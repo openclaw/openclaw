@@ -279,3 +279,100 @@ it("suppresses already-replayed DM turns while preserving delivery-only context 
   expect(prompt).not.toContain("ordinary user turn");
   expect(prompt).not.toContain("ordinary assistant reply");
 });
+
+it.each([false, true])(
+  "does not let internal runtime rows resurface answered recent requests (internal pair: %s)",
+  async (internalPair) => {
+    const scope = {
+      agentId: "main",
+      sessionId: "coverage",
+      sessionKey: "agent:main:coverage",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+    };
+    const sessionEntry = { sessionId: scope.sessionId, chatType: "channel" as const, updatedAt: 1 };
+    await replaceSessionEntry(scope, sessionEntry);
+    const append = (...messages: unknown[]) =>
+      persistTurn(scope, {
+        updateMode: "none",
+        messages: messages.map((message) => ({ message })),
+      });
+    const user = (messageId: string, text: string) =>
+      persistUserTurnTranscript({
+        ...scope,
+        sessionEntry,
+        input: { text, timestamp: Date.now(), transport: { channel: "discord", messageId } },
+      });
+    const answer = (content: string) => append({ role: "assistant", content, stopReason: "stop" });
+    const candidates = ["target", "newer-1", "newer-2", "newer-3", "newer-4", "newer-5"].map(
+      (messageId) => ({ messageId, sender: "User", body: `question ${messageId}` }),
+    );
+    for (const [index, entry] of candidates.entries()) {
+      await user(entry.messageId, entry.body);
+      await answer(`answer ${entry.messageId}`);
+      if (index === 0 && internalPair) {
+        await append({ role: "user", content: "Continue the runtime event." });
+        await answer("NO_REPLY");
+      }
+    }
+    const ctx: FinalizedMsgContext = {
+      Body: "A new current question",
+      RawBody: "A new current question",
+      SessionKey: scope.sessionKey,
+      AgentId: scope.agentId,
+      Provider: "discord",
+      CommandAuthorized: false,
+      SessionTranscriptContext: { historyLimit: 20, historyKind: "recent" },
+      InboundHistory: structuredClone(candidates),
+    };
+    const render = async () => {
+      let prompt = "";
+      await runPreparedChannelTurn({
+        channel: "discord",
+        routeSessionKey: scope.sessionKey,
+        storePath: scope.storePath,
+        ctxPayload: ctx,
+        recordInboundSession: async () => undefined,
+        runDispatch: async () => {
+          prompt = buildInboundUserContextPrefix(ctx);
+          return { queuedFinal: false };
+        },
+      });
+      return prompt;
+    };
+    const prompt = await render();
+    expect(ctx.InboundHistory).toEqual([]);
+    expect(prompt).not.toContain("question target");
+
+    // A later unrelated completion must not cover the preceding unanswered input.
+    await user("unanswered", "Unanswered external request");
+    await append({ role: "user", content: "An unrelated internal request" });
+    await answer("NO_REPLY");
+    await user("image-barrier", "Unanswered request before an unrelated image");
+    await append({
+      role: "user",
+      content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
+    });
+    await answer("NO_REPLY");
+    await user("incomplete", "An unfinished request");
+    await append({ role: "assistant", content: "Working", stopReason: "aborted" });
+    ctx.InboundHistory = [
+      { ...candidates[0]!, body: "Edited question target" },
+      { ...candidates[1]!, media: [{ url: "fixture:attachment" }] },
+      { messageId: "unanswered", sender: "User", body: "Unanswered external request" },
+      {
+        messageId: "image-barrier",
+        sender: "User",
+        body: "Unanswered request before an unrelated image",
+      },
+      { messageId: "incomplete", sender: "User", body: "An unfinished request" },
+      { messageId: "unseen", sender: "Other", body: "Unseen side discussion" },
+    ];
+    const retained = structuredClone(ctx.InboundHistory);
+    const retainedPrompt = await render();
+    expect((await readRecent(scope)).every((entry) => entry.text.length > 0)).toBe(true);
+    expect(ctx.InboundHistory).toEqual(retained);
+    for (const entry of retained) {
+      expect(retainedPrompt).toContain(entry.body);
+    }
+  },
+);

@@ -66,19 +66,18 @@ async function omitAnsweredRecentHistory(params: {
   storePath: string;
 }): Promise<void> {
   const history = params.ctx.InboundHistory ?? [];
-  let candidates = 0;
-  for (const entry of history) {
-    candidates += entry.messageId ? 1 : 0;
-  }
-  if (candidates === 0) {
+  const candidateMessageIds = history.flatMap((entry) =>
+    entry.messageId ? [entry.messageId] : [],
+  );
+  if (candidateMessageIds.length === 0) {
     return;
   }
-  // Roughly one user row and one reply per answered turn; a shorter read only keeps rows.
+  // Internal runtime activity is not a channel candidate; follow the selected identities.
   const turns = await readRecentUserAssistantTurnsForSession({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
-    limit: candidates * 2,
+    candidateMessageIds,
     includeMessageToolSourceReplies: true,
   });
   // A reply proves only the user row right before it; earlier rows in the same gap
