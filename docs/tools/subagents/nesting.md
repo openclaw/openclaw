@@ -21,7 +21,7 @@ create leaf workers sooner.
     defaults: {
       subagents: {
         maxSpawnDepth: 2, // stop nesting after depth 2 (default: 5, range 1-5)
-        maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
+        maxChildrenPerAgent: 5, // active ordinary children per parent (default: 5, range 1-100)
         maxConcurrent: 8, // concurrent child runs per spawning session (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
         announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
@@ -74,11 +74,11 @@ result; a silent token cannot settle the child task.
 
 ### Per-agent spawn limit
 
-Each agent session (at any depth) can have at most `maxChildrenPerAgent`
-(default `5`) active children at a time. This prevents runaway fan-out
-from a single orchestrator. Separately, `maxConcurrent` limits executing child
-runs for that immediate spawning session. Each nested orchestrator gets its own
-execution budget; its children do not share the root session's slots.
+Each parent session can have up to `maxChildrenPerAgent` active ordinary children
+(default `5`, range `1–100`). Separately, `maxConcurrent` limits how many of
+those children run at once (default `8`). To run 100 ordinary children at once,
+set both values to `100` under `agents.defaults.subagents`. Each nested
+orchestrator has its own budget.
 
 ### Reset a conversation
 

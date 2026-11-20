@@ -18,6 +18,15 @@ function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): voi
 const validateAgents = (agents: OpenClawConfig["agents"]) => validateConfigObject({ agents });
 
 describe("agent defaults schema", () => {
+  it("accepts up to 100 ordinary children per parent", () => {
+    const subagents = { maxChildrenPerAgent: 100 };
+    expect(AgentDefaultsSchema.parse({ subagents })?.subagents).toEqual(subagents);
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ subagents: { maxChildrenPerAgent: 101 } }),
+      "subagents.maxChildrenPerAgent",
+    );
+  });
+
   it("accepts only a Boolean opt-in for the usage-ranked tool index without adding defaults", () => {
     expect(AgentDefaultsSchema.parse({})?.experimental).toBeUndefined();
     for (const usageRankedToolIndex of [true, false]) {
