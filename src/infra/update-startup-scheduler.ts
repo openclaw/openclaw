@@ -102,7 +102,10 @@ export function createGatewayUpdateCheck(params: {
         if (state === "published") {
           params.log.info("remote model catalog applied");
         } else if (state === "superseded") {
-          params.log.info("remote model catalog check superseded; deferred to the next check");
+          // An overlapping publication, such as the config reload that changed the source, won.
+          // The download is stored, so retry adoption soon rather than at the next 6-hour check.
+          nextCheckInMs = 10_000;
+          params.log.info("remote model catalog check superseded; retrying in 10 seconds");
         }
       }
     } catch (error) {

@@ -204,7 +204,9 @@ it("defers automatic update and catalog checks until constrained memory recovers
 
 it("checks a changed catalog source at once instead of at the next scheduled check", async () => {
   let cfg: OpenClawConfig = {};
-  const applyRemoteCatalogUpdate = vi.fn(async () => "published" as const);
+  const applyRemoteCatalogUpdate = vi.fn<() => Promise<"published" | "superseded">>(
+    async () => "published",
+  );
   check = createGatewayUpdateCheck({
     lifecycle,
     getConfig: () => cfg,
@@ -221,6 +223,8 @@ it("checks a changed catalog source at once instead of at the next scheduled che
 
   const mirror = { url: "https://catalog-mirror.example.test/catalog.json" };
   cfg = { models: { catalogRefresh: mirror } };
+  // The config reload that changed the source republishes owners and wins the first adoption.
+  applyRemoteCatalogUpdate.mockResolvedValueOnce("superseded");
   sessionChanges.emit({ all: true, scope: "config-presentation" });
   await clock.advanceBy(0);
   expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
@@ -228,4 +232,6 @@ it("checks a changed catalog source at once instead of at the next scheduled che
     mirror,
   );
   expect(applyRemoteCatalogUpdate).toHaveBeenCalledTimes(2);
+  await clock.advanceBy(10_000);
+  expect(applyRemoteCatalogUpdate).toHaveBeenCalledTimes(3);
 });
