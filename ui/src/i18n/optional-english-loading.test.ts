@@ -206,6 +206,16 @@ it("refreshes an eager sharing roster when its menu's English loads", async () =
 
 it.each([
   [
+    "chat.sessionSuggestions.state.accepted",
+    "Accepted",
+    () => import("../pages/chat/components/chat-session-suggestions.solid.tsx"),
+  ],
+  [
+    "chat.sessionSuggestions.pausedDraftState",
+    "Draft",
+    () => import("../pages/chat/components/chat-typing-indicator.tsx"),
+  ],
+  [
     "chat.sessionSharing.sharedDescription",
     "Everyone with access can send",
     () => import("../pages/chat/components/chat-session-sharing-content.tsx"),
@@ -279,7 +289,7 @@ it.each([
   await load();
 
   expect(manager.t(key)).toBe(copy);
-  if (key.startsWith("chat.sessionSharing.")) {
+  if (key.startsWith("chat.sessionSharing.") || key.startsWith("chat.sessionSuggestions.")) {
     expect(manager.t("chat.sessionDetails.contextProject")).toBe(
       "chat.sessionDetails.contextProject",
     );

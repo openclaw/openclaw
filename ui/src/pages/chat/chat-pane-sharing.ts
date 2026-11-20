@@ -23,6 +23,7 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
@@ -127,6 +128,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
     this.collaboration.suggestions = [];
+    this.collaboration.liveResolutions = new Map();
     this.collaboration.role = undefined;
     this.collaboration.busyIds = new Set();
     this.collaboration.addOperation = undefined;
@@ -236,6 +238,16 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (this.collaboration.role === "viewer" && event.suggestion.author.id !== selfId) {
       return;
     }
+    if (
+      event.action === "resolved" &&
+      event.suggestion.author.id === selfId &&
+      !this.collaboration.liveResolutions.has(event.suggestion.id)
+    ) {
+      this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+        event.suggestion.id,
+        true,
+      );
+    }
     if (event.action === "added") {
       this.collaboration.suggestions = [
         ...this.collaboration.suggestions.filter((item) => item.id !== event.suggestion.id),
@@ -272,12 +284,14 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       return;
     }
     if (scope.state.chatMentions?.length || scope.state.chatAttachments.length > 0) {
-      scope.state.chatError = t(
-        scope.state.chatMentions?.length
-          ? "chat.mentions.unsupported"
-          : "chat.sessionSuggestions.attachmentsUnsupported",
+      scope.state.setRecoverableChatError(
+        t(
+          scope.state.chatMentions?.length
+            ? "chat.mentions.unsupported"
+            : "chat.sessionSuggestions.attachmentsUnsupported",
+        ),
+        EXPECTED_CHAT_REFUSAL,
       );
-      scope.state.lastError = scope.state.chatError;
       return;
     }
     const sessionKey = scope.state.sessionKey;
@@ -308,8 +322,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       ];
     } catch (error) {
       if (this.collaboration.addOperation === operation && this.isConnectionScopeCurrent(scope)) {
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (this.collaboration.addOperation === operation) {
@@ -395,8 +408,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
             previousEditDraft.mentions ?? [],
           );
         }
-        scope.state.chatError = formatUiError(error);
-        scope.state.lastError = scope.state.chatError;
+        scope.state.setRecoverableChatError(formatUiError(error), error);
       }
     } finally {
       if (isCurrentTarget()) {

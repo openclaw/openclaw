@@ -214,7 +214,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       getSnapshot: () => this.context.gateway.snapshot,
       state,
       sessionParticipationBlocked,
-      onDenied: (reason) => this.publishHeaderError(reason),
+      onDenied: (reason) => this.publishHeaderError(reason, undefined, true),
       onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
       onRewind: (entryId) => this.rewindToMessage(entryId),
       onFork: (entryId) => this.forkFromMessage(entryId),
@@ -481,8 +481,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               // Separately hydrated session-list metadata must not cancel an active query.
               ownerKey: JSON.stringify([state.connectionEpoch, selfProfileId]),
               params: { sessionKey: state.sessionKey, agentId: currentAgentId },
-              inviteAccessAvailable:
-                isGatewayMethodAdvertised(gatewaySnapshot, "session.members.setAccess") === true,
+              ...this.sessionMentionInvitationProps(),
             }
           : undefined,
       modelCatalog: state.chatModelCatalog,

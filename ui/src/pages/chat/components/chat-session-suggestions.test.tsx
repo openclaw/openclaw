@@ -84,3 +84,29 @@ describe("chat session suggestions", () => {
     expect(view.onResolve).toHaveBeenCalledWith(suggestion, "dismiss");
   });
 });
+
+it("lets the author close a dismissed outcome without a resolution request", () => {
+  const onClose = vi.fn();
+  const onResolve = vi.fn();
+  container = document.body.appendChild(document.createElement("div"));
+  mountSolid(
+    () => (
+      <ChatSessionSuggestions
+        suggestions={[{ ...suggestion, state: "dismissed" }]}
+        role="viewer"
+        busyIds={new Set()}
+        archived={false}
+        canResolve={false}
+        onResolve={onResolve}
+        onClose={onClose}
+        liveResolutions={new Map([[suggestion.id, true]])}
+      />
+    ),
+    { container },
+  );
+  const close = container.querySelector<HTMLButtonElement>('button[aria-label="Close"]');
+  expect(close).not.toBeNull();
+  close?.click();
+  expect(onClose).toHaveBeenCalledWith(suggestion.id);
+  expect(onResolve).not.toHaveBeenCalled();
+});

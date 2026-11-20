@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type {
   SessionSharingRole,
   SessionSuggestion,
@@ -6,10 +6,11 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import type { IconName } from "../../../components/solid/icon.tsx";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionSharingEnglish } from "../../../i18n/locales/en-chat-session-sharing.ts";
+import { findChatSubmissionMessage } from "../../../lib/chat/history-message-identity.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 const actions: readonly [SessionSuggestionResolution, string, IconName][] = [
   ["send", "sendNow", "arrowUp"],
@@ -23,14 +24,33 @@ export function ChatSessionSuggestions(props: {
   role?: SessionSharingRole;
   busyIds: ReadonlySet<string>;
   archived: boolean;
+  onClose?: (id: string) => void;
+  liveResolutions?: ReadonlyMap<string, boolean>;
+  messages?: readonly unknown[];
   canResolve: boolean;
-  onResolve: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
+  onResolve?: (suggestion: SessionSuggestion, resolution: SessionSuggestionResolution) => void;
 }) {
   const canResolve = () => props.canResolve && (props.role === "owner" || props.role === "admin");
+  const visible = createMemo(() =>
+    props.suggestions.filter(
+      (suggestion) =>
+        props.role === "owner" ||
+        props.role === "admin" ||
+        suggestion.state === "pending" ||
+        (props.liveResolutions?.get(suggestion.id) === true &&
+          (suggestion.state !== "accepted" ||
+            !findChatSubmissionMessage(
+              props.messages,
+              `session-suggestion:${suggestion.id}`,
+              true,
+            ))),
+    ),
+  );
+
   return (
-    <Show when={props.suggestions.length > 0}>
+    <Show when={visible().length > 0}>
       <div class="session-suggestions" aria-live="polite">
-        <For each={props.suggestions} keyed={(suggestion) => suggestion.id}>
+        <For each={visible()} keyed={(suggestion) => suggestion.id}>
           {(suggestion) => {
             const author = () => suggestion().author.label ?? suggestion().author.id;
             return (
@@ -40,9 +60,27 @@ export function ChatSessionSuggestions(props: {
                 <Show
                   when={canResolve() && suggestion().state === "pending"}
                   fallback={
-                    <span class="session-suggestion__state">
-                      {t(`chat.sessionSuggestions.state.${suggestion().state}`)}
-                    </span>
+                    <div class="session-suggestion__actions">
+                      {" "}
+                      <span class="session-suggestion__state">
+                        {t(`chat.sessionSuggestions.state.${suggestion().state}`)}
+                      </span>{" "}
+                      <Show
+                        when={
+                          props.role !== "owner" &&
+                          props.role !== "admin" &&
+                          suggestion().state === "dismissed"
+                        }
+                      >
+                        <IconButton
+                          size={28}
+                          glyph="row"
+                          icon="x"
+                          label={t("common.close")}
+                          onClick={() => props.onClose?.(suggestion().id)}
+                        />
+                      </Show>
+                    </div>
                   }
                 >
                   <div class="session-suggestion__actions">
@@ -61,7 +99,7 @@ export function ChatSessionSuggestions(props: {
                               author: author(),
                             })}
                             disabled={props.busyIds.has(suggestion().id)}
-                            onClick={() => props.onResolve(suggestion(), action[0])}
+                            onClick={() => props.onResolve?.(suggestion(), action[0])}
                           />
                         </Show>
                       )}

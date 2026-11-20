@@ -9,6 +9,7 @@ import type {
 } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { withoutMemberInvitations } from "../../lib/chat/human-mentions.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -214,11 +215,28 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
   };
 
+  protected sessionMentionInvitationProps() {
+    return {
+      inviteAccessAvailable:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.members.setAccess") ===
+        true,
+      members: this.state
+        ? this.collaboration.sharingStates.get(this.sessionSharingCacheKey(this.state.sessionKey))
+            ?.result?.members
+        : undefined,
+    };
+  }
+
   protected setSessionSharingState(cacheKey: string, state: ChatSessionSharingState): void {
     this.collaboration.sharingStates = new Map(this.collaboration.sharingStates).set(
       cacheKey,
       state,
     );
+    if (this.state && cacheKey === this.sessionSharingCacheKey(this.state.sessionKey)) {
+      for (const field of ["chatMentions", "chatMentionsBeforeHistory"] as const) {
+        this.state[field] = withoutMemberInvitations(this.state[field], state.result?.members);
+      }
+    }
   }
 
   protected sessionSharingAgentId(sessionKey: string): string | undefined {

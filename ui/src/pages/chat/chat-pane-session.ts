@@ -19,6 +19,7 @@ import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
 import { getAcceptedChatHistorySession } from "./chat-history-state.ts";
 import { ChatPaneCatalog } from "./chat-pane-catalog.ts";
@@ -463,12 +464,11 @@ export abstract class ChatPaneSession extends ChatPaneCatalog {
       session: selectedChatSessionRow(scope.state),
     });
     if (!access.allowed) {
-      scope.state.lastError = access.reason;
-      scope.state.chatError = access.reason;
+      scope.state.setRecoverableChatError(access.reason, EXPECTED_CHAT_REFUSAL);
       return;
     }
     const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? resolveChatAgentId(scope.state);
-    let failure: string | null = null;
+    let failure: unknown = null;
     try {
       // The patch can resolve falsy on failure; the capability error explains it.
       const patched = await scope.sessions.patch(
@@ -480,11 +480,10 @@ export abstract class ChatPaneSession extends ChatPaneCatalog {
         failure = scope.sessions.state.error;
       }
     } catch (error) {
-      failure = formatUiError(error);
+      failure = error;
     }
     if (failure && this.isConnectionScopeCurrent(scope) && scope.state.sessionKey === sessionKey) {
-      scope.state.lastError = failure;
-      scope.state.chatError = failure;
+      scope.state.setRecoverableChatError(formatUiError(failure), failure);
     }
   }
 

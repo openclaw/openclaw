@@ -7,6 +7,26 @@ export { MAX_HUMAN_MENTIONS } from "../../../../packages/gateway-protocol/src/hu
 /** Carries recipient spans beside plain text; "@Name" alone never binds a person. */
 export const HUMAN_MENTION_CLIPBOARD_TYPE = "application/x-openclaw-mentions";
 
+/** Existing members are mentions, not new invitation requests. */
+export function withoutMemberInvitations(
+  mentions: readonly HumanMention[] | undefined,
+  members: readonly { identityId: string }[] | undefined,
+): readonly HumanMention[] | undefined {
+  if (!members || !mentions) {
+    return mentions;
+  }
+  let changed = false;
+  const ordinary = mentions.map((mention) => {
+    if (!mention.access || !members.some((member) => member.identityId === mention.profileId)) {
+      return mention;
+    }
+    changed = true;
+    const { access: _access, ...recipient } = mention;
+    return recipient;
+  });
+  return changed ? ordinary : mentions;
+}
+
 export type HumanMentionInput = {
   value: string;
   start: number;

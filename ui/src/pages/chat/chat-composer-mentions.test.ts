@@ -461,3 +461,46 @@ it.each([
     expect(view.send).toHaveBeenCalledWith(view.value());
   },
 );
+
+it.each([true, false, undefined])(
+  "offers an invitation only for a non-member (member evidence: %s)",
+  async (member) => {
+    const view = composerFixture("chat", "", [], undefined, true);
+    view.setMembers(
+      member === undefined ? undefined : member ? [{ identityId: peter.profileId }] : [],
+    );
+    view.request.mockResolvedValue({
+      users: [{ ...peter, inviteAccessOptions: ["read", "suggest"] }],
+      truncated: false,
+    });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(Boolean(view.query(".chat-invite-access"))).toBe(member !== true);
+    expect(view.value().mentions).toEqual([
+      {
+        profileId: peter.profileId,
+        start: 0,
+        end: 18,
+        ...(member === true ? {} : { access: "read" }),
+      },
+    ]);
+  },
+);
+
+it("normalizes a recovered invitation before an unchanged draft is submitted", async () => {
+  const view = composerFixture(
+    "chat",
+    "@Peter Steinberger ",
+    [{ profileId: peter.profileId, start: 0, end: 18, access: "send" }],
+    undefined,
+    true,
+  );
+  view.setMembers([{ identityId: peter.profileId }]);
+  view.key("Enter");
+  expect(view.send).toHaveBeenCalledWith({
+    draft: "@Peter Steinberger ",
+    mentions: [{ profileId: peter.profileId, start: 0, end: 18 }],
+  });
+});

@@ -24,6 +24,7 @@ import type {
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
 } from "./components/chat-session-sharing-shared.tsx";
+import { handleChatInputHistoryKey } from "./input-history.ts";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -711,3 +712,37 @@ it.each(mutations)(
     expect(sharingState(pane, row)?.result).toEqual(sharingResult(row));
   },
 );
+
+it("retires draft invitation access when live membership evidence arrives", async () => {
+  const row = sessionRow();
+  const request = vi
+    .fn()
+    .mockResolvedValue({ ...sharingResult(row), members: [{ identityId: "alice", addedAt: 1 }] });
+  const { pane, state } = sharingPane(request);
+  state.chatMessage = "@Alice @Zoe";
+  state.chatMentions = [
+    { profileId: "alice", start: 0, end: 6, access: "send" },
+    { profileId: "zoe", start: 7, end: 11, access: "read" },
+  ];
+  state.chatMessages = [{ role: "user", content: "Earlier turn", timestamp: 1 }];
+  const pressKey = (key: "ArrowUp" | "ArrowDown") =>
+    handleChatInputHistoryKey(state, {
+      key,
+      selectionStart: 0,
+      selectionEnd: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    });
+  pressKey("ArrowUp");
+  await pane.loadSessionSharing(row);
+  pressKey("ArrowDown");
+  expect(state.chatMentions).toEqual([
+    { profileId: "alice", start: 0, end: 6 },
+    { profileId: "zoe", start: 7, end: 11, access: "read" },
+  ]);
+  expect(state.chatMessage).toBe("@Alice @Zoe");
+});

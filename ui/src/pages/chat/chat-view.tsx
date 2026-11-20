@@ -201,12 +201,13 @@ function ChatFooterContent(
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
+            onClose={input.props.onCloseSessionSuggestion}
+            liveResolutions={input.props.sessionSuggestionLiveResolutions}
+            messages={input.props.messages}
             busyIds={input.props.sessionSuggestionBusyIds ?? new Set()}
             archived={input.props.sessionSuggestionsArchived === true}
             canResolve={input.props.canResolveSessionSuggestions === true}
-            onResolve={(suggestion, resolution) =>
-              input.props.onResolveSessionSuggestion?.(suggestion, resolution)
-            }
+            onResolve={input.props.onResolveSessionSuggestion}
           />
         </ChatLazyBoundary>
       </Show>

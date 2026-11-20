@@ -631,6 +631,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionSuggestions: {
           ...registerSessionNavigationEnglish.catalog.chat.sessionSuggestions,
           ...registerChatSessionEnglish.catalog.chat.sessionSuggestions,
+          ...registerChatSessionSharingEnglish.catalog.chat.sessionSuggestions,
         },
         commandResults,
         commands: registerCommandPaletteEnglish.catalog.chat.commands,

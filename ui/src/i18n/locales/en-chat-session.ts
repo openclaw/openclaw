@@ -267,22 +267,6 @@ const enChatSession = {
     },
     sessionSuggestions: {
       attachmentsUnsupported: "Remove attachments before submitting a text suggestion.",
-      sendNow: "Send {author}'s suggestion now",
-      queue: "Queue {author}'s suggestion",
-      edit: "Edit {author}'s suggestion",
-      dismiss: "Dismiss {author}'s suggestion",
-      typing: "{name} is typing…",
-      typingMany: "{names} are typing…",
-      typingSeveral: "Several people are typing…",
-      typingOthers: "{count} others",
-      otherCollaborators: "Other collaborators",
-      typingDraftState: "is typing…",
-      pausedDraftState: "Draft",
-      state: {
-        pending: "Pending",
-        accepted: "Accepted",
-        dismissed: "Dismissed",
-      },
     },
   },
 } satisfies TranslationMap;

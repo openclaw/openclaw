@@ -94,6 +94,7 @@ export function composerFixture(
   let mentions = initialMentions;
   let ownerKey = "sender-one";
   let unsupported = false;
+  let members: readonly { identityId: string }[] | undefined;
   const send = vi.fn();
   const abort = vi.fn();
   const slashCommand = vi.fn();
@@ -126,7 +127,13 @@ export function composerFixture(
         getMentions: () => mentions,
         mentionDirectory: unsupported
           ? undefined
-          : { client, ownerKey, inviteAccessAvailable, params: { sessionKey: "agent:main:chat" } },
+          : {
+              client,
+              ownerKey,
+              inviteAccessAvailable,
+              members,
+              params: { sessionKey: "agent:main:chat" },
+            },
         mentionsUnsupported: unsupported,
         onDraftChange: onInput,
         onSlashCommand: slashCommand,
@@ -223,6 +230,10 @@ export function composerFixture(
     },
     replaceOwner: () => {
       ownerKey = "sender-two";
+      renderCurrent();
+    },
+    setMembers: (next: typeof members) => {
+      members = next;
       renderCurrent();
     },
     setUnsupported: () => {

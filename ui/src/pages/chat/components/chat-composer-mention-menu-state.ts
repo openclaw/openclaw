@@ -12,6 +12,7 @@ export type HumanMentionDirectory = {
   ownerKey: string;
   params: UsersMentionableParams;
   inviteAccessAvailable?: boolean;
+  members?: readonly { identityId: string }[];
 };
 
 export type HumanMentionMenuHost = {
