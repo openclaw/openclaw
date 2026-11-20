@@ -16,6 +16,7 @@ import {
 } from "./attempt-context.js";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import {
+  CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
 } from "./context-engine-projection.js";
@@ -142,6 +143,53 @@ export async function prepareCodexContextEngineHistory(params: {
       tokenBudget: params.historyTokenBudget,
       prepareFileContext: projectionParams.prepareFileContext,
     });
+  const historyToolAvailable = params.toolSpecs.some(
+    (tool) =>
+      typeof tool === "object" && tool !== null && Reflect.get(tool, "name") === "sessions_history",
+  );
+  // A returning thread receives what other models added since its last turn. That delta can
+  // exceed the final delivery allowance, so keep its newest intact messages and say how many
+  // older ones stay in the session transcript.
+  const buildDelta = async (delta: AgentMessage[]) => {
+    const attempt = async (omitted: number) => {
+      const note: AgentMessage[] = omitted
+        ? [
+            {
+              role: "user",
+              content: `[OpenClaw context handoff] ${omitted} earlier messages since this thread last ran are omitted here and stay in the session transcript.${historyToolAvailable ? " Read them only if needed with sessions_history." : ""}`,
+              timestamp: 0,
+            },
+          ]
+        : [];
+      try {
+        return await buildSeed([...note, ...delta.slice(omitted)]);
+      } catch (error) {
+        if (error instanceof CodexContextAttachmentError) {
+          return undefined;
+        }
+        throw error;
+      }
+    };
+    const whole = await attempt(0);
+    if (whole) {
+      return whole;
+    }
+    // Fewer kept messages always fit at least as well: binary-search the smallest cut.
+    let low = 1;
+    let high = delta.length;
+    let best: Awaited<ReturnType<typeof buildSeed>> | undefined;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const built = await attempt(mid);
+      if (built) {
+        best = built;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return best;
+  };
   const historyBootstrapItems = !configured
     ? undefined
     : prepareSeed
@@ -152,6 +200,7 @@ export async function prepareCodexContextEngineHistory(params: {
               assertCurrent: assertSeedCurrent,
               signal: params.runtimeParams.abortSignal,
               tokenBudget: params.historyTokenBudget,
+              historyToolAvailable,
             })
           ).filter(includeMessage);
           assertSeedCurrent();
@@ -164,9 +213,9 @@ export async function prepareCodexContextEngineHistory(params: {
       : [];
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
-      ? await buildSeed(messages.slice(selection.prefixLength))
+      ? await buildDelta(messages.slice(selection.prefixLength))
       : legacyDeltaMessages.length > 0
-        ? await buildSeed(legacyDeltaMessages)
+        ? await buildDelta(legacyDeltaMessages)
         : undefined;
   assertCurrent();
   return {

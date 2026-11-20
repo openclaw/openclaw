@@ -115,3 +115,38 @@ it("injects only turns from another model when selected history resumes a Codex 
   );
   expect(turnStart).not.toContain("GEMINI_DELTA");
 });
+
+it("keeps the newest intact turns when another model's delta exceeds the allowance", async () => {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  const workspaceDir = path.join(tempDir, "workspace");
+  const params = createParams(sessionFile, workspaceDir);
+  await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+  const coveredThrough = Date.parse(
+    (await readCodexAppServerBinding(sessionFile))?.historyCoveredThrough ?? "",
+  );
+  const session = openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+  for (let index = 1; index <= 8; index += 1) {
+    session.appendMessage(
+      userMessage(`DELTA_${index} ${"q".repeat(30_000)}`, coveredThrough + index * 1_000),
+    );
+  }
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    prepareBoundedSeed: vi.fn(async () => []),
+  };
+  params.contextTokenBudget = 40_000;
+  params.prompt = "continue on Codex";
+  const harness = createResumeHarness();
+
+  const run = runCodexAppServerAttempt(params);
+  await harness.waitForMethod("turn/start");
+  await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+  await run;
+
+  const injected = JSON.stringify(
+    harness.requests.filter((request) => request.method === "thread/inject_items"),
+  );
+  expect(injected).toContain("DELTA_8");
+  expect(injected).not.toContain("DELTA_1 ");
+  expect(injected).toMatch(/\[OpenClaw context handoff\] \d+ earlier messages/);
+});

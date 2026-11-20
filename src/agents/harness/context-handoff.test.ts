@@ -145,7 +145,15 @@ it("bounds a tool-heavy transcript without a model call and tolerates a failing 
     const seeded = await bound!.prepareBoundedSeed!({
       assertCurrent: () => {},
       tokenBudget: 1_500,
+      historyToolAvailable: true,
     }).finally(stop);
+    // Without the tool, the notice still names omitted turns but no recovery call.
+    const toolless = await bound!.prepareBoundedSeed!({
+      assertCurrent: () => {},
+      tokenBudget: 1_500,
+    });
+    expect(JSON.stringify(toolless[0])).toContain("[OpenClaw context handoff]");
+    expect(JSON.stringify(toolless[0])).not.toContain("sessions_history");
     expect(JSON.stringify(seeded[0])).toContain("[OpenClaw context handoff]");
     expect(JSON.stringify(seeded[0])).toContain("sessions_history");
     // Omitted turns are named by the transcript entry ids sessions_history accepts.

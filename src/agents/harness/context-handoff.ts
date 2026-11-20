@@ -244,7 +244,8 @@ export function bindHandoff(
       maxTokens: historyTokens,
       priorOmitted: facts.omittedCount,
       priorOmittedIds: facts.omittedIds,
-      sessionKey,
+      // Name the recovery tool only when the native thread can call it.
+      ...(request.historyToolAvailable ? { sessionKey } : {}),
     });
     if (!selection.values.length && selection.omittedCount) {
       log.warn(
