@@ -38,7 +38,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   const compactEntries = Array.from(
     skillsPrompt.matchAll(/^- ("(?:[^"\\\n]|\\.)*").*$/gmu),
     ([line, quoted = '""']) => {
-      const name = (JSON.parse(quoted) as string) || "(unknown)";
+      const name = String(JSON.parse(quoted)) || "(unknown)";
       return { name: ` ${name}`.slice(1), blockChars: line.length };
     },
   );

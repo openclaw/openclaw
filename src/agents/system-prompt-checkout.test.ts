@@ -36,5 +36,5 @@ it.each([
   expect(prompt).toContain("including multi-PR batches");
   expect(prompt).toContain("git worktree add");
   expect(prompt).toContain("share its object store");
-  expect(prompt).toContain("Do not clone the same repo into task scratch");
+  expect(prompt).toContain("never clone into scratch");
 });

@@ -130,7 +130,7 @@ export function buildMessagingSection(params: {
           "- A confirmed final message or final reaction to the current source completes the reply; never repeat it in text.",
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
-              ? '- Inline buttons: `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
+              ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'
               : params.runtimeChannel
                 ? `- Inline buttons OFF for ${params.runtimeChannel}; ask owner for ${params.runtimeChannel}.capabilities.inlineButtons=dm|group|all|allowlist.`
                 : ""
