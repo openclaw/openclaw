@@ -313,14 +313,20 @@ describe("tools.github handlers", () => {
     oauth.pollAuthorization.mockResolvedValue({ status: "pending", retryAfterMs: 10_000 });
     oauth.cancelAuthorizationAsync.mockReturnValue(true);
 
+    const activation = { expectedAccountId: 42, resetGitAuthor: true, pathPrepend: ["/agent/bin"] };
     const start = await invoke("tools.github.authorize.start", {
       scope: "agent",
       agentId: "main",
+      activation,
     });
     const poll = await invoke("tools.github.authorize.poll", { requestId });
     const cancel = await invoke("tools.github.authorize.cancel", { requestId });
 
-    expect(oauth.startAuthorization).toHaveBeenCalledWith({ scope: "agent", agentId: "main" });
+    expect(oauth.startAuthorization).toHaveBeenCalledWith({
+      scope: "agent",
+      agentId: "main",
+      activation,
+    });
     expect(oauth.pollAuthorization).toHaveBeenCalledWith(requestId);
     expect(oauth.cancelAuthorizationAsync).toHaveBeenCalledWith(requestId);
     expect(start.mock.calls[0]?.[1]).toEqual({

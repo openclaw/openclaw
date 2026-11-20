@@ -268,10 +268,7 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
         if (!service) {
           throw new Error("GitHub authorization lifecycle is unavailable.");
         }
-        respond(
-          true,
-          await service.startAuthorization({ scope: params.scope, agentId: resolved.agentId }),
-        );
+        respond(true, await service.startAuthorization({ ...params, agentId: resolved.agentId }));
       } catch (error) {
         respondError(
           respond,
