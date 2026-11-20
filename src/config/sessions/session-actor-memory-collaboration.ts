@@ -1,4 +1,4 @@
-import { toUSVString } from "node:util";
+import { isDeepStrictEqual, toUSVString } from "node:util";
 import type {
   SessionActorMemoryCollaborationCommand,
   SessionActorMemoryCollaborationQuery,
@@ -112,6 +112,49 @@ export function mutateSessionActorMemoryCollaboration(
               },
             }
           : {}),
+      };
+    }
+    case "session.collaboration.set-access": {
+      if (!entry) {
+        throw new Error("session changed before sharing mutation");
+      }
+      const { params } = command.input;
+      if (
+        params.expectedEntry &&
+        !isDeepStrictEqual(
+          {
+            sessionId: entry.sessionId,
+            createdActor: entry.createdActor,
+            visibility: entry.visibility,
+            incognito: entry.incognito,
+          },
+          params.expectedEntry,
+        )
+      ) {
+        throw new Error("session ownership changed before sharing mutation");
+      }
+      const identityId = toUSVString(params.identityId.trim());
+      const member = state.hot.members.find((row) => row.identityId === identityId);
+      if (!member) {
+        return { value: undefined };
+      }
+      const value = {
+        changed: member.access !== params.access,
+        ...(member.access !== undefined ? { previousAccess: member.access } : {}),
+      };
+      if (!value.changed) {
+        return { value };
+      }
+      member.access = params.access;
+      return {
+        value,
+        facts: {
+          kind: "member" as const,
+          sessionId: entry.sessionId,
+          identityId,
+          present: true,
+          access: params.access,
+        },
       };
     }
     case "session.collaboration.remove": {
