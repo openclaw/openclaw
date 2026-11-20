@@ -99,7 +99,9 @@
 }
 
 .subagents-desktop__branch-rail {
-  inset-inline-start: calc(20px + (var(--subagent-rail-depth) - 1) * var(--tree-step) - var(--tree-offset));
+  inset-inline-start: calc(
+    20px + (var(--subagent-rail-depth) - 1) * var(--tree-step) - var(--tree-offset)
+  );
   inset-block: 0;
 }
 
