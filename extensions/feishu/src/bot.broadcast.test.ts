@@ -76,7 +76,7 @@ describe("broadcast dispatch", () => {
   ])("keeps mention-shaped prose as text through ingress: %j", async (text) => {
     await handleFeishuMessage({
       cfg: createBroadcastConfig(false),
-      event: createBroadcastEvent({ messageId: "msg-command-prose", text }),
+      event: createBroadcastEvent({ messageId: `msg-command-prose:${text}`, text }),
       botOpenId: "bot-open-id",
       runtime: createRuntimeEnv(),
     });
