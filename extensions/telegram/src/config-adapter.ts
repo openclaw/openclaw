@@ -7,6 +7,10 @@ import {
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import {
+  hasTelegramAccountConfig,
+  removeTelegramBindingsWithoutAccounts,
+} from "./account-selection.js";
+import {
   listTelegramAccountIds,
   mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
@@ -28,7 +32,7 @@ export function resolveTelegramConfigAccessorAccount(params: {
   return { config: mergeTelegramAccountConfig(params.cfg, accountId) };
 }
 
-export const telegramConfigAdapter = createScopedChannelConfigAdapter<
+const scopedTelegramConfigAdapter = createScopedChannelConfigAdapter<
   ResolvedTelegramAccount,
   TelegramConfigAccessorAccount
 >({
@@ -44,3 +48,13 @@ export const telegramConfigAdapter = createScopedChannelConfigAdapter<
     formatAllowFromLowercase({ allowFrom, stripPrefixRe: /^(telegram|tg):/i }),
   resolveDefaultTo: (account) => account.config.defaultTo,
 });
+const deleteScopedTelegramAccount = scopedTelegramConfigAdapter.deleteAccount!;
+
+export const telegramConfigAdapter = {
+  ...scopedTelegramConfigAdapter,
+  // Binding-only ids stay listed for routing and default selection; they are not accounts.
+  hasAccountConfig: hasTelegramAccountConfig,
+  // Without account entries a channel token, now or later, would serve every bound id.
+  deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
+    removeTelegramBindingsWithoutAccounts(params.cfg, deleteScopedTelegramAccount(params)),
+};

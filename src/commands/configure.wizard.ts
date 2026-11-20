@@ -8,6 +8,7 @@ import {
   tryResolveLegacyCompatibilityAgentId,
 } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
+import type { ChannelAccountDeleteFollowUp } from "../channels/plugins/account-delete-follow-up.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshotForWrite, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -24,6 +25,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { persistAccountDeleteFollowUp } from "./channels/account-delete-persistence.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -405,6 +407,7 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
     let daemonSetupOutcome: DaemonSetupOutcome | undefined;
     let healthCheckOutcome: GatewayHealthCheckOutcome | undefined;
     const channelSetup = createChannelSetupHooks({ runtime });
+    const accountDeleteFollowUps: ChannelAccountDeleteFollowUp[] = [];
 
     const persistPendingConfig = async () => {
       if (!hasPendingConfig) {
@@ -422,6 +425,12 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
       mergeBaseConfig = structuredClone(committed.nextConfig);
       await channelSetup.runPostWriteHooks(committed.path);
       nextConfig = committed.nextConfig;
+      for (const followUp of accountDeleteFollowUps.splice(0)) {
+        await persistAccountDeleteFollowUp(followUp, committed.path, runtime, [
+          nextConfig,
+          mergeBaseConfig,
+        ]);
+      }
       hasPendingConfig = false;
       didPersistConfig = true;
       logConfigUpdated(runtime);
@@ -488,6 +497,7 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
           skipConfirm: true,
           skipStatusNote: true,
           onPostWriteHook: channelSetup.onPostWriteHook,
+          onAccountDeleteFollowUp: (followUp) => accountDeleteFollowUps.push(followUp),
         });
       } else {
         nextConfig = await removeChannelConfigWizard(nextConfig);
