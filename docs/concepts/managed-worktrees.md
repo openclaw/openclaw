@@ -915,7 +915,16 @@ Run-end cleanup records its outcome on the worktree record: lossless removal, re
 
 Ordinary forced checkout removal first renames the captured file tree, then lets Git remove the original registration. File deletion runs serially in the background, so cleanup can release the checkout name without waiting for every file to be unlinked. A deletion failure logs the retained directory for manual cleanup; a crash before background deletion starts can leave a sibling `.openclaw-removing-*` directory for inspection. Non-force lossless removal and explicit interrupted-removal recovery keep Git's final check and joined file deletion.
 
-Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
+Retired-tree deletion pauses for 100 ms between batches of at most 128 entries
+or 8 MiB of apparent file bytes. An individual larger file occupies its own batch;
+file sizes do not measure physical space reclaimed from shared extents. Between
+batches, the existing host pressure probe checks sustained I/O stalls and current
+or recent slow btrfs commits. Deletion waits in five-second intervals while that
+signal persists, even when PSI is low. Background deletion has a separate
+30-minute timeout, including pressure waits. Pacing bounds unlink bursts, but does not
+guarantee the latency of a filesystem transaction shared with other writers.
+
+Orphan cleanup shares the serialized, paced deletion worker and leaves queued or active background deletions with their owner. Interrupted deletion can be reclaimed by a later orphan sweep. Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
 
 Idle artifact sweeps skip the allocation lease when all observed checkout directories are already registered and no pending creation or expired snapshot needs work. Unknown paths still take the lease and receive the full cleanup checks. A checkout that becomes unregistered during this read-only inspection is reconsidered on a later sweep.
 
