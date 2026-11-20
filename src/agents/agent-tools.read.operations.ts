@@ -9,7 +9,7 @@ import { resolveSandboxFileMutationQueueKey } from "./sandbox/file-mutation-iden
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { decodeReadTextBuffer } from "./sessions/tools/read-text-capture.js";
 
-type SandboxFileOperationsParams = {
+export type SandboxFileOperationsParams = {
   abortSignal?: AbortSignal;
   root: string;
   bridge: SandboxFsBridge;
