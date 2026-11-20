@@ -263,12 +263,15 @@ it.each([
 ] as const)(
   "refreshes published inventory after a delayed page read on %s (%s, before adoption=%s)",
   async (path, surface, beforeAdoption) => {
-    const selector = path === "/plugins" ? ".plugin-catalog-card" : ".plugin-catalog-detail";
+    const browsing = path === "/plugins";
+    const selector = browsing ? ".plugin-catalog-card" : ".plugin-catalog-detail";
     const plugin = createPlugin({ name: "Fresh route plugin", catalogId: "catalog-workboard" });
     const result = { ...createResult(plugin), generation: 1 };
     const preload = deferred<typeof result>();
     let inventoryReads = 0;
-    const detail = createDiscoveryDetail(plugin);
+    const detail = createDiscoveryDetail(
+      browsing ? { ...plugin, installed: false, state: "not-installed" } : plugin,
+    );
     detail.plugin.id = "catalog-workboard";
     detail.plugin.catalog.categories = ["productivity"];
     const harness = pageFixture({
@@ -303,12 +306,20 @@ it.each([
     expect(inventoryReads).toBe(beforeAdoption ? 2 : 1);
     const find = queryWithin(page);
     const connect = vi.spyOn(harness.gateway, "connect");
+    if (browsing) {
+      await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    }
     if (!beforeAdoption) {
       harness.publishGeneration(1);
     }
     await page.updateComplete;
     preload.resolve({ ...createResult(), generation: 0 });
-    await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    if (browsing) {
+      // The catalog still reports an available plugin. The fresh inventory hides it.
+      await waitForSolid(() => expect(find(selector)).toBeNull());
+    } else {
+      await waitForSolid(() => expect(find(selector)?.textContent).toContain(plugin.name));
+    }
     expect(inventoryReads).toBe(2);
     expect(connect).not.toHaveBeenCalled();
   },
