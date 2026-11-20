@@ -1346,52 +1346,104 @@ function install(spec) {
       // The same installed executable also serves Doctor and post-core requests.
       // Only its argument-free installed Node invocation owns final publication.
       const finalizer =
-        nodeChild &&
+        args[0] === process.execPath &&
+        launch.options &&
+        (launch.options.shell === undefined || launch.options.shell === false) &&
         argv?.length === 1 &&
-        /(?:^|\/)update-migrated-finalize\.worker\.(?:m?js)$/u.test(argv[0]);
+        argv[0] === path.join(spec.root, closedEntryPaths["finalizer-check"]);
       if (finalizer) {
+        assert(fs.lstatSync(argv[0]).isFile() && fs.realpathSync(argv[0]) === argv[0]);
         assert(!selected, "Multiple migrated finalizers in one predecessor");
         assert(child.pid && child.stdin && child.stdout && child.stderr);
         selected = { child: child.pid, input: [], inputBytes: 0, output: [], outputBytes: 0 };
-        const capture = (value, encoding) => {
-          if (value === undefined || value === null || typeof value === "function") {
-            return;
+        const state = Object.getOwnPropertyDescriptor(child.stdin, "_writableState").value;
+        const prepareInput = (receiver, args, final) => {
+          try {
+            assert.equal(receiver, child.stdin);
+            assert.equal(Object.getOwnPropertyDescriptor(receiver, "_writableState")?.value, state);
+            const prepared = { ending: state.ending };
+            const [value, encoding] = args;
+            if (value !== undefined && value !== null && typeof value !== "function") {
+              // Copy only inert input. Coercion and public stream getters must
+              // never replace the native operation's return, callback or error.
+              assert(
+                typeof value === "string" || (!types.isProxy(value) && types.isUint8Array(value)),
+                "Migrated input has no inert byte representation",
+              );
+              prepared.chunk =
+                typeof value === "string"
+                  ? Buffer.from(
+                      value,
+                      typeof encoding === "string" ? encoding : state.defaultEncoding,
+                    )
+                  : Buffer.copyBytesFrom(value);
+              assert(
+                selected.inputBytes + prepared.chunk.length <= maxInputBytes,
+                "Migrated input exceeded observer budget",
+              );
+            }
+            if (final) {
+              // Native end releases the child. Retain the conservative start
+              // and store identities now, but publish nothing until it accepts.
+              const time = String(process.hrtime.bigint());
+              const request = JSON.parse(
+                Buffer.concat([
+                  ...selected.input,
+                  ...(prepared.chunk ? [prepared.chunk] : []),
+                ]).toString("utf8"),
+              );
+              assert(path.isAbsolute(request.resultPath));
+              assert.equal(request.params.result.root, spec.root);
+              assert.equal(typeof request.params.opts.run.runId, "string");
+              assert(Array.isArray(request.params.schemaVersions));
+              const databases = request.params.schemaVersions.map((entry) =>
+                fileFacts(locationOf(entry.path)),
+              );
+              assert(!fs.existsSync(scopeFile), "Multiple installed handoffs");
+              prepared.request = request;
+              prepared.scope = { time, child: child.pid, databases };
+            }
+            return prepared;
+          } catch (error) {
+            return { error };
           }
-          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value, encoding);
-          selected.inputBytes += chunk.length;
-          assert(selected.inputBytes <= maxInputBytes, "Migrated input exceeded observer budget");
-          selected.input.push(chunk);
+        };
+        const acceptInput = (prepared, final) => {
+          if (Object.hasOwn(prepared, "error")) {
+            throw prepared.error;
+          }
+          assert.equal(
+            Object.getOwnPropertyDescriptor(child.stdin, "_writableState")?.value,
+            state,
+          );
+          assert(
+            !prepared.ending && (!final || state.ending) && !state.destroyed && !state.errored,
+            "Migrated input was not accepted",
+          );
+          if (prepared.chunk) {
+            selected.inputBytes += prepared.chunk.length;
+            selected.input.push(prepared.chunk);
+          }
+          if (final) {
+            selected.request = prepared.request;
+            scope = prepared.scope;
+            writeInstalledRecoveryEvidence(scopeFile, scope);
+            report("handoff", { ...scope, request: selected.request });
+          }
         };
         const write = child.stdin.write;
         child.stdin.write = function (...writeArgs) {
-          const [value, encoding] = writeArgs;
-          observe("worker-input", () =>
-            capture(value, typeof encoding === "string" ? encoding : undefined),
-          );
-          return Reflect.apply(write, this, writeArgs);
+          const prepared = prepareInput(this, writeArgs, false);
+          const result = Reflect.apply(write, this, writeArgs);
+          observe("worker-input", () => acceptInput(prepared, false));
+          return result;
         };
         const end = child.stdin.end;
         child.stdin.end = function (...endArgs) {
-          const [value, encoding] = endArgs;
-          observe("worker-input", () =>
-            capture(value, typeof encoding === "string" ? encoding : undefined),
-          );
-          observe("handoff", () => {
-            selected.request = JSON.parse(Buffer.concat(selected.input).toString("utf8"));
-            const request = selected.request;
-            assert(path.isAbsolute(request.resultPath));
-            assert.equal(request.params.result.root, spec.root);
-            assert.equal(typeof request.params.opts.run.runId, "string");
-            assert(Array.isArray(request.params.schemaVersions));
-            const databases = request.params.schemaVersions.map((entry) =>
-              fileFacts(locationOf(entry.path)),
-            );
-            assert(!fs.existsSync(scopeFile), "Multiple installed handoffs");
-            scope = { time: String(process.hrtime.bigint()), child: child.pid, databases };
-            writeInstalledRecoveryEvidence(scopeFile, scope);
-            report("handoff", { ...scope, request });
-          });
-          return Reflect.apply(end, this, endArgs);
+          const prepared = prepareInput(this, endArgs, true);
+          const result = Reflect.apply(end, this, endArgs);
+          observe("handoff", () => acceptInput(prepared, true));
+          return result;
         };
         child.stdout.on("data", (chunk) => {
           observe("worker-output", () => {
@@ -1463,6 +1515,13 @@ function install(spec) {
       assert.equal(response.terminalRunId, runId);
       assert.equal(response.result.status, "ok");
       assert.equal(response.exitCode, 0);
+      if (selected.request.executor) {
+        assert.equal(response.executorDelegation, "pid-start-v1");
+      }
+      assert.deepEqual(
+        JSON.parse(Buffer.concat(selected.output).toString("utf8")),
+        response.result,
+      );
       const candidate = readOnly(spec.stateDatabase, (db) => ({
         ...db.prepare("SELECT * FROM update_runs WHERE run_id = ?").get(runId),
       }));
@@ -1500,9 +1559,10 @@ function install(spec) {
       if (spec.fault) {
         // A recorder failure in any isolate invalidates the proof. Do not turn
         // that failure into a new launcher mutation or hide an existing intent.
-        if (failure || fs.existsSync(sharedFailure)) {
+        if (failure) {
           return;
         }
+        assertRecordingHealthy(spec.directory);
         const stat = fs.lstatSync(spec.bin, { bigint: true });
         const identity = `${stat.dev}:${stat.ino}`;
         assert.equal(publications.find((entry) => entry.name === "openclaw")?.identity, identity);
@@ -1511,13 +1571,14 @@ function install(spec) {
         // Escrow stays on the installation filesystem; the evidence bind mount
         // may be a different device and must never turn this into an EXDEV fault.
         const escrow = spec.escrow;
-        assert(!fs.existsSync(escrow));
+        assert.equal(fs.lstatSync(escrow, { throwIfNoEntry: false }), undefined);
         const intent = { row, identity, link, escrow, bin: spec.bin };
         writeInstalledRecoveryEvidence(path.join(spec.directory, "launcher-intent.json"), intent);
         report("launcher-intent", intent);
-        if (failure || fs.existsSync(sharedFailure)) {
+        if (failure) {
           return;
         }
+        assertRecordingHealthy(spec.directory);
         fs.renameSync(spec.bin, escrow);
         fs.symlinkSync(link, spec.bin);
         const replacement = fs.lstatSync(spec.bin, { bigint: true });
@@ -1702,13 +1763,18 @@ export function readInstalledTerminalClosedEntries(root, identity, historical = 
     });
 }
 
-function readIsolates(directory) {
+function assertRecordingHealthy(directory) {
   const names = fs.readdirSync(directory);
   assert(
     !names.includes("observer-failed.json") &&
       !names.some((name) => name.endsWith(".failure.json") || name.endsWith(".failure.json.tmp")),
     "Observer recording failed; coverage is unqualified",
   );
+  return names;
+}
+
+function readIsolates(directory) {
+  const names = assertRecordingHealthy(directory);
   const files = names.filter((name) => name.endsWith(".jsonl"));
   assert(files.length > 0, "Observer isolate census is missing");
   assert(
@@ -2016,7 +2082,20 @@ function readObservation(directory, spec = {}) {
     code,
     signal,
     spawned,
-  }) => ({ event, pid, thread, spawnId, child, childThread, time, code, signal, spawned });
+    sequence,
+  }) => ({
+    event,
+    pid,
+    thread,
+    spawnId,
+    child,
+    childThread,
+    time,
+    code,
+    signal,
+    spawned,
+    sequence,
+  });
   const nativeExits = (created) =>
     rows.filter((event) =>
       created.event === "spawn"
@@ -2777,6 +2856,7 @@ export function summarizeInstalledTerminalLaunches(rows) {
         spawnId: row.spawnId,
         evidence: reference(row),
         coverage: row.coverage,
+        ...(row.lifetimeBound ? { lifetimeBound: row.lifetimeBound } : {}),
         nativeSettlement: rows
           .filter(
             (event) =>
@@ -2789,13 +2869,20 @@ export function summarizeInstalledTerminalLaunches(rows) {
       })),
     workerLifetimeBounds: rows
       .filter((row) => row.event === "thread" && row.lifetimeBound)
-      .map((row) => ({
-        pid: row.pid,
-        creatorThread: row.thread,
-        thread: row.childThread,
-        evidence: reference(row),
-        bound: row.lifetimeBound,
-      })),
+      .map((row) => {
+        const matches = rows.filter((event) =>
+          Object.entries(row.lifetimeBound.source).every(([key, value]) => event[key] === value),
+        );
+        assert.equal(matches.length, 1, "Missing enclosing native lifetime event");
+        return {
+          pid: row.pid,
+          creatorThread: row.thread,
+          thread: row.childThread,
+          evidence: reference(row),
+          bound: row.lifetimeBound,
+          nativeExit: reference(matches[0]),
+        };
+      }),
   };
 }
 
@@ -2810,13 +2897,17 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
   }
   const names = new Set(manifest.files.map((file) => file.name));
   assert.equal(names.size, manifest.files.length, "Duplicate evidence artifact");
-  const read = (name, maximum) => {
+  const readBytes = (name) => {
     const file = manifest.files.find((entry) => entry.name === name);
     assert(file, `Missing summary evidence: ${name}`);
     assert(Number.isSafeInteger(file.bytes) && file.bytes >= 0 && file.bytes <= 7 * 1024 * 1024);
     const bytes = readArtifact(name);
     assert.equal(bytes.length, file.bytes);
     assert.equal(digest(bytes), file.sha256, `Changed summary evidence: ${name}`);
+    return bytes;
+  };
+  const read = (name, maximum) => {
+    const bytes = readBytes(name);
     const decoded = gunzipSync(bytes, { maxOutputLength: maximum });
     assert.equal(decoded.at(-1), 10, `Truncated summary evidence: ${name}`);
     return decoded
@@ -2832,9 +2923,9 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
       ...(cell.processesWithoutPreload ?? []).flatMap((row) =>
         [row.evidence].concat(row.nativeSettlement),
       ),
-      ...(cell.workerLifetimeBounds ?? []).map((row) => row.evidence),
+      ...(cell.workerLifetimeBounds ?? []).flatMap((row) => [row.evidence, row.nativeExit]),
     ];
-    if (references.length === 0) {
+    if (references.length === 0 && summary.status !== "passed" && cell.status !== "passed") {
       continue;
     }
     const events = new Map();
@@ -2868,13 +2959,118 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
         }
       }
     }
-    for (const reference of references) {
+    const resolve = (reference) => {
       assert(reference && /^\d+-\d+\.jsonl$/u.test(reference.source));
       assert(Number.isSafeInteger(reference.sequence) && reference.sequence >= 0);
       const found = events.get(`${reference.source}:${reference.sequence}`);
       assert(found, "Missing summary event");
       assert.equal(found.row.event, reference.event, "Changed summary event kind");
       assert.equal(digest(found.encoded), reference.sha256, "Changed summary event digest");
+      return found.row;
+    };
+    for (const reference of references) {
+      resolve(reference);
+    }
+    const launch = (row, kind) => {
+      const created = resolve(row.evidence);
+      assert.equal(created.event, kind);
+      assert.equal(created.pid, kind === "spawn" ? row.creatorPid : row.pid);
+      assert.equal(created.thread, row.creatorThread);
+      assert.equal(
+        kind === "spawn" ? created.child : created.childThread,
+        kind === "spawn" ? row.pid : row.thread,
+      );
+      if (kind === "spawn") {
+        assert.equal(created.spawnId, row.spawnId);
+      }
+      return created;
+    };
+    const owns = (created, ended) =>
+      ended.pid === created.pid &&
+      ended.thread === created.thread &&
+      (created.event === "thread"
+        ? ended.event === "thread-exit" && ended.childThread === created.childThread
+        : ["spawn-exit", "spawn-close", "spawn-sync-return"].includes(ended.event) &&
+          ended.spawnId === created.spawnId &&
+          ended.child === created.child);
+    const raw = [...events.values()].map(({ row }) => row);
+    const handoffs = raw.filter((event) => event.event === "handoff");
+    for (const row of cell.workersWithoutPreload ?? []) {
+      const created = launch(row, "thread");
+      const ended = resolve(row.nativeExit);
+      assert(owns(created, ended), "Worker settlement belongs to another launch");
+      assert(BigInt(created.time) < BigInt(ended.time));
+      assert.equal(row.exitCode, ended.code);
+      assert.equal(handoffs.length, 1);
+      assert.equal(row.joinedBeforeHandoff, BigInt(ended.time) < BigInt(handoffs[0].time));
+    }
+    for (const row of cell.processesWithoutPreload ?? []) {
+      const created = launch(row, "spawn");
+      for (const ref of row.nativeSettlement) {
+        const ended = resolve(ref);
+        assert(owns(created, ended), "Process settlement belongs to another launch");
+        assert(BigInt(created.time) < BigInt(ended.time));
+      }
+      if (row.lifetimeBound) {
+        const bound = row.lifetimeBound;
+        const specBytes = readBytes(`${cell.name}-observer.json`);
+        assert(specBytes.length <= 1024 * 1024);
+        const receipts = JSON.parse(specBytes).processAbsence ?? [];
+        assert.equal(
+          receipts.filter((receipt) => JSON.stringify(receipt) === JSON.stringify(bound)).length,
+          1,
+          "Kernel absence is missing from the recorded observer specification",
+        );
+        assert(
+          bound.sourceKind === "linux-pid-absence" &&
+            bound.pid === created.pid &&
+            bound.thread === created.thread &&
+            bound.spawnId === created.spawnId &&
+            bound.child === created.child &&
+            bound.errorCode === "ESRCH" &&
+            bound.ownExitCode === null &&
+            Number.isSafeInteger(bound.observerPid) &&
+            bound.observerPid > 0 &&
+            bound.observerPid !== created.child,
+          "Kernel absence belongs to another launch",
+        );
+        assert(raw.every((event) => BigInt(event.time) < BigInt(bound.time)));
+      } else {
+        assert(row.nativeSettlement.length > 0, "Process has no native settlement evidence");
+      }
+    }
+    for (const row of cell.workerLifetimeBounds ?? []) {
+      let created = launch(row, "thread");
+      const ended = resolve(row.nativeExit);
+      assert(["spawn-exit", "spawn-sync-return", "thread-exit"].includes(ended.event));
+      assert.deepEqual(
+        Object.fromEntries(Object.keys(row.bound.source).map((key) => [key, ended[key]])),
+        row.bound.source,
+      );
+      assert.equal(row.bound.ownExitCode, null);
+      assert.equal(row.bound.time, ended.time);
+      assert.equal(
+        row.bound.sourceKind,
+        ended.event === "thread-exit" ? "worker-native-exit" : "process-native-exit",
+      );
+      assert(BigInt(created.time) < BigInt(ended.time));
+      const visited = new Set();
+      while (true) {
+        assert(!visited.has(created), "Cyclic enclosing lifetime");
+        visited.add(created);
+        const owners = raw.filter((event) =>
+          created.thread === 0
+            ? event.event === "spawn" && event.child === created.pid
+            : event.event === "thread" &&
+              event.pid === created.pid &&
+              event.childThread === created.thread,
+        );
+        assert.equal(owners.length, 1, "Enclosing native lifetime has no unique owner");
+        created = owners[0];
+        if (owns(created, ended)) {
+          break;
+        }
+      }
     }
   }
   const result = {
