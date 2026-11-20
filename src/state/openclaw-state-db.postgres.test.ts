@@ -72,6 +72,7 @@ import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
   cleanupPostgresStateFixture,
   installPostgresStateFixture,
+  interruptNextPostgresStateCommit,
 } from "./openclaw-state-db.postgres-fixture.test-support.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "./openclaw-state-worker-store.js";
@@ -201,45 +202,35 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           )
         ).rows;
       try {
-        namespace = withEngineStoreAdmission(
-          () => getPostgresPhysicalFacts(openOpenClawStateDatabase(options).db)?.namespace,
-        );
+        const database = withEngineStoreAdmission(() => openOpenClawStateDatabase(options));
+        namespace = getPostgresPhysicalFacts(database.db)?.namespace;
         expect(namespace).toBeDefined();
-        await closeOpenClawStateDatabaseAsync();
-        let prior: Awaited<ReturnType<typeof backends>> = [];
+        const primaryIdentity = expectDefined(
+          withEngineStoreAdmission(() =>
+            database.db.prepare("SELECT pg_backend_pid() AS pid").get(),
+          ),
+          "bootstrap connection identity",
+        );
         if (writer === "update-bookkeeping") {
           const created = await createUpdateRunAsync({ runId, trigger: "cli" }, options);
           expect(created.runId).toBe(runId);
-          prior = await backends();
         }
         await write("before");
-        const active = await backends();
-        // The updater can reuse an idle backend left by run creation.
-        const victims = active.filter(
-          (row) =>
-            !prior.some(
-              (kept) =>
-                kept.pid === row.pid &&
-                kept.query === row.query &&
-                kept.query_start.getTime() === row.query_start.getTime(),
-            ),
+        // Retain the independently owned bootstrap connection, not another connection
+        // belonging to the worker that must retire after an uncertain commit.
+        const primary = (await backends()).filter((row) => row.pid === primaryIdentity.pid);
+        expect(primary).toHaveLength(1);
+        expect(primary[0]?.state).toBe("idle");
+        const restoreCommit = await interruptNextPostgresStateCommit(
+          client,
+          namespace!,
+          writer,
+          runId,
         );
-        expect(victims).toHaveLength(1);
-        const primary = active.filter((row) => row.pid !== victims[0]!.pid);
-        // The updater uses a separate retained writer; leave the primary healthy and unqueried.
-        if (writer === "update-bookkeeping") {
-          expect(primary.length).toBeGreaterThan(0);
-          expect(primary.every((row) => row.state === "idle")).toBe(true);
-        }
-        const killed = await client.query(
-          "SELECT pg_terminate_backend(pid) AS terminated FROM pg_stat_activity WHERE application_name = $1 AND pid = $2",
-          [applicationName, victims[0]!.pid],
-        );
-        expect(killed.rows).toEqual([{ terminated: true }]);
+        await expect(write("interrupted")).rejects.toSatisfy(hasSqliteWorkerOutcomeUnknown);
         expect(
           (await backends()).filter((row) => primary.some((kept) => kept.pid === row.pid)),
         ).toEqual(primary);
-        await expect(write("interrupted")).rejects.toSatisfy(hasSqliteWorkerOutcomeUnknown);
         const read = async () => {
           if (writer === "shared-state") {
             const result = await client.query(
@@ -258,6 +249,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
           return steps.find((step) => step.step === "reconnect.fixture")?.detail;
         };
         expect(await read()).toBe("before");
+        expect(await restoreCommit()).toEqual([{ attempts: 1, is_called: true }]);
         await write("recovered");
         expect(await read()).toBe("recovered");
       } finally {
