@@ -93,7 +93,11 @@ import {
   scriptFailure,
   type CronScriptPayloadExecutionResult,
 } from "./trigger-script-result.js";
-import { createCronTriggerRuntimeLifetime } from "./trigger-script-runtime-lifetime.js";
+import {
+  createCronTriggerRuntimeLifetime,
+  retainCronTriggerRuntime,
+  reuseCronTriggerRuntime,
+} from "./trigger-script-runtime-lifetime.js";
 import type {
   CronToolsAllowExecTarget,
   CronTriggerEvaluationResult,
@@ -122,6 +126,7 @@ void assertTriggerCodesCoverHeadless;
 
 type PreparedTriggerRuntime = {
   [Symbol.dispose]?: () => void;
+  sandboxNeedsProvisioning?: (signal: AbortSignal) => Promise<boolean>;
   createTools: (
     admitted: AdmittedRunContext,
     signal: AbortSignal,
@@ -229,8 +234,15 @@ async function prepareTriggerRuntime(
       config,
       sessionKey,
       workspaceDir,
+      assertCurrent: () => preparationSignal?.throwIfAborted(),
     });
     try {
+      const sandboxNeedsProvisioning =
+        sandbox?.backend?.id === "docker"
+          ? (await import("../agents/sandbox/docker-backend.js")).getDockerSandboxProvisioningCheck(
+              sandbox.backend,
+            )
+          : undefined;
       preparationSignal?.throwIfAborted();
       const effectiveWorkspace =
         sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : workspaceDir;
@@ -335,6 +347,7 @@ async function prepareTriggerRuntime(
         createTools,
         acquireMcpTools,
         context,
+        sandboxNeedsProvisioning,
         ...(pluginRegistry ? { pluginRegistry } : {}),
         scheduledToolPolicy,
         [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
@@ -379,19 +392,6 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     entry.lifetime.retire();
   };
 
-  const retainRuntime = async (
-    entry: TriggerRuntimeCacheEntry,
-    scope: ReturnType<typeof createHeadlessDeadlineScope>,
-  ) => {
-    const release = entry.lifetime.retain();
-    try {
-      return { runtime: await scope.wait(entry.promise), release };
-    } catch (error) {
-      release();
-      throw error;
-    }
-  };
-
   const resolveCachedRuntime = async (
     request: Parameters<PrepareTriggerRuntime>[0],
     scope: ReturnType<typeof createHeadlessDeadlineScope>,
@@ -404,25 +404,39 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       request.callerOrigin ?? null,
       request.execTarget ?? null,
     ]);
-    const cached = runtimeCache.get(request.jobId);
-    if (
-      cached &&
-      cached.configEpoch === request.runtimeConfig &&
-      cached.agentId === agentId &&
-      cached.toolsAllowKey === toolsAllowKey
-    ) {
-      runtimeCache.delete(request.jobId);
-      runtimeCache.set(request.jobId, cached);
-      // Shared preparation follows its first caller's cancellation, not its deadline;
-      // a later caller's cancellation leaves the shared work for the next tick.
-      const retained = await retainRuntime(cached, scope);
-      if (retained.runtime.isCurrent()) {
-        return retained;
+    const matchesRequest = (entry: TriggerRuntimeCacheEntry) =>
+      entry.configEpoch === request.runtimeConfig &&
+      entry.agentId === agentId &&
+      entry.toolsAllowKey === toolsAllowKey;
+    for (;;) {
+      const cached = runtimeCache.get(request.jobId);
+      if (!cached) {
+        break;
       }
-      retained.release();
-    }
-    if (cached) {
+      if (matchesRequest(cached)) {
+        runtimeCache.delete(request.jobId);
+        runtimeCache.set(request.jobId, cached);
+        // Shared preparation follows its first caller's cancellation, not its deadline;
+        // a later caller's cancellation leaves the shared work for the next tick.
+        const retained = await reuseCronTriggerRuntime(
+          cached,
+          scope,
+          () => runtimeCache.get(request.jobId) === cached,
+        );
+        if (retained) {
+          return retained;
+        }
+        // Join a replacement for the same request without retiring a newer configuration.
+        const current = runtimeCache.get(request.jobId);
+        if (current !== cached) {
+          if (current && !matchesRequest(current)) {
+            throw new Error("Cron script preparation changed while checking its sandbox.");
+          }
+          continue;
+        }
+      }
       retireRuntime(request.jobId, cached);
+      break;
     }
     const { cancelSignal } = preparationLimits;
     const preparation = new AbortController();
@@ -477,7 +491,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       })
       .finally(settlePreparation);
     try {
-      return await retainRuntime(entry, scope);
+      return await retainCronTriggerRuntime(entry, scope);
     } catch (error) {
       // A missed deadline keeps preparation running for the next tick instead of
       // repeating the same cold load forever; cancellation still starts cold.
