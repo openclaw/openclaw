@@ -32,22 +32,17 @@ type MessageComponent =
   | APIComponentInContainer
   | APIComponentInMessageActionRow;
 
-// The tap consumes the agent's controls; text, media, links and other controls stay.
-function withoutAgentControls<T extends MessageComponent>(components: readonly T[]): T[] {
-  return components.flatMap((component): T[] => {
+// The tap consumes the agent's controls by disabling them; text, media, links and other
+// controls stay, and the message never becomes empty.
+function withAgentControlsDisabled<T extends MessageComponent>(components: readonly T[]): T[] {
+  return components.map((component): T => {
     if ("custom_id" in component && isDiscordAgentControlCustomId(component.custom_id)) {
-      return [];
+      return { ...component, disabled: true };
     }
-    // Discord rejects empty rows and containers.
-    if (component.type === ComponentType.ActionRow) {
-      const controls = withoutAgentControls(component.components);
-      return controls.length > 0 ? [{ ...component, components: controls }] : [];
+    if (component.type === ComponentType.ActionRow || component.type === ComponentType.Container) {
+      return { ...component, components: withAgentControlsDisabled(component.components) };
     }
-    if (component.type === ComponentType.Container) {
-      const children = withoutAgentControls(component.components);
-      return children.length > 0 ? [{ ...component, components: children }] : [];
-    }
-    return [component];
+    return component;
   });
 }
 
@@ -93,16 +88,13 @@ async function runAgentControlInteraction(params: {
   if (pluginDispatch === "handled") {
     return;
   }
-  // A message with only agent controls cannot become empty, so its controls stay. Accepted:
-  // agent messages carry text.
-  const remaining = params.reusable
-    ? []
-    : withoutAgentControls(interaction.rawData.message?.components ?? []);
   try {
-    if (remaining.length > 0) {
-      await interaction.update({ components: remaining });
-    } else {
+    if (params.reusable) {
       await interaction.acknowledge();
+    } else {
+      await interaction.update({
+        components: withAgentControlsDisabled(interaction.rawData.message?.components ?? []),
+      });
     }
   } catch (err) {
     logError(`${label}: failed to answer the interaction: ${String(err)}`);

@@ -142,12 +142,18 @@ it.each([
 
   expect(reply).not.toHaveBeenCalled();
   expect(lastBody).toBe(`callback_data: ${value}`);
-  // Single use: the tap consumes the controls and keeps the rest of the message.
+  // Single use: the tap disables the controls and keeps the rest of the message.
   expect(update).toHaveBeenCalledExactlyOnceWith({
     components: [
       expect.objectContaining({
         type: ComponentType.Container,
-        components: [expect.objectContaining({ type: ComponentType.TextDisplay })],
+        components: [
+          expect.objectContaining({ type: ComponentType.TextDisplay }),
+          expect.objectContaining({
+            type: ComponentType.ActionRow,
+            components: [expect.objectContaining({ custom_id: customId, disabled: true })],
+          }),
+        ],
       }),
     ],
   });
@@ -173,7 +179,7 @@ it("delivers an agent select choice after the component registry is gone", async
   expect(lastBody).toBe("callback_data: size:m");
 });
 
-it("consumes only the agent's controls and keeps reusable ones", async () => {
+it("disables only the agent's controls; a reusable tap leaves the message alone", async () => {
   const components = sendMarked([
     {
       type: "buttons",
@@ -194,31 +200,36 @@ it("consumes only the agent's controls and keeps reusable ones", async () => {
           {
             type: ComponentType.ActionRow,
             components: [
-              expect.objectContaining({ label: "Docs", url: "https://example.com/docs" }),
+              expect.objectContaining({ custom_id: pickId, disabled: true }),
+              expect.not.objectContaining({ disabled: true }),
+              expect.objectContaining({ custom_id: refreshId, disabled: true }),
             ],
           },
         ],
       }),
     ],
   });
+  const docs = pick.update.mock.calls[0]?.[0].components[0].components[0].components[1];
+  expect(docs).toMatchObject({ label: "Docs", url: "https://example.com/docs" });
 
   const refresh = await tap({ components, customId: refreshId!, type: ComponentType.Button });
   expect(refresh.update).not.toHaveBeenCalled();
   expect(lastBody).toBe("callback_data: refresh");
 });
 
-it("never sends an empty message when the controls were all it had", async () => {
+it("disables the controls of a controls-only message so a second tap cannot fire", async () => {
   const components = sendMarked([{ type: "buttons", buttons: [{ label: "Pick", value: "pick" }] }]);
   const [customId] = controlIds(components);
 
-  const { update, acknowledge } = await tap({
+  const { update } = await tap({
     components,
     customId: customId!,
     type: ComponentType.Button,
   });
-  expect(update).not.toHaveBeenCalled();
-  expect(acknowledge).toHaveBeenCalledOnce();
   expect(lastBody).toBe("callback_data: pick");
+  const [{ components: updated }] = update.mock.calls[0]!;
+  expect(controlIds(updated)).toEqual([customId]);
+  expect(JSON.stringify(updated)).toContain('"disabled":true');
 });
 
 it("keeps duplicate agent values distinct in one message", () => {
