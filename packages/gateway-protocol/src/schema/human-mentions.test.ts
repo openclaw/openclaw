@@ -17,16 +17,10 @@ it.each([
   const method = validation(validate);
   const base = { ...target, message: "🙂 @Ada", idempotencyKey: "run-mentions" };
   const mention = { profileId: "profile-ada", start: 3, end: 7 };
-  method.accepts(
-    base,
-    { ...base, mentions: [] },
-    { ...base, mentions: [mention] },
-    ...["read", "suggest", "send"].map((access) =>
-      Object.assign({}, base, {
-        mentions: [Object.assign({}, mention, { access })],
-      }),
-    ),
-  );
+  method.accepts(base, { ...base, mentions: [] }, { ...base, mentions: [mention] });
+  for (const access of ["read", "suggest", "send"]) {
+    method.accepts({ ...base, mentions: [{ ...mention, access }] });
+  }
   method.rejects(
     ...[
       ["profile-ada"],

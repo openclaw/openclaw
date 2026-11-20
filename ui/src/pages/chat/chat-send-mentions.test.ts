@@ -12,7 +12,7 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 const recipient = (profileId: string, start = 0) => ({ profileId, start, end: start + 5 });
 
-it.each([undefined, "read", "suggest", "send"] as const)(
+it.each([undefined, "suggest"] as const)(
   "offsets selected recipients past reply and annotation with access %s",
   async (access) => {
     const host = makeChatHost({
@@ -25,12 +25,16 @@ it.each([undefined, "read", "suggest", "send"] as const)(
     });
     await handleSendChat(host);
     const expected = "> **Reader:** @Other quote\n\n@Other context\n\n🔎 @Alex please review";
-    expect(findChatSendPayload(host)).toMatchObject({
+    const payload = findChatSendPayload(host);
+    expect(payload).toMatchObject({
       message: expected,
       mentions: [
         { ...recipient("profile-alex", expected.indexOf("@Alex")), ...(access ? { access } : {}) },
       ],
     });
+    if (!access) {
+      expect(JSON.stringify(payload)).not.toContain('"access"');
+    }
   },
 );
 

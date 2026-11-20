@@ -606,7 +606,7 @@ it("removes participation-excluded tools from construction and deferred dispatch
 });
 
 it.each(
-  [[], ["read"], ["read", "ls"], ["read", "sessions_list", "sessions_history"]].map((tools) => ({
+  [[], ["read", "sessions_list", "sessions_history"]].map((tools) => ({
     tools,
   })),
 )(

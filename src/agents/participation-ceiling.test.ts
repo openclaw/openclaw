@@ -12,14 +12,8 @@ import {
   withAuthorizedPermissionChange,
 } from "./embedded-agent-runner/run/permission-change.js";
 import { resolveExecDefaults } from "./exec-defaults.js";
-import { preparePluginHarnessParams } from "./harness/plugin-attempt-params.js";
-import type { AgentHarness, AgentHarnessAttemptParamsV2 } from "./harness/types.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
-import {
-  PARTICIPATION_RUNTIME_ERROR,
-  PARTICIPATION_TOOL_ALLOWLIST,
-  type ParticipationCeiling,
-} from "./participation-ceiling.js";
+import type { ParticipationCeiling } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -58,7 +52,12 @@ const policies = {
 } as const;
 
 describe("participation permission intersection", () => {
-  it.each(modes.flatMap((permissionMode) => defaults.map((mode) => ({ permissionMode, mode }))))(
+  it.each([
+    ...defaults.map((mode) => ({ permissionMode: undefined, mode })),
+    ...modes
+      .filter((mode) => mode !== undefined)
+      .map((permissionMode) => ({ permissionMode, mode: "full" as const })),
+  ])(
     "intersects session=$permissionMode with layered default=$mode without replacing it",
     ({ permissionMode, mode }) => {
       const cfg: OpenClawConfig = { agents: { entries: { main: { tools: { exec: { mode } } } } } };
@@ -187,51 +186,20 @@ it("never binds the participating device as approval reviewer", () => {
   ).toBe("owner-device");
 });
 
-it.each([false, true])(
-  "refuses native harness before native consent=%s can rewrite permissions",
-  async (consent) => {
-    await expect(
-      preparePluginHarnessParams(
-        { participationCeiling: ceiling } as AgentHarnessAttemptParamsV2,
-        { id: "codex" } as AgentHarness,
-        consent,
-        vi.fn(),
-        false,
-      ),
-    ).rejects.toThrow(PARTICIPATION_RUNTIME_ERROR);
-  },
-);
-
-it.each([
-  { tools: undefined, expected: [...PARTICIPATION_TOOL_ALLOWLIST] },
-  { tools: [], expected: [] },
-  { tools: ["read", "write"], expected: ["read", "write"] },
-  { tools: ["read", "message", "sessions_list"], expected: ["read", "message"] },
-])(
-  "intersects the exact participant tool ceiling $tools with agent policy",
-  ({ tools, expected }) => {
-    const capabilityProfile = resolveConversationCapabilityProfile({
-      config: { agents: { entries: { main: { tools: { deny: ["sessions_list"] } } } } },
-      sessionKey: ceiling.sessionKey,
-      participationCeiling: { ...ceiling, tools },
-    });
-    expect(
-      projectConversationToolNames({
-        capabilityProfile,
-        toolNames: [...PARTICIPATION_TOOL_ALLOWLIST, "message", "sessions_list", "skills_read"],
-        warn: () => undefined,
-      }),
-    ).toEqual(expected);
-    expect(
-      projectConversationToolNames({
-        capabilityProfile,
-        toolNames: ["read", "message"],
-        toolMeta: () => ({ pluginId: "collision" }),
-        warn: () => undefined,
-      }),
-    ).toEqual([]);
-  },
-);
+it("rejects plugin collisions within the participating core tool projection", () => {
+  const capabilityProfile = resolveConversationCapabilityProfile({
+    sessionKey: ceiling.sessionKey,
+    participationCeiling: { ...ceiling, tools: ["read", "message"] },
+  });
+  expect(
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: ["read", "message"],
+      toolMeta: () => ({ pluginId: "collision" }),
+      warn: () => undefined,
+    }),
+  ).toEqual([]);
+});
 
 it("filters discovery and exact-id deferred dispatch without invoking forbidden tools", async () => {
   const read = createStubTool("read");

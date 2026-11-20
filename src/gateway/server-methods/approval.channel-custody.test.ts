@@ -249,7 +249,7 @@ describe("approval authority boundaries", () => {
     }
   });
 
-  it("does not grant a participating requester resolution rights on its own approval", async () => {
+  it("does not grant a requester with a different reviewer identity resolution rights on its own approval", async () => {
     const { managers, exec, resolve } = createFixture();
     const pending = await exec("participant-approval");
     const participant = createClient({ deviceId: "requester-device", scopes: ["operator.read"] });

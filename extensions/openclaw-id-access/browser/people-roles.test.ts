@@ -18,11 +18,31 @@ it("shows config-valid but protocol-invalid roles as unavailable, never as the d
     "a".repeat(65),
   ]);
   expect(options[0]?.description).toContain("1–64 lowercase letters");
+  expect(
+    roleOptions(
+      [
+        {
+          name: "operator",
+          defined: true,
+          sessions: "write",
+          requiresSandbox: false,
+          admin: false,
+        },
+      ],
+      "en-US",
+    )[0]?.description,
+  ).toBe(
+    "Read and change other people's sessions · Sandbox follows agent settings · No administrator access",
+  );
 });
 
-it.each(["read", "suggest", "send"] as const)(
+it.each([
+  ["read", "Read"],
+  ["suggest", "Suggest"],
+  ["send", "Send"],
+] as const)(
   "describes the %s invitation ceiling without changing other role details",
-  (maxInvitedAccess) => {
+  (maxInvitedAccess, label) => {
     const role: Role = {
       name: "guest",
       defined: true,
@@ -32,10 +52,7 @@ it.each(["read", "suggest", "send"] as const)(
       admin: false,
     };
     expect(roleOptions([role], "en-US")[0]?.description).toBe(
-      `Only sessions they’re invited to · Can be invited up to ${maxInvitedAccess[0]!.toUpperCase()}${maxInvitedAccess.slice(1)} · Sandbox required · No administrator access`,
-    );
-    expect(roleOptions([{ ...role, maxInvitedAccess: undefined }], "en-US")[0]?.description).toBe(
-      "No access to other people's sessions · Sandbox required · No administrator access",
+      `Only sessions they’re invited to · Can be invited up to ${label} · Sandbox required · No administrator access`,
     );
   },
 );

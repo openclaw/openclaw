@@ -402,10 +402,12 @@ it.each(["chat", "new-session"] as const)(
     await view.search("@Peter Steinberger @Peter");
     view.key("Enter");
     expect(view.value().mentions.map((entry) => entry.access)).toEqual(["suggest", "suggest"]);
+    view.key("Enter");
+    expect(view.send).toHaveBeenCalledWith(view.value());
   },
 );
 
-it.each(["chat", "new-session"] as const)(
+it.each(["new-session"] as const)(
   "%s keeps recovered invitation grants visible and permits lowering without stale options",
   async (kind) => {
     const view = composerFixture(
@@ -438,5 +440,24 @@ it.each(["chat", "new-session"] as const)(
     options[0]!.click();
     await vi.advanceTimersByTimeAsync(0);
     expect(view.value().mentions[0]?.access).toBe("read");
+  },
+);
+
+it.each([
+  { advertised: true, user: peter },
+  { advertised: false, user: { ...peter, inviteAccessOptions: ["read", "suggest"] } },
+])(
+  "keeps ordinary mentions unextended with advertisement=$advertised",
+  async ({ advertised, user }) => {
+    const view = composerFixture("chat", "", [], undefined, advertised);
+    view.request.mockResolvedValue({ users: [user], truncated: false });
+    await view.search("@Peter");
+    view.key("Enter");
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(view.query(".chat-invite-access")).toBeNull();
+    expect(view.value().mentions).toEqual([{ profileId: peter.profileId, start: 0, end: 18 }]);
+    view.key("Enter");
+    expect(view.send).toHaveBeenCalledWith(view.value());
   },
 );

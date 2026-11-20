@@ -317,40 +317,70 @@ describe("chat session sharing menu", () => {
     expect(onMemberChange).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["shared", "draft"] as const)(
-    "edits invited access independently of %s visibility",
-    async (visibility) => {
-      const onMemberAccessChange = vi.fn();
-      const props = renderSharing({
-        session: sharingSession({ visibility }),
-        onMemberAccessChange,
-        state: sharingState({
-          identities: [human("alice", "Alice"), human("other", "Other")],
-          members: [{ identityId: "alice", addedBy: "owner", addedAt: 1, access: "send" }],
-          permissions: [
-            {
-              identityId: "alice",
-              level: "send",
-              options: ["read", "suggest", "send"],
-              invitation: "member",
-            },
-            { identityId: "other", level: "read", options: ["read", "send"] },
-          ],
-        }),
-      });
-      const root = await mount(props);
-      expect(item(root, "permission:other")).toBeNull();
-      item(root, "permission:alice")!.click();
-      await waitForSolid(() => expect(item(root, "permission:suggest:alice")).not.toBeNull());
-      expect(root.textContent).toContain("Lowering access cancels Alice’s queued messages");
-      item(root, "permission:suggest:alice")!.click();
-      expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("alice", "suggest");
-      expect(props.onMemberChange).not.toHaveBeenCalled();
-      render({ ...props, onMemberAccessChange: undefined }, root);
-      await waitForSolid(() => expect(item(root, "permission:alice")).toBeNull());
-      expect(root.textContent).toContain("Can send");
-    },
-  );
+  it("edits invited access across visibility and legacy membership states", async () => {
+    const onMemberAccessChange = vi.fn();
+    const props = renderSharing({
+      session: sharingSession({ visibility: "shared" }),
+      onMemberAccessChange,
+      state: sharingState({
+        identities: [human("alice", "Alice"), human("other", "Other")],
+        members: [{ identityId: "alice", addedBy: "owner", addedAt: 1, access: "send" }],
+        permissions: [
+          {
+            identityId: "alice",
+            level: "send",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          { identityId: "other", level: "read", options: ["read", "send"] },
+        ],
+      }),
+    });
+    const root = await mount(props);
+    expect(item(root, "permission:other")).toBeNull();
+    item(root, "permission:alice")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:alice")).not.toBeNull());
+    expect(root.textContent).toContain("Lowering access cancels Alice’s queued messages");
+    item(root, "permission:suggest:alice")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("alice", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
+    render({ ...props, session: sharingSession({ visibility: "draft" }) }, root);
+    expect(item(root, "permission:alice")).not.toBeNull();
+    render({ ...props, onMemberAccessChange: undefined }, root);
+    await waitForSolid(() => expect(item(root, "permission:alice")).toBeNull());
+    expect(root.textContent).toContain("Can send");
+    const legacy = renderSharing({
+      session: sharingSession({ visibility: "read-only" }),
+      onMemberAccessChange,
+      onMemberChange: props.onMemberChange,
+      state: sharingState({
+        identities: [human("legacy", "Legacy"), human("uninvited", "Uninvited")],
+        members: [{ identityId: "legacy", addedBy: "owner", addedAt: 1 }],
+        permissions: [
+          {
+            identityId: "legacy",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "member",
+          },
+          {
+            identityId: "uninvited",
+            level: "read",
+            options: ["read", "suggest", "send"],
+            invitation: "available",
+          },
+        ],
+      }),
+    });
+    render(legacy, root);
+    onMemberAccessChange.mockClear();
+    expect(item(root, "permission:uninvited")).toBeNull();
+    item(root, "permission:legacy")!.click();
+    await waitForSolid(() => expect(item(root, "permission:suggest:legacy")).not.toBeNull());
+    item(root, "permission:suggest:legacy")!.click();
+    expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("legacy", "suggest");
+    expect(props.onMemberChange).not.toHaveBeenCalled();
+  });
 
   it("keeps a world-readable draft session visibly public after its menu closes", async () => {
     const session = sharingSession({ visibility: "draft" });
@@ -774,39 +804,4 @@ describe("chat session sharing menu", () => {
     expect(error?.getAttribute("role")).toBe("alert");
     expect(root.textContent).toContain("Session access");
   });
-});
-
-it("distinguishes uninvited ceiling people from legacy memberships without stored access", async () => {
-  const onMemberAccessChange = vi.fn();
-  const onMemberChange = vi.fn();
-  const props = renderSharing({
-    session: sharingSession({ visibility: "read-only" }),
-    onMemberAccessChange,
-    onMemberChange,
-    state: sharingState({
-      identities: [human("legacy", "Legacy"), human("uninvited", "Uninvited")],
-      members: [{ identityId: "legacy", addedBy: "owner", addedAt: 1 }],
-      permissions: [
-        {
-          identityId: "legacy",
-          level: "read",
-          options: ["read", "suggest", "send"],
-          invitation: "member",
-        },
-        {
-          identityId: "uninvited",
-          level: "read",
-          options: ["read", "suggest", "send"],
-          invitation: "available",
-        },
-      ],
-    }),
-  });
-  const root = await mount(props);
-  expect(item(root, "permission:uninvited")).toBeNull();
-  item(root, "permission:legacy")!.click();
-  await waitForSolid(() => expect(item(root, "permission:suggest:legacy")).not.toBeNull());
-  item(root, "permission:suggest:legacy")!.click();
-  expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("legacy", "suggest");
-  expect(onMemberChange).not.toHaveBeenCalled();
 });

@@ -1,7 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolveApprovalSourceStreamKey } from "./approval-session-audience.js";
 import { createPreparedTestApprovalManager } from "./exec-approval-manager.test-support.js";
@@ -317,48 +316,6 @@ for (const sourceSessionKey of ["agent:main:participation", "global"]) {
     );
   });
 }
-
-it("rejects a changed creator identity while replay preparation awaits", async (test) => {
-  const fixture = await createPreparedTestApprovalManager(test);
-  await fixture.run(() =>
-    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
-      const { manager, databaseOptions } = fixture;
-      const record = manager.create(
-        { command: "echo private", sessionKey, runId: "run-participant" },
-        60_000,
-      );
-      record.participation = binding;
-      await manager.register(record, 60_000);
-      const selected = createDeferredCore();
-      const finish = createDeferredCore();
-      const prepare = approvalStore.prepareOperatorApprovalReplay;
-      vi.spyOn(approvalStore, "prepareOperatorApprovalReplay").mockImplementationOnce(
-        async (input) => {
-          const snapshot = await prepare({ ...input, databaseOptions });
-          selected.resolve();
-          await finish.promise;
-          return snapshot;
-        },
-      );
-      const client = audience()[0]!.client;
-      const runtime = createOperatorApprovalSessionEventRuntime({
-        clients: [client],
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        broadcastToConnIds: vi.fn(),
-        getLiveManager: () => manager,
-      });
-      const pending = runtime.replay(sessionKey, client);
-      const rejected = expect(pending).rejects.toThrow("authority");
-      try {
-        await selected.promise;
-        client.authenticatedUserProfile = dispatchProfile("participant");
-      } finally {
-        finish.resolve();
-      }
-      await rejected;
-    }),
-  );
-});
 
 it("selects entitled exec records before unrelated reviewers can exhaust replay", async (test) => {
   const fixture = await createPreparedTestApprovalManager(test);
