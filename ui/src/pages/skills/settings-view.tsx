@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -14,11 +15,13 @@ import { groupSkills, type SkillGroup } from "../../lib/skills-grouping.ts";
 import { isSkillAvailable } from "../../lib/skills-shared.ts";
 import { SkillStateStatus, verdictForSkill, verdictStatus } from "./skill-status.tsx";
 import { SkillTile } from "./skill-tile.tsx";
-import { createSkillsRenderer } from "./skills-page.tsx";
-import type { SkillsProps, SkillsStatusFilter } from "./view-types.ts";
+import { SkillsPage } from "./skills-page.tsx";
+import type { SkillsProps, SkillsRouteData, SkillsStatusFilter } from "./view-types.ts";
 import { skillControlsLocked } from "./view.tsx";
 
-export const renderSolid = createSkillsRenderer("settings", SkillsSettings);
+export function renderSolid(props: SolidRouteProps<SkillsRouteData>) {
+  return <SkillsPage routeData={props.data} surface="settings" List={SkillsSettings} />;
+}
 
 const STATUS_TABS: Array<{ id: SkillsStatusFilter; labelKey: string }> = [
   { id: "all", labelKey: "skillsPage.tabs.all" },

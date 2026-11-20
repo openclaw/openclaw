@@ -1,5 +1,6 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
+import type { SolidRouteModule } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -64,7 +65,7 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         clawhubRef,
       };
     },
-    component: () =>
+    component: (): Promise<SolidRouteModule<SkillsRouteData>> =>
       surface === "discovery" ? import("./discovery-view.tsx") : import("./settings-view.tsx"),
   });
 }

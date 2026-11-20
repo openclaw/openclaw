@@ -8,7 +8,6 @@ import {
   Show,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SolidRouteProps } from "../../app-route-types.tsx";
 import {
   hasOperatorAdminAccess,
   hasOperatorReadAccess,
@@ -54,22 +53,21 @@ import { createSkillsData } from "./skills-page-state.ts";
 import type {
   ClawHubDetailReceipt,
   SkillDetailTab,
-  SkillsList,
   SkillsPageProps,
   SkillsPresentation,
   SkillsRouteData,
 } from "./view-types.ts";
 import { Skills } from "./view.tsx";
 
-export function createSkillsRenderer(surface: "discovery" | "settings", List: SkillsList) {
-  return (props: SolidRouteProps<SkillsRouteData>) => (
-    <Show when={Boolean(props.data)}>
-      <SkillsPage routeData={props.data} surface={surface} List={List} />
+export function SkillsPage(props: SkillsPageProps) {
+  return (
+    <Show when={Boolean(props.routeData)}>
+      <SkillsPageContent {...props} />
     </Show>
   );
 }
 
-export function SkillsPage(props: SkillsPageProps) {
+function SkillsPageContent(props: SkillsPageProps) {
   const context = useApplication();
   const surface = () => props.surface ?? "settings";
   // The synchronous request owner admits live surface props at the effect boundary.

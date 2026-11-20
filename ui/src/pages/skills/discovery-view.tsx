@@ -1,6 +1,7 @@
 import { createMemo, createSignal, Errored, For, isPending, Loading, Show } from "solid-js";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
@@ -18,8 +19,8 @@ import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-
 import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import { SkillTile } from "./skill-tile.tsx";
 import "../../styles/skills-discovery.css";
-import { createSkillsRenderer } from "./skills-page.tsx";
-import type { SkillsProps } from "./view-types.ts";
+import { SkillsPage } from "./skills-page.tsx";
+import type { SkillsProps, SkillsRouteData } from "./view-types.ts";
 
 registerSkillsBrowserEnglish();
 
@@ -32,7 +33,9 @@ export function SkillsDiscoveryList(props: SkillsProps) {
   );
 }
 
-export const renderSolid = createSkillsRenderer("discovery", SkillsDiscoveryList);
+export function renderSolid(props: SolidRouteProps<SkillsRouteData>) {
+  return <SkillsPage routeData={props.data} surface="discovery" List={SkillsDiscoveryList} />;
+}
 
 type SkillDiscoveryEntry = {
   id: string;
