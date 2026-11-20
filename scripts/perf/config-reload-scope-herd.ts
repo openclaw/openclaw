@@ -148,7 +148,7 @@ const samplingOptions = {
 };
 const clients: InstanceType<typeof GatewayClient>[] = [];
 let active = false;
-let key = "";
+const sessionKeys = new Map<InstanceType<typeof GatewayClient>, string>();
 let configEvents = 0;
 let modelInvalidations = 0;
 const scopes: SessionRowChange["scope"][] = [];
@@ -166,22 +166,24 @@ const stopModels = registerPreparedModelRuntimePublicationListener((event) => {
     modelInvalidations++;
   }
 });
-const params = (method: string) =>
-  method === "models.list"
+const params = (client: InstanceType<typeof GatewayClient>, method: string) => {
+  const key = sessionKeys.get(client)!;
+  return method === "models.list"
     ? { agentId: "main", sessionKey: key, preparedOnly: true }
     : method === "session.members.listEvidence"
       ? { agentId: "main", sessionKey: key }
       : { agentId: "main", key };
+};
 async function probe(client: InstanceType<typeof GatewayClient>) {
   const start = performance.now();
-  await client.request("models.list", params("models.list"));
+  await client.request("models.list", params(client, "models.list"));
   probeMs.push(performance.now() - start);
 }
 function refetch(client: InstanceType<typeof GatewayClient>, method: string) {
   counts[method] = (counts[method] ?? 0) + 1;
   automatic.push(
     client
-      .request(method, method === "config.get" ? {} : params(method))
+      .request(method, method === "config.get" ? {} : params(client, method))
       .catch((error: unknown) => {
         errors.push(String(error));
       }),
@@ -243,9 +245,10 @@ try {
   }
   const roster = await clients[0]!.request<{ sessions: Array<{ key: string }> }>("sessions.list", {
     agentId: "main",
-    limit: 1,
+    limit: count,
   });
-  key = roster.sessions[0]!.key;
+  assert.equal(roster.sessions.length, count, "Fixture needs one session per client");
+  clients.forEach((client, index) => sessionKeys.set(client, roster.sessions[index]!.key));
   for (const client of clients) {
     for (const method of [
       "models.list",
@@ -253,7 +256,7 @@ try {
       "sessions.describe",
       "sessions.processes.list",
     ]) {
-      await client.request(method, params(method));
+      await client.request(method, params(client, method));
     }
   }
   if (values.allocations) {
@@ -357,6 +360,7 @@ try {
         node: process.version,
         load: loadavg(),
         clients: count,
+        distinctSessions: new Set(sessionKeys.values()).size,
         fixture,
         results,
       },
