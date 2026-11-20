@@ -124,7 +124,11 @@ it("serves the delivered skill copy only after Gateway authorization", async () 
     type: "res",
     id: "denied",
     ok: false,
-    error: { code: "INVALID_REQUEST", message: "Skill access revoked" },
+    error: {
+      code: "INVALID_REQUEST",
+      message: "Skill access revoked",
+      details: { reason: "method-not-allowed" },
+    },
   });
   await expect(tool!.execute("denied", { name: "guide" })).rejects.toThrow("Skill access revoked");
   expect(readInstructions).not.toHaveBeenCalled();
