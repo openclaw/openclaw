@@ -123,7 +123,11 @@ it.each([
   [
     "full-agentic",
     "src/gateway",
-    ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts", ...sessionWeakRefFiles],
+    [
+      "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts",
+      "src/gateway/control-ui-session-pr-prepared-read.retention.test.ts",
+      ...sessionWeakRefFiles,
+    ],
     [],
   ],
   ["gateway-core", "src/gateway", sessionWeakRefFiles.slice(0, 2), []],
