@@ -563,9 +563,6 @@ export function ApplicationShell(props: {
           prop:pageRouteFailed={
             (props.host.shellRevision(), props.host.routeState.routeFailed === true)
           }
-          prop:minimizeRequestId={
-            (props.host.shellRevision(), props.host.custodianMinimizeRequestId)
-          }
         />
         <ShellRequestedComponent
           host={props.host}

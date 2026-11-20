@@ -51,7 +51,6 @@ export type AssistantPanelProps = {
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
-  minimizeRequestId: number;
   store?: CustodianSessionStore;
 };
 export function createAssistantPanel(
@@ -108,14 +107,9 @@ export function createAssistantPanel(
             JSON.parse(getSafeLocalStorage()?.getItem(targetStorageKey()) ?? "null"),
           );
         } catch {
-          // Invalid presentation preferences use the default destination.
+          // Missing or invalid saved presentation preferences use the default destination.
         }
         destination = saved?.destination === "home" ? "home" : "custodian";
-        // Ask is explicit help, not a second conversation restored after onboarding.
-        // Home and activation-owned plugin docks retain their normal behavior.
-        if (destination === "custodian") {
-          dockLayout.setOpen(false);
-        }
         builtInDestination = destination;
       }
       const context = getContext();

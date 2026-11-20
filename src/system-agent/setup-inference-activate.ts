@@ -506,11 +506,19 @@ async function verifyAndActivateCandidate(
   if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup || createFirstAgent) {
     let createdFirstAgent: OpenClawConfig | undefined;
     const finishFirstAgent = async () => {
-      if (createdFirstAgent) {
+      if (!createdFirstAgent) {
+        return;
+      }
+      try {
         const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
         await provisionDefaultProactiveJob(createdFirstAgent, routeAgentId, {
           commitGuard: () => throwIfSetupInferenceCancelled(params),
         });
+      } catch (error) {
+        // The model and agent are already applied; the default check-in job is optional.
+        params.runtime.error?.(
+          `Your agent is ready, but OpenClaw couldn't schedule its default check-in: ${formatErrorMessage(error)}`,
+        );
       }
     };
     const configTarget: SetupInferenceConfigTarget = {

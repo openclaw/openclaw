@@ -28,6 +28,7 @@ it.each([
   "probe-failure",
   "cancelled",
   "application-failure",
+  "job-failure",
 ])(
   "couples canonical first-agent creation with host-only Codex activation (%s)",
   async (outcome) => {
@@ -39,6 +40,9 @@ it.each([
       surface: "gateway",
     });
     const provision = vi.spyOn(proactive, "provisionDefaultProactiveJob");
+    if (outcome === "job-failure") {
+      provision.mockRejectedValueOnce(new Error("cron store unavailable"));
+    }
     if (outcome === "existing") {
       setup.config.agents!.entries!.main = { name: "Existing agent", workspace: setup.workspace };
       await fs.writeFile(setup.configPath, JSON.stringify(setup.config));

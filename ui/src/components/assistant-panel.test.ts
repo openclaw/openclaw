@@ -592,11 +592,7 @@ describe("assistant panel", () => {
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(1),
     );
-    await update(panel, {
-      custodianAvailable: true,
-      custodianSuppressed: false,
-      minimizeRequestId: 1,
-    });
+    await update(panel, { custodianAvailable: true, custodianSuppressed: false });
     expect(panel.assistantPanelOpen).toBe(false);
     expect(reserveRight()).toBe("0px");
     await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
@@ -618,6 +614,16 @@ describe("assistant panel", () => {
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
     expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
+  });
+
+  it("restores a saved open Ask dock after reloading an ordinary route", async () => {
+    const { panel } = await mountPanel({ custodianSuppressed: false });
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
+    expect(panel.assistantPanelOpen).toBe(true);
+
+    panel.remove();
+    const { panel: restored } = await mountPanel({ custodianSuppressed: false });
+    expect(restored.assistantPanelOpen).toBe(true);
   });
 
   it("suppresses automatic Ask OpenClaw restores in Settings while keeping explicit opens usable", async () => {
@@ -696,8 +702,9 @@ describe("assistant panel", () => {
       { id: 1, role: "user", text: "Check this system", at: 1, question: null, step: null },
     ];
     panel.custodianSuppressed = false;
-    panel.minimizeRequestId = 1;
     await panel.updateComplete;
+    await toggle(panel, CUSTODIAN_PANEL_TOGGLE_EVENT);
+    expect(panel.assistantPanelOpen).toBe(true);
 
     currentStore.sending = true;
     currentStore.setInput("status");

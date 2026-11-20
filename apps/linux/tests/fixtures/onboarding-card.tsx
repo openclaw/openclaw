@@ -2,9 +2,9 @@ import { render } from "@solidjs/web";
 import type { GatewayBrowserClient } from "../../../../ui/src/api/gateway.ts";
 import type { ApplicationContext } from "../../../../ui/src/app/context.ts";
 import { ApplicationProvider } from "../../../../ui/src/lib/reactive/context.ts";
-import { createCustodianActions } from "../../../../ui/src/pages/custodian/custodian-actions.ts";
-import { CustodianSessionStore } from "../../../../ui/src/pages/custodian/custodian-session-store.ts";
-import { CustodianSetupCard } from "../../../../ui/src/pages/custodian/custodian-setup-card.tsx";
+import { projectCallbackOwner } from "../../../../ui/src/lib/reactive/callback-owner.ts";
+import { AutomaticSetupCard } from "../../../../ui/src/pages/model-setup/automatic-setup-card.tsx";
+import { AutomaticModelSetup } from "../../../../ui/src/pages/model-setup/automatic-setup.ts";
 import "../../../../ui/src/styles/base.css";
 import "../../../../ui/src/styles/components.css";
 import "../../../../ui/src/styles/custodian.css";
@@ -15,7 +15,7 @@ import "./onboarding-card.css";
 const capabilityAtBoot = document.documentElement.dataset.nativeSetupAtBoot === "true";
 window.dispatchEvent(new Event("openclaw:native-window-chrome-available"));
 const instance = crypto.randomUUID();
-const store = new CustodianSessionStore();
+let setup: AutomaticModelSetup | undefined;
 const client = {
   async request<T>(method: string): Promise<T> {
     if (method !== "openclaw.setup.auto") {
@@ -50,7 +50,7 @@ function report() {
       path: location.pathname,
       capabilityAtBoot,
       currentGateway: window["__OPENCLAW_NATIVE_SETUP__"]?.currentGateway,
-      setupStatus: store.autoSetup.result?.status,
+      setupStatus: setup?.result?.status,
     }),
   });
 }
@@ -79,14 +79,22 @@ window.addEventListener("openclaw:native-gateways-changed", report);
 
 render(
   () => {
-    const { actions } = createCustodianActions(() => store);
+    const projection = projectCallbackOwner(
+      (changed) =>
+        new AutomaticModelSetup(() => {
+          changed();
+          report();
+        }),
+      (owner) => owner,
+    );
+    setup = projection.owner;
     return (
       <ApplicationProvider value={context}>
         <header>OPENCLAW · SYNTHETIC GATEWAY DATA</header>
         <main>
           <h1>{title()}</h1>
           <p>Production setup card in the native desktop app. Provider results are synthetic.</p>
-          <CustodianSetupCard store={store} actions={actions.setup} />
+          <AutomaticSetupCard owner={projection.owner} revision={projection.view.revision} />
           <p id="action-error" role="alert" />
           <nav aria-label="Proof navigation">
             <a href="/fixture/chat/custodian">Open chat</a>
@@ -104,6 +112,5 @@ render(
   },
   document.getElementById("app")!,
 );
-store.subscribe(report);
-store.autoSetup.synchronize(context, true, location.origin);
+setup?.synchronize(context, true, location.origin);
 report();
