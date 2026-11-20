@@ -82,19 +82,19 @@ it("renders gateway DNS-SD records", () => {
   }
 });
 
-it("keeps long hostnames as valid DNS labels", () => {
+it("keeps truncated host labels as valid DNS hostnames", () => {
   const dnsLabelRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-  // 62 chars + "-gateway" overflows 63, so truncation must not leave a trailing hyphen.
-  vi.spyOn(os, "hostname").mockReturnValue("a".repeat(62));
+  // 68 chars: truncating to 63 lands on the hyphen before the trailing "bbbbb".
+  vi.spyOn(os, "hostname").mockReturnValue(`${"a".repeat(62)}-bbbbb`);
   const txt = renderZoneText();
-
-  const instanceLabel = /_openclaw-gw\._tcp IN PTR ([^.]+)\._openclaw-gw\._tcp/.exec(txt)?.[1];
-  expect(instanceLabel).toBeDefined();
-  expect(dnsLabelRe.test(instanceLabel!)).toBe(true);
 
   const srvTarget = /IN SRV 0 0 18789 (\S+)/.exec(txt)?.[1];
   expect(srvTarget).toBeDefined();
   expect(dnsLabelRe.test(srvTarget!)).toBe(true);
+
+  const hostOwner = /^([^\s]+) IN A /m.exec(txt)?.[1];
+  expect(hostOwner).toBeDefined();
+  expect(dnsLabelRe.test(hostOwner!)).toBe(true);
 });
 
 it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
