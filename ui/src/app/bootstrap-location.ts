@@ -42,7 +42,7 @@ import { loadGatewaySessionSelection } from "./settings.ts";
 // candidates remain explicit, even before Gateway hello registers plugin tabs.
 function isPersistedSessionLanding(location: RouteLocation, basePath: string): boolean {
   return (
-    isDefaultChatLanding(location, basePath, routeIdFromPath) &&
+    isDefaultChatLanding(location, basePath) &&
     !/^\/chat\/main\/?$/u.test(location.pathname.slice(basePath.length))
   );
 }
@@ -158,7 +158,7 @@ export function resolveBootstrapModelCatalogTarget(
       ...(target.slugHint ? { slugHint: target.slugHint } : {}),
     };
   }
-  if (isDefaultChatLanding(location, basePath, routeIdFromPath)) {
+  if (isDefaultChatLanding(location, basePath)) {
     const agentId =
       parseAgentSessionKey(selection.sessionKey)?.agentId ?? selection.selectedAgentId;
     return { sessionKey: selection.sessionKey, ...(agentId ? { agentId } : {}) };
@@ -205,9 +205,7 @@ export async function isResolvedDefaultLanding(
 ): Promise<boolean> {
   const landing = await resolved;
   const current = history.location();
-  return (
-    isDefaultChatLanding(current, basePath, routeIdFromPath) || sameRouteLocation(current, landing)
-  );
+  return isDefaultChatLanding(current, basePath) || sameRouteLocation(current, landing);
 }
 
 export function createInitialApplicationLocationResolver(params: {
