@@ -73,7 +73,7 @@ describe("renderPluginCatalogResults", () => {
       state: "disabled",
     };
     const props = baseProps({
-      intent: "featured",
+      query: "catalog",
       result: { items: [plugin("catalog")] },
       inventory: [
         { ...installed, installed: false, state: "not-installed" },
@@ -563,6 +563,60 @@ describe("renderPluginCatalogResults", () => {
     tools.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
     expect(onCategoryChange).toHaveBeenCalledWith("tools");
     expect(cardIds(tools)).toEqual(["pin", ...items.slice(0, 7).map((item) => item.id)]);
+  });
+
+  it("lists installed plugins only in search and keeps a row installed from the view", async () => {
+    const local = { present: true, installed: true, enabled: true, state: "enabled" } as const;
+    const installed = plugin("installed", { local: { ...local, action: "manage" } });
+    const listedLater = plugin("inventory-installed", { catalog: { categories: ["channels"] } });
+    const shelf = Array.from({ length: 8 }, (_, index) => plugin(`shelf-${index}`));
+    const props = baseProps({
+      featured: [installed, ...shelf],
+      trending: [listedLater],
+      result: { items: [installed, listedLater, plugin("tool")] },
+      inventory: [
+        {
+          id: "inventory-plugin",
+          name: "Inventory plugin",
+          catalogId: listedLater.id,
+          kind: ["tool"],
+          origin: "global",
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+      ],
+    });
+    const { container, ui } = await mount(props);
+    const featured = container.querySelector('[data-catalog-section="featured"]')!;
+    expect(cardIds(featured)).toEqual(shelf.map((entry) => entry.id));
+    ui.node('[data-catalog-section="trending"]').toBeNull();
+    ui.node('[data-catalog-section="channels"]').toBeNull();
+    expect(cardIds(container.querySelector('[data-catalog-section="tools"]')!)).toEqual(["tool"]);
+
+    update(container, { ...props, category: "channels", result: { items: [listedLater] } });
+    await waitForSolid(() =>
+      ui.content("openclaw-panel-empty-state").toContain("Everything here is already installed."),
+    );
+    ui.all(".plugin-catalog-card").toHaveLength(0);
+
+    update(container, { ...props, query: "installed" });
+    await waitForSolid(() => {
+      expect(cardIds(container)).toEqual(["installed", "inventory-installed", "tool"]);
+      ui.all("[data-plugin-state]").toHaveLength(2);
+    });
+
+    const tools = { ...props, category: "tools", busy: { "install:tool": "install" as const } };
+    update(container, tools);
+    await waitForSolid(() => expect(cardIds(container)).toEqual(["tool"]));
+    const row = container.querySelector('[data-plugin-id="tool"]');
+    const installedTool = plugin("tool", { local: { ...local, action: "manage" } });
+    update(container, { ...tools, busy: {}, result: { items: [installed, installedTool] } });
+    await waitForSolid(() => ui.node('[data-plugin-id="tool"] [data-plugin-state]').not.toBeNull());
+    ui.node('[data-plugin-id="tool"]').toBe(row);
+
+    update(container, { ...props, result: { items: [installed, installedTool] } });
+    await waitForSolid(() => ui.node('[data-plugin-id="tool"]').toBeNull());
   });
 });
 
