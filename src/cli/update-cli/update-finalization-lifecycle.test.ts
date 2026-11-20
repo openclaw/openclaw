@@ -9,6 +9,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { isUpdateRepairRun } from "../../infra/update-run-record.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
@@ -80,6 +81,10 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
     phase: "repairing",
     status: "running",
     target: { kind: "package", version: "2026.10.5" },
+    after: { version: "2026.10.5" },
+    steps: expect.arrayContaining([
+      expect.objectContaining({ step: "finalize:package-rollback-not-needed", status: "skipped" }),
+    ]),
   });
 });
 
@@ -121,20 +126,32 @@ it.each(["failed", "succeeded"] as const)(
   },
 );
 
-it.each(["skipped", "failed", "succeeded"] as const)(
-  "selects the repair retry's prior update after a %s standalone repair",
-  (status) => {
+it.each([
+  ["skipped", 1, true],
+  ["failed", 1, true],
+  ["succeeded", 1, true],
+  ["skipped", 9, true],
+  ["failed", 1, false],
+] as const)(
+  "selects the repair retry's prior update after %s standalone repair (%i attempts, install kind recorded: %s)",
+  (status, attempts, recordInstallKind) => {
     const prior = ledger.createUpdateRun({ trigger: "cli" });
     ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
 
-    vi.advanceTimersByTime(1);
-    const firstRepair = new UpdateFinalizationLifecycle(false, undefined, () => {});
-    const firstRepairId = firstRepair.attachLedger(true);
-    firstRepair.recordInstallKind("package");
-    ledger.finishUpdateRun(firstRepairId, {
-      status,
-      ...(status === "skipped" ? { reason: "doctor-maintenance-pending" } : {}),
-    });
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      vi.advanceTimersByTime(1);
+      const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+      const runId = lifecycle.attachLedger(true);
+      if (recordInstallKind) {
+        lifecycle.recordInstallKind("package");
+      }
+      if (status === "failed") {
+        lifecycle.fail();
+      } else {
+        lifecycle.complete(0, status === "skipped" ? "Run openclaw update repair." : undefined);
+      }
+      expect.soft(isUpdateRepairRun(getUpdateRun(runId)!)).toBe(true);
+    }
 
     vi.advanceTimersByTime(1);
     const retry = new UpdateFinalizationLifecycle(false, undefined, () => {});
