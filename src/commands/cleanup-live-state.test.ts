@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { registerMaintenanceCommands } from "../cli/program/register.maintenance.js";
 import {
   loadSessionEntry,
@@ -46,10 +47,15 @@ const { uninstallCommand } = await import("./uninstall.js");
 
 const liveOwners = new Set<ChildProcess>();
 const testStates = new Set<OpenClawTestState>();
+const releaseBarriers = new Set<() => void>();
+const pendingCleanups = new Set<Promise<void>>();
 
 async function stopLiveStateOwner(child: ChildProcess): Promise<void> {
   liveOwners.delete(child);
   if (child.exitCode !== null || child.signalCode !== null) {
+    if (child.exitCode !== 0 || child.signalCode !== null) {
+      throw new Error("live cleanup child did not release and exit normally");
+    }
     return;
   }
   child.send?.("close");
@@ -59,17 +65,24 @@ async function stopLiveStateOwner(child: ChildProcess): Promise<void> {
   } finally {
     clearTimeout(forceKill);
   }
+  if (child.exitCode !== 0 || child.signalCode !== null) {
+    throw new Error("live cleanup child did not release and exit normally");
+  }
 }
 
 afterEach(async () => {
-  const results = await Promise.allSettled([
-    ...[...liveOwners].map((child) => stopLiveStateOwner(child)),
-    ...[...testStates].map((state) => state.cleanup()),
-  ]);
+  for (const release of releaseBarriers) {
+    release();
+  }
+  releaseBarriers.clear();
+  const results = await Promise.allSettled(pendingCleanups);
+  pendingCleanups.clear();
+  results.push(...(await Promise.allSettled([...liveOwners].map(stopLiveStateOwner))));
   liveOwners.clear();
+  vi.restoreAllMocks();
+  results.push(...(await Promise.allSettled([...testStates].map((state) => state.cleanup()))));
   testStates.clear();
   configState.isNixMode = false;
-  vi.restoreAllMocks();
   vi.clearAllMocks();
   const failures = results.filter((result) => result.status === "rejected");
   if (failures.length > 0) {
@@ -80,22 +93,45 @@ afterEach(async () => {
   }
 });
 
-async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProcess> {
+async function startLiveStateOwner(
+  state: OpenClawTestState,
+  contender = false,
+): Promise<ChildProcess> {
   const lockModuleUrl = pathToFileURL(path.resolve("src/infra/gateway-lock.ts")).href;
   const script = `
     import path from "node:path";
     import { DatabaseSync } from "node:sqlite";
-    const { acquireGatewayLock } = await import(${JSON.stringify(lockModuleUrl)});
-    const lock = await acquireGatewayLock({ allowInTests: true, env: process.env, port: 18789 });
-    if (!lock) throw new Error("live owner did not acquire the Gateway lock");
-    const databasePath = path.join(process.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
-    const database = new DatabaseSync(databasePath);
-    database.exec("PRAGMA journal_mode = WAL; CREATE TABLE live_owner (value TEXT); INSERT INTO live_owner VALUES ('held');");
+    const { acquireGatewayLock, GatewayLockError } = await import(${JSON.stringify(lockModuleUrl)});
+    const acquire = () => acquireGatewayLock({
+      allowInTests: true, env: process.env, port: 18789, timeoutMs: 250, pollIntervalMs: 25,
+    });
+    let lock, database;
+    if (process.argv.at(-1) !== "contender") {
+      lock = await acquire();
+      if (!lock) throw new Error("live owner did not acquire the Gateway lock");
+      const databasePath = path.join(process.env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+      database = new DatabaseSync(databasePath);
+      database.exec("PRAGMA journal_mode = WAL; CREATE TABLE live_owner (value TEXT); INSERT INTO live_owner VALUES ('held');");
+    }
     process.send?.("ready");
     process.on("message", async (message) => {
+      if (message === "acquire") {
+        let acquired;
+        try {
+          acquired = await acquire();
+        } catch (error) {
+          if (!(error instanceof GatewayLockError)) throw error;
+          process.send?.({ acquired: false, name: error.name });
+          return;
+        }
+        if (!acquired) throw new Error("contender did not get an ownership result");
+        await acquired.release();
+        process.send?.({ acquired: true });
+        return;
+      }
       if (message !== "close") return;
-      database.close();
-      await lock.release().catch(() => undefined);
+      database?.close();
+      await lock?.release();
       process.exit(0);
     });
     setInterval(() => {}, 1_000);
@@ -106,7 +142,16 @@ async function startLiveStateOwner(state: OpenClawTestState): Promise<ChildProce
   }
   const child = spawn(
     process.execPath,
-    ["--import", "tsx", "--input-type=module", "--eval", script, "openclaw", "gateway"],
+    [
+      "--import",
+      "tsx",
+      "--input-type=module",
+      "--eval",
+      script,
+      "openclaw",
+      "gateway",
+      ...(contender ? ["contender"] : []),
+    ],
     { cwd: path.resolve("."), env, stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
   liveOwners.add(child);
@@ -159,6 +204,64 @@ function runCleanup(
 async function readFiles(paths: readonly string[]): Promise<Buffer[]> {
   return Promise.all(paths.map((filePath) => fs.readFile(filePath)));
 }
+
+it.each(["config", "credentials"] as const)(
+  "holds session-scope ownership through %s removal",
+  async (target) => {
+    const state = await makeState();
+    state.envVars.XDG_CACHE_HOME = state.path("cache");
+    state.applyEnv();
+    state.env.XDG_CACHE_HOME = state.path("cache");
+    await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+    await state.writeText("credentials/synthetic.txt", "synthetic credential");
+    const contender = await startLiveStateOwner(state, true);
+    const requestOwnership = async () => {
+      const reply = Promise.race([
+        once(contender, "message").then(([message]) => message),
+        once(contender, "exit").then(([code, signal]) => {
+          throw new Error(`ownership contender exited before replying (${code ?? signal})`);
+        }),
+      ]);
+      contender.send("acquire");
+      return reply;
+    };
+    const pathname = target === "config" ? state.configPath : state.statePath("credentials");
+    const entered = createDeferred();
+    const resumed = createDeferred();
+    releaseBarriers.add(resumed.resolve);
+    const rm = fs.rm;
+    vi.spyOn(fs, "rm").mockImplementation(async (file, options) => {
+      if (file === pathname) {
+        entered.resolve();
+        await resumed.promise;
+      }
+      return rm(file, options);
+    });
+    const cleanup = resetCommand(quietRuntime(), {
+      scope: "config+creds+sessions",
+      yes: true,
+      nonInteractive: true,
+    });
+    pendingCleanups.add(cleanup);
+    void cleanup.catch(() => {});
+    await awaitGateBeforeSettlement(
+      entered.promise,
+      cleanup,
+      "reset did not reach the selected removal boundary",
+    );
+
+    await expect(requestOwnership()).resolves.toMatchObject({
+      acquired: false,
+      name: "GatewayLockError",
+    });
+
+    resumed.resolve();
+    await expect(cleanup).resolves.toBeUndefined();
+    pendingCleanups.delete(cleanup);
+    await expect(requestOwnership()).resolves.toEqual({ acquired: true });
+    await stopLiveStateOwner(contender);
+  },
+);
 
 describe.each([
   ["reset", "--scope", "full"],
