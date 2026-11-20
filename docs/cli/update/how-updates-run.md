@@ -1551,7 +1551,7 @@ the sentinel.
   <Step title="Activate and verify">
     Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/openclaw`. This is a symlink on POSIX and a junction on Windows. The service and the `openclaw` command on PATH both run through `<state>/git-install/openclaw-launcher.mjs`.
 
-    Windows cannot rename onto a junction, so a switch removes the old junction and then renames the new one into place. A process killed between those two steps leaves no `git-install\openclaw`; the temporary `.openclaw.release-link-*` junction beside it still names the new release. Rename it to `openclaw`, or run `openclaw update` from the source checkout, which recreates a missing link.
+    Windows cannot rename onto a junction, so a switch removes the old junction and then renames the new one into place. A process killed between those two steps leaves no `git-install\openclaw`; the temporary `.openclaw.release-link-*` junction beside it still names the new release. The next start through the launcher renames it into place, and the next `openclaw update` recreates a missing link.
 
     Publication selects a release; it does not replace the running Gateway's files. The next Gateway start loads the selected release and upgrades state at boot. With `--no-restart`, publication leaves the old link selected and records the new release as pending for the next service start.
 

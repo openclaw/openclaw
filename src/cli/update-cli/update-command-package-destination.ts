@@ -3,6 +3,8 @@ import path from "node:path";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
+import { GIT_RELEASE_LAUNCHER, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
 import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { pathEntryExists, realpathOrResolve } from "../../infra/path-existence.js";
@@ -97,9 +99,15 @@ export async function inspectNpmGlobalDestination(
       ? await readManagedGatewayServiceForUpdate(process.env)
       : null;
     const command = serviceInspection?.command ?? null;
+    // A Git release install leaves the package forwarding to its launcher (exact text only).
+    const forwardsToThisInstall =
+      packageRootReal !== null &&
+      (await fs.readFile(path.join(packageRootReal, "openclaw.mjs"), "utf8").catch(() => null)) ===
+        gitReleaseForwardingEntry(path.join(resolveGitReleasePrefix(), GIT_RELEASE_LAUNCHER));
     const ownsPackage =
       packageRootReal !== null &&
-      ((await realpathOrResolve(root)) === packageRootReal ||
+      (forwardsToThisInstall ||
+        (await realpathOrResolve(root)) === packageRootReal ||
         (await gatewayServiceCommandUsesRoot({ root: packageRootReal, command })) === true);
     const ownsLauncher =
       !launcherPresent ||

@@ -9,7 +9,10 @@ import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
 import * as exec from "../../process/exec.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { retireStandaloneGitWrapper } from "./update-command-git.js";
+import {
+  exposeGlobalPackageThroughRelease,
+  retireStandaloneGitWrapper,
+} from "./update-command-git.js";
 import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
 import { completePostUpdateMaintenance } from "./update-command-post-update-maintenance.js";
 
@@ -200,5 +203,55 @@ describe("retireStandaloneGitWrapper", () => {
     expect(run("--", "gateway", "run")).toBe("new index.js\n");
     expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
     expect(run("--version")).toBe("new entry.js\n");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("exposeGlobalPackageThroughRelease", () => {
+  async function install(base: string) {
+    const prefix = path.join(base, "state", "git-install");
+    const { releaseRoot } = await createGitReleaseDirs(prefix);
+    await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(releaseRoot, "dist", "entry.js"), 'console.log("release");\n');
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    const checkout = path.join(base, "checkout");
+    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
+    await fs.writeFile(path.join(checkout, "openclaw.mjs"), 'console.log("checkout");\n');
+    const globalRoot = path.join(base, "lib", "node_modules");
+    await fs.mkdir(globalRoot, { recursive: true });
+    return { slot: gitReleaseSlot(prefix), checkout, globalRoot };
+  }
+  const start = (entry: string, ...args: string[]) =>
+    spawnSync(process.execPath, [entry, ...args], { encoding: "utf8" }).stdout;
+
+  it("replaces an npm link to the checkout without writing the checkout", async () => {
+    const base = dirs.make("openclaw-npm-entry-");
+    const { slot, checkout, globalRoot } = await install(base);
+    const packageRoot = path.join(globalRoot, "openclaw");
+    await fs.symlink(checkout, packageRoot);
+
+    await expect(exposeGlobalPackageThroughRelease(packageRoot, slot, checkout)).resolves.toBe(
+      undefined,
+    );
+
+    expect((await fs.lstat(packageRoot)).isDirectory()).toBe(true);
+    expect(start(path.join(packageRoot, "openclaw.mjs"), "--version")).toBe("release\n");
+    expect(await fs.readFile(path.join(checkout, "openclaw.mjs"), "utf8")).toBe(
+      'console.log("checkout");\n',
+    );
+    expect((await fs.readdir(globalRoot)).filter((name) => name !== "openclaw")).toEqual([]);
+  });
+
+  it("writes through a link to another directory, as a pnpm store path", async () => {
+    const base = dirs.make("openclaw-npm-entry-");
+    const { slot, checkout, globalRoot } = await install(base);
+    const store = path.join(base, "store", "openclaw");
+    await fs.mkdir(store, { recursive: true });
+    const packageRoot = path.join(globalRoot, "openclaw");
+    await fs.symlink(store, packageRoot);
+
+    await exposeGlobalPackageThroughRelease(packageRoot, slot, checkout);
+
+    expect((await fs.lstat(packageRoot)).isSymbolicLink()).toBe(true);
+    expect(start(path.join(store, "openclaw.mjs"), "--version")).toBe("release\n");
   });
 });

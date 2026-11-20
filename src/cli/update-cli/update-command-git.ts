@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
 import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
+import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -481,7 +482,19 @@ async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
     timeoutMs,
   }).catch(() => null);
   const packageRoot = target?.packageRoot;
-  return packageRoot && (await isLinkTo(packageRoot, checkout)) ? packageRoot : null;
+  if (!packageRoot) {
+    return null;
+  }
+  // A swap killed between its two renames left the link under its backup name.
+  if (!(await fs.lstat(packageRoot).catch(() => null))) {
+    await restoreInterruptedNpmPackageRootLink(
+      path.dirname(packageRoot),
+      packageRoot,
+      checkout,
+      false,
+    ).catch(() => undefined);
+  }
+  return (await isLinkTo(packageRoot, checkout)) ? packageRoot : null;
 }
 
 async function isLinkTo(link: string, dir: string): Promise<boolean> {
@@ -499,27 +512,31 @@ async function isLinkTo(link: string, dir: string): Promise<boolean> {
  * so `openclaw` on PATH runs the release the launcher selects (a `--no-restart` target is pending
  * until the next Gateway start) and a foreground Gateway start counts toward the trial. The rest
  * of the package stays: this updater and a running Gateway still load from it, and an old service
- * definition may still name its `dist/index.js`. Its disk space stays used until
- * `npm uninstall -g openclaw` (accepted).
+ * definition may still name its `dist/index.js`. Its disk space stays used until a switch back to
+ * npm replaces it (destination ownership recognizes this exact entry).
  *
  * An updater before #200578 switched to Git by linking the global package to the checkout, which
  * it then rebuilt in place. Releases never rebuild the checkout, so that link is replaced by a
  * directory holding only the entries (writing through it would edit the checkout). Its
  * `dist/index.js` also starts the launcher, for a service definition that names the package path
  * and is not refreshed (`--no-restart`). Other links (a pnpm store path) are written through, as
- * before. A process killed between the unlink and the rename leaves no global package and no
- * `openclaw` on PATH (rare, accepted): `node <launcher>` runs the release, and
- * `npm install -g openclaw` then `openclaw update --channel dev` switch PATH to Git again.
+ * before. The link moves to the backup name npm package updates use, so a process killed before
+ * the stage takes its place leaves it where the next Git update puts it back and retries.
  */
-async function exposeGlobalPackageThroughRelease(
+export async function exposeGlobalPackageThroughRelease(
   packageRoot: string,
   slot: string,
   checkout: string,
 ): Promise<string | undefined> {
   const launcher = path.join(path.dirname(slot), GIT_RELEASE_LAUNCHER);
-  const contents = `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
+  const contents = gitReleaseForwardingEntry(launcher);
   const linked = await isLinkTo(packageRoot, checkout);
   const stage = `${packageRoot}.release-${process.pid}`;
+  const backup = path.join(
+    path.dirname(packageRoot),
+    `.openclaw.package-backup-${process.pid}-${Date.now()}`,
+  );
+  let moved = false;
   try {
     if (linked) {
       await fs.mkdir(path.join(stage, "dist"), { recursive: true });
@@ -529,15 +546,21 @@ async function exposeGlobalPackageThroughRelease(
       );
       await fs.writeFile(path.join(stage, "dist", "index.js"), contents);
       await fs.writeFile(path.join(stage, "openclaw.mjs"), contents, { mode: 0o755 });
-      await fs.unlink(packageRoot);
+      await fs.rename(packageRoot, backup);
+      moved = true;
       await fs.rename(stage, packageRoot);
+      moved = false;
+      await fs.unlink(backup).catch(() => {});
     } else {
       await fs.writeFile(stage, contents, { mode: 0o755 });
       await fs.rename(stage, path.join(packageRoot, "openclaw.mjs"));
     }
     return undefined;
   } catch (error) {
+    if (moved) {
+      await fs.rename(backup, packageRoot).catch(() => {});
+    }
     await fs.rm(stage, { recursive: true, force: true }).catch(() => {});
-    return `${packageRoot} could not start ${launcher} (${String(error)}); \`openclaw\` on PATH may not run the release. Run OpenClaw with \`node ${launcher}\`. If \`openclaw\` is missing, run \`npm install -g openclaw\`, then \`openclaw update --channel dev\`.`;
+    return `${packageRoot} could not start ${launcher} (${String(error)}); \`openclaw\` on PATH still starts the previous build.`;
   }
 }

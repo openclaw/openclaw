@@ -449,6 +449,26 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       }
     });
 
+    it("finishes a link switch killed after the old link was removed", async () => {
+      const { prefix } = await setup();
+      await publishGitRelease({
+        prefix,
+        releaseRoot: await release(prefix, "1.0.0", 'console.log("old");\n'),
+        trial: false,
+      });
+      const next = await release(prefix, "2.0.0", 'console.log("new");\n');
+      // The Windows switch removes the old link, then renames the temporary one into place.
+      const slot = gitReleaseSlot(prefix);
+      await fs.symlink(
+        path.relative(prefix, next),
+        path.join(prefix, ".openclaw.release-link-1-1"),
+      );
+      await fs.unlink(slot);
+
+      expect(startGateway(prefix).stdout).toBe("new\n");
+      expect(await fs.realpath(slot)).toBe(await fs.realpath(next));
+    });
+
     it("moves something other than a release link aside instead of refusing the update", async () => {
       const { stateDir, prefix } = await setup();
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

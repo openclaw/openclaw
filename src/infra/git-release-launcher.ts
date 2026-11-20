@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
 import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
 import {
@@ -167,6 +168,19 @@ function linked(target) {
   return path.resolve(path.dirname(slot), target);
 }
 
+// Windows removes the old junction before renaming the new one into place. A switch killed in
+// between leaves no link and the new one under its temporary name: finish the switch.
+if (!fs.lstatSync(slot, { throwIfNoEntry: false })) {
+  const waiting = fs
+    .readdirSync(prefix)
+    .filter((name) => name.startsWith(".openclaw.release-link-"))
+    .map((name) => path.join(prefix, name))
+    .sort((a, b) => fs.lstatSync(b).mtimeMs - fs.lstatSync(a).mtimeMs)[0];
+  if (waiting) {
+    fs.renameSync(waiting, slot);
+  }
+}
+
 let trial;
 try {
   trial = JSON.parse(fs.readFileSync(trialFile, "utf8"));
@@ -228,4 +242,12 @@ export async function writeGitReleaseLauncher(prefix: string): Promise<string> {
     await fs.rename(temporary, launcher);
   }
   return launcher;
+}
+
+/**
+ * The `openclaw.mjs` an npm global package holds once a Git install runs from releases. Its exact
+ * text is how a later switch back to npm recognizes the package as this installation's.
+ */
+export function gitReleaseForwardingEntry(launcher: string): string {
+  return `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
 }
