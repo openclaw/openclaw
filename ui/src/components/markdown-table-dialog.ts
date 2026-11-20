@@ -2,8 +2,6 @@ import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createIconElement } from "./markdown-icon.ts";
-import { registerSessionTitleTarget } from "./markdown-link-display.ts";
-import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 import "./modal-dialog.tsx";
 
 export function mountExpandedMarkdownTable(
@@ -53,8 +51,5 @@ export function mountExpandedMarkdownTable(
   dialog.append(content);
   // Keep delegated file/session actions and modal teardown with their transcript.
   owner.append(dialog);
-  // Cloned anchors need their own href lifetime before the source is decorated.
-  for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
-    stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
-  }
+  return content;
 }

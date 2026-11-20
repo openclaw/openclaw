@@ -8,6 +8,8 @@ import { showToast } from "../lib/toast.ts";
 import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import { registerSessionTitleTarget } from "./markdown-link-display.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -315,7 +317,11 @@ async function showTableDialog(
       return;
     }
     dialog = document.createElement("openclaw-modal-dialog");
-    mountExpandedMarkdownTable(dialog, table, trigger, owner, close, stopListeners);
+    const content = mountExpandedMarkdownTable(dialog, table, trigger, owner, close, stopListeners);
+    // Cloned anchors need their own href lifetime before the source is decorated.
+    for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
+      stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
+    }
   } catch (error) {
     if (state.closeDialog === close && owner.isConnected && trigger.isConnected) {
       showToast({ message: formatUiError(error), severity: "error" });
