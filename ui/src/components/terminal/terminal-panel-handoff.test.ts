@@ -178,6 +178,42 @@ it("retains unsent text and uploaded attachments across tabs and a native dockin
   expect(target.querySelector(".tp-attachment")).toBeNull();
 });
 
+it("stages a pasted image as an editable attachment without sending PTY input before send", async () => {
+  const gateway = gatewayFixture();
+  const panel = await mount(gateway.client);
+  panel.selectHostedTab(panel.activeHostedTabId!);
+  await panel.updateComplete;
+  const input = composerInput(panel);
+  input.value = "cat";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  const file = new File(["png"], "pasted-image.png", { type: "image/png" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new TextEncoder().encode("png").buffer,
+  });
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  Object.defineProperty(paste, "clipboardData", {
+    value: {
+      items: [{ type: file.type, getAsFile: () => file }],
+      getData: (type: string) => (type === "text/plain" ? "" : ""),
+    },
+  });
+  input.dispatchEvent(paste);
+  await vi.waitFor(() =>
+    expect(panel.querySelector(".tp-attachment")?.textContent).toContain("pasted-image.png"),
+  );
+  expect(paste.defaultPrevented).toBe(true);
+  expect(terminals[0]!.terminal.paste).not.toHaveBeenCalled();
+  expect(terminals[0]!.terminal.input).not.toHaveBeenCalled();
+  panel
+    .querySelector("form.tp-composer")!
+    .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await panel.updateComplete;
+  expect(terminals[0]!.terminal.paste).toHaveBeenCalledExactlyOnceWith(
+    "cat /tmp/synthetic-file.txt",
+  );
+  expect(terminals[0]!.terminal.input).toHaveBeenCalledExactlyOnceWith("\r", true);
+});
+
 describe("terminal panel readiness", () => {
   it("keeps an already closed panel closed for an explicit close request", () => {
     const panel = mountFixture({}, false);
