@@ -49,6 +49,7 @@ import {
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
 import {
+  captureGatewayOperatorContinuation,
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
@@ -136,6 +137,26 @@ describe("scheduled authenticated operator source", () => {
           constructor: Error,
           message: "Queued operator authority cannot be recovered; submit a new request.",
         });
+        const queued = await restoreGatewayQueuedOperatorRecovery({
+          source: persisted,
+          liveAuthority: captured.authority,
+          context: fixture.context,
+          assertCurrent() {},
+        });
+        const continuation = await captureGatewayOperatorContinuation({
+          client: {
+            ...fixture.client,
+            internal: { ...fixture.client.internal, operatorRunAuthority: captured.authority },
+          },
+          context: fixture.context,
+        });
+        try {
+          expect(queued.authority.scopes).toEqual(["operator.admin"]);
+          expect(continuation?.authority.scopes).toEqual(["operator.admin"]);
+        } finally {
+          queued.release();
+          continuation?.release();
+        }
         expect(captured.authority.assertCurrent).not.toThrow();
       });
     }

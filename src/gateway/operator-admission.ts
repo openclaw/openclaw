@@ -1,6 +1,8 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
+  assertAdmittedRunOperatorAuthority,
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
@@ -10,6 +12,7 @@ import {
 } from "../agents/operator-model-policy.js";
 import { isConfiguredCommandOwner } from "../auto-reply/command-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   isPairedDeviceTokenIdentityCurrent,
   listApprovedPairedDeviceRoles,
@@ -40,12 +43,13 @@ import type {
   PreparedUserProfileIdentity,
   UserChannelIdentity,
 } from "../state/user-profiles.types.js";
-import { captureGatewayAuthPolicy, resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
+import { resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { gatewayPersonPrincipalAuthError, type ResolvedGatewayAuth } from "./auth.js";
 import { prepareChannelOperatorAuthority } from "./channel-operator-authority.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
+  readOpenClawIdTunnelPrincipal,
   openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipalLookup,
 } from "./openclaw-id/tunnel-principal.js";
@@ -59,12 +63,18 @@ import { intersectOperatorRunModelPolicy } from "./operator-run-authority.js";
 import {
   hasAutomationAdminDelegation,
   type QueuedOperatorRecoverySource,
+  type RestartRecoveryOperatorSource,
 } from "./operator-run-recovery-source.codec.js";
 import { getGatewayControlUiIngressHost } from "./remote-control-ui-ingress-host.js";
 import { restoreIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
-type Facts = Exclude<QueuedOperatorRecoverySource, { kind: "unavailable" }>;
+type Facts =
+  | (Extract<QueuedOperatorRecoverySource, { kind: "gateway" }> & {
+      source?: RestartRecoveryOperatorSource;
+    })
+  | Extract<QueuedOperatorRecoverySource, { kind: "channel" }>
+  | { kind: "live"; authority: AdmittedRunOperatorAuthority };
 type PreparedOperatorAdmission = {
   config: OpenClawConfig;
   context: GatewayRequestContext;
@@ -87,7 +97,7 @@ type PreparedOperatorAdmission = {
   ingressAuth: ResolvedGatewayAuth;
 };
 
-function admissionError(error: unknown): never {
+function admissionError(error: unknown, facts: Facts): never {
   if (
     error instanceof UserProfileMutationUnsettledError ||
     (error instanceof GatewayDispatchUnavailableError && error.retryable) ||
@@ -95,6 +105,13 @@ function admissionError(error: unknown): never {
       error.accessCause === "policy-unavailable")
   ) {
     throw new GatewayOperatorAccessUnavailableError();
+  }
+  if (
+    isAbortError(error) &&
+    facts.kind === "gateway" &&
+    facts.snapshot.sourceIngress === "principal"
+  ) {
+    throw new GatewayOperatorRecoveryAuthorizationError(undefined, { cause: error });
   }
   if (error instanceof GatewayOperatorAccessDeniedError) {
     throw new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error });
@@ -110,7 +127,7 @@ export async function prepareOperatorAdmission(
   let identity: PreparedUserProfileIdentity | undefined;
   let ingress: PreparedOperatorAdmission["ingress"];
   try {
-    const snapshot = facts.snapshot;
+    const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
     const readConfig = context.getCommittedRuntimeConfig ?? context.getRuntimeConfig;
     const native =
       facts.kind === "channel"
@@ -129,11 +146,15 @@ export async function prepareOperatorAdmission(
         : undefined;
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
-    if (gateway?.openclawIdPrincipal) {
+    const principal =
+      facts.kind === "live" ? facts.authority.openclawIdPrincipal : gateway?.openclawIdPrincipal;
+    if (principal) {
       await prepareOpenClawIdTunnelPrincipalLookup();
     }
     const paired = gateway?.device
-      ? await loadPairedDevicePairingStoreRecordReadOnly(gateway.device.deviceId)
+      ? await loadPairedDevicePairingStoreRecordReadOnly(gateway.device.deviceId).catch(() => {
+          throw new GatewayOperatorAccessUnavailableError();
+        })
       : undefined;
     if (gateway?.sourceIngress === "principal") {
       ingress = await restoreIngressPrincipalRecovery(
@@ -154,17 +175,30 @@ export async function prepareOperatorAdmission(
   } catch (error) {
     ingress?.release();
     identity?.release();
-    return admissionError(error);
+    return admissionError(error, facts);
   }
 }
 
 /** Decide once from prepared owners and committed config; the run keeps only frozen facts. */
 export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperatorAdmission) {
   const { config, identity, ingress, paired, channel, channelIdentity, context } = prepared;
-  const snapshot = facts.snapshot;
+  const live = facts.kind === "live" ? facts.authority : undefined;
+  const snapshot = facts.kind === "live" ? facts.authority : facts.snapshot;
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
-  const principal = gateway?.openclawIdPrincipal;
+  const principal = live?.openclawIdPrincipal ?? gateway?.openclawIdPrincipal;
   try {
+    if (live) {
+      assertAdmittedRunOperatorAuthority(live);
+      live.assertCurrent();
+    }
+    if (principal) {
+      if (readOpenClawIdTunnelPrincipal(principal.peerKey) === null) {
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+      if (!isOpenClawIdTunnelPrincipalCurrent(principal)) {
+        throw new GatewayOperatorRecoveryAuthorizationError();
+      }
+    }
     const profile = identity.readCurrentFacts(gateway?.aliasBindingIds).profile;
     const refuse = () => {
       throw new GatewayOperatorRecoveryAuthorizationError();
@@ -185,12 +219,20 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       scopes = intersectOperatorScopes(scopes, channel.operatorProfile.scopes);
     }
     if (gateway) {
-      if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
-        refuse();
-      }
       const source = gateway.authPolicy;
+      const policy =
+        source && !principal
+          ? resolveGatewayAuthPolicyGrant(config, { ...source, browserOrigin: undefined })
+          : undefined;
+      // Proxy policy generations do not describe either ambient identity or local fallback secrets.
       const sharedGeneration =
-        source?.authMethod === "trusted-proxy" && !principal ? undefined : gateway.sharedGeneration;
+        !principal &&
+        (source?.authMethod === "trusted-proxy" ||
+          (source?.authMethod === "password" &&
+            (source.fallbackCredentialGeneration !== undefined ||
+              policy?.methodEnabled !== undefined)))
+          ? undefined
+          : gateway.sharedGeneration;
       if (sharedGeneration !== undefined) {
         if (!context.sharedGatewaySessionGenerationState) {
           throw new GatewayOperatorAccessUnavailableError();
@@ -199,10 +241,6 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           refuse();
         }
       }
-      const policy =
-        source && !principal
-          ? resolveGatewayAuthPolicyGrant(config, { ...source, browserOrigin: undefined })
-          : undefined;
       if (policy && (policy.methodEnabled === false || policy.proxyUserAllowed === false)) {
         refuse();
       }
@@ -211,7 +249,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           source.fallbackCredentialGeneration !== undefined
             ? source.fallbackCredentialGeneration !== policy?.fallbackCredentialGeneration
             : policy?.fallbackCredentialGeneration !== undefined &&
-              source.grantGeneration !== captureGatewayAuthPolicy(config, source).grantGeneration
+              source.grantGeneration !==
+                stableStringify(resolveGatewayAuthPolicyGrant(config, source))
         ) {
           refuse();
         }
@@ -223,15 +262,15 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           gateway.device,
           [],
         );
-        const tokenlessProxyCurrent =
+        const tokenlessIdentityCurrent =
           !principal &&
-          source?.authMethod === "trusted-proxy" &&
+          (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale") &&
           paired &&
           paired.deviceId === gateway.device.deviceId &&
           gateway.device.key === sha256Hex(paired.publicKey) &&
           listApprovedPairedDeviceRoles(paired).includes("operator") &&
           !paired.tokens?.operator?.revokedAtMs;
-        if (!tokenCurrent && !tokenlessProxyCurrent) {
+        if (!tokenCurrent && !tokenlessIdentityCurrent) {
           refuse();
         }
         scopes = intersectOperatorScopes(scopes, [
@@ -240,10 +279,15 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
             : (paired?.approvedScopes ?? paired?.scopes ?? [])),
           ...(policy?.grant ?? []),
         ]);
-      } else if (
-        source?.authMethod === "tailscale" ||
-        (source?.authMethod === "trusted-proxy" && !principal)
-      ) {
+      } else if (source?.authMethod === "tailscale") {
+        // Older rows omitted tokenless device facts. An unchanged grant preserves their
+        // hidden device scopes; changed grants can only narrow until these rows age out.
+        if (
+          source.grantGeneration !== stableStringify(resolveGatewayAuthPolicyGrant(config, source))
+        ) {
+          scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
+        }
+      } else if (source?.authMethod === "trusted-proxy" && !principal) {
         scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
       }
       if (gateway.sourceIngress === "principal") {
@@ -261,6 +305,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           }
         }
       }
+    }
+    if (gateway || live) {
       const access =
         principal?.kind === "owner"
           ? null
@@ -291,9 +337,11 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         "Gateway access is not active for this requester; ask an administrator to restore access.",
       );
     }
-    const originalModels = snapshot.modelPolicy
-      ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
-      : undefined;
+    const originalModels =
+      live?.modelPolicy ??
+      (facts.kind !== "live" && facts.snapshot.modelPolicy
+        ? restoreOperatorModelPolicySnapshot(facts.snapshot.modelPolicy)
+        : undefined);
     const modelPolicy = intersectOperatorRunModelPolicy(
       originalModels,
       prepareOperatorModelPolicy({
@@ -311,13 +359,17 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
             senderId: channelIdentity.senderId,
           }) ||
             operatorScopeSatisfied("operator.admin", scopes))
-        : operatorScopeSatisfied("operator.admin", scopes);
+        : facts.kind === "gateway" && facts.source && facts.source.kind !== "gateway"
+          ? principal?.kind !== "member"
+          : operatorScopeSatisfied("operator.admin", scopes);
     const authority = createAdmittedRunOperatorAuthority({
       profileId: profile.profileId,
       openclawIdPrincipal: principal,
       scopes,
       gatewayAccessGrant: grant,
-      recoverySnapshot: gateway,
+      recoverySnapshot: gateway ?? live?.recoverySnapshot,
+      recoverySnapshotUnavailableReason: live?.recoverySnapshotUnavailableReason,
+      source: live?.source,
       channelRecoverySource:
         facts.kind === "channel"
           ? { reference: facts.snapshot.reference, modelPolicy: originalModels }
@@ -360,7 +412,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     };
   } catch (error) {
     identity.release();
-    return admissionError(error);
+    return admissionError(error, facts);
   } finally {
     ingress?.release();
   }

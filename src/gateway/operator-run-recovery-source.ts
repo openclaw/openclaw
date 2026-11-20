@@ -21,7 +21,7 @@ import {
 import { resolveGatewayUiAdminSource } from "./operator-scopes.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
-/** An unrecoverable source still runs in memory under its retained live authority. */
+/** Durable evidence when serializable; same-process starts also pass their original live facts. */
 export function captureQueuedOperatorRecoverySource(
   authority: AdmittedRunOperatorAuthority | undefined,
 ): QueuedOperatorRecoverySource | undefined {
@@ -124,16 +124,19 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   const sourceDevice = client.connect.device;
   const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
   let device = tokenDevice ?? undefined;
-  const tokenlessProxy = !ocid && authPolicy.authMethod === "trusted-proxy" && tokenDevice == null;
-  if (sourceDevice && tokenDevice === undefined && !tokenlessProxy) {
+  const tokenlessIdentity =
+    !ocid &&
+    tokenDevice == null &&
+    (authPolicy.authMethod === "trusted-proxy" || authPolicy.authMethod === "tailscale");
+  if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
     return { unavailableReason: "device-no-token" };
   }
-  if (sourceDevice && tokenlessProxy) {
+  if (sourceDevice && tokenlessIdentity) {
     const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
     if (!paired) {
       return { unavailableReason: "device-no-token" };
     }
-    // Proxy authentication may not issue a token, but an existing pairing still bounds later work.
+    // Ambient identity may not issue a token; the existing pairing still bounds later work.
     device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
   }
   const sharedGeneration = client.usesSharedGatewayAuth

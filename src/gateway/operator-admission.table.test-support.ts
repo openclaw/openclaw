@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import https from "node:https";
 import { assert, expect, vi } from "vitest";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -21,15 +20,16 @@ import {
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
-import * as tailscale from "../infra/tailscale.js";
+import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import type { GatewayIngressPrincipalBindingV1 } from "../plugins/gateway-ingress.types.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import type { Deferred } from "../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -39,7 +39,6 @@ import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-cla
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import type { GatewayClient, GatewayClientOptions } from "./client.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
-import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import type { LinkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import {
   setOpenClawIdMemberAccountLookup,
@@ -53,12 +52,19 @@ import {
   PROXY_USER,
   WRITER,
   proxyHeaders,
+  observeAdmissionFixture,
   prepareAdmissionOperator,
   prepareNativeSend,
   revokeAdmissionSource,
 } from "./operator-admission.credentials.test-support.js";
-import * as admission from "./operator-admission.js";
-import type { OperatorRunRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
+import {
+  runLiveAdmissionCase,
+  type LiveAdmissionKind,
+} from "./operator-admission.live.test-support.js";
+import {
+  decodeQueuedOperatorRecoverySource,
+  type OperatorRunRecoverySnapshot,
+} from "./operator-run-recovery-source.codec.js";
 import * as queuedInputs from "./queued-chat-inputs.js";
 import type { GatewayKernelRuntime } from "./server-kernel-request-runtime.js";
 import * as kernelModule from "./server-kernel.js";
@@ -76,14 +82,16 @@ type Credential =
   | AuthMethod
   | "fallback"
   | "proxy-device"
+  | "tailscale-device"
   | "ocid-owner"
   | "ocid-member"
   | "principal"
   | "channel";
-export type Row = {
+type SavedRow = {
   credential: Credential;
   ingress: OperatorRunRecoverySnapshot["sourceIngress"] | "channel";
 };
+export type Row = SavedRow | { credential: LiveAdmissionKind; ingress: "live" };
 type History = {
   messages: unknown[];
   pendingInputs: {
@@ -91,7 +99,23 @@ type History = {
   };
 };
 export type Mode = "token" | "password" | "trusted-proxy";
-type Scenario = "before-start" | "after-start" | "stop";
+type Scenario =
+  | "before-start"
+  | "after-start"
+  | "stop"
+  | "method-disabled"
+  | "legacy-method-disabled"
+  | "legacy-fallback"
+  | "legacy-rotated"
+  | "fallback-proxy-policy"
+  | "legacy-tailscale"
+  | "legacy-tailscale-narrowed"
+  | "narrowed-grant"
+  | "widened-grant"
+  | "narrowed-role"
+  | "empty-after-role"
+  | "pairing-unavailable"
+  | "owner-unavailable";
 export class AdmissionCase {
   readonly id = randomUUID();
   readonly sessionKey = `agent:main:admission-${this.id}`;
@@ -118,8 +142,10 @@ export class AdmissionCase {
   readonly service = new AbortController();
   readonly deliveries: unknown[] = [];
   readonly terminals = new Map<string, Deferred<string>>();
+  readonly observedRunScopes: string[][] = [];
   readonly identity: DeviceIdentity;
   original?: FollowupRun;
+  finalAdmissionError?: unknown;
   profileId?: string;
   latestRunId?: string;
   queuedRunId?: string;
@@ -197,160 +223,6 @@ export class AdmissionFixture {
     if (waitReady) {
       await this.server.startupSettled;
     }
-  }
-
-  observe() {
-    const enqueue = queueLifecycle.markFollowupRunEnqueued;
-    const enqueued = vi
-      .spyOn(queueLifecycle, "markFollowupRunEnqueued")
-      .mockImplementation((run) => {
-        const accepted = enqueue(run);
-        const c = this.current;
-        if (accepted && c && !c.original && run.prompt.includes(c.queuedText)) {
-          c.original = run;
-          const source = run.operatorAuthority;
-          assert(source, "Accepted input must carry real authority");
-          if (c.row.ingress === "channel") {
-            expect(source.channelRecoverySource).toBeDefined();
-          } else {
-            const snapshot = source.recoverySnapshot;
-            assert(snapshot);
-            expect(snapshot.sourceIngress).toBe(c.row.ingress);
-            if (snapshot.sourceIngress !== "principal") {
-              expect(snapshot.authPolicy.authMethod).toBe(
-                c.row.credential === "fallback"
-                  ? "password"
-                  : c.row.credential === "proxy-device" || c.row.credential.startsWith("ocid-")
-                    ? "trusted-proxy"
-                    : c.row.credential,
-              );
-              if (c.row.credential === "trusted-proxy") {
-                expect(snapshot.device).toBeUndefined();
-              }
-              if (c.row.credential === "proxy-device") {
-                expect(snapshot.device).toBeDefined();
-              }
-              if (c.row.credential === "fallback") {
-                expect(snapshot.authPolicy.fallbackCredentialGeneration).toBeDefined();
-              }
-              if (c.row.credential.startsWith("ocid-")) {
-                expect(snapshot.openclawIdPrincipal?.kind).toBe(
-                  c.row.credential === "ocid-owner" ? "owner" : "member",
-                );
-              }
-            }
-          }
-          c.enqueued.resolve();
-        }
-        return accepted;
-      });
-    const prepare = admission.prepareOperatorAdmission;
-    const prepared = vi
-      .spyOn(admission, "prepareOperatorAdmission")
-      .mockImplementation(async (...args) => {
-        const facts = await prepare(...args);
-        const c = this.current;
-        const followup = this.preparingFollowup.getStore();
-        if (
-          c?.original &&
-          c.scenario === "before-start" &&
-          !c.preparedHeld &&
-          followup?.prompt.includes(c.queuedText) &&
-          (c.row.credential === "channel" || followup !== c.original) &&
-          ["principal", "channel"].includes(c.row.credential) &&
-          args[0].snapshot.profileId === c.profileId
-        ) {
-          c.preparedHeld = true;
-          c.prepared.resolve();
-          await c.releasePrepared.promise;
-        }
-        return facts;
-      });
-    const drain = queuedInputs.continueSessionQueuedInputs;
-    const drained = vi
-      .spyOn(queuedInputs, "continueSessionQueuedInputs")
-      .mockImplementation(async (context, target, options) => {
-        const c = this.current;
-        if (c?.sessionKey !== target.sessionKey) {
-          return await drain(context, target, options);
-        }
-        if (c.restarting) {
-          c.drainEntered.resolve();
-          await c.releaseDrain.promise;
-        }
-        try {
-          return await drain(context, target, options);
-        } finally {
-          c.drained.resolve();
-        }
-      });
-    const followup = queueLifecycle.prepareFollowupRunOperatorAuthority;
-    const followupAdmission = vi
-      .spyOn(queueLifecycle, "prepareFollowupRunOperatorAuthority")
-      .mockImplementation(async (run) => {
-        try {
-          await this.preparingFollowup.run(run, () => followup(run));
-        } finally {
-          const c = this.current;
-          if (
-            c &&
-            ["principal", "channel"].includes(c.row.credential) &&
-            run.prompt.includes(c.queuedText) &&
-            (c.row.credential === "channel" || run !== c.original)
-          ) {
-            c.finalAdmissionSettled.resolve();
-          }
-        }
-      });
-    const emit = https.Server.prototype.emit;
-    const transport = vi.spyOn(https.Server.prototype, "emit").mockImplementation(function (
-      this: https.Server,
-      event: string | symbol,
-      ...args: unknown[]
-    ) {
-      if (event === "upgrade") {
-        const request = args[0] as IncomingMessage;
-        if (request.headers["x-admission-relay"] === "tailscale") {
-          markGatewayIngressTransport(request, { kind: "managed-tailscale", mode: "serve" });
-        }
-        const peer = request.headers["x-admission-peer"];
-        if (typeof peer === "string") {
-          markGatewayIngressTransport(request, {
-            kind: "openclaw-id-tunnel",
-            peerKey: peer,
-            clientIp: "fd7a:115c:a1e0::1",
-          });
-        }
-      }
-      return emit.call(this, event, ...args);
-    });
-    // Fixed daemon I/O only: production attribution still verifies the forwarded identity.
-    const whois = vi
-      .spyOn(tailscale, "readTailscaleWhoisIdentity")
-      .mockResolvedValue({ login: PROXY_USER, name: "Synthetic operator" });
-    const unsubscribe = onAgentEvent((event) => {
-      const c = this.current;
-      if (!c || event.sessionKey !== c.sessionKey || event.stream !== "lifecycle") {
-        return;
-      }
-      if (event.data.phase === "start") {
-        c.latestRunId = event.runId;
-      }
-      if (event.data.phase === "end" || event.data.phase === "error") {
-        c.terminal(event.runId).resolve(
-          event.data.aborted ? "aborted" : event.data.phase === "error" ? "error" : "final",
-        );
-      }
-    });
-    this.restores.push(
-      () => enqueued.mockRestore(),
-      () => prepared.mockRestore(),
-      () => drained.mockRestore(),
-      () => followupAdmission.mockRestore(),
-      () => transport.mockRestore(),
-      () => whois.mockRestore(),
-      unsubscribe,
-    );
   }
 
   async respond(request: IncomingMessage, response: ServerResponse) {
@@ -438,23 +310,100 @@ export class AdmissionFixture {
       "Real accepted input must retain its original recovery source",
     );
     expect(extractTextFromChatContent(JSON.parse(stored.message_json).content)).toBe(c.queuedText);
-    if (c.scenario === "before-start" && c.row.credential !== "principal") {
+    if (
+      [
+        "legacy-fallback",
+        "legacy-method-disabled",
+        "legacy-rotated",
+        "legacy-tailscale",
+        "legacy-tailscale-narrowed",
+      ].includes(c.scenario)
+    ) {
+      // Compatibility boundary: erase only the absent historical field from a real,
+      // relinquished persisted row. Never substitute manufactured authority.
+      const source = structuredClone(
+        decodeQueuedOperatorRecoverySource(JSON.parse(stored.origin_source_json)),
+      );
+      assert(source.kind === "gateway" && source.snapshot.sourceIngress !== "principal");
+      if (c.row.credential === "fallback") {
+        expect(source.snapshot.authPolicy.authMethod).toBe("password");
+        expect(source.snapshot.authPolicy.fallbackCredentialGeneration).toEqual(expect.any(String));
+        delete source.snapshot.authPolicy.fallbackCredentialGeneration;
+      } else {
+        expect(source.snapshot.authPolicy.authMethod).toBe("tailscale");
+        expect(source.snapshot.device).toBeDefined();
+        delete source.snapshot.device;
+      }
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: c.target.storePath });
+      expect(
+        database.db
+          .prepare("UPDATE session_pending_inputs SET origin_source_json = ? WHERE input_id = ?")
+          .run(JSON.stringify(source), stored.input_id).changes,
+      ).toBe(1);
+      const legacy = (await readSessionQueuedInputPage(c.target)).rows.find(
+        (row) => row.input_id === stored.input_id,
+      );
+      assert(legacy?.origin_source_json);
+      if (c.row.credential === "fallback") {
+        expect(legacy.origin_source_json).not.toContain("fallbackCredentialGeneration");
+      } else {
+        expect(JSON.parse(legacy.origin_source_json).snapshot.device).toBeUndefined();
+      }
+    }
+    if (
+      (c.scenario === "before-start" && c.row.credential !== "principal") ||
+      [
+        "method-disabled",
+        "legacy-method-disabled",
+        "legacy-rotated",
+        "fallback-proxy-policy",
+        "legacy-tailscale-narrowed",
+        "narrowed-grant",
+        "widened-grant",
+        "narrowed-role",
+        "empty-after-role",
+        "owner-unavailable",
+        "pairing-unavailable",
+      ].includes(c.scenario)
+    ) {
       await revokeAdmissionSource(this, c);
     }
     assert(this.kernel);
     const context = this.kernel.gatewayRequestContext;
-    const continuation = runWithGatewayIndependentRootWorkAdmission(
-      () =>
-        withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
-          queuedInputs.continueSessionQueuedInputs(context, c.target, {
-            signal: c.signal,
-            assertCurrent: () => c.signal.throwIfAborted(),
-          }),
-        ),
-      "test:accepted-input-drain",
-      c.signal,
+    const deferred = await c.wait(
+      runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, () =>
+            queuedInputs.continueSessionQueuedInputs(context, c.target, {
+              signal: c.signal,
+              assertCurrent: () => c.signal.throwIfAborted(),
+            }),
+          ),
+        "test:accepted-input-drain",
+        c.signal,
+      ),
     );
-    expect(await c.wait(continuation)).toBeUndefined();
+    if (c.scenario === "owner-unavailable" || c.scenario === "pairing-unavailable") {
+      assert(deferred, "An unavailable owner must defer, not refuse or consume accepted work");
+      expect(deferred.error).toBeInstanceOf(Error);
+      const retained = (await readSessionQueuedInputPage(c.target)).rows.find(
+        (row) => row.input_id === stored.input_id,
+      );
+      expect(retained).toMatchObject({
+        state: "queued",
+        origin_source_json: stored.origin_source_json,
+        message_json: stored.message_json,
+      });
+      expect(c.queuedCalls).toBe(0);
+      if (c.scenario === "owner-unavailable") {
+        assert(c.claw);
+        const authority = c.claw.authority;
+        setOpenClawIdTunnelPrincipalLookup((key) => authority.currentPeer(key));
+      }
+      await c.wait(deferred.resume());
+    } else {
+      expect(deferred).toBeUndefined();
+    }
     c.releaseFirst.resolve();
   }
 
@@ -463,6 +412,11 @@ export class AdmissionFixture {
     const fallbackEnv = captureEnv(["OPENCLAW_GATEWAY_PASSWORD"]);
     this.current = c;
     try {
+      if (row.ingress === "live") {
+        assert(scenario === "before-start" || scenario === "after-start" || scenario === "stop");
+        await runLiveAdmissionCase(row.credential, scenario, this);
+        return;
+      }
       let operator: Pick<GatewayClient, "request"> | GatewayIngressPrincipalBindingV1 | undefined;
       let nativeSend: (() => Promise<unknown>) | undefined;
       if (row.credential === "channel") {
@@ -514,9 +468,15 @@ export class AdmissionFixture {
         await this.server.close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
         await this.closeClients();
         await this.claim?.release();
+        assert(row.credential === "trusted-proxy" && scenario === "method-disabled");
+        this.config = structuredClone(this.baseline);
+        this.config.gateway!.auth = {
+          ...this.config.gateway!.auth,
+          mode: "token",
+          token: "admission-restarted-token",
+        };
         await this.start(false);
         await c.wait(c.drainEntered.promise);
-        await revokeAdmissionSource(this, c);
         c.releaseDrain.resolve();
         await c.wait(c.drained.promise);
         assert(this.server);
@@ -535,10 +495,25 @@ export class AdmissionFixture {
         await revokeAdmissionSource(this, c);
         c.releasePrepared.resolve();
         await c.wait(c.finalAdmissionSettled.promise);
+        if (row.credential === "principal") {
+          expect(c.finalAdmissionError).toBeInstanceOf(GatewayOperatorRecoveryAuthorizationError);
+        }
       }
-      if (scenario === "before-start") {
+      if (
+        [
+          "before-start",
+          "method-disabled",
+          "legacy-method-disabled",
+          "legacy-rotated",
+          "empty-after-role",
+        ].includes(scenario)
+      ) {
         if (!restartSentinel) {
           await c.wait(c.terminal(first.runId).promise);
+        }
+        if (scenario === "legacy-method-disabled") {
+          // The durable attempt settled before restoring fallback auth for the observer.
+          fallbackEnv.restore();
         }
         const observer = await this.admin(signal);
         const history = await observer.request<History>("chat.history", {
@@ -561,8 +536,26 @@ export class AdmissionFixture {
         await c.wait(c.recoveredReached.promise);
         assert(c.latestRunId);
         const running = c.latestRunId;
-        if (scenario === "after-start") {
-          await revokeAdmissionSource(this, c);
+        if (scenario !== "stop") {
+          if (scenario === "after-start") {
+            await revokeAdmissionSource(this, c);
+          }
+          if (["narrowed-grant", "narrowed-role", "legacy-tailscale-narrowed"].includes(scenario)) {
+            expect(c.observedRunScopes).not.toEqual([]);
+            for (const scopes of c.observedRunScopes) {
+              expect(scopes).toEqual(["operator.write"]);
+            }
+          } else if (scenario === "widened-grant") {
+            expect(c.observedRunScopes).not.toEqual([]);
+            for (const scopes of c.observedRunScopes) {
+              expect(scopes.toSorted()).toEqual([...WRITER].toSorted());
+            }
+          } else if (scenario === "legacy-tailscale") {
+            expect(c.observedRunScopes).not.toEqual([]);
+            for (const scopes of c.observedRunScopes) {
+              expect(scopes.toSorted()).toEqual([...WRITER, "operator.approvals"].toSorted());
+            }
+          }
           c.releaseRecovered.resolve();
           expect(await c.wait(c.terminal(running).promise)).toBe("final");
         } else {
@@ -577,7 +570,7 @@ export class AdmissionFixture {
         const history = await observer.request<History>("chat.history", {
           sessionKey: c.sessionKey,
         });
-        if (scenario === "after-start") {
+        if (scenario !== "stop") {
           expect(JSON.stringify(history.messages)).toContain(c.answer);
         } else {
           expect(JSON.stringify(history.messages)).not.toContain(c.answer);
@@ -600,7 +593,10 @@ export class AdmissionFixture {
         setOpenClawIdTunnelPrincipalResolver(undefined);
         setOpenClawIdTunnelPrincipalLookup(undefined);
         setOpenClawIdMemberAccountLookup(undefined);
-        if (JSON.stringify(this.config) !== JSON.stringify(this.baseline)) {
+        if (c.profileId && ["narrowed-role", "empty-after-role"].includes(scenario)) {
+          await setCanonicalUserProfileRole(c.profileId, "operator");
+        }
+        if (!restartSentinel && JSON.stringify(this.config) !== JSON.stringify(this.baseline)) {
           await this.publish(structuredClone(this.baseline));
         }
         this.current = undefined;
@@ -706,7 +702,7 @@ export async function createFixture(mode: Mode): Promise<AdmissionFixture> {
       response.destroy(error instanceof Error ? error : undefined);
     });
   });
-  fixture.observe();
+  observeAdmissionFixture(fixture);
   try {
     await fixture.start();
     return fixture;

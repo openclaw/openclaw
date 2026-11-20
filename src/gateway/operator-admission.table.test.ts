@@ -2,6 +2,7 @@
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import { afterAll, beforeAll, describe, it } from "vitest";
+import type { LiveAdmissionKind } from "./operator-admission.live.test-support.js";
 import {
   createFixture,
   type AdmissionFixture,
@@ -35,9 +36,11 @@ type Kind =
   | WsKind
   | `fallback:${Ingress}`
   | `proxy-device:${Ingress}`
+  | `tailscale-device:${Ingress}`
   | "ocid-owner"
   | "ocid-member"
   | Exclude<keyof typeof sourceIngresses, Ingress>
+  | LiveAdmissionKind
   | Exclude<QueuedOperatorRecoverySource["kind"], "gateway" | "unavailable">;
 const rows: Record<Kind, Row> = {
   "token:control-ui": { credential: "token", ingress: "control-ui" },
@@ -48,6 +51,8 @@ const rows: Record<Kind, Row> = {
   "device-token:internal": { credential: "device-token", ingress: "internal" },
   "tailscale:control-ui": { credential: "tailscale", ingress: "control-ui" },
   "tailscale:internal": { credential: "tailscale", ingress: "internal" },
+  "tailscale-device:control-ui": { credential: "tailscale-device", ingress: "control-ui" },
+  "tailscale-device:internal": { credential: "tailscale-device", ingress: "internal" },
   "trusted-proxy:control-ui": { credential: "trusted-proxy", ingress: "control-ui" },
   "trusted-proxy:internal": { credential: "trusted-proxy", ingress: "internal" },
   "fallback:control-ui": { credential: "fallback", ingress: "control-ui" },
@@ -58,6 +63,15 @@ const rows: Record<Kind, Row> = {
   "ocid-member": { credential: "ocid-member", ingress: "control-ui" },
   principal: { credential: "principal", ingress: "principal" },
   channel: { credential: "channel", ingress: "channel" },
+  "http-bearer": { credential: "http-bearer", ingress: "live" },
+  "http-ocid": { credential: "http-ocid", ingress: "live" },
+  "openai-compatible": { credential: "openai-compatible", ingress: "live" },
+  "plugin-in-process": { credential: "plugin-in-process", ingress: "live" },
+  "recorded-person": { credential: "recorded-person", ingress: "live" },
+  "recorded-system-turn": { credential: "recorded-system-turn", ingress: "live" },
+  "cron-standing-grant": { credential: "cron-standing-grant", ingress: "live" },
+  "cron-management-grant": { credential: "cron-management-grant", ingress: "live" },
+  "cron-operator-source": { credential: "cron-operator-source", ingress: "live" },
 };
 
 const modeFor = (row: Row): Mode =>
@@ -77,14 +91,31 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
   afterAll(async () => {
     await fixture?.close();
   });
+  if (mode === "trusted-proxy") {
+    it.for([
+      ["fallback:internal", "legacy-method-disabled"],
+      ["fallback:internal", "legacy-fallback"],
+      ["fallback:internal", "legacy-rotated"],
+      ["fallback:internal", "fallback-proxy-policy"],
+      ["trusted-proxy:internal", "narrowed-grant"],
+      ["trusted-proxy:internal", "widened-grant"],
+      ["trusted-proxy:internal", "narrowed-role"],
+      ["trusted-proxy:internal", "empty-after-role"],
+    ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
+      await fixture.run(rows[kind], scenario, signal);
+    });
+  }
   if (mode === "token") {
-    it(
-      "replays genuinely accepted queued input through a real restart",
-      { timeout: 90_000 },
-      async ({ signal }) => {
-        await fixture.run(rows["token:internal"], "before-start", signal, true);
-      },
-    );
+    it.for([
+      ["ocid-owner", "owner-unavailable"],
+      ["device-token:internal", "pairing-unavailable"],
+      ["tailscale:internal", "legacy-tailscale"],
+      ["tailscale:internal", "legacy-tailscale-narrowed"],
+      ["tailscale-device:internal", "narrowed-grant"],
+      ["tailscale-device:internal", "widened-grant"],
+    ] as const)("%s: %s", { timeout: 90_000 }, async ([kind, scenario], { signal }) => {
+      await fixture.run(rows[kind], scenario, signal);
+    });
   }
   describe.each(Object.entries(rows).filter(([, row]) => modeFor(row) === mode))(
     "%s",
@@ -96,4 +127,14 @@ describe.each(["token", "password", "trusted-proxy"] as const)("saved admission:
       }
     },
   );
+  if (mode === "trusted-proxy") {
+    // Last case: keep the transitioned listener until this pool closes, never hot-reset its mode.
+    it(
+      "refuses a disabled proxy method after replaying accepted input through a real token-mode restart",
+      { timeout: 90_000 },
+      async ({ signal }) => {
+        await fixture.run(rows["trusted-proxy:internal"], "method-disabled", signal, true);
+      },
+    );
+  }
 });

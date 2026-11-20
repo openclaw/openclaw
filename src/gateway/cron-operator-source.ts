@@ -92,6 +92,7 @@ export async function restoreCronOperatorSource(params: {
     assertCurrent();
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
+      source,
       target,
       context,
       assertCurrent,

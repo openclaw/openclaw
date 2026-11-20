@@ -166,6 +166,7 @@ export async function prepareFollowupRunOperatorAuthority(run: FollowupRun): Pro
     const restored = await restoreGatewayQueuedOperatorRecovery({
       context,
       source: captureQueuedOperatorRecoverySource(run.operatorAuthority),
+      liveAuthority: run.operatorAuthority,
       assertCurrent: () => {
         if (state.completed) {
           throw new Error("Input completed before source adoption");
