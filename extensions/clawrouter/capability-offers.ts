@@ -184,7 +184,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   /** Require a recent proxy-key observation for consumers without model-scoped grants. */
-  requireFreshProxyCatalog?: boolean;
+  requireFreshProxyCatalog?: boolean | ((offers: readonly ClawRouterCapabilityOffer[]) => boolean);
 }): Promise<ClawRouterCapabilityOffer[]> {
   params.signal?.throwIfAborted();
   const remaining = createProviderOperationTimeoutResolver({
@@ -220,7 +220,12 @@ export async function fetchClawRouterCapabilityOffers(params: {
       maxBytes: 1024 * 1024,
       timeoutMs: remaining,
     });
-    if (params.requireFreshProxyCatalog) {
+    const offers = readClawRouterCapabilityOffers(body, context.baseUrl);
+    const requireFresh =
+      typeof params.requireFreshProxyCatalog === "function"
+        ? params.requireFreshProxyCatalog(offers)
+        : params.requireFreshProxyCatalog;
+    if (requireFresh) {
       const catalog = asOptionalRecord(body);
       const scope = asOptionalRecord(catalog?.scope);
       const observedAt =
@@ -239,7 +244,7 @@ export async function fetchClawRouterCapabilityOffers(params: {
     }
     remaining();
     params.signal?.throwIfAborted();
-    return readClawRouterCapabilityOffers(body, context.baseUrl);
+    return offers;
   } finally {
     void response.body?.cancel().catch(() => undefined);
     await release();

@@ -2,6 +2,7 @@ import { resolveSiteName } from "../agents/tools/web-search-provider-common.js";
 import { wrapWebContent } from "../security/external-content.js";
 import {
   asOptionalObjectRecord,
+  asNonArrayRecord,
   filterStringEntries,
   isRecord,
   normalizeOptionalString,
@@ -20,6 +21,21 @@ const string = (value: unknown) => (typeof value === "string" ? value : "");
  * Authentication, admission, fetch policy, limits and caching belong to the caller.
  */
 export const nativeWebSearchCodecs = {
+  "deepseek.search": {
+    method: "POST",
+    request(endpoint: string, query: string, count: number) {
+      return { url: endpoint, body: { query, count, need_content: false } };
+    },
+    readResults: readDeepSeekSearchResults,
+    results(payload: unknown, count: number) {
+      const { results } = readDeepSeekSearchResults(payload, count);
+      for (const row of results) {
+        row.title = wrapped(row.title);
+        row.snippet = row.snippet ? wrapped(row.snippet) : undefined;
+      }
+      return results;
+    },
+  },
   "brave.search": {
     method: "GET",
     request(endpoint: string, query: string, count: number) {
@@ -135,3 +151,32 @@ export const nativeWebSearchCodecs = {
     },
   },
 } as const;
+
+// The direct plugin and proxy consumer share the native result formatter.
+// Authentication, cache ownership and response admission remain caller-owned.
+function readDeepSeekSearchResults(payload: unknown, count: number) {
+  const data = asNonArrayRecord(payload);
+  if (!Array.isArray(data.results)) {
+    throw new Error("DeepSeek API error: malformed JSON response");
+  }
+  let omittedResults = false;
+  const results = data.results.slice(0, count).flatMap((entry) => {
+    const result = asNonArrayRecord(entry);
+    const url = normalizeOptionalString(result.url);
+    const parsed = url && url.length <= 2_048 ? URL.parse(url) : null;
+    if (!parsed || !["http:", "https:"].includes(parsed.protocol) || parsed.href.length > 2_048) {
+      omittedResults = true;
+      return [];
+    }
+    return [
+      {
+        title: normalizeOptionalString(result.title) ?? "",
+        url: parsed.href,
+        snippet: normalizeOptionalString(result.summary) ?? normalizeOptionalString(result.snippet),
+        published: normalizeOptionalString(result.date),
+        siteName: normalizeOptionalString(result.site_name),
+      },
+    ];
+  });
+  return { results, omittedResults };
+}
