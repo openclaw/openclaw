@@ -340,7 +340,7 @@ if (values["agent-db-fixture"]) {
   }
 }
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
-const { requireGit } = await import("../../src/agents/worktrees/git.js");
+const { requireGit, runGit } = await import("../../src/agents/worktrees/git.js");
 const { drainGlobalSingletonLifecycleState } = await import("../../src/shared/global-singleton.js");
 if (values["default-base"]) {
   assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
@@ -725,6 +725,10 @@ try {
             ),
           );
           await idle;
+          assert.notEqual(
+            (await runGit(destination, ["cat-file", "-e", priorSandbox.sourceCommit])).code,
+            0,
+          );
           assert.equal(await requireGit(destination, ["rev-parse", "HEAD"]), target);
           assert.equal(
             await requireGit(destination, ["write-tree"]),
