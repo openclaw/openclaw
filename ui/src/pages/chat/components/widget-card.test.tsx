@@ -797,97 +797,31 @@ describe("widget-card", () => {
     );
     expect(pinButton(missingView)).toBeNull();
   });
-  it("releases placement observation while a retained widget is hidden", () => {
-    const observers: ResizeObserverStub[] = [];
-    class ResizeObserverStub implements ResizeObserver {
-      private readonly targets = new Set<Element>();
-      observe = vi.fn((target: Element) => {
-        this.targets.add(target);
-      });
-      unobserve = vi.fn((target: Element) => {
-        this.targets.delete(target);
-      });
-      disconnect = vi.fn(() => {
-        this.targets.clear();
-      });
-      constructor(private readonly callback: ResizeObserverCallback) {
-        observers.push(this);
-      }
-      deliver() {
-        this.callback(
-          [...this.targets].map((target) => ({
-            target,
-            contentRect: new DOMRectReadOnly(),
-            borderBoxSize: [],
-            contentBoxSize: [],
-            devicePixelContentBoxSize: [],
-          })),
-          this,
-        );
-      }
-    }
-    vi.stubGlobal("ResizeObserver", ResizeObserverStub);
-    const frames: FrameRequestCallback[] = [];
-    const request = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
-      frames.push(callback);
-      return frames.length;
-    });
-    const cancel = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
+  it("keeps native header actions and the widget frame through presentation changes", () => {
     const [presented, setPresented] = createSignal(true);
-    const [options, setOptions] = createSignal({ rawText: "Widget details" });
+    const [title, setTitle] = createSignal("Release status");
     const root = mountSolid(() => (
       <ContentPresentation value={presented}>
-        <div class="chat-thread">
-          <ToolPreview
-            preview={{ ...canvasPreview, url: "about:blank", sandbox: "strict" }}
-            surface="chat_message"
-            options={options()}
-          />
-        </div>
+        <ToolPreview
+          preview={{ ...canvasPreview, title: title(), url: "about:blank", sandbox: "strict" }}
+          surface="chat_message"
+          options={{ rawText: "Widget details" }}
+        />
       </ContentPresentation>
     ));
-    onTestFinished(() => {
-      root.unmount();
-      request.mockRestore();
-      cancel.mockRestore();
-      vi.unstubAllGlobals();
-    });
+    onTestFinished(() => root.unmount());
     flush();
-    expect(observers).toHaveLength(1);
-    expect(observers[0]?.observe).toHaveBeenCalledTimes(2);
     const frame = root.container.querySelector("iframe");
-    const thread = root.container.querySelector<HTMLElement>(".chat-thread")!;
-    const preview = root.container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
-    vi.spyOn(thread, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
-    Object.defineProperty(thread, "clientWidth", { value: 100 });
-    const geometry = vi
-      .spyOn(preview, "getBoundingClientRect")
-      .mockReturnValue(new DOMRect(0, 0, 90, 100));
-    observers[0]?.deliver();
-    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
-    frames.shift()?.(0);
-    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
-
-    setOptions({ rawText: "Updated widget details" });
-    flush();
-    expect(observers).toHaveLength(1);
-    expect(observers[0]?.disconnect).not.toHaveBeenCalled();
-
-    geometry.mockReturnValue(new DOMRect(0, 0, 50, 100));
-    observers[0]?.deliver();
+    const header = root.container.querySelector(".widget-header");
+    expect(header?.querySelector("h3")?.textContent).toBe("Release status");
+    expect(header?.querySelector('button[aria-label="Widget actions"]')).not.toBeNull();
     setPresented(false);
+    setTitle("Updated release status");
     flush();
-    frames.shift()?.(0);
-    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
-    expect(observers[0]?.disconnect).toHaveBeenCalledOnce();
-    expect(root.container.querySelector("iframe")).toBe(frame);
-
     setPresented(true);
     flush();
-    observers[1]?.deliver();
-    frames.shift()?.(0);
-    expect(observers).toHaveLength(2);
-    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
+    expect(root.container.querySelector(".widget-header")).toBe(header);
+    expect(header?.querySelector("h3")?.textContent).toBe("Updated release status");
     expect(root.container.querySelector("iframe")).toBe(frame);
   });
 

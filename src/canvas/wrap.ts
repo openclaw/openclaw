@@ -1,7 +1,155 @@
 import { WIDGET_CDN_ORIGINS } from "../plugin-sdk/widget-html.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { WIDGET_MEDIA_SOURCES } from "../shared/widget-media.js";
+import { readWidgetPreviewControls } from "../shared/widget-preview-controls.js";
 import { WIDGET_THEME_MESSAGE_TYPE, WIDGET_THEME_TOKENS } from "../shared/widget-theme.js";
+
+// Serialized into the trusted wrapper before any widget-authored script runs.
+// Geometry and bounded DOM labels only; this channel cannot save a comment.
+const WIDGET_INSPECTOR_SCRIPT = String.raw`(function installWidgetInspector(port             ) {
+  if (typeof document.elementFromPoint !== "function") {
+    return;
+  }
+  const listen = window.addEventListener.bind(window);
+  const post = port.postMessage.bind(port);
+  const call = Function.prototype.call.bind(Function.prototype.call);
+  const dataOf = Object.getOwnPropertyDescriptor(MessageEvent.prototype, "data") .get ;
+  const targetAt = document.elementFromPoint.bind(document);
+  const boundsOf = Element.prototype.getBoundingClientRect;
+  const attr = Element.prototype.getAttribute;
+  const tagOf = Object.getOwnPropertyDescriptor(Element.prototype, "localName") .get ;
+  const textOf = Object.getOwnPropertyDescriptor(Node.prototype, "textContent") .get ;
+  const slice = String.prototype.slice;
+  const stop = Event.prototype.stopImmediatePropagation;
+  const prevent = Event.prototype.preventDefault;
+  const raf = window.requestAnimationFrame.bind(window);
+  let inspection = 0;
+  let pointer                                      ;
+  let pending = false;
+  let lastHover = "";
+  const stringify = JSON.stringify;
+  const rectValues = ["left", "top", "right", "bottom"].map(
+    (key) => Object.getOwnPropertyDescriptor(DOMRectReadOnly.prototype, key) .get ,
+  );
+  const target = () => {
+    const element = pointer && targetAt(pointer.x, pointer.y);
+    if (!element) return;
+    const tag         = call(tagOf, element);
+    if (tag === "html" || tag === "body" || tag === "iframe") return;
+    const rect = call(boundsOf, element);
+    return {
+      element,
+      tag,
+      left: call(rectValues[0], rect),
+      top: call(rectValues[1], rect),
+      right: call(rectValues[2], rect),
+      bottom: call(rectValues[3], rect),
+    };
+  };
+  const hover = () => {
+    if (!inspection || pending) return;
+    pending = true;
+    raf(() => {
+      pending = false;
+      if (!inspection) return;
+      const hit = target();
+      const rect = hit && { left: hit.left, top: hit.top, right: hit.right, bottom: hit.bottom };
+      const next = stringify(rect ?? null);
+      if (next !== lastHover) {
+        lastHover = next;
+        post({ type: "openclaw:widget-inspect-hover", inspection, rect });
+      }
+    });
+  };
+  const end = () => {
+    post({ type: "openclaw:widget-inspect-cancel", inspection });
+    inspection = 0;
+    pointer = undefined;
+  };
+  port.addEventListener("message", (event) => {
+    const data = call(dataOf, event);
+    if (data?.type === "openclaw:widget-prompt-host-ready") {
+      post({ type: "openclaw:widget-inspect-ready" });
+    } else if (
+      data?.type === "openclaw:widget-inspect-mode" &&
+      typeof data.inspection === "number"
+    ) {
+      inspection = data.inspection;
+      pointer = undefined;
+      lastHover = "";
+    }
+  });
+  listen(
+    "pointermove",
+    (event) => {
+      if (inspection && event.isTrusted) {
+        pointer = { x: event.clientX, y: event.clientY };
+        hover();
+      }
+    },
+    true,
+  );
+  listen(
+    "pointerout",
+    (event) => {
+      if (event.isTrusted && !event.relatedTarget) {
+        pointer = undefined;
+        hover();
+      }
+    },
+    true,
+  );
+  listen("scroll", hover, true);
+  listen("resize", hover);
+  const intercept = (event       ) => {
+    if (!inspection || !event.isTrusted) return;
+    call(prevent, event);
+    call(stop, event);
+  };
+  listen("pointerdown", intercept, true);
+  listen("pointerup", intercept, true);
+  listen("auxclick", intercept, true);
+  listen("contextmenu", intercept, true);
+  listen(
+    "click",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      intercept(event);
+      if (event.button !== 0 || event.detail === 0) return;
+      pointer = { x: event.clientX, y: event.clientY };
+      const hit = target();
+      if (!hit) return;
+      const { element, tag, ...rect } = hit;
+      const id = call(slice, call(attr, element, "id") ?? "", 0, 80);
+      const text = call(
+        slice,
+        call(attr, element, "aria-label") ||
+          call(attr, element, "alt") ||
+          call(attr, element, "title") ||
+          call(textOf, element) ||
+          "",
+        0,
+        240,
+      );
+      post({ type: "openclaw:widget-inspect-pick", inspection, rect, tag, id, text });
+      // Remain armed until the host retires this mode; a double-click must not activate the widget.
+    },
+    true,
+  );
+  listen(
+    "keydown",
+    (event) => {
+      if (!inspection || !event.isTrusted) return;
+      if (event.key === "Escape") {
+        intercept(event);
+        end();
+      } else if (event.key === "Enter" || event.key === " ") {
+        intercept(event);
+      }
+    },
+    true,
+  );
+})(c.port1);`;
 
 const WIDGET_BODY_HEIGHT =
   "Math.ceil(Math.max(b.scrollHeight,b.offsetHeight,b.getBoundingClientRect().height))";
@@ -119,6 +267,7 @@ export function buildWidgetDocument(
     'const apply=Reflect.apply;const dataOf=Object.getOwnPropertyDescriptor(MessageEvent.prototype,"data").get;' +
     "const c=new MessageChannel();" +
     "const promptPost=c.port1.postMessage.bind(c.port1);" +
+    WIDGET_INSPECTOR_SCRIPT +
     "const b=new MessageChannel();const bridgePost=b.port1.postMessage.bind(b.port1);" +
     "const promptWaiting=[];let inlinePromptReady=false;" +
     'c.port1.addEventListener("message",event=>{if(apply(dataOf,event,[])?.type!=="openclaw:widget-prompt-host-ready"||inlinePromptReady)return;' +
@@ -161,8 +310,23 @@ export function buildWidgetDocument(
     'const inline=()=>{promptPost({type:"openclaw:widget-prompt",prompt:value});resolve(true);};' +
     'if(inlinePromptReady)inline();else if(hostInitExpired)reject(new ErrorCtor("widget prompt host unavailable"));' +
     "else push.call(promptWaiting,{send,inline,reject});});};" +
+    // Local preview controls use no request channel, ticket, prompt, or grant.
+    // Embed the same self-contained reader that validates publications in the host.
+    `const readControls=(${readWidgetPreviewControls.toString()});` +
+    "let previewControls=[];let previewChange=null;" +
+    'const publishControls=()=>post({type:"openclaw:widget-preview-controls",controls:previewControls},"*");' +
+    "const setControls=(controls,onChange)=>{const next=readControls(controls);" +
+    'if(!next||typeof onChange!=="function")throw new ErrorCtor("invalid widget preview controls");' +
+    "previewControls=next;previewChange=onChange;publishControls();};" +
+    'listen("message",event=>{if(event.source!==parent)return;const data=apply(dataOf,event,[]);' +
+    'if(data?.type==="openclaw:widget-chat-host"){publishControls();return;}' +
+    'if(data?.type!=="openclaw:widget-preview-change"||typeof data.id!=="string"||typeof data.value!=="string")return;' +
+    "for(const control of previewControls){if(control.id!==data.id)continue;" +
+    "for(const option of control.options){if(option.value!==data.value)continue;control.value=data.value;publishControls();" +
+    "if(previewChange)previewChange({id:data.id,value:data.value});return;}return;}});" +
     'const host={};define(host,"controlUiBaseUrl",{enumerable:true,get:()=>controlUiBaseUrl});freeze(host);' +
     "const api=freeze({host," +
+    "preview:freeze({setControls})," +
     'prompt:freeze({send:sendPrompt}),state:freeze({emit:payload=>request("state.emit",{payload})}),' +
     'data:freeze({read:(bindingId,params)=>request("data.read",{bindingId:stringify(bindingId),params}),query:queryName=>request("data.query",{queryName:stringify(queryName)})}),' +
     'action:freeze({run:(action,params)=>request("action.run",{action:stringify(action),params:params===undefined?{}:params})}),' +
@@ -228,7 +392,12 @@ export function buildWidgetDocument(
     "const replace=Node.prototype.replaceChild;" +
     'const getParent=Object.getOwnPropertyDescriptor(Node.prototype,"parentNode")?.get;' +
     "const names=Element.prototype.getAttributeNames;const getAttr=Element.prototype.getAttribute;" +
-    "const setAttr=Element.prototype.setAttribute;" +
+    "const setAttr=Element.prototype.setAttribute;const removeAttr=Element.prototype.removeAttribute;" +
+    'const text=Object.getOwnPropertyDescriptor(Node.prototype,"textContent");' +
+    'const inputValue=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"value").get;' +
+    'const checked=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,"checked").get;' +
+    'const textareaValue=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").get;' +
+    'const selected=Object.getOwnPropertyDescriptor(HTMLOptionElement.prototype,"selected").get;' +
     "const serializer=new XMLSerializer();const serialize=serializer.serializeToString.bind(serializer);" +
     "const create=document.createElement.bind(document);const styles=getComputedStyle.bind(window);" +
     "const getProperty=CSSStyleDeclaration.prototype.getPropertyValue;" +
@@ -250,6 +419,13 @@ export function buildWidgetDocument(
     'const root=clone.call(document.documentElement,true);const scripts=query.call(root,"script");' +
     "for(let index=scripts.length-1;index>=0;index--){const script=item.call(scripts,index);" +
     "if(script&&getParent){const owner=getParent.call(script);if(owner)remove.call(owner,script);}}" +
+    // cloneNode retains default form attributes, not necessarily their live state.
+    'const liveFields=queryDocument("input,textarea,option");const clonedFields=query.call(root,"input,textarea,option");' +
+    "for(let index=0;index<liveFields.length;index++){const live=item.call(liveFields,index);const cloned=item.call(clonedFields,index);if(!live||!cloned)continue;" +
+    'if(live.localName==="input"){setAttr.call(cloned,"value",inputValue.call(live));' +
+    'if(checked.call(live))setAttr.call(cloned,"checked","");else removeAttr.call(cloned,"checked");}' +
+    'else if(live.localName==="textarea")text.set.call(cloned,textareaValue.call(live));' +
+    'else if(selected.call(live))setAttr.call(cloned,"selected","");else removeAttr.call(cloned,"selected");}' +
     'const liveCanvases=queryDocument("canvas");const clonedCanvases=query.call(root,"canvas");' +
     "for(let index=0;index<liveCanvases.length;index++){const live=item.call(liveCanvases,index);" +
     "const cloned=item.call(clonedCanvases,index);if(!live||!cloned||!getParent||!setSrc)continue;" +
@@ -269,7 +445,8 @@ export function buildWidgetDocument(
     'const context=getContext.call(canvas,"2d");if(!context||!setFill)throw new ErrorCtor("widget snapshot canvas unavailable");' +
     'setFill.call(context,getProperty.call(styles(document.documentElement),"--surface"));' +
     "fill.call(context,0,0,canvasWidth,canvasHeight);draw.call(context,image,0,0,canvasWidth,canvasHeight);" +
-    'post({type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height},"*");' +
+    'const reply={type:"openclaw:widget-snapshot",id:data.id,dataUrl:toDataURL.call(canvas,"image/png"),width,height};' +
+    'post(reply,"*");' +
     '}catch(error){post({type:"openclaw:widget-snapshot",id:data.id,error:stringify(error)},"*");}})();});})();</script>';
   const connectSources = options.connectOrigins?.length
     ? options.connectOrigins.join(" ")

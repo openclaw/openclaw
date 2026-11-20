@@ -7,10 +7,15 @@ const WIDGET_SNAPSHOT_REPLY_TYPE = "openclaw:widget-snapshot";
 const WIDGET_SNAPSHOT_TIMEOUT_MS = 5_000;
 const WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS = 32 * 1024 * 1024;
 
-type WidgetSnapshotReply = { type?: unknown; id?: unknown; dataUrl?: unknown; error?: unknown };
+type WidgetSnapshotReply = {
+  type?: unknown;
+  id?: unknown;
+  dataUrl?: unknown;
+  error?: unknown;
+};
 class WidgetSnapshotUnavailableError extends Error {}
 
-function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
+function captureWidget(frame: HTMLIFrameElement): Promise<string> {
   const target = frame.contentWindow;
   if (!target) {
     return Promise.reject(new Error("widget frame is unavailable"));
@@ -56,7 +61,13 @@ function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
       WIDGET_SNAPSHOT_TIMEOUT_MS,
     );
     try {
-      target.postMessage({ type: WIDGET_SNAPSHOT_REQUEST_TYPE, id }, "*");
+      target.postMessage(
+        {
+          type: WIDGET_SNAPSHOT_REQUEST_TYPE,
+          id,
+        },
+        "*",
+      );
     } catch (error) {
       fail(error instanceof Error ? error : new Error(String(error)));
     }
@@ -87,7 +98,7 @@ export async function exportWidget(
     .replace(/-+/g, "-")
     .replace(/^[. -]+|[. -]+$/g, "");
   const filename = truncateUtf16Safe(rawStem, 120).replace(/[. -]+$/g, "") || "widget";
-  const snapshot = requestWidgetSnapshot(frame);
+  const snapshot = captureWidget(frame);
 
   if (action === "copy") {
     beginClipboardCopy();

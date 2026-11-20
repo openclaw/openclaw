@@ -35,6 +35,9 @@ const enBrowser = {
     dockRight: "Dock to right",
     annotate: "Annotate page",
     inspect: "Inspect element",
+    annotateWidget: "Annotate widget",
+    widgetInspectUnavailable:
+      "Element comments aren’t available yet. Try again once the widget loads, or ask the agent to render this widget again.",
     annotateSend: "Add to message",
     annotateUndo: "Undo",
     annotateClear: "Clear",

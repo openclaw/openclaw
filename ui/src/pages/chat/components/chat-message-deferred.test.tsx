@@ -164,11 +164,12 @@ it("reserves declared and saved widget height before the lazy renderer arrives",
     flush();
     const placeholder = () =>
       mounted.container.querySelector<HTMLElement>(".chat-tool-card__preview");
-    expect(placeholder()?.style.minHeight).toBe("220px");
+    expect(placeholder()?.dataset.contentKind).toBe("canvas-html");
+    expect(placeholder()?.style.minHeight).toBe("calc(220px + var(--widget-header-height) + 2px)");
     expect(mounted.container.textContent).not.toContain("Widget renderer ready");
     setSavedHeight(700);
     flush();
-    expect(placeholder()?.style.minHeight).toBe("700px");
+    expect(placeholder()?.style.minHeight).toBe("calc(700px + var(--widget-header-height) + 2px)");
     moduleReady.resolve();
     await waitForSolid(() =>
       expect(mounted.container.textContent).toContain("Widget renderer ready"),

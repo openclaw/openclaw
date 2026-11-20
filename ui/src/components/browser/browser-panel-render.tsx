@@ -1,6 +1,6 @@
 import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { For, Match, onSettled, Switch } from "solid-js";
+import { Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -14,6 +14,7 @@ import { Icon } from "../solid/icon.tsx";
 import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+import { AnnotationBar, AnnotationTooltip } from "./annotation-controls.tsx";
 import type { BrowserPanel } from "./browser-panel-owner.ts";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import { BrowserToolbar } from "./browser-panel-toolbar.tsx";
@@ -25,84 +26,22 @@ type ControllerProps = { controller: BrowserPanel };
 
 function AnnotateBar(props: ControllerProps) {
   return (
-    <div class="bp-annotatebar">
-      <span class="bp-annotatebar__hint">{t("browser.annotateHint")}</span>
-      <For each={["undoStroke", "clearStrokes"] as const}>
-        {(action) => (
-          <button
-            class="bp-btn"
-            type="button"
-            disabled={props.controller.strokes.length === 0}
-            onClick={() => props.controller.input[action]()}
-          >
-            {t(action === "undoStroke" ? "browser.annotateUndo" : "browser.annotateClear")}
-          </button>
-        )}
-      </For>
-      <button
-        class="bp-btn"
-        type="button"
-        title={t("browser.annotateDone")}
-        onClick={() => props.controller.exitCaptureModes()}
-      >
-        <Icon name="x" />
-      </button>
-      <button
-        class="bp-btn bp-btn--primary"
-        type="button"
-        disabled={props.controller.strokes.length === 0}
-        onClick={() => void props.controller.input.sendAnnotation({})}
-      >
-        {t("browser.annotateSend")}
-      </button>
-    </div>
+    <AnnotationBar
+      hasMarks={props.controller.strokes.length > 0}
+      onUndo={() => props.controller.input.undoStroke()}
+      onClear={() => props.controller.input.clearStrokes()}
+      onExit={() => props.controller.exitCaptureModes()}
+      onAdd={() => void props.controller.input.sendAnnotation({})}
+    />
   );
 }
 
 function InspectTooltip(props: ControllerProps) {
-  const node = createMemo(() => props.controller.inspected);
-  const pointer = createMemo(() => props.controller.inspectPointer);
   return (
-    <>
-      {props.controller.mode === "inspect" && node() && pointer() ? (
-        <div
-          class="bp-tooltip"
-          style={{
-            left: `${Math.min(92, Math.max(0, pointer()!.x * 100))}%`,
-            top: `${Math.min(92, Math.max(0, pointer()!.y * 100 + 2))}%`,
-          }}
-        >
-          <div class="bp-tooltip__title">
-            <span class="bp-tooltip__selector">
-              {node()!.tag}
-              {node()!.id ? `#${node()!.id}` : ""}
-              {node()!
-                .classes.map((name) => `.${name}`)
-                .join("")}
-            </span>
-            <span class="bp-tooltip__size">
-              {Math.round(node()!.rect.width)} × {Math.round(node()!.rect.height)}
-            </span>
-          </div>
-          {node()!.name ? (
-            <div class="bp-tooltip__row">
-              <span>{t("browser.inspectName")}</span>
-              <span>{node()!.name}</span>
-            </div>
-          ) : null}
-          {node()!.role ? (
-            <div class="bp-tooltip__row">
-              <span>{t("browser.inspectRole")}</span>
-              <span>{node()!.role}</span>
-            </div>
-          ) : null}
-          <div class="bp-tooltip__row">
-            <span>{t("browser.inspectFocusable")}</span>
-            <span>{node()!.focusable ? "✓" : "–"}</span>
-          </div>
-        </div>
-      ) : null}
-    </>
+    <AnnotationTooltip
+      node={props.controller.mode === "inspect" ? props.controller.inspected : null}
+      pointer={props.controller.inspectPointer}
+    />
   );
 }
 

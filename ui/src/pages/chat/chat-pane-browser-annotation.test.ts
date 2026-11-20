@@ -8,7 +8,10 @@ import type {
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import * as toast from "../../lib/toast.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
-import { receiveBrowserAnnotation } from "./chat-pane-browser-annotation.ts";
+import {
+  browserAnnotationTargetsPane,
+  receiveBrowserAnnotation,
+} from "./chat-pane-browser-annotation.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 
 const card = {
@@ -17,6 +20,21 @@ const card = {
   markedRegionCount: 1,
   inspectedElement: false,
 };
+
+it("routes inline capture to its own pane while sidebar capture follows focus", () => {
+  const own = document.createElement("openclaw-chat-pane");
+  const other = document.createElement("openclaw-chat-pane");
+  const widget = document.createElement("div");
+  own.append(widget);
+  const event = new Event("capture");
+  widget.dispatchEvent(event);
+  expect(browserAnnotationTargetsPane(event, own, false)).toBe(true);
+  expect(browserAnnotationTargetsPane(event, other, true)).toBe(false);
+  const sidebar = new Event("capture");
+  window.dispatchEvent(sidebar);
+  expect(browserAnnotationTargetsPane(sidebar, own, true)).toBe(true);
+  expect(browserAnnotationTargetsPane(sidebar, own, false)).toBe(false);
+});
 const annotations = (count: number): ChatAttachment[] =>
   Array.from({ length: count }, (_, id) => ({
     id: String(id),

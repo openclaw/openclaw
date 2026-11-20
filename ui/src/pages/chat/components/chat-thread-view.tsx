@@ -61,6 +61,7 @@ import { resolveTranscriptAvatarPlacement } from "./chat-transcript-identity.ts"
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { WIDGET_COMMENT_INTENT, type WidgetCommentIntent } from "./widget-comment-intent.ts";
 import "../../../styles/chat/selection-annotations.css";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -219,6 +220,21 @@ function ChatThreadContent(
   onSettled(() => {
     const element = root();
     const unregister = element && registerTranscriptElement(paneId(), element);
+    const stopWidgetComments =
+      element &&
+      listen(element, WIDGET_COMMENT_INTENT, (event) => {
+        if (!(event instanceof CustomEvent) || !input.presented || !input.props.onAddToChat) {
+          return;
+        }
+        const widget: WidgetCommentIntent = event.detail;
+        event.stopPropagation();
+        event.preventDefault();
+        input.props.onAddToChat(
+          { text: widget.text, start: 0, end: widget.text.length },
+          widget.anchor,
+          widget,
+        );
+      });
     const searchState = getTranscriptState(paneId()).search;
     let query = searchState.snapshot.query.trim();
     const stopSearch = searchState.subscribe(() => {
@@ -232,6 +248,7 @@ function ChatThreadContent(
     return () => {
       stopSearch();
       unregister?.();
+      stopWidgetComments?.();
     };
   });
   const search = createMemo(() =>

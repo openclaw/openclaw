@@ -7,6 +7,10 @@ import {
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  readWidgetPreviewControls,
+  type WidgetPreviewControl,
+} from "../../../src/shared/widget-preview-controls.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
@@ -16,83 +20,21 @@ import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { observeWindowMessage } from "../lib/reactive/window-message.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import {
-  WidgetSandboxHost,
-  WIDGET_LOAD_NOTICE_MS,
-  WIDGET_LOAD_TIMEOUT_MS,
-} from "../lib/widget-sandbox-host.ts";
+import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import {
+  createWidgetInspection,
+  type WidgetInspectionListener,
+} from "./canvas-widget-inspection.ts";
 import { isCanvasWidgetLoadRetryEvent } from "./canvas-widget-view-events.ts";
+import {
+  loadCanvasView,
+  forgetPendingCanvasView,
+  type CanvasWidgetViewBinding,
+} from "./canvas-widget-view-load.ts";
 import type { CanvasWidgetViewProps } from "./canvas-widget-view.types.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
-
-type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-
-type CanvasWidgetViewBinding = {
-  client: WidgetClient;
-  generation: number;
-  docId: string;
-  sessionKey: string;
-  operatorRead: boolean;
-};
-
-const pendingViews = new WeakMap<
-  WidgetClient,
-  {
-    generation: number;
-    requests: Map<string, Promise<CanvasDocumentViewResult>>;
-  }
->();
-
-function canvasViewRequestKey(binding: CanvasWidgetViewBinding): string {
-  return `${binding.sessionKey}\0${binding.docId}\0${binding.operatorRead}`;
-}
-
-function forgetPendingCanvasView(binding: CanvasWidgetViewBinding | undefined): void {
-  if (!binding) {
-    return;
-  }
-  const pending = pendingViews.get(binding.client);
-  if (pending?.generation === binding.generation) {
-    pending.requests.delete(canvasViewRequestKey(binding));
-  }
-}
-
-function loadCanvasView(binding: CanvasWidgetViewBinding): Promise<CanvasDocumentViewResult> {
-  let pending = pendingViews.get(binding.client);
-  if (!pending || pending.generation !== binding.generation) {
-    pending = { generation: binding.generation, requests: new Map() };
-    pendingViews.set(binding.client, pending);
-  }
-  const requestKey = canvasViewRequestKey(binding);
-  const existing = pending.requests.get(requestKey);
-  if (existing) {
-    return existing;
-  }
-  const request = binding.client.request<CanvasDocumentViewResult>(
-    "canvas.document.view",
-    {
-      docId: binding.docId,
-      ...(!binding.operatorRead && binding.sessionKey ? { sessionKey: binding.sessionKey } : {}),
-    },
-    { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-  );
-  // Canvas also supports replacing a named document. Share concurrent reads,
-  // but only the mounted view retains bytes; a remount revalidates the source.
-  if (pending.requests.size < 32) {
-    const requests = pending.requests;
-    requests.set(requestKey, request);
-    void request
-      .finally(() => {
-        if (requests.get(requestKey) === request) {
-          requests.delete(requestKey);
-        }
-      })
-      .catch(() => {});
-  }
-  return request;
-}
 
 type ViewBinding = CanvasWidgetViewBinding & {
   connectionRevision: number;
@@ -173,6 +115,7 @@ export function createCanvasWidget(
     sandboxGeneration: number;
     scriptFrameAdmitted: boolean;
     pending: boolean;
+    previewControls: WidgetPreviewControl[];
   } = {
     error: "",
     accessDenied: false,
@@ -182,11 +125,13 @@ export function createCanvasWidget(
     sandboxGeneration: 0,
     scriptFrameAdmitted: false,
     pending: false,
+    previewControls: [],
   };
   let reportedHeight: number | undefined;
   let activeBinding: ViewBinding | undefined;
   let sandboxHost: WidgetSandboxHost | undefined;
   let promptPort: MessagePort | undefined;
+  const inspect = createWidgetInspection();
   let releasePromptPort: (() => void) | undefined;
   let frameElement: HTMLIFrameElement | undefined;
   let sandboxOrigin = "";
@@ -208,6 +153,34 @@ export function createCanvasWidget(
     previewFrame: {
       configurable: true,
       get: () => (frameElement?.isConnected ? frameElement : undefined),
+    },
+    previewControls: { configurable: true, get: () => state.previewControls },
+    startInspection: {
+      configurable: true,
+      value: (receive: WidgetInspectionListener) =>
+        promptPort && props.presentationActive && props.allowScripts && isCurrent(validatedBinding)
+          ? inspect.start(promptPort, receive)
+          : undefined,
+    },
+    setPreviewControl: {
+      configurable: true,
+      value: (id: string, value: string) => {
+        if (
+          !props.presentationActive ||
+          !props.allowScripts ||
+          !isCurrent(validatedBinding) ||
+          !state.previewControls.some(
+            (control) =>
+              control.id === id && control.options.some((option) => option.value === value),
+          )
+        ) {
+          return;
+        }
+        frameElement?.contentWindow?.postMessage(
+          { type: "openclaw:widget-preview-change", id, value },
+          sandboxOrigin,
+        );
+      },
     },
   });
   function clearRetry(): void {
@@ -284,6 +257,9 @@ export function createCanvasWidget(
   }
 
   function clearSandbox(): void {
+    inspect.reset();
+    state.previewControls = [];
+    props.onPreviewControlsChange?.([]);
     cancelFrameAdmission?.();
     cancelFrameAdmission = undefined;
     state.scriptFrameAdmitted = false;
@@ -356,6 +332,7 @@ export function createCanvasWidget(
       releaseCanvasViewInterest();
       clearRetry();
       validatedBinding = undefined;
+      inspect.stop();
       sandboxHost?.setActive(false);
       state.awaitingResult = false;
       state.pending = true;
@@ -476,6 +453,7 @@ export function createCanvasWidget(
     const active = props.presentationActive && isCurrent(validatedBinding);
     sandboxHost?.setActive(active);
     if (!active) {
+      inspect.stop();
       cancelFrameAdmission?.();
       cancelFrameAdmission = undefined;
     }
@@ -607,6 +585,15 @@ export function createCanvasWidget(
     }
     host.handleMessage(event);
     const data = asOptionalRecord(event.data);
+    if (data?.type === "openclaw:widget-preview-controls" && props.allowScripts && host.loaded) {
+      const controls = readWidgetPreviewControls(data.controls);
+      if (controls) {
+        state.previewControls = controls;
+        props.onPreviewControlsChange?.(controls);
+        notify();
+      }
+      return;
+    }
     if (
       data?.type === "openclaw:widget-scroll" &&
       scrollNonce &&
@@ -702,18 +689,23 @@ export function createCanvasWidget(
     promptPort = port;
     releasePromptPort = listen(port, "message", (message) => {
       if (
-        message instanceof MessageEvent &&
-        props.presentationActive &&
-        isCurrent(validatedBinding) &&
-        sandboxHost === host &&
-        promptPort === port &&
-        message.data?.type === "openclaw:widget-prompt"
+        !props.presentationActive ||
+        !props.allowScripts ||
+        !isCurrent(validatedBinding) ||
+        sandboxHost !== host ||
+        promptPort !== port
       ) {
+        return;
+      }
+      const payload = asOptionalRecord(message.data);
+      if (payload?.type === "openclaw:widget-prompt") {
         void dispatchWidgetPrompt(
           host.frame,
-          message.data.prompt,
+          payload.prompt,
           `${props.sessionKey}\0${props.docId}\0${validatedBinding!.generation}`,
         );
+      } else if (payload) {
+        inspect.receive(payload, host.frame);
       }
     });
     port.start();
