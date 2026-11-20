@@ -13,14 +13,12 @@ import {
   createDynamicSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { SessionWorkStartError } from "../../config/sessions/session-work-start.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { cronRunAcceptance } from "../../infra/agent-run-registry.automation.js";
 import { execRequestAbortSignal } from "../../infra/exec-request-context.js";
 import type { SourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
@@ -28,9 +26,9 @@ import { isCurrentSessionControllerOperation } from "../../sessions/session-cont
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
+import { runInSessionEventAdmissionScope } from "./session-event-admission-scope.js";
 import {
   prepareCronRunContinuationCleanup,
   prepareScheduledAutomationStart,
@@ -77,12 +75,6 @@ export { combineSessionEventTargetsForHost } from "./session-event-target.js";
 export type { SessionEventReceipt, SessionEventTarget } from "./session-event-contract.js";
 
 const log = createSubsystemLogger("session-events");
-
-// The loader exposes this synchronous facade; enter auth/plugin preparation only in admitted async work.
-const loadGenerationReadmission = createLazyRuntimeNamedExport(
-  () => import("./queue/drain-admission-scope.js"),
-  "runOutsideAdmittedGenerationScopes",
-);
 
 /**
  * Producer-owned occurrence; passive notices continue to use enqueueSystemEvent.
@@ -708,16 +700,14 @@ export function enqueueSessionEventForHost(
     finish();
     return settled.then(() => undefined);
   };
-  void runWithoutOwnedSessionTranscriptWrites(() =>
-    runWithGatewayDetachedWorkContinuation(async () => {
+  void runInSessionEventAdmissionScope(
+    () =>
+      execute()
+        .catch(settleExecutionFailure)
+        .finally(() => generationLease?.release()),
+    () => {
       admissionStarted = true;
-      const runOutsideAdmittedGenerationScopes = await loadGenerationReadmission();
-      return runOutsideAdmittedGenerationScopes(() =>
-        execute()
-          .catch(settleExecutionFailure)
-          .finally(() => generationLease?.release()),
-      );
-    }, "session:event"),
+    },
   ).catch(settleExecutionFailure);
   return {
     id: occurrenceId,
