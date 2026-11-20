@@ -1,12 +1,15 @@
 // A client-selected publisher must reach the outbound ClawHub request unchanged (#117633).
-// Only HTTP is faked; search, the Gateway handlers, and the detail client are real.
+// Search, the Gateway handlers, and the detail client are real.
 
+import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsDetailResultSchema } from "../../../packages/gateway-protocol/src/schema/skill-detail.js";
+import { SkillsSearchResultSchema } from "../../../packages/gateway-protocol/src/schema/skills-search.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveClawHubCatalogIconUrl } from "../../plugins/catalog-icon-registry.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -127,6 +130,79 @@ function fakeClawHub(input: string): Response {
 
 const callSkillsHandler = (method: string, params: Record<string, unknown>) =>
   callGatewayHandler(skillsHandlers, method, params);
+
+it("preserves ranked identities and their optional categories from the trending HTTP feed", async ({
+  onTestFinished,
+}) => {
+  const reads: string[] = [];
+  const fixture = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      createServer((req, res) => {
+        reads.push(`${req.method} ${req.url}`);
+        res.setHeader("Content-Type", "application/json");
+        res.end(
+          JSON.stringify({
+            items: [
+              {
+                slug: SLUG,
+                displayName: "External email",
+                source: "skills-sh",
+                install: { kind: "skills-sh", reference: `skills-sh:acme/tools/${SLUG}` },
+              },
+              {
+                slug: SLUG,
+                displayName: "Native email",
+                source: "clawhub",
+                publisher: { handle: "acme" },
+                categories: ["communication", "productivity"],
+              },
+            ],
+            nextCursor: "next:page",
+          }),
+        );
+      }),
+  });
+  onTestFinished(async () => {
+    vi.unstubAllEnvs();
+    try {
+      await fixture.releaseListener();
+    } finally {
+      await fixture.claim.release();
+    }
+  });
+  const registry = `http://127.0.0.1:${fixture.claim.port}`;
+  vi.stubEnv("OPENCLAW_CLAWHUB_URL", registry);
+  vi.stubEnv("CLAWHUB_TOKEN", "synthetic-fixture-token");
+  const { ok, response, error } = await callSkillsHandler("skills.search", {});
+  expect(error).toBeUndefined();
+  expect(ok).toBe(true);
+  expect(reads).toEqual(["GET /api/v1/trending?kind=skills&limit=20"]);
+  expect(response).toEqual({
+    nextCursor: "next:page",
+    results: [
+      {
+        slug: SLUG,
+        displayName: "External email",
+        registry,
+        score: 0,
+        installRef: `skills-sh:acme/tools/${SLUG}`,
+        installOnly: true,
+        trustState: "not-scanned-by-clawhub",
+      },
+      {
+        slug: SLUG,
+        displayName: "Native email",
+        registry,
+        score: 0,
+        ownerHandle: "acme",
+        installRef: `@acme/${SLUG}`,
+        categories: ["communication", "productivity"],
+      },
+    ],
+  });
+  expect(Value.Check(SkillsSearchResultSchema, response)).toBe(true);
+});
 
 describe("ClawHub publisher identity across skills.search and skills.detail", () => {
   beforeEach(() => {

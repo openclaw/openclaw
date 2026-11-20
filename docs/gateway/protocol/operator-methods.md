@@ -349,6 +349,10 @@ registry failures are errors. Clients can check whether the Gateway advertises
 | Category only                    | Native skills listed by `/api/v1/skills?category=<slug>`             |
 | Text, optionally with a category | `/api/v1/search?q=<text>` with the selected `category`, if any       |
 
+Trending results can include `categories`, an array of registry category slugs.
+Use `skills.categories` for their display labels. When a row has no membership
+metadata, keep it in the ranked feed without assigning it a category.
+
 Pass the returned opaque `nextCursor` back as `cursor` with the same browse filter
 for the next page. No cursor means there is no next page. Text search is not
 paginated. A failed or unavailable category filter never retries as unfiltered

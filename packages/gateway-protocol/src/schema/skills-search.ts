@@ -41,6 +41,7 @@ export const SkillsSearchResultSchema = closedObject({
       official: Type.Optional(Type.Boolean()),
       score: Type.Number(),
       slug: NonEmptyString,
+      categories: Type.Optional(Type.Array(Type.String())),
       registry: NonEmptyString,
       ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
       installRef: Type.String({

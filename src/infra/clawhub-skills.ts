@@ -1,5 +1,5 @@
 import type { SkillsDetailResult } from "@openclaw/gateway-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import type {
@@ -56,7 +56,7 @@ type ClawHubSkillSearchWireEntry = Omit<
 
 type ClawHubSkillTrendingWireEntry = Pick<
   ClawHubSkillSearchWireEntry,
-  "slug" | "displayName" | "source" | "install" | "official"
+  "slug" | "displayName" | "source" | "install" | "official" | "categories"
 > & {
   summary?: string | null;
   publisher?: { handle?: string | null } | null;
@@ -186,12 +186,8 @@ export async function searchClawHubSkills(
 export async function searchClawHubSkillsPage(
   params: ClawHubFetchOptions & SkillsSearchParams,
 ): Promise<{ results: ClawHubSkillSearchResult[]; nextCursor?: string }> {
-  const registry = resolveClawHubBaseUrl(params.baseUrl);
   const query = params.query?.trim();
-  const request = {
-    ...params,
-    baseUrl: registry,
-  };
+  const request = { ...params, baseUrl: resolveClawHubBaseUrl(params.baseUrl) };
   if (params.category) {
     // Older registries ignore unknown list parameters and return an unfiltered page.
     // Require the same registry to advertise the filter before trusting its results.
@@ -266,6 +262,7 @@ export async function searchClawHubSkillsPage(
     entries = (result.items ?? []).map((entry) => ({
       score: 0,
       slug: entry.slug,
+      categories: entry.categories,
       displayName: entry.displayName,
       summary: entry.summary ?? undefined,
       source: entry.source,
@@ -275,7 +272,7 @@ export async function searchClawHubSkillsPage(
       updatedAt: entry.metrics?.updatedAt ?? undefined,
     }));
   }
-  const results = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, registry));
+  const results = entries.flatMap((entry) => mapClawHubSkillSearchEntry(entry, request.baseUrl));
   return { results, ...(nextCursor ? { nextCursor } : {}) };
 }
 
@@ -408,17 +405,21 @@ function mapClawHubSkillSearchEntry(
   entry: ClawHubSkillSearchWireEntry,
   registry: string,
 ): ClawHubSkillSearchResult | [] {
-  const { install: _install, source: _source, ...rest } = entry;
-  const base = { ...rest, registry, icon: resolveClawHubImageUrl(entry.icon, registry) };
-  const source = normalizeOptionalString(entry.source);
-  const installKind = normalizeOptionalString(entry.install?.kind);
-  const reference = normalizeOptionalString(entry.install?.reference);
+  const { install, source, categories, ...rest } = entry;
+  const base = {
+    ...rest,
+    ...(isStringArray(categories) ? { categories } : {}),
+    registry,
+    icon: resolveClawHubImageUrl(entry.icon, registry),
+  };
+  const installKind = normalizeOptionalString(install?.kind);
+  const reference = normalizeOptionalString(install?.reference);
   // Source identifies the catalog row. Install kind only describes how ClawHub will deliver it:
   // native ClawHub rows may legitimately be GitHub-backed.
   if (installKind && !CLAWHUB_SUPPORTED_INSTALL_KINDS.has(installKind)) {
     return [];
   }
-  switch (source) {
+  switch (normalizeOptionalString(source)) {
     case CLAWHUB_SKILLS_SH_SOURCE_KIND: {
       // An external row is only installable as itself. Without its own reference there is no
       // identity to install, so the row cannot be offered at all.
