@@ -12,6 +12,8 @@ suite.define(() => {
   it("does not claim empty discovery after the installed inventory fails", () =>
     suite.withPage({ viewport: { width: 1280, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
+        // This scenario observes the page while its initial inventory is still pending.
+        awaitInitialRoster: false,
         deferredMethods: ["skills.status", "skills.search"],
         methodResponses: { "skills.status": empty, "skills.search": { results: [] } },
       });
