@@ -7,6 +7,8 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import { gitReleaseSlot } from "../../infra/git-release-paths.js";
+import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import {
   createUpdateRun,
@@ -907,4 +909,60 @@ describe("maybeRestartService", () => {
 
     expect(errorSpy).toHaveBeenCalledWith("service management skipped: ownership conflict");
   });
+
+  it.for(["checkout", "launcher"] as const)(
+    "owes the service refresh when --no-restart leaves the service on the %s",
+    async (serviceStarts, { onTestFinished }) => {
+      const home = await fs.realpath(tempDirs.make("update-git-no-restart-"));
+      const prefix = path.join(home, ".openclaw", "git-install");
+      const { releaseRoot } = await createGitReleaseDirs(prefix);
+      const checkout = path.join(home, "checkout");
+      for (const root of [releaseRoot, checkout]) {
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: gateway.version }),
+        );
+        await fs.writeFile(path.join(root, "dist", "index.js"), "export {};\n");
+      }
+      await publishGitRelease({ prefix, releaseRoot, trial: true, pending: true });
+      const entry =
+        serviceStarts === "checkout"
+          ? path.join(checkout, "dist", "index.js")
+          : path.join(prefix, "openclaw-launcher.mjs");
+      const service = vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(
+        createMockGatewayService({
+          isLoaded: async () => true,
+          readCommand: async () => ({
+            programArguments: [process.execPath, entry, "gateway"],
+            environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "gateway" },
+          }),
+        }),
+      );
+      onTestFinished(() => service.mockRestore());
+      const result: UpdateRunResult = {
+        status: "ok",
+        mode: "git",
+        root: gitReleaseSlot(prefix),
+        steps: [],
+        durationMs: 0,
+      };
+
+      await expect(
+        maybeRestartService({
+          shouldRestart: false,
+          result,
+          opts: { json: true },
+          refreshServiceEnv: false,
+          serviceEnv: { HOME: home },
+          gatewayPort: 18789,
+          timeoutMs: 1_000,
+        }),
+      ).resolves.toBe("ok");
+
+      expect(JSON.stringify(result).includes("still points outside the updated install")).toBe(
+        serviceStarts === "checkout",
+      );
+    },
+  );
 });

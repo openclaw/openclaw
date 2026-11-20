@@ -34,7 +34,7 @@ import {
 import { tryWriteCompletionCache } from "./shared.js";
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { recordMutableUpdateSignalPhase } from "./update-command-mutable-signals.js";
-import { recordOwedUpdateStep } from "./update-command-owed.js";
+import { oweServiceDefinitionRefresh, recordOwedUpdateStep } from "./update-command-owed.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
@@ -450,6 +450,13 @@ export async function maybeRestartService(
         );
       }
     }
+    // A service that still starts the checkout never selects a pending release (launchd starts
+    // what it loads, so --no-restart leaves the definition alone).
+    const pendingRelease =
+      activation.result.mode === "git" && readPackageReleaseSlotSync(activation.result.root ?? "");
+    if (pendingRelease && (await serviceUsesUpdatedRoot()) === false) {
+      oweServiceDefinitionRefresh(run, activation.result, activation.serviceEnv, assertCurrent);
+    }
     return "ok";
   }
   if (
@@ -608,12 +615,7 @@ export async function maybeRestartService(
         }
       }
       if (requiresInstallRootRefresh && (await serviceUsesUpdatedRoot()) !== true) {
-        const warning =
-          `Gateway service still points outside the updated install ${activation.result.root}. ` +
-          `Run \`${formatCliCommand("openclaw gateway install --force", activation.serviceEnv)}\`, then \`${formatCliCommand("openclaw gateway restart", activation.serviceEnv)}\`.`;
-        recordServiceReconciliationWarning(activation.result, activation.serviceEnv, warning);
-        assertCurrent();
-        recordOwedUpdateStep(run, { id: "service-definition", reason: warning });
+        oweServiceDefinitionRefresh(run, activation.result, activation.serviceEnv, assertCurrent);
         return await reconciliationPending();
       }
     }

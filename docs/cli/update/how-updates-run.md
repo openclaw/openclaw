@@ -1583,9 +1583,13 @@ checkout under `<stateDir>/git-install/releases/`, and the link
 builds the target as a new release, switches the link, and arms a trial in
 `releases/.trial`. The service and the `openclaw` command on PATH start through
 `<stateDir>/git-install/openclaw-launcher.mjs`. Only a Gateway run (`openclaw gateway` or
-`openclaw gateway run`) counts as a start: after two failed starts the launcher switches the
-link back to the trial's previous release. With `--no-restart`, the new release stays pending
-and the next Gateway run selects it. The trial ends once the Gateway on the new release is ready.
+`openclaw gateway run`, without `--help` or `--version`) counts as a start: after two failed
+starts the launcher switches the link back to the trial's previous release. With `--no-restart`,
+the new release stays pending and the next Gateway run selects it. A service that still starts the
+source checkout (the first update to releases) keeps starting it: the update leaves its
+definition unchanged and records an owed `service-definition` step that names
+`openclaw gateway install --force` and `openclaw gateway restart`. The trial ends once the Gateway
+on the new release is ready.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that

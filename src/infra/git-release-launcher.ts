@@ -54,7 +54,10 @@ for (let i = 2; i < process.argv.length && process.argv[i] !== "--"; i++) {
     i++;
   }
 }
+// Help and version requests only print, so they never select a release or count.
+const informational = process.argv.slice(2).some((arg) => ["-h", "--help", "-V", "--version"].includes(arg));
 const gatewayRun =
+  !informational &&
   positionals[0] === "gateway" &&
   (positionals.length === 1 || (positionals.length === 2 && positionals[1] === "run"));
 const counts = gatewayRun && !process.argv.includes("${WINDOWS_TASK_SUPERVISOR_FLAG}");
