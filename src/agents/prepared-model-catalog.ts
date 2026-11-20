@@ -2,6 +2,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -380,15 +381,22 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   return { snapshot: lease.snapshot, run: lease.run, release: () => lease[Symbol.asyncDispose]() };
 }
 
+/** A standalone reader prepares what Gateway startup prepares before building catalog rows. */
+async function prepareModelCatalogReader(env: NodeJS.ProcessEnv | undefined): Promise<void> {
+  if (!getPreparedSharedAuthStoreOwnership(env ?? process.env)) {
+    await prepareSharedAuthStoreOwnership(env);
+  }
+  // The listing decides which models exist; the hosted catalog describes them.
+  await prepareRemoteModelCatalogStartupSnapshot({ env });
+}
+
 async function withPreparedModelCatalogOwnerPolicy<T>(
   params: LoadPreparedModelCatalogParams,
   configPolicy: PreparedModelCatalogConfigPolicy,
   read: (snapshot: PreparedModelRuntimeSnapshot) => T | Promise<T>,
   preparePublishedOwner = preparePublishedCatalogOwner,
 ): Promise<T> {
-  if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
-    await prepareSharedAuthStoreOwnership(params.env);
-  }
+  await prepareModelCatalogReader(params.env);
   // Ordinary reads return published rows; explicit refresh keeps its writable default.
   const request = {
     ...params,
@@ -427,9 +435,7 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
 async function loadScopedReadOnlyModelCatalog(
   params: LoadPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
-  if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
-    await prepareSharedAuthStoreOwnership(params.env);
-  }
+  await prepareModelCatalogReader(params.env);
   const { activationExact } = resolveInputs(params);
   const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
     params,

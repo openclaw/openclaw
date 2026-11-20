@@ -201,3 +201,31 @@ it("defers automatic update and catalog checks until constrained memory recovers
   expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
   expect(applyRemoteCatalogUpdate).toHaveBeenCalledOnce();
 });
+
+it("checks a changed catalog source at once instead of at the next scheduled check", async () => {
+  let cfg: OpenClawConfig = {};
+  const applyRemoteCatalogUpdate = vi.fn(async () => "published" as const);
+  check = createGatewayUpdateCheck({
+    lifecycle,
+    getConfig: () => cfg,
+    log: { info: vi.fn() },
+    isNixMode: false,
+    applyRemoteCatalogUpdate,
+  });
+  check.start();
+  await clock.advanceBy(0);
+  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
+  sessionChanges.emit({ all: true, scope: "config-presentation" });
+  await clock.advanceBy(0);
+  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledOnce();
+
+  const mirror = { url: "https://catalog-mirror.example.test/catalog.json" };
+  cfg = { models: { catalogRefresh: mirror } };
+  sessionChanges.emit({ all: true, scope: "config-presentation" });
+  await clock.advanceBy(0);
+  expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+  expect(refreshRemoteModelCatalogMock.mock.calls[1]?.[0].config.models?.catalogRefresh).toBe(
+    mirror,
+  );
+  expect(applyRemoteCatalogUpdate).toHaveBeenCalledTimes(2);
+});
