@@ -131,6 +131,13 @@ export class UpdateFinalizationLifecycle {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();
     this.ledgerOptions = { env: { ...process.env }, busyTimeoutMs: this.budget("preflight") };
+    // Read the prior run before this repair's own run exists.
+    const prior =
+      repair && !inherited
+        ? listUpdateRuns({ limit: 3, excludeReason: "dry-run" }, this.ledgerOptions).find(
+            (run) => !run.steps.some((step) => step.step === "reconcile:settle"),
+          )
+        : undefined;
     this.runId = createUpdateRun(
       { runId: inherited || undefined, trigger: "cli", reportResult },
       this.ledgerOptions,
@@ -142,11 +149,6 @@ export class UpdateFinalizationLifecycle {
     if (this.ownsRepairRun) {
       recordUpdateRunPhase(this.runId, "repairing", {}, this.ledgerOptions);
       recordUpdateRunRepairContinuation(this.runId, this.runId, this.ledgerOptions);
-      // Keep the latest failed update visible after this repair becomes the newest run.
-      const prior = listUpdateRuns({ limit: 3, excludeReason: "dry-run" }, this.ledgerOptions).find(
-        (run) =>
-          run.runId !== this.runId && !run.steps.some((step) => step.step === "reconcile:settle"),
-      );
       const detail =
         prior && isUpdateRepairRun(prior)
           ? prior.status !== "succeeded" &&
