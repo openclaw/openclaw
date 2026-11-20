@@ -30,7 +30,7 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
 
   for (let i = 0; i < messages.length; i += 1) {
     const message = messages[i];
-    const role = (message as { role?: unknown } | undefined)?.role;
+    const role = message?.role;
 
     if (role !== "toolResult") {
       assertNoPendingCalls();
@@ -40,10 +40,8 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
       continue;
     }
 
-    if (role === "toolResult") {
-      const toolCallId = extractToolResultId(
-        message as Extract<AgentMessage, { role: "toolResult" }>,
-      );
+    if (message.role === "toolResult") {
+      const toolCallId = extractToolResultId(message);
       if (!toolCallId || !pending.delete(toolCallId)) {
         throw formatOpenAIResponsesReplayInvariantError({
           reason: "orphan_tool_result",
@@ -54,13 +52,11 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
       continue;
     }
 
-    if (role !== "assistant") {
+    if (message.role !== "assistant") {
       continue;
     }
 
-    for (const toolCall of extractToolCallsFromAssistant(
-      message as Extract<AgentMessage, { role: "assistant" }>,
-    )) {
+    for (const toolCall of extractToolCallsFromAssistant(message)) {
       pending.set(toolCall.id, i);
     }
   }

@@ -67,9 +67,9 @@ export async function executeBoundedCompactionSession(
     };
     try {
       let replayEnabled = initialTransport.replayEnabled;
-      const transportSession = firstAttempt
+      const transportSession: { agent: { streamFn: StreamFn | undefined } } = firstAttempt
         ? initialTransport
-        : { agent: { streamFn: undefined as StreamFn | undefined } };
+        : { agent: { streamFn: undefined } };
       if (!firstAttempt) {
         const providerStreamFn = registerProviderStreamForModel({
           model: effectiveModel,
