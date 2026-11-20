@@ -182,36 +182,46 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, ".env.local"), "destination-owned\n");
     const { executeGitWorktreeOperation } = await import("./git-worktree-operations.runtime.js");
+    const sourcePaths = inspection.paths.map((relativePath) => path.join(repo, relativePath));
     using stats = vi.spyOn(fs, "lstat");
+    expect(
+      await executeGitWorktreeOperation({
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo },
+      }),
+    ).toEqual(inspection);
+    expect(stats.mock.calls.map(([target]) => target)).toEqual(expect.arrayContaining(sourcePaths));
+    stats.mockClear();
+    // Measure sizing at its owner, not across eligibility and fs-safe copy admission.
     expect(
       await executeGitWorktreeOperation({
         type: "worktree.provisioning-inspection",
         input: { sourceRoot: repo, estimateBytes: false },
       }),
     ).toEqual({ paths: inspection.paths, estimatedBytes: 0 });
-    expect(
-      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
-    ).toHaveLength(0);
-    stats.mockClear();
+    expect(stats.mock.calls.filter(([target]) => sourcePaths.includes(String(target)))).toEqual([]);
+    stats.mockRestore();
     using requests = vi.spyOn(gitWorker, "runGitWorkerOperation");
     expect(await provisionIncludedFiles(repo, destination)).toEqual([
       "dependencies/package/settings.local",
     ]);
     expect(
-      requests.mock.calls.filter(
-        ([operation]) =>
-          operation.type === "worktree.provisioning-inspection" &&
-          operation.input.estimateBytes !== false,
-      ),
-    ).toHaveLength(0);
+      requests.mock.calls
+        .map(([operation]) => operation)
+        .filter((operation) => operation.type === "worktree.provisioning-inspection"),
+    ).toEqual([
+      {
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo, estimateBytes: false },
+      },
+    ]);
     expect(
-      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
-    ).toHaveLength(1);
+      await fs.readFile(path.join(destination, "dependencies/package/settings.local"), "utf8"),
+    ).toBe("nested provisioned\n");
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
     // Copy-time inspection keeps skipping sources that cannot be inspected.
-    stats.mockRestore();
     const lstat = fs.lstat;
     const unreadable = Object.assign(new Error("synthetic unreadable source"), { code: "EACCES" });
     vi.spyOn(fs, "lstat").mockImplementation((target, options) =>
