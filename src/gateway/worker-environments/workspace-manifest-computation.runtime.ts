@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { deserialize } from "node:v8";
-import { zstdDecompressSync } from "node:zlib";
+import { zstdCompressSync, zstdDecompressSync } from "node:zlib";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
@@ -123,7 +123,7 @@ export async function executeWorkspaceManifestComputation(
             }
           : undefined,
       );
-      return { rawManifest, manifestRef };
+      return { compressed: zstdCompressSync(rawManifest), manifestRef };
     }
     case "workspace.manifest.local": {
       const { executeLocalWorkspaceManifestRead } =

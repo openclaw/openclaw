@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { zstdCompressSync } from "node:zlib";
+import { zstdDecompressSync } from "node:zlib";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit, requireGitBuffer } from "../../agents/worktrees/git.js";
@@ -72,7 +72,11 @@ it.skipIf(process.platform === "win32")(
         baseCommit,
         buildCacheInputs: new Set(buildCacheInputs),
       });
-    expect(previous).toEqual(await fullCapture());
+    const decode = (document: typeof previous) => ({
+      rawManifest: zstdDecompressSync(document.compressed).toString("utf8"),
+      manifestRef: document.manifestRef,
+    });
+    expect(decode(previous)).toEqual(await fullCapture());
     let seed = 2340;
     const pick = (candidates: string[]) => {
       seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -143,15 +147,16 @@ it.skipIf(process.platform === "win32")(
         baseCommit,
         buildCacheInputs,
         previous: {
-          compressed: zstdCompressSync(Buffer.from(previous.rawManifest)),
+          compressed: previous.compressed,
           manifestRef: previous.manifestRef,
           changedPaths,
         },
       });
-      expect(captured, `round ${round}`).toEqual(await fullCapture());
-      expect(captured.manifestRef).toBe(`sha256:${sha256(captured.rawManifest)}`);
+      const document = decode(captured);
+      expect(document, `round ${round}`).toEqual(await fullCapture());
+      expect(captured.manifestRef).toBe(`sha256:${sha256(document.rawManifest)}`);
       const manifest = parseWorkerWorkspaceManifest(
-        captured.rawManifest,
+        document.rawManifest,
         captured.manifestRef,
         buildCacheInputs,
       );

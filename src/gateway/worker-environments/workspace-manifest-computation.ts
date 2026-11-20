@@ -197,7 +197,7 @@ export type WorkspaceManifestComputationOperations = {
         buildCacheInputs: string[];
         previous?: { compressed: Uint8Array; manifestRef: string; changedPaths: string[] };
       };
-      output: Omit<WorkspaceManifestSnapshot, "manifest">;
+      output: { compressed: Uint8Array; manifestRef: string };
     };
     "workspace.reconcile.diff": {
       input: { root: string; baseTree: string; currentTree: string };

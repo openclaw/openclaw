@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
+import { zstdDecompress } from "node:zlib";
 import { sha256Hex as digest } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
@@ -33,6 +35,7 @@ import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import { captureTemplateWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { buildCacheInputPaths, WORKSPACE_PATH_EXCLUSIONS_JS } from "./workspace-path-exclusions.js";
 
+const decompressManifest = promisify(zstdDecompress);
 const log = createSubsystemLogger("agents/worktrees");
 const TEMPLATE_PHASE = "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template";
 
@@ -180,7 +183,7 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   const policyKey = digest(
     JSON.stringify(["template-manifest-v1", WORKSPACE_PATH_EXCLUSIONS_JS, buildCacheInputs]),
   );
-  let manifest: { rawManifest: string; manifestRef: string } | undefined;
+  let manifest: Awaited<ReturnType<typeof prepareTemplateManifest>> | undefined;
   let previousGeneration: WorktreeTemplateRecord | undefined;
   let changedPaths: string[] | undefined;
   const prepareManifest = async (
@@ -465,7 +468,11 @@ export async function cloneLocalWorkspaceTemplate(
       stateOwnerPath: guard.workerAuthority?.stateOwnerPath,
       killProcessTree: true,
     });
-    return prepared.manifest!;
+    // Idle preparation keeps the inventory compressed; only a clone consumes its document.
+    const { compressed, manifestRef } = prepared.manifest!;
+    const rawManifest = (await decompressManifest(compressed)).toString("utf8");
+    guard.commitGuard();
+    return { rawManifest, manifestRef };
   } catch (error) {
     outcome = error;
     throw error;

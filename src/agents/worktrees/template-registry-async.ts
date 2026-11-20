@@ -1,5 +1,3 @@
-import { promisify } from "node:util";
-import { zstdCompress, zstdDecompress } from "node:zlib";
 import {
   composeSessionSourceAssertion,
   prepareSessionSourceEffect,
@@ -199,13 +197,11 @@ export function reserveTemplateAsync(
   );
 }
 
-type TemplateManifest = { rawManifest: string; manifestRef: string };
-const compressManifest = promisify(zstdCompress);
-const decompressManifest = promisify(zstdDecompress);
-const templateManifests = new LruCache<{ compressed: Buffer; manifestRef: string; bytes: number }>(
-  1024,
-  { maxBytes: 64 * 1024 * 1024, sizeOf: (entry) => entry.bytes },
-);
+type TemplateManifest = { compressed: Uint8Array; manifestRef: string };
+const templateManifests = new LruCache<TemplateManifest & { bytes: number }>(1024, {
+  maxBytes: 64 * 1024 * 1024,
+  sizeOf: (entry) => entry.bytes,
+});
 const pendingManifests = new Map<string, Promise<TemplateManifest>>();
 const templateManifestKey = (record: WorktreeTemplateRecord, policyKey: string) =>
   `${JSON.stringify(record.id)}:${JSON.stringify([record.path, record.createdAt, record.sourceCommit, policyKey])}`;
@@ -248,17 +244,12 @@ export async function prepareTemplateManifest(
   const prepared = (async () => {
     const cached = readCompressedTemplateManifest(record, policyKey);
     if (cached) {
-      const rawManifest = (await decompressManifest(cached.compressed)).toString("utf8");
-      signal?.throwIfAborted();
-      return {
-        rawManifest,
-        manifestRef: cached.manifestRef,
-      };
+      return cached;
     }
     const manifest = await capture();
-    const compressed = await compressManifest(Buffer.from(manifest.rawManifest));
-    const bytes = compressed.byteLength + 2 * (key.length + manifest.manifestRef.length) + 256;
-    templateManifests.set(key, { compressed, manifestRef: manifest.manifestRef, bytes });
+    const bytes =
+      manifest.compressed.byteLength + 2 * (key.length + manifest.manifestRef.length) + 256;
+    templateManifests.set(key, { ...manifest, bytes });
     return manifest;
   })().finally(() => pendingManifests.delete(key));
   pendingManifests.set(key, prepared);

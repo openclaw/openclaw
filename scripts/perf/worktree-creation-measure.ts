@@ -8,9 +8,8 @@ import fs from "node:fs/promises";
 import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { parseArgs, promisify } from "node:util";
+import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
-import { zstdCompress } from "node:zlib";
 /**
  * node --import ./scripts/tsx.mjs scripts/perf/worktree-creation-measure.ts \
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
@@ -725,17 +724,13 @@ try {
                   });
                   assert(installed.installed);
                   assert.equal(await requireGit(destination, ["status", "--porcelain"]), "");
-                  const { result: compressed } = await measure("sandbox-manifest-encode", () =>
-                    promisify(zstdCompress)(previous.manifest!.rawManifest),
-                  );
                   await captureTemplateWorkspaceManifest(
                     {
                       root: destination,
                       baseCommit: target,
                       buildCacheInputs: [],
                       previous: {
-                        compressed,
-                        manifestRef: previous.manifest.manifestRef,
+                        ...previous.manifest!,
                         changedPaths: ["advance.txt"],
                       },
                     },

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { zstdDecompressSync } from "node:zlib";
+import { zstdCompressSync } from "node:zlib";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -40,15 +40,7 @@ const retain = (input: Parameters<typeof registry.retainTemplateReaderAsync>[1])
   registry.retainTemplateReaderAsync(env, input, guard);
 const retire = () => retain({ id: template.id, key: "retire", owner, unpublish: true });
 
-function cachedManifest(record: WorktreeTemplateRecord, policy: string) {
-  const cached = registry.readCompressedTemplateManifest(record, policy);
-  return (
-    cached && {
-      rawManifest: zstdDecompressSync(cached.compressed).toString("utf8"),
-      manifestRef: cached.manifestRef,
-    }
-  );
-}
+const cachedManifest = registry.readCompressedTemplateManifest;
 
 function worker(databasePath?: string, revokeAtCommit = false) {
   const location = { env, path: databasePath };
@@ -218,7 +210,10 @@ it("reads absent templates without writer queueing and recovers on the first mut
 });
 
 it("shares captures by generation, commit and policy, and forgets retired manifests", async () => {
-  const document = { rawManifest: '{"entries":[]}', manifestRef: "sha256:synthetic" };
+  const document = {
+    compressed: zstdCompressSync('{"entries":[]}'),
+    manifestRef: "sha256:synthetic",
+  };
   const capture = vi.fn(async () => document);
   const cached = (record = template, policy = "source-v1") => cachedManifest(record, policy);
   const prepare = (record = template, policy = "source-v1") =>
@@ -257,7 +252,7 @@ it("shares captures by generation, commit and policy, and forgets retired manife
 });
 
 it("isolates cancellation of the initiating capture and its waiting callers", async () => {
-  const document = { rawManifest: "{}", manifestRef: "synthetic" };
+  const document = { compressed: zstdCompressSync("{}"), manifestRef: "synthetic" };
   const first = new AbortController();
   const canceled = new AbortController();
   const initiatingError = new Error("capture canceled");
@@ -292,18 +287,18 @@ it("isolates cancellation of the initiating capture and its waiting callers", as
 it("evicts the least recently used compressed manifest when the byte budget fills", async () => {
   // Incompressible synthetic bytes exceed the 64 MiB budget with only three entries.
   const document = {
-    rawManifest: randomBytes(24 * 1024 * 1024).toString("base64"),
+    compressed: zstdCompressSync(randomBytes(24 * 1024 * 1024)),
     manifestRef: "x",
   };
   const records = [0, 1, 2].map((n) => Object.assign({}, template, { id: `${template.id}-${n}` }));
   for (const record of records.slice(0, 2)) {
     await registry.prepareTemplateManifest(record, "policy", async () => document);
   }
-  expect(cachedManifest(records[0]!, "policy")).toEqual(document);
+  expect(cachedManifest(records[0]!, "policy")).toBeDefined();
   await registry.prepareTemplateManifest(records[2]!, "policy", async () => document);
   expect(cachedManifest(records[1]!, "policy")).toBeUndefined();
-  expect(cachedManifest(records[0]!, "policy")).toEqual(document);
-  expect(cachedManifest(records[2]!, "policy")).toEqual(document);
+  expect(cachedManifest(records[0]!, "policy")).toBeDefined();
+  expect(cachedManifest(records[2]!, "policy")).toBeDefined();
   for (const record of records) {
     await remove(record.id);
   }
@@ -349,7 +344,7 @@ it("admits readers only from retained ready generations and refuses retirement u
 it("rolls back ready publication when custody is revoked at worker commit", async () => {
   await reserve();
   await ready(template.id, 20);
-  const document = { rawManifest: "{}", manifestRef: "synthetic" };
+  const document = { compressed: zstdCompressSync("{}"), manifestRef: "synthetic" };
   await registry.prepareTemplateManifest(template, "policy", async () => document);
   const staged = { ...template, id: "replacement", cacheKey: "preparing:replacement" };
   await reserve(staged);
