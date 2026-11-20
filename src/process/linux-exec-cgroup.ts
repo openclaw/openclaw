@@ -59,65 +59,197 @@ function joinAgentExecCgroup(directory: string): void {
 }
 
 let execCgroupCleanup = Promise.resolve();
+const sessionLeaf = /^session-[a-f0-9]{32}$/u;
+const sessionWatchers = new Map<string, fs.FSWatcher>();
+const watcherEvents = new Set<string>();
+let watcherBatch: NodeJS.Immediate | undefined;
+let sweepAfter = "";
+let cleanupLifetime:
+  | {
+      signal: AbortSignal;
+      log: { info: (message: string) => void };
+    }
+  | undefined;
+
+/** The Gateway owns notifications; housekeeping never holds up process extinction. */
+export function startAgentExecCgroupCleanup(
+  signal: AbortSignal,
+  log: { info: (message: string) => void },
+): void {
+  cleanupLifetime = { signal, log };
+  sweepAfter = "";
+  const stop = () => {
+    for (const watcher of sessionWatchers.values()) {
+      watcher.close();
+    }
+    sessionWatchers.clear();
+    watcherEvents.clear();
+    clearImmediate(watcherBatch);
+    watcherBatch = undefined;
+  };
+  signal.addEventListener("abort", stop, { once: true });
+  if (signal.aborted) {
+    stop();
+  }
+}
+
+function unwatchSessionCgroup(directory: string): void {
+  sessionWatchers.get(directory)?.close();
+  sessionWatchers.delete(directory);
+  watcherEvents.delete(directory);
+}
+
+function watchSessionCgroup(directory: string): void {
+  if (sessionWatchers.has(directory) || sessionWatchers.size >= 256) {
+    return;
+  }
+  const watcher = fs.watch(path.join(directory, "cgroup.events"), { persistent: false }, () => {
+    watcherEvents.add(directory);
+    watcherBatch ??= setImmediate(() => {
+      watcherBatch = undefined;
+      const directories = [...watcherEvents];
+      watcherEvents.clear();
+      void enqueueCgroupCleanup(directories, "watcher");
+    });
+  });
+  sessionWatchers.set(directory, watcher);
+  watcher.on("error", (error) => {
+    unwatchSessionCgroup(directory);
+    if (!hasErrnoCode(error, "ENOENT")) {
+      process.emitWarning(`Agent exec cgroup watcher failed: ${String(error)}`);
+    }
+  });
+}
+
+function enqueueCgroupCleanup(
+  directories: string[],
+  source: "completion" | "watcher" | "sweep",
+): Promise<void> {
+  execCgroupCleanup = execCgroupCleanup.then(async () => {
+    const counts = { reclaimed: 0, removed: 0, skippedPopulated: 0, errors: 0 };
+    for (const directory of directories) {
+      if (cleanupLifetime?.signal.aborted) {
+        break;
+      }
+      try {
+        // Subscribe before reading: an exit between the read and watch must not be lost.
+        try {
+          watchSessionCgroup(directory);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            counts.errors++;
+            process.emitWarning(`Agent exec cgroup watcher unavailable: ${String(error)}`);
+          }
+        }
+        const events = await fs.promises.readFile(path.join(directory, "cgroup.events"), "utf8");
+        if (
+          !/^populated 0$/mu.test(events) ||
+          (await fs.promises.readFile(path.join(directory, "cgroup.procs"), "utf8")).trim()
+        ) {
+          counts.skippedPopulated++;
+          continue;
+        }
+        // The budget bounds retries, not one uninterruptible kernel reclaim write.
+        const deadline = performance.now() + 250;
+        let reclaimed = false;
+        do {
+          const current = (
+            await fs.promises.readFile(path.join(directory, "memory.current"), "utf8")
+          ).trim();
+          if (Number(current) <= 1024 ** 2) {
+            break;
+          }
+          try {
+            await fs.promises.writeFile(path.join(directory, "memory.reclaim"), current, {
+              flag: fs.constants.O_WRONLY,
+            });
+            reclaimed = true;
+          } catch (error) {
+            if (hasErrnoCode(error, "ENOENT")) {
+              process.emitWarning(
+                "Agent exec memory.reclaim unavailable; removing the empty session cgroup without reclaiming its cache.",
+              );
+              break;
+            }
+            if (!hasErrnoCode(error, "EAGAIN")) {
+              throw error;
+            }
+          }
+          await sleep(50);
+        } while (!cleanupLifetime?.signal.aborted && performance.now() < deadline);
+        if (reclaimed) {
+          counts.reclaimed++;
+        }
+        if (cleanupLifetime?.signal.aborted) {
+          break;
+        }
+        // A new arrival leaves the watch armed; its later exit retries cleanup.
+        await fs.promises.rmdir(directory);
+        counts.removed++;
+        unwatchSessionCgroup(directory);
+      } catch (error) {
+        if (hasErrnoCode(error, "EBUSY") || hasErrnoCode(error, "ENOTEMPTY")) {
+          counts.skippedPopulated++;
+        } else {
+          unwatchSessionCgroup(directory);
+          if (!hasErrnoCode(error, "ENOENT")) {
+            counts.errors++;
+            process.emitWarning(`Agent exec cgroup cleanup failed: ${String(error)}`);
+          }
+        }
+      }
+    }
+    cleanupLifetime?.log.info(
+      `agent exec cgroup cleanup: source=${source} reclaimed=${counts.reclaimed} removed=${counts.removed} skippedPopulated=${counts.skippedPopulated} errors=${counts.errors} watching=${sessionWatchers.size}`,
+    );
+  });
+  return execCgroupCleanup;
+}
 
 /** Reclaim before rmdir: removal alone leaves the cache charged to the parent. */
 export function reclaimAgentExecCgroup(directory: string | undefined): Promise<void> {
-  if (
-    process.platform !== "linux" ||
-    !directory ||
-    !/^session-[a-f0-9]{32}$/u.test(path.basename(directory))
-  ) {
+  if (process.platform !== "linux" || !directory || !sessionLeaf.test(path.basename(directory))) {
     return Promise.resolve();
   }
-  execCgroupCleanup = execCgroupCleanup.then(async () => {
-    try {
-      const events = await fs.promises.readFile(path.join(directory, "cgroup.events"), "utf8");
-      if (
-        !/^populated 0$/mu.test(events) ||
-        (await fs.promises.readFile(path.join(directory, "cgroup.procs"), "utf8")).trim()
-      ) {
-        return;
-      }
-      // Serialize reclaim and yield between writes. The budget bounds retries;
-      // a single kernel reclaim write is not interruptible by a userspace timer.
-      const deadline = performance.now() + 250;
-      do {
-        const current = (
-          await fs.promises.readFile(path.join(directory, "memory.current"), "utf8")
-        ).trim();
-        if (Number(current) <= 1024 ** 2) {
-          break;
-        }
-        try {
-          await fs.promises.writeFile(path.join(directory, "memory.reclaim"), current, {
-            flag: fs.constants.O_WRONLY,
-          });
-        } catch (error) {
-          if (hasErrnoCode(error, "ENOENT")) {
-            process.emitWarning(
-              "Agent exec memory.reclaim unavailable; removing the empty session cgroup without reclaiming its cache.",
-            );
-            break;
-          }
-          if (!hasErrnoCode(error, "EAGAIN")) {
-            throw error;
-          }
-        }
-        await sleep(50);
-      } while (performance.now() < deadline);
-      // New arrivals make rmdir fail with EBUSY; reclaim itself cannot kill them.
-      await fs.promises.rmdir(directory);
-    } catch (error) {
-      if (
-        !hasErrnoCode(error, "ENOENT") &&
-        !hasErrnoCode(error, "EBUSY") &&
-        !hasErrnoCode(error, "ENOTEMPTY")
-      ) {
-        process.emitWarning(`Agent exec cgroup cleanup failed: ${String(error)}`);
-      }
+  return enqueueCgroupCleanup([directory], "completion");
+}
+
+/** One shallow read, at most 256 leaves; rotate so live leaves cannot starve leftovers. */
+export async function sweepAgentExecCgroups(): Promise<void> {
+  if (process.platform !== "linux" || cleanupLifetime?.signal.aborted) {
+    return;
+  }
+  try {
+    // A Gateway started inside an exec leaf does not own its parent service.
+    if (!/^0::.*\.service\/gateway$/mu.test(fs.readFileSync("/proc/self/cgroup", "utf8"))) {
+      return;
     }
-  });
-  return execCgroupCleanup;
+    const root = resolveGatewayServiceCgroupDirectory();
+    if (!root) {
+      return;
+    }
+    const aggregate = path.join(root, "agent-exec");
+    const names = (await fs.promises.readdir(aggregate))
+      .filter((name) => sessionLeaf.test(name))
+      .toSorted();
+    const start = Math.max(
+      0,
+      names.findIndex((name) => name > sweepAfter),
+    );
+    const selected = names.slice(start, start + 256);
+    sweepAfter = start + selected.length < names.length ? selected.at(-1)! : "";
+    await enqueueCgroupCleanup(
+      selected.map((name) => path.join(aggregate, name)),
+      "sweep",
+    );
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      process.emitWarning(`Agent exec cgroup sweep failed: ${String(error)}`);
+      cleanupLifetime?.log.info(
+        "agent exec cgroup cleanup: source=sweep reclaimed=0 removed=0 skippedPopulated=0 errors=1",
+      );
+    }
+  }
 }
 
 /** Helpers enter in their own process; their outside owner retires the session leaf. */
@@ -131,8 +263,10 @@ export async function releaseAgentExecCgroupScope(scopeKey?: string): Promise<vo
     if (root) {
       await reclaimAgentExecCgroup(sessionExecCgroup(path.join(root, "agent-exec"), scope));
     }
-  } catch {
-    // Unavailable delegation never owned a session cgroup.
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      process.emitWarning(`Agent exec cgroup cleanup failed: ${String(error)}`);
+    }
   }
 }
 

@@ -99,8 +99,8 @@ describe("sessions_yield tool", () => {
   });
 
   it.each([
-    [undefined, "test-session", "did not pause the turn or schedule a continuation"],
-    ["message", "root", "eligible active native task"],
+    [undefined, "test-session", "Reply to the user now"],
+    ["message", "root", "No active native task registered this message wait"],
   ] as const)(
     "keeps an ineligible turn active with intent %s",
     async (waitFor, sessionId, message) => {

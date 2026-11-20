@@ -36,6 +36,7 @@ import {
 import { mutateLocalWorkspaceProjection } from "./local-workspace-store.kernel.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceMutation } from "./local-workspace-store.types.js";
+import * as workspaceHashes from "./workspace-hash-memo.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -348,6 +349,7 @@ it.each(["probe", "scan"] as const)(
     assert(first.kind === "scan" && first.fingerprints, "Expected a real fingerprint observation");
     const resolved = vi.spyOn(realpathSync, "native");
     const opened = vi.spyOn(fs, "open");
+    const serializedIdentity = vi.spyOn(workspaceHashes, "workspaceStatIdentity");
     const second = await executeLocalWorkspaceManifestRead(
       {
         ...snapshot,
@@ -363,6 +365,7 @@ it.each(["probe", "scan"] as const)(
     const target = path.join(projection, "nested/file.txt");
     expect(resolved.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
     expect(opened.mock.calls.filter(([file]) => file === target)).toHaveLength(0);
+    expect(serializedIdentity).not.toHaveBeenCalled();
   },
 );
 

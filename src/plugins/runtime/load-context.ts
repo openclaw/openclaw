@@ -75,7 +75,7 @@ export function setPluginRuntimeLoadContext(
 ): void {
   const previous = getPluginRuntimeLoadContextState(registry);
   const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
-  const bound = {
+  const bound: PluginRuntimeLoadContext & PluginRuntimeLoadContextState = {
     ...context,
     fallbackRateLimitModels: new WeakMap(),
     environmentKey: context.environmentKey ?? captureEnvironmentKey(context.env),

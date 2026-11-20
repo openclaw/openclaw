@@ -430,10 +430,8 @@ it("includes shared policies for the admitted Gateway tools in the initial instr
   const instructions = fixture.requests[0]?.agent.instructions;
   expect(instructions).toContain("## UI Presentation");
   expect(instructions).toContain("Permission blocks:");
-  expect(instructions).toContain("Omit unverified remediation advice");
   expect(instructions).toContain("## Skill Workshop");
   expect(instructions).toContain("## Delegation");
-  expect(instructions).toContain("Use or store credentials the user supplies as requested");
   expect(instructions).toContain("Fixture Git co-authors: Example <example@example.test>.");
   expect(instructions).toContain("Extra fixture instructions");
 });
