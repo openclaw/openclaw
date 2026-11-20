@@ -13,6 +13,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
+import * as cronRequesterModule from "./get-reply-run.cron-requester.js";
 import type { runPreparedReply } from "./get-reply-run.js";
 import { createOwnerIngress } from "./get-reply-run.owner-ingress.test-support.js";
 
@@ -56,6 +57,7 @@ export function registerTelegramRequesterAuthorityCases(
       const { operationalRunInstance } = createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
       let observed = false;
+      using recorded = vi.spyOn(cronRequesterModule, "logReplyCronOwnerWithoutAuthority");
       vi.mocked(runReplyAgent).mockImplementationOnce(async ({ opts }) => {
         expect(Boolean(opts?.cronCreatorAuthorityCapability)).toBe(kind === "owner");
         await withGatewayToolCallerIdentity(
@@ -83,6 +85,8 @@ export function registerTelegramRequesterAuthorityCases(
       try {
         await runPrepared({ ...params, cfg });
         expect(observed).toBe(true);
+        // An owner turn ends with the grant or a recorded reason, never neither.
+        expect(recorded).toHaveBeenCalledTimes(kind === "owner" ? 0 : 1);
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
         clearRuntimeConfigSnapshot();

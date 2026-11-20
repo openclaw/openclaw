@@ -53,7 +53,7 @@ import {
   SetupInferenceCancelledError,
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
-  validateSetupInferenceOwnerEvidence,
+  validateSetupInferenceEvidence,
   validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
@@ -490,16 +490,14 @@ async function verifyAndActivateCandidate(
   if (!verification.ok) {
     return failure(verification);
   }
-  if ("auth" in verification) {
-    const ownerFailure = validateSetupInferenceOwnerEvidence({
-      runner: route.runner,
-      configuredHarnessId:
-        route.runner === "embedded" ? route.agentHarnessRuntimeOverride : undefined,
-      auth: verification.auth,
-    });
-    if (ownerFailure) {
-      return failure(ownerFailure);
-    }
+  const evidence =
+    "auth" in verification ? validateSetupInferenceEvidence(route, verification, params) : {};
+  if (evidence.failure) {
+    return failure(evidence.failure);
+  }
+  if (evidence.warning && params.prompter) {
+    await params.prompter.note(evidence.warning, "Context window");
+    throwIfSetupInferenceCancelled(params);
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -708,6 +706,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines,
+    lines: evidence.warning && !params.prompter ? [...lines, evidence.warning] : lines,
   };
 }

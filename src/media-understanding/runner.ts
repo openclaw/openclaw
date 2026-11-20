@@ -724,14 +724,14 @@ export async function runCapability(
   // it once here (apply.ts's memoized factory builds it at most once per turn)
   // and reuse the concrete value for every remaining call below.
   const providerRegistry = resolveProviderRegistry(params.providerRegistry);
-  const entries = resolveModelEntries({
+  let resolvedEntries = resolveModelEntries({
     cfg,
     capability,
     config,
     providerRegistry,
+    modelOverride: params.request?.modelOverride,
   });
-  const automaticAudio = capability === "audio" && entries.length === 0;
-  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
+  const automaticAudio = capability === "audio" && resolvedEntries.length === 0;
   if (!automaticAudio && resolvedEntries.length === 0) {
     resolvedEntries = await resolveAutoEntries({
       ...params,

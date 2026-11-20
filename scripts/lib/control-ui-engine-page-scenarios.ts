@@ -51,11 +51,11 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -877,14 +877,21 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
-    rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
-    },
+    ready: ".skill-discovery .skill-installed-shelf",
     action: {
-      label: "Filter discovered skills to one installed skill",
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: async (page) => {
+        await page.locator(".skill-discovery .skill-installed-shelf").click();
+        await page.waitForFunction(() => {
+          const discovery = document.querySelector(".skill-discovery");
+          const total = Number(
+            discovery?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0,
+          );
+          return (
+            total >= 1000 || (discovery?.querySelectorAll("[data-skill-id]").length ?? 0) >= 1000
+          );
+        });
+      },
       run: async (page) => {
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
@@ -1309,18 +1316,16 @@ function createPageFixture(
     };
     const templates = templateEntries();
     const templateCategories = [
-      "personal",
-      "health",
+      "engineering",
+      "operations",
+      "household",
+      "entertainment",
       "travel",
       "productivity",
       "research",
-      "engineering",
-      "governance",
-      "operations",
-      "finance",
+      "health",
       "sales",
       "product",
-      "people",
       "other",
     ];
     const environments: EnvironmentSummary[] = [
@@ -2174,6 +2179,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);

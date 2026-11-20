@@ -102,6 +102,12 @@ export interface AfterToolCallContext extends BeforeToolCallContext {
 }
 
 /**
+ * Typed reason a tool call ended before execution. `unknown-tool` means the call named no tool
+ * available to this run, so it has no tool identity a later retry could share.
+ */
+export type ToolPreExecutionErrorKind = "argument-validation" | "unknown-tool";
+
+/**
  * Context passed to `afterToolOutcome` after every finalized tool outcome.
  *
  * Unlike `afterToolCall`, this hook also observes failures that prevented
@@ -112,7 +118,7 @@ export interface AfterToolOutcomeContext extends AfterToolCallContext {
   /** Whether the tool implementation started executing. */
   executionStarted: boolean;
   /** Typed pre-execution failure provenance when available. */
-  errorKind?: "argument-validation";
+  errorKind?: ToolPreExecutionErrorKind;
 }
 
 export interface ShouldStopAfterTurnContext {
@@ -548,6 +554,6 @@ export type AgentEvent =
       /** False when resolution, preparation, validation, policy, or queued steering prevented execution. */
       executionStarted?: boolean;
       /** Typed pre-execution failure provenance for safe downstream diagnostics. */
-      errorKind?: "argument-validation";
+      errorKind?: ToolPreExecutionErrorKind;
       hideFromChannelProgress?: boolean;
     };

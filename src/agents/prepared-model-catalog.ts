@@ -2,11 +2,14 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { readRemoteModelCatalogStartupPublication } from "../model-catalog/remote-startup-snapshot.js";
 import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
+  resolveNativeModelPrimary,
   tryResolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import {
@@ -19,6 +22,7 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -387,6 +391,11 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     await prepareSharedAuthStoreOwnership(params.env);
   }
+  // Standalone readers describe listed models with the hosted catalog, as Gateway startup does.
+  // Prepared processes stay synchronous so callers join the owner published at call time.
+  if (readRemoteModelCatalogStartupPublication() === undefined) {
+    await prepareRemoteModelCatalogStartupSnapshot({ env: params.env });
+  }
   // Ordinary reads return published rows; explicit refresh keeps its writable default.
   const request = {
     ...params,
@@ -427,6 +436,10 @@ async function loadScopedReadOnlyModelCatalog(
 ): Promise<ModelCatalogSnapshot> {
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     await prepareSharedAuthStoreOwnership(params.env);
+  }
+  // Same hosted catalog preparation as withPreparedModelCatalogOwnerPolicy.
+  if (readRemoteModelCatalogStartupPublication() === undefined) {
+    await prepareRemoteModelCatalogStartupSnapshot({ env: params.env });
   }
   const { activationExact } = resolveInputs(params);
   const prepared = await resolveReadOnlyPublishedModelCatalogOwner(
@@ -601,12 +614,18 @@ export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): 
     return;
   }
   const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
+  // A built-in fallback is not startup demand. Keep warmup for configured models/runtimes and
+  // signed-in defaults, without probing native auth or starting discovery to decide.
+  if (
+    !resolveNativeModelPrimary(config, agentId) &&
+    !owner?.authModes[provider] &&
+    !resolveModelRuntimePolicy({ config, agentId, provider, modelId: model }).policy
+  ) {
+    return;
+  }
   // The turn chooses its runtime from the published row's transport; match it.
-  const selected = findModelInCatalog(
-    getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId })?.modelCatalog.entries ?? [],
-    provider,
-    model,
-  );
+  const selected = findModelInCatalog(owner?.modelCatalog.entries ?? [], provider, model);
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: config,
     provider,

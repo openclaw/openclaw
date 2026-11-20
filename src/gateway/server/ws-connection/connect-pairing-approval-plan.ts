@@ -7,6 +7,7 @@ import {
 import type { ConnectPairingRequiredReason } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
 import {
+  hasEffectivePairedDeviceRole,
   listApprovedPairedDeviceRoles,
   type getPairedDevice,
 } from "../../../infra/device-pairing.js";
@@ -79,7 +80,6 @@ function resolveOpenClawIdPairingScopes(
  */
 export function resolveTrustedProxyDeviceGrantScopes(params: {
   state: AuthenticatedGatewayConnect;
-  configSnapshot: GatewayConnectPhaseContext["configSnapshot"];
   hasBrowserOriginHeader: boolean;
   pairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
   devicePublicKey: string;
@@ -87,14 +87,13 @@ export function resolveTrustedProxyDeviceGrantScopes(params: {
 }): string[] | null {
   const { state, pairedDevice } = params;
   if (
-    params.configSnapshot.gateway?.auth?.trustedProxy?.narrowToDeviceGrant !== true ||
     state.authMethod !== "trusted-proxy" ||
     state.role !== "operator" ||
     state.isBrowserOperatorUi ||
     state.isWebchat ||
     params.hasBrowserOriginHeader ||
     pairedDevice?.publicKey !== params.devicePublicKey ||
-    !listApprovedPairedDeviceRoles(pairedDevice).includes("operator")
+    !hasEffectivePairedDeviceRole(pairedDevice, "operator")
   ) {
     return null;
   }

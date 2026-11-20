@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { recordRequesterDelivery as recordRequesterDeliveryFact } from "../registry/subagent-delivery-state.js";
 import {
   sessionStore,
   setSessionStore,
@@ -96,6 +97,65 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it.each([false, true])(
+    "retains all completion results after an empty settle turn (consumed=%s)",
+    async (consumed) => {
+      const children = setChildren(
+        ["run-a", "run-b", "run-c"].map((runId) =>
+          makeSettledChild({
+            runId,
+            completion: completion(`Saved result from ${runId}`),
+            requesterSettleWake: wakeState(["run-a", "run-b", "run-c"]),
+          }),
+        ),
+      );
+      deliverSpy.mockImplementationOnce(async (params) => {
+        await prepareDispatch(params);
+        if (consumed) {
+          const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+          await input.onTranscriptCommitted!("empty-settle-turn");
+        }
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+          disposition: "retryable",
+        };
+      });
+      expect(
+        await wake({
+          recordRequesterDelivery: async (batch, fact, onPublished) => {
+            for (const entry of batch) {
+              recordRequesterDeliveryFact(entry, fact);
+            }
+            onPublished(batch);
+          },
+        }),
+      ).toBe(consumed);
+      expectMessage(children.map((entry) => `Saved result from ${entry.runId}`));
+      expect(children.map((entry) => entry.completion?.resultText)).toEqual([
+        "Saved result from run-a",
+        "Saved result from run-b",
+        "Saved result from run-c",
+      ]);
+      if (consumed) {
+        expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b", "run-c"], 1, {
+          delivered: false,
+          path: "direct",
+          disposition: "retryable",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        });
+      } else {
+        expect(completeBatchSpy).not.toHaveBeenCalled();
+        expect(children.every((entry) => entry.requesterSettleWake?.status === "pending")).toBe(
+          true,
+        );
+      }
+    },
+  );
+
   it("preserves delivered replies when consumption bookkeeping fails", async () => {
     setChildren();
     const failure = new Error("consumption registry write failed");
@@ -500,7 +560,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(await wake()).toBe(false);
     expect(deliverSpy).toHaveBeenCalledOnce();
   });
-  it("delivers a result that a failed turn already committed to the transcript", async () => {
+  it("hands a consumed failed turn to the retained settlement owner", async () => {
     const children = setChildren();
     deliverSpy.mockImplementationOnce(async (params) => {
       await prepareDispatch(params);
@@ -521,8 +581,10 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       true,
     );
     expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
-      delivered: true,
+      delivered: false,
       path: "direct",
+      disposition: "permanent_failure",
+      error: "529",
     });
   });
   it("keeps an answer that missed its channel failed, without replaying the committed result", async () => {

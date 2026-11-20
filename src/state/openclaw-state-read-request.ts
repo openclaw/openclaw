@@ -6,9 +6,14 @@ const engineSelectionBytes = new WeakMap<DatabaseEngineSelection, number>();
 
 // eslint-disable-next-line no-control-regex -- JSON escapes every C0 control character.
 const jsonEscapes = /["\\\u0000-\u001f\ud800-\udfff]/u;
+const nonPlainAscii = /[^\x20-\x21\x23-\x5b\x5d-\x7e]/;
 
 // Keep JSON's escaped-string charge without allocating the serialized string.
 function quotedStringBytes(value: string): number {
+  // Printable ASCII without quotes/backslashes needs neither UTF-8 nor escape accounting.
+  if (!nonPlainAscii.test(value)) {
+    return value.length + 2;
+  }
   let bytes = Buffer.byteLength(value, "utf8") + 2;
   if (!jsonEscapes.test(value)) {
     return bytes;

@@ -123,7 +123,7 @@ describe("OpenAI-compatible operator run authority", () => {
   });
 
   it.each(["member", "owner"] as const)(
-    "retains the authenticated HTTP %s instead of the named-reader default",
+    "retains the authenticated HTTP %s profile grant instead of the named-reader default",
     async (kind) => {
       await withOpenClawTestState({ label: "compat-http-membership" }, async () => {
         const fixture = createOperatorRunFixture();
@@ -166,6 +166,9 @@ describe("OpenAI-compatible operator run authority", () => {
               : await ensureCanonicalUserProfileForOpenClawIdIdentity({
                   accountId: principal.accountId,
                 });
+          if (principal.kind === "member") {
+            setUserProfileRole(person.id, "operator");
+          }
           const authenticated = await authorizeScopedGatewayHttpRequestOrReply({
             req,
             res,
