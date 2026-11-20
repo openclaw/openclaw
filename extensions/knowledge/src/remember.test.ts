@@ -211,7 +211,9 @@ it("validates retained original input before resuming an accepted remember", asy
     items: [{ text: "Prefers short replies.", kind: "preference" }],
   };
   const storage = new KnowledgeStorage(f.config, undefined, (where) => {
-    if (where === "after-accept") throw new Error("interrupted");
+    if (where === "after-accept") {
+      throw new Error("interrupted");
+    }
   });
   await expect(storage.remember(input, accessFor(f.owner, true), "agent")).rejects.toThrow(
     "interrupted",

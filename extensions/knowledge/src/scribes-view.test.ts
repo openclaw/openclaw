@@ -717,7 +717,7 @@ it.each([true, false])(
       }
       return result;
     });
-    let view = await render();
+    const view = await render();
     try {
       loseResponse = true;
       const retry = buttonNamed(view, "Repair");

@@ -960,5 +960,7 @@ it.each([
     topP: 0.8,
   });
   expect(params.temperature).toBeUndefined();
-  if (id.includes("gpt-6")) expect(params.top_p).toBeUndefined();
+  if (id.includes("gpt-6")) {
+    expect(params.top_p).toBeUndefined();
+  }
 });
