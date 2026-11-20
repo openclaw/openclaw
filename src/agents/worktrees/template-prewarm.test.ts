@@ -119,11 +119,37 @@ it("joins the background generation when a create arrives during its build", asy
   expect(vi.mocked(f.backend.cloneTemplate).mock.lastCall?.[2].idleIoPriority).not.toBe(true);
 });
 
+it("rebuilds unchanged files when checkout policy changes before background preparation", async () => {
+  const f = await fixture();
+  await git(f.repo, "config", "core.autocrlf", "false");
+  await fs.writeFile(path.join(f.repo, "unchanged.txt"), "unchanged\n");
+  await git(f.repo, "add", "unchanged.txt");
+  await git(f.repo, "commit", "-m", "unchanged file");
+  await git(f.repo, "push", "origin", "main");
+  const first = await f.create("first");
+  expect(await fs.readFile(path.join(first.path, "unchanged.txt"), "utf8")).toBe("unchanged\n");
+  await git(f.repo, "config", "core.autocrlf", "true");
+  const target = await f.advance("changed\n");
+  await f.pass();
+  const before = vi.mocked(f.backend.cloneTemplate).mock.calls.length;
+  const second = await f.create("second");
+  expect(await git(second.path, "rev-parse", "HEAD")).toBe(target);
+  expect(await fs.readFile(path.join(second.path, "unchanged.txt"), "utf8")).toBe("unchanged\r\n");
+  expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("changed\r\n");
+  expect(await git(second.path, "status", "--porcelain")).toBe("");
+  expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
+});
+
 it("coalesces observed advances while a generation is building", async () => {
   const f = await fixture();
-  await f.create("first");
-  const b = await f.advance("B\n");
   await git(f.repo, "remote", "remove", "origin");
+  await f.create("first");
+  const advanceLocal = async (contents: string) => {
+    await fs.writeFile(path.join(f.repo, "README.md"), contents);
+    await git(f.repo, "commit", "-am", contents);
+    return (await resolveWorktreeBase(f.repo)).commit;
+  };
+  const b = await advanceLocal("B\n");
   const entered = createDeferred();
   const release = createDeferred();
   const clone = vi.mocked(f.backend.cloneTemplate).getMockImplementation()!;
@@ -134,11 +160,6 @@ it("coalesces observed advances while a generation is building", async () => {
   });
   const pass = f.pass();
   await awaitGateBeforeSettlement(entered.promise, pass, "background clone did not start");
-  const advanceLocal = async (contents: string) => {
-    await fs.writeFile(path.join(f.repo, "README.md"), contents);
-    await git(f.repo, "commit", "-am", contents);
-    return (await resolveWorktreeBase(f.repo)).commit;
-  };
   const c = await advanceLocal("C\n");
   const d = await advanceLocal("D\n");
   release.resolve();

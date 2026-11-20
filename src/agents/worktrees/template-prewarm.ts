@@ -1,9 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { observeWorktreeBase, resolveWorktreeBase } from "./base-ref.js";
 import { withWorktreePreparationTiming } from "./preparation-timing.js";
 import { recentWorktreeTemplates } from "./run-end-lifecycle.js";
-import { managedWorktrees } from "./service.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -19,6 +17,13 @@ export async function prewarmRecentManagedTemplates(params: {
     return observed;
   }
   const recipes = recentWorktreeTemplates(process.env);
+  if (!recipes.size) {
+    return observed;
+  }
+  const [{ observeWorktreeBase, resolveWorktreeBase }, { managedWorktrees }] = await Promise.all([
+    import("./base-ref.js"),
+    import("./service.js"),
+  ]);
   const commitGuard = () => {
     params.signal.throwIfAborted();
     if (params.getConfig() !== config) {

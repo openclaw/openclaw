@@ -26,7 +26,7 @@ import {
   type RepositoryCreationParams,
   type prepareWorktreeDestination,
 } from "./service-preparation.js";
-import { prepareWorktreeTemplate, retainWorktreeTemplate } from "./template-cache.js";
+import { prepareWorktreeTemplate } from "./template-cache.js";
 import { readTemplateAsync } from "./template-registry-async.js";
 import { worktreeTemplateMutationKey, type WorktreeWarmPoolRequest } from "./template-registry.js";
 import type { CreateManagedWorktreeParams } from "./types.js";
@@ -273,7 +273,7 @@ export async function prepareWarmWorktree(
   const { template, sourceOnly } = request;
   const current = await readTemplateAsync(
     env,
-    worktreeTemplateMutationKey(template.cacheKey),
+    request.targetCommit ? worktreeTemplateMutationKey(template.cacheKey) : template.cacheKey,
     guard.commitGuard,
     undefined,
     guard.workerAuthority,
@@ -282,44 +282,27 @@ export async function prepareWarmWorktree(
     if (current?.status !== "ready") {
       throw new Error("Managed template recipe is no longer ready");
     }
-    // Keep the policy checkout alive while its owner derives the target content key.
-    const source = await retainWorktreeTemplate(
+    // Selection owns validation and reader custody. If retirement removes this
+    // policy checkout before selection, the next idle pass retries the failed read.
+    const prepared = await prepareManagedWorktreeTemplate({
+      ...guard,
       env,
-      current,
-      guard.commitGuard,
-      undefined,
-      guard.workerAuthority,
-    );
-    if (!source) {
-      throw new Error("Managed template recipe lost reader custody");
+      now: Date.now,
+      enabled: true,
+      repoRoot: template.repoRoot,
+      commonDir: template.commonDir,
+      worktreeRoot: template.worktreeRoot,
+      destination: current.path,
+      base: request.targetCommit,
+      sourceOnly,
+      useWarmPool: false,
+      backgroundUsedAt: request.backgroundUsedAt,
+      requireSpace,
+    });
+    if (!prepared) {
+      throw new Error("Managed template checkout policy is unavailable");
     }
-    let outcome: unknown;
-    try {
-      const prepared = await prepareManagedWorktreeTemplate({
-        ...guard,
-        env,
-        now: Date.now,
-        enabled: true,
-        repoRoot: template.repoRoot,
-        commonDir: template.commonDir,
-        worktreeRoot: template.worktreeRoot,
-        destination: source.path,
-        base: request.targetCommit,
-        sourceOnly,
-        useWarmPool: false,
-        backgroundUsedAt: request.backgroundUsedAt,
-        requireSpace,
-      });
-      if (!prepared) {
-        throw new Error("Managed template checkout policy is unavailable");
-      }
-      await prepared.record.release();
-    } catch (error) {
-      outcome = error;
-      throw error;
-    } finally {
-      await source.release(outcome);
-    }
+    await prepared.record.release();
     return;
   }
   if (current?.id !== template.id || current.contentKey !== template.contentKey) {
