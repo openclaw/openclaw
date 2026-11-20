@@ -44,11 +44,9 @@ it.each([true, false])(
       expect(scope.getStore()).toBe(harness);
     });
     harness.supportsTurnScopedToolRestrictions = liveSupport;
-    const resolveRuntimeContextForTools = vi.fn(() => []);
     const params = {
       thinkLevel: "ultra",
       onAgentEvent,
-      resolveRuntimeContextForTools,
       supportsTurnScopedToolRestrictions: true,
     };
     const pending = scope.run(harness, () => harness.runAttempt(params as never));
@@ -59,11 +57,9 @@ it.each([true, false])(
     expect(runEmbeddedAttempt).toHaveBeenCalledWith({
       thinkLevel: "ultra",
       onAgentEvent,
-      resolveRuntimeContextForTools,
       supportsTurnScopedToolRestrictions: liveSupport,
     });
     expect(onAgentEvent).toHaveBeenCalledTimes(2);
-    expect(resolveRuntimeContextForTools).not.toHaveBeenCalled();
   },
 );
 
