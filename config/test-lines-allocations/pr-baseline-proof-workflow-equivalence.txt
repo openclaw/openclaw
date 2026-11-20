@@ -1,3 +1,3 @@
-# Real-Git workflow equivalence, frozen dependency selection, preflight preservation, and fixture lifecycle regressions.
-# Net test growth is 546 lines; this covers the excess above the 400-line allowance.
-146
+# Real-Git workflow admission, frozen dependency selection, preflight preservation, captured hash FD cleanup, and fresh GitHub adapter refs.
+# Net test growth is 1073 lines; this covers the excess above the 400-line allowance.
+673
