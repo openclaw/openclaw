@@ -7,9 +7,10 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { installNativeEmbed } from "./native-nav.test-support.ts";
 import { makeDetection } from "./model-setup-fixtures.test-support.ts";
+import { installNativeEmbed } from "./native-nav.test-support.ts";
 import { config, configMocks, pluginResponses } from "./plugins-settings-admin.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Plugin help in ordinary Home" });
@@ -24,20 +25,25 @@ const methods = [
 ];
 
 suite.define(() => {
-  it.each([true, false])("routes legacy new-agent links by readiness without creating an agent (ready=%s)", async (ready) => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...methods, "openclaw.setup.detect"],
-        agentModel: ready ? "openai/gpt-5.5" : null,
-        methodResponses: { "openclaw.setup.detect": makeDetection() },
+  it.each([true, false])(
+    "routes legacy new-agent links by readiness without creating an agent (ready=%s)",
+    async (ready) => {
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...methods, "openclaw.setup.detect"],
+          agentModel: ready ? "openai/gpt-5.5" : null,
+          methodResponses: { "openclaw.setup.detect": makeDetection() },
+        });
+        await page.goto(suite.server.baseUrl + "custodian?intent=new-agent");
+        await expect
+          .poll(() => new URL(page.url()).pathname)
+          .toBe(ready ? "/chat/main" : "/settings/model-setup");
+        expect(await gateway.getRequests("agents.create")).toHaveLength(0);
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       });
-      await page.goto(suite.server.baseUrl + "custodian?intent=new-agent");
-      await expect.poll(() => new URL(page.url()).pathname).toBe(ready ? "/chat/main" : "/settings/model-setup");
-      expect(await gateway.getRequests("agents.create")).toHaveLength(0);
-      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-    });
-  });
+    },
+  );
   it.each([390, 1440])(
     "keeps rejected credential edits redacted and existing Home drafts unsent at %s pixels",
     async (width) => {
@@ -103,13 +109,37 @@ suite.define(() => {
         expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
         if (capture) {
           const frame = await takeControlUiScreenshotFrame(page, panel, [composer], {
-            elements: [panel, composer],
+            elements: [panel.locator(".assistant-panel-header"), composer],
             animations: "disabled",
           });
           await writeFile(
             path.join(suite.artifactDir, "home-help-after-" + width + ".png"),
             frame.png,
           );
+          if (width === 1440) {
+            const annotations = {
+              viewport: page.viewportSize()!,
+              scale: await page.evaluate(() => window.devicePixelRatio),
+              annotations: [
+                {
+                  kind: "outline" as const,
+                  rect: frame.elements[0]!.bounds,
+                  text: "Regular Home conversation",
+                  detail: "Normal tools, drafts and permissions",
+                  labelAt: { x: 1040, y: 150 },
+                  color: "#a04f22",
+                },
+              ],
+            };
+            await writeFile(
+              path.join(suite.artifactDir, "after-annotations.json"),
+              JSON.stringify(annotations),
+            );
+            await writeFile(
+              path.join(suite.artifactDir, "after-annotated.png"),
+              await rasterizeProofAnnotations(suite.browser, { ...annotations, image: frame.png }),
+            );
+          }
         }
         await composer.press("Enter");
         const sent = await gateway.waitForRequest("chat.send");

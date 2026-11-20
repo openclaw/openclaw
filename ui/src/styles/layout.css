@@ -3816,10 +3816,6 @@ openclaw-tooltip.sidebar-hover-tooltip {
   text-wrap: balance;
 }
 
-.content.content--plugin-embed {
-  padding: 0;
-}
-
 .content--workboard {
   padding-inline-start: var(--space-7);
   padding-bottom: 0;
@@ -3839,6 +3835,7 @@ openclaw-tooltip.sidebar-hover-tooltip {
 
 /* Embedded pages own their spacing and scrolling inside the frame. */
 .content.content--plugin-embed {
+  padding: 0;
   gap: 0;
 }
 

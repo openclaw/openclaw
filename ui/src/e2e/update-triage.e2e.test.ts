@@ -84,7 +84,9 @@ suite.define(() => {
       const check = page.getByRole("button", { name: "Check status", exact: true });
       await check.waitFor();
       expect(await check.isEnabled()).toBe(true);
-      expect(await page.getByRole("button", { name: "Retry update", exact: true }).isEnabled()).toBe(true);
+      expect(
+        await page.getByRole("button", { name: "Retry update", exact: true }).isEnabled(),
+      ).toBe(true);
       const reads = (await gateway.getRequests("update.status")).length;
       await check.click();
       await gateway.waitForRequest("update.status", { after: reads });

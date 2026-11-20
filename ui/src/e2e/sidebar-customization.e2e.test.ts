@@ -482,7 +482,16 @@ suite.define(() => {
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Infrastructure", "Labs", "Advanced", "Debug", "Logs", "Updates", "About"]);
+        .toEqual([
+          "System history",
+          "Infrastructure",
+          "Labs",
+          "Advanced",
+          "Debug",
+          "Logs",
+          "Updates",
+          "About",
+        ]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {

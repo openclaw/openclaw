@@ -286,14 +286,14 @@ it("treats git-backed workspaces as existing even when template files are missin
   await expectCompletedWithoutBootstrap(tempDir);
 });
 
-it.each(["current", "6.1", "7.1", "8.2", "9.2", "9.3", "9.4", "9.6"])(
+it.each(["current", "6.1", "7.1", "8.2", "9.2", "9.3", "9.4", "9.6", "11.5"])(
   "keeps %s stock bootstrap pending across restart until profiles are edited",
   async (version) => {
     await ensureWorkspace();
     if (version === "current") {
       const bootstrap = await readWorkspaceFile(BOOTSTRAP);
       expect(createHash("sha256").update(bootstrap).digest("hex")).toBe(
-        "0bcb8c9187e32c87bc31dc3e2fa83c4569bfd13267c0bf9766a635dac3df33a3",
+        "22eda48f66097bb3a10eff2842405163f658f1c0505b29c4d53b77adad507554",
       );
     } else {
       const fixture = new URL(`../../test/fixtures/bootstrap/2026.${version}.md`, import.meta.url);
