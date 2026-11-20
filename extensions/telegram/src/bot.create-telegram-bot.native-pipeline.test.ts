@@ -36,10 +36,14 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),
   loadPreparedModelCatalog: vi.fn(async () => []),
 }));
-vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/native-command-registry")>()),
-  loadCommandArgMenuModelCatalog: vi.fn(async () => []),
-}));
+vi.mock("openclaw/plugin-sdk/command-auth-native", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/command-auth-native")>();
+  return {
+    ...actual,
+    resolveCommandArgMenuAsync: (params: Parameters<typeof actual.resolveCommandArgMenuAsync>[0]) =>
+      actual.resolveCommandArgMenuAsync({ ...params, catalog: [] }),
+  };
+});
 const requireRecord = createRequireRecord("record", "expected-label-object");
 type TelegramConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
 const openDm = { dmPolicy: "open", allowFrom: ["*"] } satisfies TelegramConfig;

@@ -6,7 +6,6 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
-  loadCommandArgMenuModelCatalog,
   parseCommandArgs,
   resolveCommandArgMenuAsync,
   serializeCommandArgs,
@@ -456,14 +455,6 @@ async function dispatchDiscordCommandInteraction(
           route: effectiveRoute,
         })
       : null;
-  // Native /think must not wait on provider discovery; persisted rows retain its metadata.
-  const menuModelCatalog =
-    command.key === "think" && menuNeedsModelContext
-      ? await loadCommandArgMenuModelCatalog({
-          cfg,
-          ...(menuModelContext?.agentId ? { agentId: menuModelContext.agentId } : {}),
-        })
-      : undefined;
   // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.
   const menu =
     command.key === "verbose" && bindingReadiness?.ok === false
@@ -472,11 +463,16 @@ async function dispatchDiscordCommandInteraction(
           command,
           args: commandArgs,
           cfg,
-          session: command.key === "verbose" ? effectiveRoute : undefined,
+          session:
+            command.key === "verbose" || command.key === "think"
+              ? {
+                  agentId: menuModelContext?.agentId ?? effectiveRoute.agentId,
+                  sessionKey: effectiveRoute.sessionKey,
+                }
+              : undefined,
           provider: menuModelContext?.provider,
           model: menuModelContext?.model,
           agentRuntime: menuModelContext?.agentRuntime,
-          catalog: menuModelCatalog,
         });
   if (policy?.isCurrent() === false) {
     return reject("Access policy changed. Try this interaction again.", true);

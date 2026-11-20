@@ -18,10 +18,15 @@ vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOrigina
   resolveConfiguredBindingRoute: vi.fn<typeof bindings.resolveConfiguredBindingRoute>(),
 }));
 
-vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/native-command-registry")>()),
-  loadCommandArgMenuModelCatalog: vi.fn(async () => []),
-}));
+vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/native-command-registry")>();
+  return {
+    ...actual,
+    resolveCommandArgMenuAsync: (params: Parameters<typeof actual.resolveCommandArgMenuAsync>[0]) =>
+      actual.resolveCommandArgMenuAsync({ ...params, catalog: [] }),
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>()),

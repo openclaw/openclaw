@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
@@ -14,6 +15,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import type { OpenClawConfig } from "../config/types.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { SkillCommandSpec } from "../skills/types.js";
+import { loadCommandArgMenuModelCatalog } from "./command-arg-menu-catalog.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { resolveTextCommand } from "./commands-registry-normalize.js";
@@ -367,6 +369,8 @@ type ResolvedCommandArgMenu = {
   arg: CommandArgDefinition;
   choices: ResolvedCommandArgChoice[];
   title?: string;
+  /** Published rows used by this menu, also available for channel-specific status text. */
+  modelCatalog?: ModelCatalogEntry[];
 };
 
 /** @deprecated Use resolveCommandArgMenuAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -393,7 +397,30 @@ export function resolveCommandArgMenu(params: CommandArgMenuParams): ResolvedCom
 export async function resolveCommandArgMenuAsync(
   params: CommandArgMenuParams,
 ): Promise<ResolvedCommandArgMenu | null> {
-  const menu = resolveCommandArgMenuChoices(params);
+  if (!canResolveCommandArgMenu(params)) {
+    return null;
+  }
+  // Menus follow the published generation without discovery or exact-config selection.
+  // An explicitly supplied catalog, including an empty one, remains authoritative.
+  const modelCatalog =
+    params.command.key === "think" &&
+    params.cfg &&
+    params.catalog === undefined &&
+    params.command.args.some(
+      (arg) => typeof arg.choices === "function" && params.args?.values?.[arg.name] == null,
+    )
+      ? await loadCommandArgMenuModelCatalog({
+          cfg: params.cfg,
+          agentId: params.session?.agentId,
+        })
+      : undefined;
+  const menu = resolveCommandArgMenuChoices({
+    ...params,
+    catalog: params.catalog ?? modelCatalog,
+  });
+  if (menu && modelCatalog) {
+    menu.modelCatalog = modelCatalog;
+  }
   if (menu && params.command.key === "verbose" && params.cfg && params.session) {
     const { agentId, sessionKey } = params.session;
     const entry = await readSessionEntryReadOnlyInWorker({
