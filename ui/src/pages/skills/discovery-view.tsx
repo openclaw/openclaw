@@ -16,7 +16,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
 import { PluginCatalogGrid, renderCatalogGridSkeleton } from "../plugins/catalog-grid.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
-import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
+import { installedReference, SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import { SkillTile } from "./skill-tile.tsx";
 import "../../styles/skills-discovery.css";
 import { SkillsPage } from "./skills-page.tsx";
@@ -48,14 +48,6 @@ type SkillDiscoveryEntry = {
   library?: SkillLibraryEntry;
   remote?: ClawHubSearchResult;
 };
-
-function installedReference(skill: SkillStatusEntry): string | null {
-  const link = skill.clawhub;
-  if (!link?.valid) {
-    return null;
-  }
-  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
-}
 
 function linkedOwner(skill: SkillStatusEntry): string | null {
   const link = skill.clawhub;

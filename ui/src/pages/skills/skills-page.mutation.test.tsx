@@ -328,3 +328,62 @@ describe("Skills mutation presentation", () => {
     },
   );
 });
+
+describe("Installed skill dialog", () => {
+  it("reads the skill card on open and when its revision changes in the open dialog", async () => {
+    const report = createReport([
+      createSkill({
+        primaryEnv: undefined,
+        skillCard: { present: true, path: "/tmp/skill/skill-card.md", sizeBytes: 12 },
+      }),
+    ]);
+    let cardReads = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.skillCard") {
+        cardReads++;
+        return {
+          schema: "openclaw.skills.skill-card.v1",
+          skillKey: "repo-skill",
+          path: "/tmp/skill/skill-card.md",
+          sizeBytes: cardReads === 1 ? 12 : 24,
+          content: cardReads === 1 ? "# Card\n\nOpened with the dialog." : "# Updated skill card",
+        };
+      }
+      if (method === "skills.status") {
+        return report;
+      }
+      if (method === "skills.library.list") {
+        return { ...personalLibrary, defaultTarget: "workspace" };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const { page, publishRouteData } = mountSkills(request, "settings");
+    publishRouteData({ report });
+    await waitForFast(() =>
+      expect(page.querySelector(".plugins-item__detail-button")).not.toBeNull(),
+    );
+    expect(request.mock.calls.some(([method]) => method === "skills.skillCard")).toBe(false);
+    page.querySelector<HTMLButtonElement>(".plugins-item__detail-button")!.click();
+    await waitForFast(() =>
+      expect(page.querySelector(".skill-reader-dialog .sidebar-markdown")?.textContent).toContain(
+        "Opened with the dialog.",
+      ),
+    );
+    expect(cardReads).toBe(1);
+    const dialog = page.querySelector(".skill-reader-dialog");
+    const refreshed = createReport([
+      createSkill({
+        primaryEnv: undefined,
+        skillCard: { present: true, path: "/tmp/skill/skill-card.md", sizeBytes: 24 },
+      }),
+    ]);
+    publishRouteData({ report: refreshed });
+    await waitForFast(() => {
+      expect(dialog?.querySelector(".sidebar-markdown")?.textContent ?? "").toContain(
+        "Updated skill card",
+      );
+    });
+    expect(page.querySelector(".skill-reader-dialog")).toBe(dialog);
+    expect(cardReads).toBe(2);
+  });
+});

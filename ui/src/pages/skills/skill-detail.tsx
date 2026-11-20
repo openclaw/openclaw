@@ -508,7 +508,6 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
     () => props.view.state.skillCardContents[props.skill.skillKey],
   );
   const completion = createMemo(() => props.view.state.skillCardReads[props.skill.skillKey]);
-  const requested = () => props.view.state.skillsDetailTab === "card";
   const read = createMemo(() => {
     const receipt = completion();
     const value = acceptedContent();
@@ -531,13 +530,12 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       <Show
         when={content() !== undefined}
         fallback={
-          <div class="muted" role="status">
-            {t("skillsPage.skillCardNotLoaded")}
+          <div class="plugin-catalog-detail__readme-well skill-page__card-pending" role="status">
+            <span class="muted">{t("skillsPage.skillCardNotLoaded")}</span>
           </div>
         }
       >
-        {/* The card is read when asked for, so that first request opens it whole. */}
-        <PluginReadmeWell expanded={requested()}>
+        <PluginReadmeWell>
           <MarkdownContent
             class="sidebar-markdown"
             onClick={handleMarkdownCodeBlockClick}
@@ -547,46 +545,43 @@ function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps 
       </Show>
     );
   };
+  // The dialog reads the card when it opens; the block keeps the clamped card's height meanwhile.
   return (
-    <Show
-      when={requested() || acceptedContent() !== undefined}
-      fallback={
-        // Unread, the card is one row that names it; opening it reads the card in place.
-        <button
-          type="button"
-          class="skill-page__card-row"
-          aria-expanded="false"
-          onClick={() => props.view.onDetailTabChange("card")}
-        >
-          <span>{t("skillsPage.skillCard")}</span>
-          <Icon name="chevronDown" />
-        </button>
-      }
-    >
-      <SkillPageSection title={t("skillsPage.skillCard")}>
-        <Loading
-          on={acceptedContent() === undefined ? completion() : null}
-          fallback={
-            <div class="plugin-catalog-detail__readme-well">
-              <div class="muted" role="status">
-                {t("skillsPage.loadingSkillCard")}
-              </div>
+    <SkillPageSection title={t("skillsPage.skillCard")}>
+      <Loading
+        on={acceptedContent() === undefined ? completion() : null}
+        fallback={
+          <div class="plugin-catalog-detail__readme-well skill-page__card-pending">
+            <span class="muted" role="status">
+              {t("skillsPage.loadingSkillCard")}
+            </span>
+          </div>
+        }
+      >
+        <Errored
+          fallback={(error) => (
+            <div class="plugin-catalog-detail__readme-well skill-page__card-pending">
+              <InlineAlert
+                tone="danger"
+                role="alert"
+                action={
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    onClick={() => props.view.onDetailTabChange("card")}
+                  >
+                    {t("skillsPage.retry")}
+                  </button>
+                }
+              >
+                {formatUiError(error())}
+              </InlineAlert>
             </div>
-          }
+          )}
         >
-          <Errored
-            fallback={(error) => (
-              <div class="plugin-catalog-detail__readme-well">
-                <InlineAlert tone="danger" role="alert">
-                  {formatUiError(error())}
-                </InlineAlert>
-              </div>
-            )}
-          >
-            <CardContent />
-          </Errored>
-        </Loading>
-      </SkillPageSection>
-    </Show>
+          <CardContent />
+        </Errored>
+      </Loading>
+    </SkillPageSection>
   );
 }
