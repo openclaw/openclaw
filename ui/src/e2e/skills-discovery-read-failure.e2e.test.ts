@@ -31,9 +31,8 @@ suite.define(() => {
         .getByRole("alert")
         .filter({ hasText: "Synthetic installed inventory unavailable" })
         .waitFor();
-      await expect
-        .poll(() => page.locator(".skill-discovery .plugin-catalog-grid").getAttribute("aria-busy"))
-        .toBe("false");
+      // The grid is absent after an empty registry read; only a pending read has this status.
+      await page.getByRole("status", { name: "Searching…" }).waitFor({ state: "hidden" });
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const file = `${suite.artifactDir}/failed-installed-status.png`;
         await page.screenshot({ path: file });
@@ -51,6 +50,7 @@ suite.define(() => {
         ...empty,
         skills: [createSkill({ name: "Recovered Skill", skillKey: "recovered" })],
       });
+      await page.getByRole("button", { name: "Installed", exact: true }).click();
       await page
         .getByRole("button", { name: "Open Recovered Skill details", exact: true })
         .waitFor();

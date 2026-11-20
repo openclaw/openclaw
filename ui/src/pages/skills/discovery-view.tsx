@@ -5,6 +5,7 @@ import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
   CatalogDiscoverySection,
+  CatalogDiscoverySearch,
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
@@ -13,6 +14,7 @@ import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-brows
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { ClawHubSearchResult } from "../../lib/skills/clawhub-search.ts";
+import { registryCategoryIcon } from "../plugins/catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
@@ -164,7 +166,8 @@ export function SkillDiscovery(props: SkillsProps) {
   const epoch = createMemo(() => props.clawhubSearchEpoch);
   const pending = createMemo(() => isPending(props.readClawHubSearch), { loadingValue: true });
   const [scope, setScope] = createSignal<"all" | "installed">("all");
-  const allEntries = createMemo<SkillDiscoveryEntry[]>(() => {
+  const category = createMemo(() => props.state.clawhubCategory);
+  const catalog = createMemo(() => {
     const skills = props.mutationSkills;
     const libraries = props.libraryEntries ?? [];
     const results = props.state.clawhubSearchResults ?? [];
@@ -196,6 +199,7 @@ export function SkillDiscovery(props: SkillsProps) {
         skill,
       });
     }
+    const remoteRows: SkillDiscoveryEntry[] = [];
     const remoteIds = new Set<string>();
     for (const remote of results) {
       const reference = remote.installRef;
@@ -213,8 +217,9 @@ export function SkillDiscovery(props: SkillsProps) {
       );
       if (installed) {
         installed.remote = remote;
+        remoteRows.push(installed);
       } else {
-        items.push({
+        remoteRows.push({
           id: `remote:${reference}`,
           name: remote.displayName,
           description: remote.summary ?? "",
@@ -224,13 +229,13 @@ export function SkillDiscovery(props: SkillsProps) {
         });
       }
     }
-    return items;
+    return { installed: items, remote: remoteRows };
   });
-  const entries = createMemo(() => {
+  const installed = createMemo(() => {
     // Canonical-form comparison: a composed (NFC) query must match decomposed (NFD) copy.
     const filter = props.state.clawhubSearchQuery.trim().toLowerCase().normalize("NFC");
     // Remote matches retain the registry's semantic ranking, even if their copy lacks the query.
-    return allEntries().filter(
+    return catalog().installed.filter(
       (entry) =>
         entry.remote ||
         !filter ||
@@ -240,29 +245,31 @@ export function SkillDiscovery(props: SkillsProps) {
           .includes(filter),
     );
   });
-  // Installed skills: every local and library entry, summarized above the registry until asked for.
-  const installed = createMemo(() => entries().filter((entry) => entry.skill || entry.library));
-  const hasInstalled = createMemo(() => allEntries().some((entry) => entry.skill || entry.library));
+  const hasInstalled = createMemo(() => catalog().installed.length > 0);
   // During a search, installed matches that ClawHub also returned stay in the registry's ranking.
   const installedRows = createMemo(() =>
     scope() === "installed" ? installed() : installed().filter((entry) => !entry.remote),
   );
   const installedSection = createMemo(() =>
-    scope() === "installed" || query().trim() ? installedRows() : [],
+    !category() && (scope() === "installed" || query().trim()) ? installedRows() : [],
   );
-  const remoteRows = createMemo(() =>
-    scope() === "all" ? entries().filter((entry) => entry.remote) : [],
-  );
-  const shelf = () => scope() === "all" && !query().trim() && installed().length > 0;
+  const remoteRows = createMemo(() => (scope() === "all" ? catalog().remote : []));
+  const shelf = () => scope() === "all" && !category() && !query().trim() && installed().length > 0;
+  const selectBuiltin = (next: "all" | "installed") => {
+    setScope(next);
+    props.onCategoryChange(null);
+  };
+  const remoteTitle = () => category()?.label ?? t("skillsPage.clawHub");
+  const inventoryReady = () =>
+    props.libraryEntries !== undefined &&
+    !props.loading &&
+    (!props.error || props.state.skillsReport);
   return (
     <section
       class="plugin-catalog-results plugin-catalog-results--rows skill-discovery"
       aria-label={t("skillsPage.title")}
     >
-      <label class="plugin-catalog-search">
-        <span aria-hidden="true">
-          <Icon name="search" />
-        </span>
+      <CatalogDiscoverySearch>
         <input
           type="search"
           class="settings-input"
@@ -273,7 +280,7 @@ export function SkillDiscovery(props: SkillsProps) {
           value={props.state.clawhubSearchQuery}
           onInput={(event) => props.onClawHubQueryChange(event.currentTarget.value)}
         />
-      </label>
+      </CatalogDiscoverySearch>
       {props.error && (
         <InlineAlert tone="danger" role="alert">
           {props.error}
@@ -294,7 +301,11 @@ export function SkillDiscovery(props: SkillsProps) {
                   type="button"
                   class="btn btn--sm"
                   onClick={() => {
-                    props.onClawHubQueryChange(query());
+                    if (props.hasNextPage) {
+                      props.onLoadMore();
+                    } else {
+                      props.onClawHubQueryChange(query());
+                    }
                     reset();
                   }}
                 >
@@ -305,7 +316,7 @@ export function SkillDiscovery(props: SkillsProps) {
           </Loading>
         )}
       >
-        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+        <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() && null}
         </Loading>
       </Errored>
@@ -316,19 +327,61 @@ export function SkillDiscovery(props: SkillsProps) {
           {props.state.clawhubInstallMessage!.text}
         </InlineAlert>
       )}
-      <Show when={hasInstalled()}>
-        <CatalogDiscoveryChips label={t("skillsPage.title")}>
-          <CatalogDiscoveryChip active={scope() === "all"} onClick={() => setScope("all")}>
-            {t("skillsPage.tabs.all")}
-          </CatalogDiscoveryChip>
+      <CatalogDiscoveryChips label={t("skillsPage.categories")}>
+        <CatalogDiscoveryChip
+          icon={<Icon name="layoutGrid" />}
+          active={scope() === "all" && !category()}
+          onClick={() => selectBuiltin("all")}
+        >
+          {t("skillsPage.tabs.all")}
+        </CatalogDiscoveryChip>
+        <Show when={hasInstalled()}>
           <CatalogDiscoveryChip
+            icon={<Icon name="bookOpenText" />}
             active={scope() === "installed"}
-            onClick={() => setScope("installed")}
+            onClick={() => selectBuiltin("installed")}
           >
             {t("skillsPage.installed")}
           </CatalogDiscoveryChip>
-        </CatalogDiscoveryChips>
-      </Show>
+        </Show>
+        <Errored
+          fallback={(error, reset) => (
+            <InlineAlert tone="warning" role="alert">
+              {formatUiError(error())}{" "}
+              <button
+                type="button"
+                class="btn btn--sm"
+                onClick={() => {
+                  props.onRetryCategories();
+                  reset();
+                }}
+              >
+                {t("common.retry")}
+              </button>
+            </InlineAlert>
+          )}
+        >
+          <Loading
+            on={epoch()}
+            fallback={<span class="skeleton plugin-catalog-chip--skeleton" aria-hidden="true" />}
+          >
+            <For each={props.readCategories()} keyed={(item) => item.slug}>
+              {(item) => (
+                <CatalogDiscoveryChip
+                  icon={registryCategoryIcon(item().icon)}
+                  active={category()?.slug === item().slug}
+                  onClick={() => {
+                    setScope("all");
+                    props.onCategoryChange(item());
+                  }}
+                >
+                  {item().label}
+                </CatalogDiscoveryChip>
+              )}
+            </For>
+          </Loading>
+        </Errored>
+      </CatalogDiscoveryChips>
       <div class="plugin-catalog-results__body">
         <Show when={shelf()}>
           <InstalledShelf entries={installed()} onOpen={() => setScope("installed")} />
@@ -346,13 +399,13 @@ export function SkillDiscovery(props: SkillsProps) {
           when={remoteRows().length > 0}
           fallback={
             <Show when={scope() === "all" && pending() && props.state.connected}>
-              <CatalogDiscoverySection id="clawhub" title={t("skillsPage.clawHub")}>
+              <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
                 {renderCatalogGridSkeleton({ label: t("skillsPage.searching"), cards: 6 })}
               </CatalogDiscoverySection>
             </Show>
           }
         >
-          <CatalogDiscoverySection id="clawhub" title={t("skillsPage.clawHub")}>
+          <CatalogDiscoverySection id="clawhub" title={remoteTitle()}>
             <PluginCatalogGrid items={remoteRows()} results busy={props.loading || pending()}>
               {(entry, contentRef) => (
                 <DiscoveryRow entry={entry()} skills={props} contentRef={contentRef} />
@@ -360,21 +413,38 @@ export function SkillDiscovery(props: SkillsProps) {
             </PluginCatalogGrid>
           </CatalogDiscoverySection>
         </Show>
+        <Show when={scope() === "all" && props.hasNextPage}>
+          <div class="plugin-catalog-load-more">
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              disabled={pending()}
+              onClick={() => props.onLoadMore()}
+            >
+              {t(pending() ? "skillsPage.loadingMore" : "skillsPage.loadMore")}
+            </button>
+          </div>
+        </Show>
       </div>
       <Errored fallback={() => null}>
-        <Loading on={[query(), connected(), epoch()]} fallback={null}>
+        <Loading on={[query(), category(), connected(), epoch()]} fallback={null}>
           {props.readClawHubSearch() &&
-            props.libraryEntries !== undefined &&
+            (category() || inventoryReady()) &&
+            !props.hasNextPage &&
             installedSection().length + remoteRows().length === 0 &&
             !shelf() &&
-            !props.loading &&
-            (!props.error || props.state.skillsReport) &&
             props.state.connected && (
               <SettingsGroup>
                 <SettingsEmpty
                   message={
                     <span role="status">
-                      {t(query().trim() ? "skillsPage.noMatches" : "skillsPage.empty")}
+                      {t(
+                        category()
+                          ? "skillsPage.noFilteredSkills"
+                          : query().trim()
+                            ? "skillsPage.noMatches"
+                            : "skillsPage.empty",
+                      )}
                     </span>
                   }
                 />

@@ -9,9 +9,13 @@ function CategoryStrokeIcon(props: { children: JSX.Element }) {
   return <StrokeIcon> {props.children}</StrokeIcon>;
 }
 
-// Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
+// Category-only SVGs stay in deferred catalog pages, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
   activity: () => <Icon name="activity" />,
+  zap: () => <Icon name="zap" />,
+  "list-checks": () => <Icon name="listChecks" />,
+  shapes: () => <Icon name="shapes" />,
+  "settings-2": () => <Icon name="slidersHorizontal" />,
   "book-open": () => <Icon name="book" />,
   brain: () => <Icon name="brain" />,
   bot: () => <Icon name="bot" />,
@@ -103,6 +107,10 @@ export function categoryIcon({ slug, icon }: PluginDiscoveryCategory): JSX.Eleme
   if (template) {
     return <TemplateCategoryIcon icon={template[2]} />;
   }
-  const render = Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
+  return registryCategoryIcon(icon);
+}
+
+export function registryCategoryIcon(icon?: string): JSX.Element {
+  const render = icon && Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
   return render ? render() : <Icon name="box" />;
 }

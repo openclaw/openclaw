@@ -1,5 +1,6 @@
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createRouteLoaderOptions } from "../../test-helpers/route-loader-options.ts";
 import { buildSkillLibraryMock } from "../../test-helpers/skill-library-fixtures.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -149,6 +150,53 @@ describe("unified skill discovery", () => {
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
   });
 
+  it("keeps the feed usable without category support, and retries a failed taxonomy independently", async () => {
+    const categories = Promise.withResolvers<{ categories: { slug: string; label: string }[] }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.search") {
+        return { results: [remoteSkill()] };
+      }
+      if (method === "skills.categories") {
+        return categories.promise;
+      }
+      if (method === "skills.library.list") {
+        return personalLibrary;
+      }
+      return {};
+    });
+    const mounted = mountSkills(request);
+    const feed = () => mounted.container.querySelector('[data-skill-id="remote:@alice/repo"]');
+    await waitForFast(() => expect(feed()).not.toBeNull());
+    expect(request.mock.calls.some(([method]) => method === "skills.categories")).toBe(false);
+    const { gateway } = mounted.context;
+    mounted.connection.publish({
+      ...gateway.snapshot,
+      hello: gatewayHelloForMethods(["skills.categories"]),
+    });
+    await waitForFast(() =>
+      expect(request.mock.calls.some(([method]) => method === "skills.categories")).toBe(true),
+    );
+    expect(feed()).not.toBeNull();
+    categories.reject(new Error("Category directory unavailable"));
+    await waitForFast(() =>
+      expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Category directory unavailable",
+      ),
+    );
+    const before = request.mock.calls.filter(([method]) => method === "skills.search").length;
+    request.mockResolvedValueOnce({ categories: [{ slug: "research", label: "Research" }] });
+    mounted.container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+    await waitForFast(() =>
+      expect(mounted.container.querySelector(".plugin-catalog-chips")?.textContent).toContain(
+        "Research",
+      ),
+    );
+    expect(feed()).not.toBeNull();
+    expect(request.mock.calls.filter(([method]) => method === "skills.search")).toHaveLength(
+      before,
+    );
+  });
+
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
     for (const loading of [true, false]) {
@@ -175,6 +223,20 @@ describe("unified skill discovery", () => {
     expect(cards[1]?.textContent).toContain("Bob");
     cards[1]?.querySelector<HTMLButtonElement>(".plugin-catalog-card__primary-link")!.click();
     expect(onLibraryOpen).toHaveBeenCalledWith(libraries[1]!.skillId);
+  });
+
+  it("reports an empty category independently of installed matches or pending inventory", () => {
+    const container = renderDiscovery({
+      clawhubCategory: { slug: "research", label: "Research" },
+      clawhubQuery: "repo",
+      clawhubResults: [],
+      libraryEntries: undefined,
+      loading: true,
+    });
+    expect(container.querySelector(".plugin-catalog-card")).toBeNull();
+    expect(container.querySelector(".settings-empty")?.textContent).toBe(
+      "No skills match your filters.",
+    );
   });
 
   it("does not mistake an invalid namesake for a ClawHub install", () => {

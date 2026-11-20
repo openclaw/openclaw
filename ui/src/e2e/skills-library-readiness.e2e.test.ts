@@ -32,9 +32,8 @@ suite.define(() => {
       await page.getByRole("searchbox", { name: "Search skills", exact: true }).waitFor();
       await gateway.waitForRequest("skills.status");
       await gateway.waitForRequest("skills.search");
-      await expect
-        .poll(() => page.locator(".skill-discovery .plugin-catalog-grid").getAttribute("aria-busy"))
-        .toBe("false");
+      // The grid is absent after an empty registry read; only a pending read has this status.
+      await page.getByRole("status", { name: "Searching…" }).waitFor({ state: "hidden" });
       const empty = page.getByText("No skills yet. Search ClawHub to add one.", { exact: true });
       expect
         .soft(await empty.count(), "pending library does not establish empty discovery")
@@ -59,6 +58,7 @@ suite.define(() => {
       await page.reload();
       await gateway.waitForRequest("skills.library.list");
       await gateway.resolveDeferred("skills.library.list", accepted);
+      await page.getByRole("button", { name: "Installed", exact: true }).click();
       await page
         .getByRole("button", { name: "Open " + own.entry.slug + " details", exact: true })
         .waitFor();
