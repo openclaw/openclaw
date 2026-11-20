@@ -17,6 +17,14 @@ While an update is active, the table shows its phase instead of advertising anot
 update, and the final line points to `openclaw update status`. JSON still includes
 registry/Git `availability` separately from `activeRun`.
 
+A standalone `update repair` has its own outcome. The latest-attempt report in
+the CLI and Control UI includes the earlier failed update's run ID when repair
+selected it. If repair did not identify a source and the preceding attempt
+failed, the report shows that failure as context. In JSON, the repair's `steps`
+carry `finalize:repair-history:source:<run-id>` or
+`finalize:repair-history:previous:<run-id>`, respectively. Use `update.runs.get`
+to inspect the original failure.
+
 A failed or interrupted attempt becomes history only when its saved observation
 of a running Gateway differs in version or build ID from the live serving
 Gateway. Text status then shows a past-failure note without recovery advice.

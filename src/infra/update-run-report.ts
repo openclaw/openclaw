@@ -22,7 +22,12 @@ import {
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
-import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isStandaloneUpdateRepair,
+  UPDATE_REPAIR_HISTORY_STEP_PREFIX,
+  type UpdateRunRecord,
+} from "./update-run-record.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
@@ -31,6 +36,7 @@ import { formatUpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 export type UpdateRunReport = { headline: string; lines: string[]; markdown: string };
 
 const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
+const IN_PROGRESS_REPAIR_REPORT_PREFIX = "⬆️ Update repair in progress: ";
 const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
   "preflight-local-replay-conflict":
     "A local commit conflicts with the update target. Resolve the conflict in the paths named by the failing check (rebase the local commits onto the update target, or drop them), then rerun the update.",
@@ -48,7 +54,10 @@ const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
 
 /** Recognizes pending projections written by this renderer, including shipped reports. */
 export function isUpdateRunReportInProgress(markdown: string): boolean {
-  return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
+  return (
+    markdown.startsWith(IN_PROGRESS_REPORT_PREFIX) ||
+    markdown.startsWith(IN_PROGRESS_REPAIR_REPORT_PREFIX)
+  );
 }
 
 type ReportInput = Pick<
@@ -245,6 +254,7 @@ export function renderUpdateRunReport(
   } = {},
 ): UpdateRunReport {
   const reconciled = isAcknowledgedAbandonedUpdateRun(run);
+  const repair = isStandaloneUpdateRepair(run);
   const currentHealth: UpdateRunReportHealth | undefined =
     opts.currentHealth ??
     (run.target?.installationMethod !== "ocm" &&
@@ -265,6 +275,7 @@ export function renderUpdateRunReport(
   // Keep the version visible and distinguish Git updates within the same version.
   const before = formatUpdateVersion(run.before);
   const after = formatUpdateVersion(run.after);
+  const repairVersion = after ? ` for ${after}` : "";
   const reason = bounded(
     run.reason?.trim() ||
       (run.status === "failed" &&
@@ -305,12 +316,18 @@ export function renderUpdateRunReport(
         warnings.length > 0
           ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
           : "";
-      headline = after
-        ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}${attention}.`
-        : `✅ OpenClaw updated${attention}.`;
+      headline = repair
+        ? `✅ Update repair completed${repairVersion}${attention}.`
+        : after
+          ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}${attention}.`
+          : `✅ OpenClaw updated${attention}.`;
       break;
     }
     case "failed":
+      if (repair) {
+        headline = `⚠️ Update repair failed${repairVersion}: ${reason}.`;
+        break;
+      }
       headline = reconciled
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
@@ -329,20 +346,32 @@ export function renderUpdateRunReport(
             ? `ℹ️ OpenClaw${after ? ` ${after}` : ""} installed; Gateway readiness unverified; recovery backups retained.`
             : run.reason === "doctor-maintenance-pending"
               ? "ℹ️ OpenClaw repair pending: Doctor maintenance remains unfinished."
-              : `ℹ️ OpenClaw update skipped: ${reason}.`;
+              : repair
+                ? `ℹ️ Update repair skipped${repairVersion}: ${reason}.`
+                : `ℹ️ OpenClaw update skipped: ${reason}.`;
       break;
     case "rolled-back":
       headline = `↩️ OpenClaw update rolled back to ${after ?? running ?? before ?? "the previous version"}: ${reason}.`;
       break;
     case "running":
-      headline = `${IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
+      headline = `${repair ? IN_PROGRESS_REPAIR_REPORT_PREFIX : IN_PROGRESS_REPORT_PREFIX}${run.target?.installationMethod === "ocm" ? "managed by OCM" : run.phase}.`;
       break;
   }
   headline = bounded(headline, 500);
   const markdownLimit = opts.markdownLimit ?? 1500;
   // Successful activation must not bury recovery constraints behind snapshot inventory.
   // Failed runs keep their failure diagnostics ahead of warnings in the short report.
-  const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
+  const lines: string[] = [];
+  const earlier = run.steps.find(({ step }) => step.startsWith(UPDATE_REPAIR_HISTORY_STEP_PREFIX));
+  if (earlier) {
+    const runId = earlier.step.slice(earlier.step.lastIndexOf(":") + 1);
+    lines.push(
+      `Earlier failed update ${runId}${earlier.detail ? `: ${bounded(earlier.detail, 240)}` : ""}.`,
+    );
+  }
+  if (run.status === "succeeded") {
+    lines.push(...warnings);
+  }
   if (
     currentHealth &&
     (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))

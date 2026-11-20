@@ -29,7 +29,11 @@ import {
   recordUpdateRunRepairContinuation,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
-import type { UpdateRunStep } from "../../infra/update-run-record.js";
+import {
+  UPDATE_REPAIR_HISTORY_STEP_PREFIX,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../infra/update-run-record.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   UPDATE_RUN_HEARTBEAT_MS,
@@ -138,6 +142,7 @@ export class UpdateFinalizationLifecycle {
     this.ownsRepairRun = repair && this.ownsRun;
     if (this.ownsRepairRun) {
       recordUpdateRunRepairContinuation(this.runId, this.runId, this.ledgerOptions);
+      recordUpdateRunPhase(this.runId, "repairing", {}, this.ledgerOptions);
     }
     if (this.active) {
       recordUpdateRunStep(
@@ -147,6 +152,21 @@ export class UpdateFinalizationLifecycle {
       );
     }
     return this.runId;
+  }
+
+  recordRepairHistory(run: UpdateRunRecord, relationship: "source" | "previous"): void {
+    if (this.runId && this.ownsRepairRun) {
+      recordUpdateRunStep(
+        this.runId,
+        {
+          step: `${UPDATE_REPAIR_HISTORY_STEP_PREFIX}${relationship}:${run.runId}`,
+          status: "completed",
+          endedAtMs: Date.now(),
+          detail: run.reason ?? undefined,
+        },
+        this.ledgerOptions,
+      );
+    }
   }
 
   recordInstallKind(installKind: "git" | "package" | "unknown", version?: string | null): void {

@@ -60,6 +60,32 @@ it("retains a recorded repair phase after the run has finished", () => {
     steps: [makeStep("repairing", "failed")],
   });
   expect(view.phases.find(({ step }) => step === "repairing")?.status).toBe("failed");
+  expect(view.headline).toContain("Update repair failed");
+});
+
+it("shows a standalone repair with its failed update and only applicable phases", () => {
+  const sourceId = "96e7c9ae-508b-48a2-bd42-f152be64dc4a";
+  const { element, find, text } = mount({
+    phase: "finished",
+    status: "succeeded",
+    after: { version: "2026.11.5" },
+    steps: [
+      makeStep("requested"),
+      makeStep("repairing"),
+      makeStep(`finalize:repair-history:source:${sourceId}`, "completed", "post-update-failed"),
+      makeStep("finished"),
+    ],
+  });
+  expect(
+    [...element.querySelectorAll(".update-run-view__phases [data-step]")].map((phase) =>
+      phase.getAttribute("data-step"),
+    ),
+  ).toEqual(["requested", "repairing", "finished"]);
+  expect(text(".update-run-view__heading h3")).toContain("Update repair completed for 2026.11.5");
+  expect(text(".update-run-view__report-body")).toContain(
+    `Earlier failed update ${sourceId}: post-update-failed.`,
+  );
+  expect(find(".update-run-view__oracles")).toBeNull();
 });
 
 it("presents diagnostic receipts as readable details without inventing installation steps", () => {

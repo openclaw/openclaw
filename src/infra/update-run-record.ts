@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { classifyUpdateRunCause } from "./update-run-cause.js";
 import type { UpdateRunDriverSchema } from "./update-run-driver-schema.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
@@ -137,6 +138,17 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
 }
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
+
+// Retained by the ledger codec, including readers that treat it as an ordinary step.
+export const UPDATE_REPAIR_HISTORY_STEP_PREFIX = "finalize:repair-history:";
+
+/** Standalone repair enters repairing directly from requested, including in older records. */
+export function isStandaloneUpdateRepair(run: Pick<UpdateRunRecord, "phase" | "steps">): boolean {
+  const firstWorkPhase = run.steps.find(({ step }) =>
+    UPDATE_RUN_PHASES.some((phase) => phase !== "requested" && phase === step),
+  );
+  return (firstWorkPhase?.step ?? run.phase) === "repairing";
+}
 
 export type CreateUpdateRunInput = Partial<
   Pick<UpdateRunRecord, "origin" | "target" | "before" | "after">

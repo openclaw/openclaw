@@ -5,6 +5,7 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { retainCurrentDeferredUpdateWarnings } from "../../infra/deferred-update-warnings.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -26,6 +27,7 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
+import { isStandaloneUpdateRepair } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -374,6 +376,25 @@ async function updateFinalizeCommandInternal(
   const interruptedGateway = recoveryRunIds.length
     ? findUpdateGatewayStop(listUpdateRuns({ limit: 100 }))
     : undefined;
+  if (lifecycle.ownsUpdateRepairRun) {
+    try {
+      const sourceId = interruptedGateway?.runId ?? recoveryRunIds[0];
+      const source = sourceId ? getUpdateRun(sourceId) : undefined;
+      if (source?.status === "failed" && !isStandaloneUpdateRepair(source)) {
+        lifecycle.recordRepairHistory(source, "source");
+      } else {
+        // A prior failure stays visible even when recovery did not select a source run.
+        const previous = listUpdateRuns({ limit: 2 }).find((run) => run.runId !== invokingRunId);
+        if (previous?.status === "failed" && !isStandaloneUpdateRepair(previous)) {
+          lifecycle.recordRepairHistory(previous, "previous");
+        }
+      }
+    } catch (error) {
+      defaultRuntime.error(
+        `Warning: Could not record earlier update history: ${formatErrorMessage(error)}`,
+      );
+    }
+  }
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);

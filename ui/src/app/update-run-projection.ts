@@ -6,6 +6,8 @@ import {
 } from "../../../src/infra/update-run-history-projection.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
+  isStandaloneUpdateRepair,
+  UPDATE_REPAIR_HISTORY_STEP_PREFIX,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
@@ -29,6 +31,7 @@ export function projectUpdateRun(
   serving?: UpdateRunServingIdentity,
 ) {
   const terminal = run.status !== "running";
+  const repair = isStandaloneUpdateRepair(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
   const report = historical
@@ -37,7 +40,11 @@ export function projectUpdateRun(
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
-    if (phase === "repairing" && !recorded && phase !== run.phase) {
+    if (
+      !recorded &&
+      phase !== run.phase &&
+      (phase === "repairing" || (repair && phase !== "requested" && phase !== "finished"))
+    ) {
       return [];
     }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";
@@ -63,13 +70,16 @@ export function projectUpdateRun(
     (step) =>
       !step.step.startsWith("notice:") &&
       !step.step.startsWith("diagnostic:") &&
+      !step.step.startsWith(UPDATE_REPAIR_HISTORY_STEP_PREFIX) &&
       !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
   );
   // An active operation owns the panel even before it has emitted diagnostic text.
   const detailStep =
     steps.findLast((step) => step.status === "in_progress") ??
     run.steps.findLast((step) => step.status === "in_progress" && step.detail) ??
-    run.steps.findLast((step) => step.detail);
+    run.steps.findLast(
+      (step) => step.detail && !step.step.startsWith(UPDATE_REPAIR_HISTORY_STEP_PREFIX),
+    );
   const groupedDetails = new Map<string, string[]>();
   for (const step of run.steps) {
     if (!step.detail) {
@@ -89,8 +99,9 @@ export function projectUpdateRun(
   const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
   const identity = resolveUpdateRunIdentity(facts, run.after);
-  const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
-    value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
+  const unobserved = repair ? undefined : terminal ? "warn" : "pending";
+  const booleanState = (value: boolean | undefined) =>
+    value === undefined ? unobserved : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },
     {
@@ -138,6 +149,8 @@ export function projectUpdateRun(
     })),
     detailStep: detailStep?.step,
     details,
-    oracles: managedByOcm ? [] : oracles,
+    oracles: managedByOcm
+      ? []
+      : oracles.flatMap(({ name, state }) => (state === undefined ? [] : [{ name, state }])),
   };
 }

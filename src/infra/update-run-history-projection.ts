@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { isStandaloneUpdateRepair, type UpdateRunRecord } from "./update-run-record.js";
 
 export type UpdateRunServingIdentity = {
   version?: string | null;
@@ -9,7 +9,7 @@ export type UpdateRunServingIdentity = {
 
 /** Project saved failures against the serving process, without rewriting history. */
 export function projectUpdateRunHistory(
-  run: Pick<UpdateRunRecord, "status" | "reason" | "verification">,
+  run: Pick<UpdateRunRecord, "status" | "reason" | "verification" | "phase" | "steps">,
   serving?: UpdateRunServingIdentity,
 ): string | null {
   if (run.status !== "failed" || !serving || run.verification.serviceRunning !== true) {
@@ -32,5 +32,6 @@ export function projectUpdateRunHistory(
   } else {
     return null;
   }
-  return `Last update run failed (${label(run.reason?.trim() || "unknown reason")}) — Gateway is serving ${current}; recorded serving ${recorded}.`;
+  const operation = isStandaloneUpdateRepair(run) ? "update repair" : "update run";
+  return `Last ${operation} failed (${label(run.reason?.trim() || "unknown reason")}) — Gateway is serving ${current}; recorded serving ${recorded}.`;
 }

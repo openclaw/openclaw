@@ -20,6 +20,8 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { readUpdateRunStatus } from "../../infra/update-run-status.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -322,7 +324,7 @@ it.each([
 // #188303: a refused recovery after migrated state leaves the managed service stopped
 // (launchd boots it out); without named data risk, repair restarts it on the installed package.
 it("restarts a Gateway left stopped by a refused post-migration recovery", async () => {
-  seed(
+  const original = seed(
     true,
     { recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" } },
     true,
@@ -331,6 +333,34 @@ it("restarts a Gateway left stopped by a refused post-migration recovery", async
   );
   await repair();
   expect(events).toEqual(["finalized", "start", "verified"]);
+  const status = await readUpdateRunStatus();
+  expect(status).toHaveProperty("lastRun.status", "succeeded");
+  if (!("lastRun" in status) || !status.lastRun) {
+    throw new Error("Expected a recorded repair");
+  }
+  const report = renderUpdateRunReport(status.lastRun);
+  expect(report.headline).toBe("✅ Update repair completed for 1.0.0.");
+  expect(report.lines).toContain(`Earlier failed update ${original}: state-migrated-no-rollback.`);
+  expect(status.lastRun.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:repair-history:source:${original}` }),
+  );
+  expect(getUpdateRun(original)?.status).toBe("failed");
+});
+
+it("keeps an earlier failed update visible when repair has no recorded source", async () => {
+  const original = seed(false, {}, false, false, "post-update-failed");
+  await repair();
+  const status = await readUpdateRunStatus();
+  expect(status).toHaveProperty("lastRun.status", "succeeded");
+  if (!("lastRun" in status) || !status.lastRun) {
+    throw new Error("Expected a recorded repair");
+  }
+  expect(status.lastRun.steps).toContainEqual(
+    expect.objectContaining({ step: `finalize:repair-history:previous:${original}` }),
+  );
+  expect(renderUpdateRunReport(status.lastRun).lines).toContain(
+    `Earlier failed update ${original}: post-update-failed.`,
+  );
 });
 
 it("verifies a handoff that recorded manager liveness without settled readiness", async () => {
