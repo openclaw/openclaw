@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
@@ -7,10 +9,16 @@ import {
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { normalizeGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.codec.js";
+import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import {
   expectCurrent,
+  pairedOperator,
+  persistDevices,
   recoveryFixture,
   restoreFixture,
 } from "./operator-run-recovery.test-support.js";
@@ -90,3 +98,70 @@ describe("recovered access policy", () => {
       }),
   );
 });
+
+it.each([false, true])(
+  "uses current identity scopes at a Tailscale start (paired=%s)",
+  async (paired) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const email = "identity-scopes@example.test";
+      const profile = ensureProfileForEmail(email);
+      const auth = {
+        mode: "token" as const,
+        token: "fixture-gateway-token",
+        allowTailscale: true,
+        identityScopes: { [email]: ["operator.write" as const] },
+      };
+      const config: OpenClawConfig = { gateway: { auth } };
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
+        config,
+        scopes: ["operator.write"],
+        device: paired ? pairedOperator() : undefined,
+      });
+      const snapshot = expectDefined(
+        normalizeGatewayOperatorRecoverySnapshot({
+          ...fixture.snapshot,
+          authPolicy: {
+            ...captureGatewayAuthPolicy(config, {
+              role: "operator",
+              authMethod: "tailscale",
+              verifiedIdentity: email,
+            }),
+            generation: "",
+          },
+        }),
+        "saved identity-authenticated requester",
+      );
+      if (paired) {
+        const device = pairedOperator();
+        expectDefined(device.tokens?.operator, "paired operator token").scopes = ["operator.read"];
+        persistDevices(state.stateDir, [device], "both");
+      }
+      const admitted = await restoreGatewayOperatorSource({
+        snapshot,
+        context: fixture.context,
+        assertCurrent() {},
+      });
+      try {
+        expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
+        fixture.setConfig({
+          gateway: { auth: { ...auth, identityScopes: { [email]: ["operator.read"] } } },
+        });
+        const next = await restoreGatewayOperatorSource({
+          snapshot,
+          context: fixture.context,
+          assertCurrent() {},
+        });
+        try {
+          expect(operatorScopeSatisfied("operator.write", next.authority.scopes)).toBe(false);
+          expect(operatorScopeSatisfied("operator.read", next.authority.scopes)).toBe(true);
+        } finally {
+          next.release();
+        }
+        expectCurrent(admitted.authority);
+        expect(operatorScopeSatisfied("operator.write", admitted.authority.scopes)).toBe(true);
+      } finally {
+        admitted.release();
+      }
+    });
+  },
+);

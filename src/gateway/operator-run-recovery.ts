@@ -33,6 +33,7 @@ import {
   GatewayOperatorAccessDeniedError,
   resolvePreparedGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
+import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
 import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   captureChannelOperatorRunAuthority,
@@ -146,11 +147,23 @@ async function restoreGatewayOperatorSnapshot(params: {
     let scopes = ingress
       ? intersectOperatorScopes(snapshot.scopes, ingress.scopes)
       : snapshot.scopes;
+    const identityScopes =
+      snapshot.authPolicy?.verifiedIdentity && !principal
+        ? resolveIdentityOperatorScopes(
+            snapshot.authPolicy.verifiedIdentity,
+            config.gateway?.auth?.identityScopes,
+          )
+        : [];
     if (snapshot.device) {
       if (!isPairedDeviceTokenIdentityCurrent(paired ?? null, "operator", snapshot.device, [])) {
         throw new GatewayOperatorRecoveryAuthorizationError();
       }
-      scopes = intersectOperatorScopes(scopes, paired?.tokens?.operator?.scopes ?? []);
+      scopes = intersectOperatorScopes(scopes, [
+        ...(paired?.tokens?.operator?.scopes ?? []),
+        ...identityScopes,
+      ]);
+    } else if (snapshot.authPolicy?.authMethod === "tailscale") {
+      scopes = intersectOperatorScopes(scopes, identityScopes);
     }
     if (snapshot.authPolicy && !principal) {
       const source = snapshot.authPolicy;

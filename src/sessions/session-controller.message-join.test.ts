@@ -257,8 +257,8 @@ it.each<[string, Outcome, JoinCase?]>([
     { sharedOwner: { direction: "incoming" }, after: "owner-revoke" },
   ],
   [
-    "shared WebUI authority revoked before submission",
-    "failed",
+    "admitted shared WebUI continuation survives source revocation",
+    "accepted",
     { sharedOwner: { direction: "outgoing" }, after: "shared-revoke" },
   ],
 ])(
@@ -759,13 +759,6 @@ it.each<[string, Outcome, JoinCase?]>([
               }),
             ),
           });
-          if (c.after === "shared-revoke") {
-            await expect(admission).rejects.toThrow("Shared browser authority revoked");
-            expect(delivered).not.toHaveBeenCalled();
-            expect(replacement).not.toHaveBeenCalled();
-            assertFrozen();
-            return;
-          }
           const attempt = await admission;
           expect((await attempt.outcome).status).toBe(outcome);
           expect(delivered).toHaveBeenCalledTimes(outcome === "accepted" ? 1 : 0);
