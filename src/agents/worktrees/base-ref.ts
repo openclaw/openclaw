@@ -415,9 +415,13 @@ async function prepareDefaultBase(
   return { commit, gitOperand: commit, recordRef: "HEAD", noOrigin: true };
 }
 
-async function fetchRemoteDefault(
+export async function fetchRemoteDefault(
   repoRoot: string,
   options: NonNullable<Parameters<typeof runGit>[2]>,
+  transport?: {
+    url: string;
+    run: (args: string[], timeoutMs: number) => ReturnType<typeof runGit>;
+  },
 ): Promise<ResolvedWorktreeBase & { branch: string }> {
   const cached = await runGit(
     repoRoot,
@@ -427,10 +431,10 @@ async function fetchRemoteDefault(
   if (cached.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
-  const advertised = await runGit(repoRoot, ["ls-remote", "--symref", "origin", "HEAD"], {
-    ...options,
-    timeoutMs: 30_000,
-  });
+  const runTransport = (args: string[], timeoutMs: number) =>
+    transport ? transport.run(args, timeoutMs) : runGit(repoRoot, args, { ...options, timeoutMs });
+  const remote = transport ? ["--", transport.url] : ["origin"];
+  const advertised = await runTransport(["ls-remote", "--symref", ...remote, "HEAD"], 30_000);
   if (advertised.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
@@ -459,17 +463,16 @@ async function fetchRemoteDefault(
     );
   }
   let remoteRef = `refs/remotes/origin/${branch}`;
-  const fetched = await runGit(
-    repoRoot,
+  const fetched = await runTransport(
     [
       "fetch",
       "--no-auto-maintenance",
       "--no-recurse-submodules",
       "--no-tags",
-      "origin",
+      ...remote,
       `+refs/heads/${branch}:${remoteRef}`,
     ],
-    { ...options, timeoutMs: 60_000 },
+    60_000,
   );
   if (fetched.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
@@ -484,11 +487,11 @@ async function fetchRemoteDefault(
     branch = cachedBranch ?? branch;
     remoteRef = `refs/remotes/origin/${branch}`;
   }
-  const verified = await runGit(
-    repoRoot,
-    ["rev-parse", "--verify", `${remoteRef}^{commit}`],
-    options,
-  );
+  const verifyArgs = ["rev-parse", "--verify", `${remoteRef}^{commit}`];
+  const verified =
+    transport && fetchSucceeded
+      ? await runTransport(verifyArgs, 60_000)
+      : await runGit(repoRoot, verifyArgs, options);
   if (verified.cleanup === "uncertain") {
     throw new CommandProcessCleanupError();
   }
@@ -502,9 +505,14 @@ async function fetchRemoteDefault(
     );
   }
   const commit = requireGitCommandOutput("git rev-parse remote default", verified).trim();
+  if (transport && fetchSucceeded) {
+    // Transport borrows the source object store, but only this owner publishes its refs.
+    await requireGit(repoRoot, ["update-ref", "--no-deref", remoteRef, commit], options);
+  }
   if (fetchSucceeded && advertisedBranch && cachedBranch !== branch) {
     await requireGit(repoRoot, ["symbolic-ref", "refs/remotes/origin/HEAD", remoteRef], options);
   }
+  options.beforeRun?.();
   return {
     branch,
     commit,

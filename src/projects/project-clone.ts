@@ -19,6 +19,7 @@ import {
   cloneProjectCheckout,
   configureProjectCheckoutMaintenance,
   ensureProjectCheckoutCommit,
+  prepareProjectCheckoutDefaultBase,
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
@@ -201,19 +202,46 @@ export async function materializeProjectClone(
   );
 }
 
+type ProjectCloneOperationOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  token?: string;
+  assertCurrent?: () => void;
+  startRun?: GitOperationStarter;
+};
+
 /** Refreshes an existing project clone while holding its checkout lifecycle lease. */
 export async function refreshProjectClone(
   project: ProjectRegistryRecord,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
-    signal?: AbortSignal;
-    timeoutMs?: number;
-    token?: string;
-    assertCurrent?: () => void;
-    startRun?: GitOperationStarter;
-  } = {},
+  options: ProjectCloneOperationOptions = {},
 ): Promise<void> {
   if (project.source !== "cloned") {
     return;
+  }
+  await withCurrentProjectClone(project, options, refreshProjectCheckout);
+}
+
+/** Capture a managed project's default commit before allocating its session worktree. */
+export async function prepareProjectCloneDefaultBase(
+  project: ProjectRegistryRecord,
+  options: ProjectCloneOperationOptions = {},
+): Promise<{ baseRef: string; baseCommit: string }> {
+  return await withCurrentProjectClone(project, options, prepareProjectCheckoutDefaultBase);
+}
+
+async function withCurrentProjectClone<T>(
+  project: ProjectRegistryRecord,
+  options: ProjectCloneOperationOptions,
+  run: (
+    input: { target: string; url: string },
+    options: ProjectCloneOperationOptions,
+  ) => Promise<T>,
+): Promise<T> {
+  if (project.source !== "cloned") {
+    throw new ProjectCloneError(
+      "clone_failed",
+      "This project is no longer a Gateway-managed clone. Reselect the repository and retry.",
+    );
   }
   const selectedProject: ProjectRegistryIdentity = {
     id: project.id,
@@ -224,11 +252,11 @@ export async function refreshProjectClone(
   const { signal, timeoutMs, token, assertCurrent, startRun } = options;
   const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
   const context = captureOpenClawStateWorkerContext({ path: options.path, env });
-  await withProjectCheckoutLifecycle(
+  return await withProjectCheckoutLifecycle(
     selectedProject.repoRoot,
     { path: context.admission.databasePath, env, signal },
     async (lease) => {
-      const assertRefreshCurrent = () => {
+      const assertCloneCurrent = () => {
         lease.assertOwned();
         assertCurrent?.();
       };
@@ -242,7 +270,7 @@ export async function refreshProjectClone(
           input: { project: selectedProject, lease: identity },
         }),
       );
-      assertRefreshCurrent();
+      assertCloneCurrent();
       if (!current) {
         throw new ProjectCloneError(
           "clone_failed",
@@ -260,21 +288,22 @@ export async function refreshProjectClone(
       await configureProjectCheckoutMaintenance(current.repoRoot, {
         env,
         signal: lease.signal,
-        assertCurrent: assertRefreshCurrent,
+        assertCurrent: assertCloneCurrent,
       });
       // The registry owns source identity; origin can be changed inside the shared checkout.
-      await refreshProjectCheckout(
+      const result = await run(
         { target: current.repoRoot, url: originUrl },
         {
           env,
           signal: lease.signal,
           timeoutMs,
           token,
-          assertCurrent: assertRefreshCurrent,
+          assertCurrent: assertCloneCurrent,
           startRun,
         },
       );
-      assertRefreshCurrent();
+      assertCloneCurrent();
+      return result;
     },
   );
 }

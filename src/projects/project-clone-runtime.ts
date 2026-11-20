@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ProjectCloneFailureCause } from "../../packages/gateway-protocol/src/index.js";
+import { fetchRemoteDefault } from "../agents/worktrees/base-ref.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import {
   executeGitCommand,
@@ -259,6 +260,102 @@ export async function refreshProjectCheckout(
   input: { target: string; url: string },
   options: ProjectCloneOptions = {},
 ): Promise<void> {
+  await withProjectCheckoutTransport(
+    input,
+    options,
+    async ({ target: staging, options: stagingOptions, filter, currentRefs, protectedRefs }) => {
+      // The isolated repository owns transport, but it borrows the managed object store.
+      // It must not run maintenance using its incomplete temporary ref inventory.
+      const result = await runProjectCheckoutGit(
+        { target: staging, url: input.url },
+        {
+          ...stagingOptions,
+          timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
+        },
+        [
+          "fetch",
+          "--no-auto-maintenance",
+          "--no-recurse-submodules",
+          "--prune",
+          ...(filter ? [`--filter=${filter}`] : []),
+          "--",
+          input.url,
+          "+refs/heads/*:refs/remotes/origin/*",
+        ],
+      );
+      if (result.code !== 0 || result.termination !== "exit") {
+        throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
+      }
+      const fetchedRefs = await readProjectRemoteRefs({ target: staging }, stagingOptions);
+      const updates = [
+        ...Array.from(fetchedRefs, ([ref, commit]) => `update ${ref} ${commit}`),
+        ...Array.from(currentRefs.keys())
+          .filter((ref) => !fetchedRefs.has(ref) && !protectedRefs?.has(ref))
+          .map((ref) => `delete ${ref}`),
+      ];
+      if (updates.length > 0) {
+        const updated = await runProjectCheckoutGit(
+          input,
+          options,
+          ["update-ref", "--no-deref", "--stdin"],
+          {
+            input: `${updates.join("\n")}\n`,
+          },
+        );
+        if (updated.code !== 0 || updated.termination !== "exit") {
+          throw new ProjectCloneError(
+            "clone_failed",
+            "The managed repository changed while its branches were refreshed. Retry the session.",
+          );
+        }
+      }
+    },
+  );
+}
+
+/** Select the default through the same authenticated, checkout-isolated transport as refresh. */
+export async function prepareProjectCheckoutDefaultBase(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions = {},
+): Promise<{ baseRef: string; baseCommit: string }> {
+  return await withProjectCheckoutTransport(input, options, async (transport) => {
+    const base = await fetchRemoteDefault(
+      input.target,
+      {
+        signal: options.signal,
+        beforeRun: options.assertCurrent,
+        env: cloneCommandEnv(undefined, undefined, options.env ?? process.env),
+      },
+      {
+        url: input.url,
+        run: (args, timeoutMs) =>
+          runProjectCheckoutGit(
+            { target: transport.target, url: input.url },
+            {
+              ...transport.options,
+              timeoutMs: Math.min(timeoutMs, options.timeoutMs ?? timeoutMs),
+            },
+            args[0] === "fetch" && transport.filter
+              ? [args[0], `--filter=${transport.filter}`, ...args.slice(1)]
+              : args,
+          ),
+      },
+    );
+    return { baseRef: base.recordRef, baseCommit: base.commit };
+  });
+}
+
+async function withProjectCheckoutTransport<T>(
+  input: { target: string; url: string },
+  options: ProjectCloneOptions,
+  run: (transport: {
+    target: string;
+    options: ProjectCloneOptions;
+    filter: string;
+    currentRefs: Map<string, string>;
+    protectedRefs?: ReadonlySet<string>;
+  }) => Promise<T>,
+): Promise<T> {
   const [objectPath, objectFormatResult, initialRefs, filterResult] = await Promise.all([
     runProjectCheckoutGit(input, options, [
       "rev-parse",
@@ -348,51 +445,13 @@ export async function refreshProjectCheckout(
         );
       }
     }
-    // The isolated repository owns transport, but it borrows the managed object store.
-    // It must not run maintenance using its incomplete temporary ref inventory.
-    const result = await runProjectCheckoutGit(
-      { target: staging, url: input.url },
-      {
-        ...stagingOptions,
-        timeoutMs: options.timeoutMs ?? PROJECT_FETCH_TIMEOUT_MS,
-      },
-      [
-        "fetch",
-        "--no-auto-maintenance",
-        "--no-recurse-submodules",
-        "--prune",
-        ...(filter ? [`--filter=${filter}`] : []),
-        "--",
-        input.url,
-        "+refs/heads/*:refs/remotes/origin/*",
-      ],
-    );
-    if (result.code !== 0 || result.termination !== "exit") {
-      throw classifyProjectGitFailure(result, "fetch", Boolean(options.token));
-    }
-    const fetchedRefs = await readProjectRemoteRefs({ target: staging }, stagingOptions);
-    const updates = [
-      ...Array.from(fetchedRefs, ([ref, commit]) => `update ${ref} ${commit}`),
-      ...Array.from(currentRefs.keys())
-        .filter((ref) => !fetchedRefs.has(ref) && !protectedRefs?.has(ref))
-        .map((ref) => `delete ${ref}`),
-    ];
-    if (updates.length > 0) {
-      const updated = await runProjectCheckoutGit(
-        input,
-        options,
-        ["update-ref", "--no-deref", "--stdin"],
-        {
-          input: `${updates.join("\n")}\n`,
-        },
-      );
-      if (updated.code !== 0 || updated.termination !== "exit") {
-        throw new ProjectCloneError(
-          "clone_failed",
-          "The managed repository changed while its branches were refreshed. Retry the session.",
-        );
-      }
-    }
+    return await run({
+      target: staging,
+      options: stagingOptions,
+      filter,
+      currentRefs,
+      protectedRefs,
+    });
   } catch (error) {
     retainStaging = hasCommandProcessCleanupError(error);
     throw error;

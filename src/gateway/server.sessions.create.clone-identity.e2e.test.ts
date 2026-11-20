@@ -42,7 +42,7 @@ afterEach(async () => {
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each(
-  (["clone", "refresh"] as const).flatMap((operation) =>
+  (["clone", "refresh", "default base"] as const).flatMap((operation) =>
     (["allowed", "retired", "rotated"] as const).map((identity) => ({ operation, identity })),
   ),
 )(
@@ -68,17 +68,31 @@ test.each(
     setRuntimeConfigSnapshot(selected);
     const runCommand = processExec.runCommandWithTimeout;
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) => {
-      if (argv[0] !== "git" || !argv.some((arg) => [REPOSITORY_URL, git.endpoint].includes(arg))) {
+      if (argv[0] !== "git") {
         return runCommand(argv, options);
       }
       // Translate HTTPS into this owned authenticated endpoint; the production
       // Git command, selected credential, retry admission and object transfer remain real.
       const commandOptions = typeof options === "number" ? { timeoutMs: options } : options;
       return runCommand(
-        argv.map((arg) => (arg === REPOSITORY_URL ? git.endpoint : arg)),
+        argv.map((arg) =>
+          arg === REPOSITORY_URL ||
+          (arg === "origin" && (argv.includes("fetch") || argv.includes("ls-remote")))
+            ? git.endpoint
+            : arg,
+        ),
         {
           ...commandOptions,
-          env: { ...commandOptions.env, GIT_CONFIG_KEY_0: `http.${git.endpoint}/.extraHeader` },
+          env: Object.fromEntries(
+            Object.entries(commandOptions.env ?? {}).map(([key, value]) => [
+              key,
+              // Test-only routing retains the selected header and its config index.
+              key.startsWith("GIT_CONFIG_KEY_") &&
+              value === `http.${new URL(REPOSITORY_URL).origin}/.extraHeader`
+                ? `http.${git.endpoint}/.extraHeader`
+                : value,
+            ]),
+          ),
         },
       );
     });
@@ -123,7 +137,7 @@ test.each(
       expect(entry, JSON.stringify(chatErrors())).toBeDefined();
       return { runId, entry };
     };
-    if (operation === "refresh") {
+    if (operation !== "clone") {
       const warm = await create();
       expect(warm.entry?.projectId, JSON.stringify(chatErrors())).toBeDefined();
       await requireGit(path.join(git.root, "remote.git"), ["branch", "fresh-base", git.later]);

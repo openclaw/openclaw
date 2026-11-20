@@ -22,7 +22,11 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
+import {
+  materializeProjectClone,
+  prepareProjectCloneDefaultBase,
+  refreshProjectClone,
+} from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import {
@@ -491,7 +495,13 @@ export async function prepareSessionWorkspaceForRun(params: {
       // A pending repository URL also owns a managed checkout, including retries
       // saved before project sessions stopped binding directly to the shared clone.
       pending ??= { titleSource: "" };
-      if (pending.baseRef && !pending.baseCommit) {
+      let next: typeof pending | undefined;
+      if (project?.source === "cloned" && !pending.baseRef && !pending.baseCommit) {
+        status("preparing_worktree_base");
+        const base = await prepareProjectCloneDefaultBase(project, cloneOptions);
+        assertProjectCurrent();
+        next = { ...pending, ...base };
+      } else if (pending.baseRef && !pending.baseCommit) {
         let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         if (
           !resolved.ok &&
@@ -508,7 +518,9 @@ export async function prepareSessionWorkspaceForRun(params: {
         }
         // Accept once, before setup can fail: retries keep the commit while the
         // original ref remains publication metadata, never a fallback selection.
-        const next = { ...pending, baseCommit: resolved.value };
+        next = { ...pending, baseCommit: resolved.value };
+      }
+      if (next) {
         const updated = await patchSessionEntryCore(
           target,
           (current) => {

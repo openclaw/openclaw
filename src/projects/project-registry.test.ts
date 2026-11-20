@@ -24,11 +24,13 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import {
   cloneProjectCheckout,
   ensureProjectCheckoutCommit,
+  prepareProjectCheckoutDefaultBase,
   ProjectCloneError,
   refreshProjectCheckout,
 } from "./project-clone-runtime.js";
 import {
   materializeProjectClone,
+  prepareProjectCloneDefaultBase,
   refreshProjectClone,
   removeClonedProjectCheckout,
 } from "./project-clone.js";
@@ -448,6 +450,62 @@ describe("project registry persistence", () => {
     );
   });
 
+  it("preserves partial-clone filtering and promisor packs when the default advances", async () => {
+    const source = await initializeRepository(root, "source");
+    await git(source, "config", "uploadpack.allowFilter", "true");
+    const target = path.join(root, "partial");
+    const url = pathToFileURL(source).href;
+    await git(root, "clone", "--filter=blob:none", "--no-checkout", url, target);
+    const packs = path.join(target, ".git", "objects", "pack");
+    const before = new Set(await fs.readdir(packs));
+    const commit = await commitFile(source, "later.txt", "keep the new default blob lazy\n");
+    const blob = await gitText(source, "rev-parse", "HEAD:later.txt");
+    expect(await prepareProjectCheckoutDefaultBase({ url, target }, {})).toEqual({
+      baseRef: "origin/main",
+      baseCommit: commit,
+    });
+    const added = (await fs.readdir(packs)).filter(
+      (name) => name.endsWith(".idx") && !before.has(name),
+    );
+    expect(added.length).toBeGreaterThan(0);
+    for (const pack of added) {
+      await fs.stat(path.join(packs, pack.replace(/\.idx$/, ".promisor")));
+    }
+    await expect(
+      execFileAsync("git", ["-C", target, "cat-file", "-e", blob], {
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+      }),
+    ).rejects.toMatchObject({ code: 1 });
+    expect(await gitText(target, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
+  });
+
+  it.each(["main", "renamed"])(
+    "publishes the advanced %s default to the source cache for offline reuse",
+    async (branch) => {
+      const { source, target } = await cloneFixture();
+      if (branch !== "main") {
+        await git(source, "branch", "-m", branch);
+      }
+      const commit = await commitFile(source, "later.txt", "new default\n");
+      // Local transport rewrites cannot redirect the registry's canonical URL.
+      await git(target, "config", `url.${path.join(root, "unavailable")}.insteadOf`, source);
+      const expected = { baseRef: `origin/${branch}`, baseCommit: commit };
+      expect(await prepareProjectCheckoutDefaultBase({ url: source, target }, {})).toEqual(
+        expected,
+      );
+      expect(await gitText(target, "rev-parse", `origin/${branch}`)).toBe(commit);
+      expect(await gitText(target, "symbolic-ref", "refs/remotes/origin/HEAD")).toBe(
+        `refs/remotes/origin/${branch}`,
+      );
+      expect(
+        await prepareProjectCheckoutDefaultBase(
+          { url: source, target },
+          { env: { ...process.env, GIT_ALLOW_PROTOCOL: "" } },
+        ),
+      ).toEqual(expected);
+    },
+  );
+
   it.each([
     ["initial", false],
     ["fetched", false],
@@ -548,25 +606,32 @@ describe("project registry persistence", () => {
     await expectRef(checkout, "refs/remotes/origin/injected-base").rejects.toBeDefined();
   });
 
-  it("revokes stale refresh after removal and operator re-registration", async () => {
-    const { source, checkout, project } = await registeredClone(true);
-    const revokedCommit = await commitFile(source, "revoked.txt", "must not fetch\n");
-    await git(source, "branch", "revoked-base");
-    await expect(removeProjectRegistry(project, options)).resolves.toBe(true);
-    await expect(
-      registerProjectRegistry({ path: checkout, name: "Operator" }, options),
-    ).resolves.toMatchObject({ source: "registered" });
+  it.each(["refresh", "default base"] as const)(
+    "revokes stale %s after removal and operator re-registration",
+    async (operation) => {
+      const { source, checkout, project } = await registeredClone(true);
+      const revokedCommit = await commitFile(source, "revoked.txt", "must not fetch\n");
+      await git(source, "branch", "revoked-base");
+      await expect(removeProjectRegistry(project, options)).resolves.toBe(true);
+      await expect(
+        registerProjectRegistry({ path: checkout, name: "Operator" }, options),
+      ).resolves.toMatchObject({ source: "registered" });
 
-    await expect(refreshProjectClone(project, options)).rejects.toMatchObject({
-      failure: "clone_failed",
-    });
-    await expect(
-      git(checkout, "cat-file", "-e", `${revokedCommit}^{commit}`),
-    ).rejects.toBeDefined();
-    await expectRef(checkout, "refs/remotes/origin/revoked-base").rejects.toBeDefined();
-  });
+      await expect(
+        operation === "refresh"
+          ? refreshProjectClone(project, options)
+          : prepareProjectCloneDefaultBase(project, options),
+      ).rejects.toMatchObject({
+        failure: "clone_failed",
+      });
+      await expect(
+        git(checkout, "cat-file", "-e", `${revokedCommit}^{commit}`),
+      ).rejects.toBeDefined();
+      await expectRef(checkout, "refs/remotes/origin/revoked-base").rejects.toBeDefined();
+    },
+  );
 
-  it.each(["refresh", "pinned commit"] as const)(
+  it.each(["refresh", "default base", "pinned commit"] as const)(
     "stops %s fetching when its persisted checkout lease is lost",
     async (operation) => {
       const checkout = await initializeRepository(root, "checkout");
@@ -582,7 +647,7 @@ describe("project registry persistence", () => {
       const fixtureUrl = `${await listen(server)}/fixture.git`;
       await git(checkout, "remote", "add", "origin", fixtureUrl);
       const originUrl =
-        operation === "refresh" ? fixtureUrl : "https://github.com/acme/refresh.git";
+        operation !== "pinned commit" ? fixtureUrl : "https://github.com/acme/refresh.git";
       const project = await registerClone(checkout, originUrl, "Refresh");
       if (operation === "pinned commit") {
         await git(
@@ -598,14 +663,16 @@ describe("project registry persistence", () => {
       const refresh = (
         operation === "refresh"
           ? refreshProjectClone(project, fetchOptions)
-          : materializeProjectClone(
-              {
-                cfg: {} as OpenClawConfig,
-                gitUrl: "https://github.com/acme/refresh.git",
-                requiredCommit: "f".repeat(40),
-              },
-              fetchOptions,
-            )
+          : operation === "default base"
+            ? prepareProjectCloneDefaultBase(project, fetchOptions)
+            : materializeProjectClone(
+                {
+                  cfg: {} as OpenClawConfig,
+                  gitUrl: "https://github.com/acme/refresh.git",
+                  requiredCommit: "f".repeat(40),
+                },
+                fetchOptions,
+              )
       ).catch((error: unknown) => error);
       try {
         await requested.promise;

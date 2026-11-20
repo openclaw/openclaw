@@ -11,7 +11,7 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import * as sessionIdentity from "../config/sessions/session-accessor.sqlite-identity.js";
+import * as sessionTurnPublication from "../config/sessions/session-turn-publication.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { RespondFn } from "./server-methods/types.js";
@@ -85,13 +85,14 @@ export function registerGoalChatRestartSettlementCase(fixture: {
       "Keep the committed Goal after publication fails",
       "goal-publication-failure",
     );
-    const publish = sessionIdentity.publishCommittedSessionIdentity;
+    const publish = sessionTurnPublication.publishCommittedSessionTurn;
     let rejected = false;
     const notification = vi
-      .spyOn(sessionIdentity, "publishCommittedSessionIdentity")
+      .spyOn(sessionTurnPublication, "publishCommittedSessionTurn")
       .mockImplementation((...args) => {
         publish(...args);
-        if (!rejected && args[3].has(request.sessionKey)) {
+        // Identity notifications are best effort; fail the required input-source publication.
+        if (!rejected && args[1].scope.sessionKey === request.sessionKey) {
           rejected = true;
           throw new Error("Synthetic input publication failed after commit");
         }
