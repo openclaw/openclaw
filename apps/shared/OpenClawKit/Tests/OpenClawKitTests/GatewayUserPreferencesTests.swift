@@ -3,6 +3,58 @@ import OpenClawKit
 import Testing
 
 struct GatewayUserPreferencesTests {
+    @Test func `mixed shortcuts retain valid pins and compare the raw snapshot`() throws {
+        let data = Data(#"{"status":"ok","entries":{"ui.railShortcuts":["session:root",7,"route:chat"]}}"#.utf8)
+        #expect(try GatewayUserPreferences.decodeRailShortcuts(data) == ["session:root", "route:chat"])
+        let params = try #require(try GatewayUserPreferences.personalPinWriteParams(data, pinned: true, key: "other"))
+        let json = try #require(JSONSerialization.jsonObject(with: Data(params.utf8)) as? [String: Any])
+        let expected = try #require((json["expectedEntries"] as? [String: Any])?["ui.railShortcuts"] as? [Any])
+        #expect(expected.count == 3)
+        #expect(expected[1] as? Int == 7)
+        #expect(GatewayUserPreferences.settingPersonalPin(true, key: "root", in: ["session:root", "route:chat"]) == [
+            "session:root",
+            "route:chat",
+        ])
+        #expect(try GatewayUserPreferences.personalPinWriteParams(data, pinned: true, key: " ") == nil)
+    }
+
+    @Test func `personal pin writes compare the server snapshot and never write without identity`() throws {
+        let absent = Data(#"{"status":"ok","entries":{}}"#.utf8)
+        let params = try #require(try GatewayUserPreferences.personalPinWriteParams(absent, pinned: true, key: "root"))
+        let json = try #require(JSONSerialization.jsonObject(with: Data(params.utf8)) as? [String: Any])
+        #expect((json["entries"] as? [String: [String]])?["ui.railShortcuts"] == ["session:root"])
+        #expect((json["expectedEntries"] as? [String: Any])?["ui.railShortcuts"] is NSNull)
+        let empty = Data(#"{"status":"ok","entries":{"ui.railShortcuts":[]}}"#.utf8)
+        let emptyParams = try #require(try GatewayUserPreferences.personalPinWriteParams(
+            empty,
+            pinned: false,
+            key: "root"))
+        let emptyJSON = try #require(JSONSerialization.jsonObject(with: Data(emptyParams.utf8)) as? [String: Any])
+        #expect((emptyJSON["expectedEntries"] as? [String: [String]])?["ui.railShortcuts"] == [])
+        #expect(try GatewayUserPreferences.personalPinWriteParams(
+            Data(#"{"status":"no_durable_identity"}"#.utf8), pinned: true, key: "root") == nil)
+    }
+
+    @Test func `personal pins distinguish empty from unavailable preferences`() throws {
+        #expect(try GatewayUserPreferences.decodeRailShortcuts(
+            Data(#"{"status":"ok","entries":{"ui.railShortcuts":[]}}"#.utf8)) == [])
+        #expect(try GatewayUserPreferences.decodeRailShortcuts(
+            Data(#"{"status":"ok","entries":{}}"#.utf8)) == [])
+        #expect(try GatewayUserPreferences.decodeRailShortcuts(
+            Data(#"{"status":"no_durable_identity"}"#.utf8)) == nil)
+        #expect(try GatewayUserPreferences.decodeRailShortcuts(
+            Data(#"{"status":"ok","entries":{"ui.railShortcuts":false}}"#.utf8)) == nil)
+    }
+
+    @Test func `pin intent rebases without replacing other personal shortcuts`() {
+        let remote = ["route:chat", "session:other", "session-rail:rail", "plugin:example/view"]
+        let pinned = GatewayUserPreferences.settingPersonalPin(true, key: "root", in: remote)
+        #expect(pinned == remote + ["session:root"])
+        #expect(GatewayUserPreferences.personalSessionPinKeys(pinned) == ["other", "root"])
+        #expect(GatewayUserPreferences.settingPersonalPin(false, key: "root", in: pinned) == remote)
+        #expect(GatewayUserPreferences.settingPersonalPin(true, key: "root", in: pinned) == pinned)
+    }
+
     @Test func `normalizes bare and prefixed hex`() {
         #expect(GatewayUserPreferences.normalizedAccentHex("#A1B2C3") == "#a1b2c3")
         #expect(GatewayUserPreferences.normalizedAccentHex("a1b2c3") == "#a1b2c3")

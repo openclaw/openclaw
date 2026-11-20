@@ -5,6 +5,19 @@ import Testing
 
 struct CommandSessionGroupingTests {
     @MainActor
+    @Test func `personal navigation never inherits shared session pins`() {
+        let appModel = NodeAppModel()
+        let shared = [entry("root", category: "Research", pinned: true, activity: 1)]
+        let projected = appModel.personallyPinnedSessions(shared)
+        #expect(projected.first?.pinned == false)
+        #expect(shared.first?.pinned == true)
+        #expect(projected.first?.category == "Research")
+        let sections = CommandSessionGrouping.sections(from: projected)
+        #expect(!sections.contains { $0.id == .pinned })
+        #expect(sections.contains { $0.id == .category("Research") })
+    }
+
+    @MainActor
     @Test func `group mutations wait for a resolved current connection`() async {
         let model = SessionGroupModel()
         let appModel = NodeAppModel()

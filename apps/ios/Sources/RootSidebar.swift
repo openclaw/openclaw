@@ -616,7 +616,7 @@ struct RootSidebar: View {
 
     private func visibleSessionSections(categories: [String]) -> [ChatSessionSidebarModel.Section] {
         RootSidebarModel.sections(
-            sessions: self.model.sessions,
+            sessions: self.appModel.personallyPinnedSessions(self.model.sessions),
             query: self.searchText,
             currentSessionKey: self.appModel.chatSessionKey,
             mainSessionKey: self.appModel.mainSessionKey,

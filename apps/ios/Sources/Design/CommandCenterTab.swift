@@ -493,7 +493,7 @@ struct CommandCenterTab: View {
     }
 
     private var effectiveDefaultChatSessionEntry: OpenClawChatSessionEntry? {
-        let sessions = self.dashboardModel.sessions
+        let sessions = self.appModel.personallyPinnedSessions(self.dashboardModel.sessions)
         let mainKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
             currentSessionKey: "main",
@@ -504,7 +504,7 @@ struct CommandCenterTab: View {
     }
 
     private var effectiveRecentChatSessions: [OpenClawChatSessionEntry] {
-        self.dashboardModel.sessions.filter {
+        self.appModel.personallyPinnedSessions(self.dashboardModel.sessions).filter {
             SessionStatusScope.active.includes($0, at: self.dashboardModel.now) &&
                 Self.isRecentChatSession($0.key, defaultSessionKey: self.appModel.mainSessionKey)
         }
@@ -960,7 +960,7 @@ struct CommandSessionsScreen: View {
     private var visibleSessions: [OpenClawChatSessionEntry] {
         let mainKey = self.resolvedMainSessionKey
         let currentKey = self.resolvedCurrentSessionKey
-        return self.sessions
+        return self.appModel.personallyPinnedSessions(self.sessions)
             .filter { CommandCenterTab.isListedChatSession(
                 $0.key,
                 mainSessionKey: mainKey,
