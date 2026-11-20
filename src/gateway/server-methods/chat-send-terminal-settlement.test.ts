@@ -79,7 +79,7 @@ it.for(
     (["native", "dispatched"] as const).map((publication) => ({ action, publication })),
   ),
 )(
-  "accepts $action from a synchronous $publication final listener but refuses the live turn",
+  "accepts $action from a synchronous $publication final listener",
   async ({ action, publication }, { signal }) => {
     const fixture = await createFixture({ active: false });
     const runId = `terminal-${publication}-${action}`;
@@ -137,27 +137,36 @@ it.for(
     const invoke = (respond: RespondFn) => clientRequest.runInAsyncScope(() => mutate(respond));
     const finalResponse = vi.fn<RespondFn>();
     let mutation: Promise<void> | undefined;
+    let finalPublished = false;
+    const settle = settlementOwner.waitForTerminalSessionRunSettlement;
+    vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
+      (params) => {
+        const result = settle(params);
+        if (finalPublished) {
+          settlementEntered.resolve();
+        }
+        return result;
+      },
+    );
     vi.mocked(fixture.context.broadcast).mockImplementation((event, payload) => {
-      if (event !== "chat" || (payload as { state?: string }).state !== "final") {
+      const finalPayload = payload as { state?: string; runId?: string };
+      if (event !== "chat" || finalPayload.state !== "final" || finalPayload.runId !== runId) {
         return;
       }
-      const settle = settlementOwner.waitForTerminalSessionRunSettlement;
-      vi.spyOn(settlementOwner, "waitForTerminalSessionRunSettlement").mockImplementation(
-        (params) => {
-          const result = settle(params);
-          settlementEntered.resolve();
-          return result;
-        },
-      );
-      mutation = invoke(finalResponse);
+      finalPublished = true;
       finalObserved.resolve();
+      mutation ??= invoke(finalResponse);
     });
     try {
       await fixture.send();
       await withinTest(modelEntered.promise, signal);
-      const liveResponse = vi.fn<RespondFn>();
-      await invoke(liveResponse);
-      expectActiveRunRefusal(liveResponse, action);
+      // Compact intentionally preempts an abortable live turn; its preemption
+      // contract is covered by the compaction tests, not this terminal listener.
+      if (action !== "compact") {
+        const liveResponse = vi.fn<RespondFn>();
+        await invoke(liveResponse);
+        expectActiveRunRefusal(liveResponse, action);
+      }
       modelRelease.resolve();
       await withinTest(finalObserved.promise, signal);
       await withinTest(settlementEntered.promise, signal);
@@ -167,17 +176,23 @@ it.for(
     } finally {
       modelRelease.resolve();
       releaseRetainedWork();
-      await fixture.cleanup();
-      await mutation;
-      if (subscriptions) {
-        heartbeatNotifications.onEvent = () => {};
-        subscriptions.transcriptUnsub();
-        subscriptions.lifecycleUnsub();
-        await subscriptions.agentUnsub();
+      try {
+        await fixture.cleanup();
+        await mutation;
+      } finally {
+        try {
+          if (subscriptions) {
+            heartbeatNotifications.onEvent = () => {};
+            subscriptions.transcriptUnsub();
+            subscriptions.lifecycleUnsub();
+            await subscriptions.agentUnsub();
+          }
+          await subscriptionParams.scheduler.stop();
+        } finally {
+          clientRequest.emitDestroy();
+          vi.restoreAllMocks();
+        }
       }
-      await subscriptionParams.scheduler.stop();
-      clientRequest.emitDestroy();
-      vi.restoreAllMocks();
     }
   },
 );
