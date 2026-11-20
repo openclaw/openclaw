@@ -28,6 +28,7 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import * as processExec from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -35,6 +36,7 @@ import {
   getAdmittedRunDelegatedAuthority,
 } from "../admitted-run-context.js";
 import * as agentTools from "../agent-tools.async.js";
+import { findSkillUsageMatch } from "../agent-tools.before-tool-call.diagnostics.js";
 import {
   rewrapToolWithBeforeToolCallHook,
   runBeforeToolCallHook,
@@ -395,7 +397,19 @@ describe("agent harness host capability", () => {
 
   it("keeps policy snapshots independent from later attempt mutation", async () => {
     const config = { tools: { loopDetection: { enabled: true } } };
-    const skillsSnapshot = { prompt: "safe", version: 1, skills: [{ name: "safe" }] };
+    const skill = createCanonicalFixtureSkill({
+      name: "safe",
+      description: "Synthetic",
+      filePath: "/synthetic/safe/SKILL.md",
+      baseDir: "/synthetic/safe",
+      source: "workspace",
+    });
+    const skillsSnapshot = {
+      prompt: "safe",
+      version: 1,
+      skills: [{ name: "safe" }],
+      resolvedSkills: [skill],
+    };
     const { attempt } = await admittedAttempt("run-snapshot", { config, skillsSnapshot });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
 
@@ -423,6 +437,11 @@ describe("agent harness host capability", () => {
         }),
       }),
     );
+    const ctx = mockRunBefore.mock.lastCall?.[0].ctx;
+    expect(Object.isFrozen(ctx?.skillsSnapshot)).toBe(true);
+    expect(
+      findSkillUsageMatch({ toolName: "read", toolParams: { path: skill.filePath }, ctx }),
+    ).toMatchObject({ skillName: "safe", activation: "read", skillSource: "workspace" });
   });
 
   it("closes prepared mutable-file approval revalidators with the admitted run", async () => {

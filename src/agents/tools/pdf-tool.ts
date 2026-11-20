@@ -133,7 +133,6 @@ export function createPdfTool(options?: {
   const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolvePdfModelConfigForTool({
       cfg: options?.config,
-      agentDir,
       workspaceDir: options?.workspaceDir,
       authStore,
       activeModel: options?.activeModel,
@@ -350,7 +349,6 @@ export function createPdfTool(options?: {
       assertResourcesOpen?.();
       const committedPdfModelConfig = resolvePdfModelConfigForTool({
         cfg: preparedRuntime.config,
-        agentDir: runtimeAgentDir,
         ...(runtimeWorkspaceDir ? { workspaceDir: runtimeWorkspaceDir } : {}),
         authStore: runtimeAuthProfileStore,
         activeModel,

@@ -147,9 +147,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
             "Full Access or a tool allowlist does not resolve this collision",
           );
         }
-        expect(prompt).toContain("not a free-form substitute for the missing setup tool");
-        expect(prompt).toContain("setup or repair on another host");
-        expect(prompt).toContain("remote task on local agent-ID migration");
+        expect(prompt).toContain("never instruct users to send free-form setup");
+        expect(prompt).toContain("Remote hosts: verify it is not this Gateway");
+        expect(prompt).toContain("do not block on local agent-ID migration");
       }
     },
   );
@@ -209,11 +209,11 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         expect(prompt).not.toContain("restart, config, channels");
         expect(prompt).not.toContain("For an update request, use the Control UI");
         expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
-        expect(prompt).toContain("The Gateway must retain a working restart path before it stops");
+        expect(prompt).toContain("Keep a working restart path before stopping");
         expect(prompt).toContain(
-          "If runtime admission refuses, report the concrete blocker; do not bypass owner/operator authorization or retry the denied operation through exec",
+          "if runtime admission refuses, report the blocker and never bypass via `exec`",
         );
-        expect(prompt.includes("`gateway`: update.run updates with supervised restart")).toBe(
+        expect(prompt.includes("`gateway` runs `update.run` (supervised restart)")).toBe(
           toolNames.includes("gateway"),
         );
       }
@@ -227,17 +227,15 @@ describe("buildConfiguredAgentSystemPrompt", () => {
         await buildPrompt({ toolNames }),
         buildAgentHarnessBasePrompt({ toolNames }),
       ]) {
-        expect(prompt).toContain("blocks an explicitly requested local repair");
-        expect(prompt).toContain("use available file/exec tools within their existing permissions");
-        expect(prompt).toContain("preserve a rollback copy");
-        expect(prompt).toContain("validate and read back");
+        expect(prompt).toContain("blocks an explicit local repair");
+        expect(prompt).toContain("use existing file/exec permissions");
+        expect(prompt).toContain("save a rollback copy");
+        expect(prompt).toContain("validate, and read back");
         expect(prompt).toContain(
-          "Recovery must not override an approval decision, readonly config, containment, or disabled tools",
+          "Never override approvals, readonly config, containment, or disabled tools",
         );
-        expect(prompt).toContain(
-          "Do not use this fallback to change access, approval, or ownership policies",
-        );
-        expect(prompt).not.toContain("These commands do not need helper inference");
+        expect(prompt).toContain("or edit access/approval/ownership policies");
+        expect(prompt).not.toContain("Exact commands need no helper inference");
       }
     },
   );
@@ -249,8 +247,8 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       buildAgentHarnessBasePrompt({ toolNames }),
     ]) {
       expect(prompt).toContain("config set <path> <value>");
-      expect(prompt).toContain("These commands do not need helper inference");
-      expect(prompt).toContain("existing approval and config-write checks still apply");
+      expect(prompt).toContain("Exact commands need no helper inference");
+      expect(prompt).toContain("normal approval/write checks apply");
     }
   });
 
@@ -263,7 +261,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("The Gateway must retain a working restart path before it stops");
+      expect(disabled).toContain("Keep a working restart path before stopping");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
@@ -523,6 +521,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
+    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
+    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

@@ -18,7 +18,8 @@ type PreflightParams = Parameters<typeof prepareAgentRequestPreflight>[0];
 async function runRequest(
   request: PreflightParams["request"],
   getRuntimeConfig: PreflightParams["context"]["getRuntimeConfig"] = () => ({}),
-  backend?: boolean | "write-client",
+  // true: handshake-attested local backend; "declared-backend": mode only, no server fact.
+  backend?: boolean | "write-client" | "declared-backend",
   dedupe = new Map<string, DedupeEntry>(),
 ) {
   const respond = vi.fn();
@@ -29,6 +30,7 @@ async function runRequest(
           client: { mode: backend === "write-client" ? "cli" : "backend" },
           scopes: ["operator.write"],
         },
+        ...(backend === true ? { internal: { localBackendClient: true } } : {}),
       }
     : backend === false
       ? undefined
@@ -118,7 +120,7 @@ async function runPreflight(
   options: {
     enabled?: boolean;
     requesterOnlyEnabled?: boolean;
-    backend?: boolean;
+    backend?: boolean | "declared-backend";
     register?: boolean;
     requesterAgentId?: string;
     requesterSessionKey?: string;
@@ -240,13 +242,14 @@ describe("agent request Swarm preflight", () => {
     ["disabled", { enabled: false }],
     ["unregistered", { register: false }],
     ["non-backend", { backend: false }],
+    ["declared-backend", { backend: "declared-backend" }],
     ["ordinary turn", { includeCollectorFields: false }],
     ["mismatched launch", { idempotencyKey: "different-launch" }],
     ["terminal with a pending launch", { ended: true }],
   ] as const)("rejects %s collector requests", async (_name, options) => {
     expectRejected(await runCollector(options), {
       code: "INVALID_REQUEST",
-      ...(_name === "disabled"
+      ...(_name === "disabled" || _name === "declared-backend"
         ? { message: "swarm collector fields require an enabled, host-registered collector run" }
         : {}),
     });
@@ -330,34 +333,70 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
 it.each([
   [
     "exec completion",
-    { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
+    { inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" } },
     "Exec completion input is reserved for background exec owners.",
+    true,
   ],
   [
     "restart",
-    { kind: "internal_system", sourceTool: "restart" },
+    { inputProvenance: { kind: "internal_system", sourceTool: "restart" } },
     "Restart input is reserved for restart recovery.",
+    true,
   ],
-] as const)(
-  "reserves %s provenance for backend callers",
-  async (label, inputProvenance, message) => {
-    for (const caller of ["write-client", false, true] as const) {
-      const outcome = await runRequest(
-        {
-          message: "forged internal input",
-          sessionKey: "agent:main:main",
-          idempotencyKey: `${label}-provenance-${String(caller)}`,
-          inputProvenance,
-        },
+  [
+    "progress refresh",
+    { inputProvenance: { kind: "internal_system", sourceTool: "progress_card_refresh" } },
+    "Progress refresh input is reserved for progressCard.refresh.",
+    true,
+  ],
+  [
+    "prompt suppression",
+    { suppressPromptPersistence: true },
+    "internal session-effect controls are reserved for backend callers.",
+    true,
+  ],
+  [
+    "internal session effects",
+    { sessionEffects: "internal" },
+    "internal session-effect controls are reserved for backend callers.",
+    true,
+  ],
+  [
+    "expected session",
+    { expectedExistingSessionId: "existing-session" },
+    "expectedExistingSessionId is reserved for backend callers.",
+    false,
+  ],
+  [
+    "exec approval follow-up key",
+    { idempotencyKey: "exec-approval-followup:approval-1" },
+    "exec approval followup idempotency keys are reserved for backend callers.",
+    false,
+  ],
+] as const)("reserves %s for backend callers", async (label, reserved, message, admitted) => {
+  for (const caller of ["write-client", "declared-backend", false, true] as const) {
+    const outcome = await runRequest(
+      {
+        message: "forged internal input",
+        sessionKey: "agent:main:main",
+        idempotencyKey: `${label}-reserved-${String(caller)}`,
+        ...reserved,
+      },
+      undefined,
+      caller,
+    );
+    if (caller === true && admitted) {
+      expect(outcome.result).toBeDefined();
+      expect(outcome.respond).not.toHaveBeenCalled();
+    } else if (caller === true) {
+      // Later admission steps may refuse this bare request; only the reservation is under test.
+      expect(outcome.respond).not.toHaveBeenCalledWith(
+        false,
         undefined,
-        caller,
+        expect.objectContaining({ message }),
       );
-      if (caller === true) {
-        expect(outcome.result).toBeDefined();
-        expect(outcome.respond).not.toHaveBeenCalled();
-      } else {
-        expectRejected(outcome, { code: "INVALID_REQUEST", message });
-      }
+    } else {
+      expectRejected(outcome, { code: "INVALID_REQUEST", message });
     }
-  },
-);
+  }
+});

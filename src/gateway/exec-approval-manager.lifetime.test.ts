@@ -2,11 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type TestContext } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  resolveAdmittedRunActiveAssertion,
-} from "../agents/admitted-run-context.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
 import { prepareCronStreamMutationAdmission } from "../cron/service/config-mutation.js";
@@ -172,31 +167,31 @@ describe("ExecApprovalManager lifetime", () => {
       record: { decision: "allow-once", consumedBy: "cron.add:watcher" },
     });
     expect(manager.prepareConsumeAllowOnce(record.id, "cron.add:another-watcher")).toBeNull();
-    expect(() => prepared.assertCurrent()).toThrow("approval authority is no longer active");
+    expect(() => prepared.assertCurrent()).toThrow(
+      "This approval is no longer available. Start a new turn to request approval again.",
+    );
   });
 
-  it.for(["run closes", "grace expires", "manager retires"] as const)(
+  it.for(["grace expires", "manager retires"] as const)(
     "fences prepared consumption when %s before the effect commits",
     async (change, test) => {
-      let active = true;
       const { manager, databaseOptions } = await createPersistentManager(test);
       const record = manager.create({ command: "tail -F app.log" }, 60_000);
-      record.approvalAuthority = () => active;
       await manager.register(record, 60_000);
       await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
       const prepared = manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher");
       if (!prepared) {
         throw new Error("expected live approval consumption");
       }
-      if (change === "run closes") {
-        active = false;
-      } else if (change === "grace expires") {
+      if (change === "grace expires") {
         vi.setSystemTime(Date.now() + 15_000);
       } else {
         manager.retire();
       }
 
-      expect(() => prepared.assertCurrent()).toThrow("approval authority is no longer active");
+      expect(() => prepared.assertCurrent()).toThrow(
+        "This approval is no longer available. Start a new turn to request approval again.",
+      );
       expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
         outcome: "found",
         record: { decision: "allow-once", consumedAtMs: null },
@@ -204,210 +199,158 @@ describe("ExecApprovalManager lifetime", () => {
     },
   );
 
-  it.for(["current", "revoked"] as const)(
-    "settles a borrowed %s approval with its cron write after storage preparation waits",
-    async (authority) => {
-      await withOpenClawTestState({ label: "borrowed-cron-approval" }, async (state) => {
-        const scheduler = createTestGatewayScheduler("fake-timers");
-        const manager = new ExecApprovalManager({
-          scheduler,
-          persistence: { runtimeEpoch: "borrowed-cron-approval" },
-        });
-        const storePath = state.statePath("cron", "jobs.json");
-        const cron = new CronService({
-          scheduler,
-          nowMs: () => Date.now(),
-          storePath,
-          cronEnabled: false,
-          defaultAgentId: "main",
-          cronConfig: { triggers: { enabled: true } },
-          log: createNoopLogger(),
-          enqueueSystemEvent: vi.fn(),
-          runIsolatedAgentJob: async () => ({ status: "ok" }),
-        });
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
-        const effect = createDeferredCore<{ ok: true } | { ok: false; error: unknown }>();
-        const runId = `borrowed-cron-${authority}`;
-        const admission = prepareAgentRunAdmission({
-          cfg: {},
-          operationalRunInstance: createOperationalRunInstanceRef(runId),
-          facts: {
-            runId,
-            agentId: "main",
-            ingress: { kind: "system", state: "present", boundary: "borrowed-cron-approval" },
-          },
-        });
-        let handoff: ReturnType<typeof manager.registerDecisionHandoff> | undefined;
-        try {
-          const job = await cron.add({
-            name: "Borrowed approval watcher",
-            enabled: false,
-            schedule: { kind: "stream", command: ["synthetic-source"] },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "Synthetic event" },
-          });
-          const policyKey = "borrowed-watcher-policy";
-          const execPolicy = {
-            kind: "resolved" as const,
-            assertCurrent: (approvedPolicyKey?: string) => {
-              if (approvedPolicyKey !== policyKey) {
-                throw new CronStreamExecApprovalRequiredError(policyKey, "full", "always");
-              }
-            },
-          };
-          const proposal = await cron.update(job.id, { enabled: true }, { execPolicy }).then(
-            () => {
-              throw new Error("Expected approval before enabling the watcher");
-            },
-            (error: unknown) => {
-              if (!(error instanceof CronStreamExecApprovalRequiredError) || !error.mutation) {
-                throw error;
-              }
-              return error.mutation;
-            },
-          );
-          const before = await loadCronJobsStore(storePath);
-          const record = manager.create({ command: "synthetic-source" }, 60_000);
-          record.approvalAuthority = expectDefined(
-            resolveAdmittedRunActiveAssertion(await admission.admit("embedded")),
-            "live creator authority",
-          );
-          await manager.register(record, 60_000);
-          sqliteWorkerOwnerProbe.command(stateWorker, async (command, options, scope) => {
-            if (command.type === "cron.mutateJobs") {
-              entered.resolve();
-              await release.promise;
-            }
-            return await scope.execute(command, options);
-          });
-          handoff = manager.registerDecisionHandoff(record.id, async (decision) => {
-            try {
-              expect(decision).toBe("allow-once");
-              const consumption = expectDefined(
-                manager.prepareConsumeAllowOnce(record.id, `cron.update:${job.id}`),
-                "borrowed approval consumption",
-              );
-              await cron.update(
-                job.id,
-                { enabled: true },
-                {
-                  execPolicy,
-                  streamExecApproval: {
-                    createdAtMs: proposal.job.createdAtMs,
-                    policyKey,
-                    binding: cronStreamExecApprovalBinding(proposal),
-                    consumption,
-                  },
-                },
-              );
-              effect.resolve({ ok: true });
-            } catch (error) {
-              effect.resolve({ ok: false, error });
-            }
-          });
-          await manager.resolve(record.id, "allow-once");
-          expect(
-            await Promise.race([
-              entered.promise.then(() => "storage-wait"),
-              effect.promise.then(() => "effect-settled"),
-            ]),
-          ).toBe("storage-wait");
-          manager.retire();
-          if (authority === "revoked") {
-            admission.close();
-          }
-          release.resolve();
-          const outcome = await effect.promise;
-          await handoff.observation;
-          const stored = await getOperatorApprovalDetailed({ id: record.id });
-          if (authority === "current") {
-            expect(outcome).toEqual({ ok: true });
-            expect((await loadCronJobsStore(storePath)).jobs).toMatchObject([
-              { id: job.id, enabled: true },
-            ]);
-            expect(stored).toMatchObject({
-              outcome: "found",
-              record: { decision: "allow-once", consumedBy: `cron.update:${job.id}` },
-            });
-            expect(record.consumedDecision).toBe("allow-once");
-          } else {
-            expect(outcome).toMatchObject({
-              ok: false,
-              error: { message: "approval authority is no longer active" },
-            });
-            expect(await loadCronJobsStore(storePath)).toEqual(before);
-            expect(stored).toMatchObject({
-              outcome: "found",
-              record: { decision: "allow-once", consumedAtMs: null },
-            });
-            expect(record.consumedDecision).toBeUndefined();
-          }
-        } finally {
-          admission.close();
-          release.resolve();
-          handoff?.abandon();
-          await manager.drain();
-          cron.stop();
-          await cron.waitForIdle();
-          await scheduler.stop();
-        }
+  it("settles a borrowed approval with its cron write after storage preparation waits", async () => {
+    await withOpenClawTestState({ label: "borrowed-cron-approval" }, async (state) => {
+      const scheduler = createTestGatewayScheduler("fake-timers");
+      const manager = new ExecApprovalManager({
+        scheduler,
+        persistence: { runtimeEpoch: "borrowed-cron-approval" },
       });
-    },
-  );
-
-  it.for(["authority", "signal", "retirement"] as const)(
-    "refuses insertion when %s closes during audience preparation",
-    async (closed, testContext) => {
+      const storePath = state.statePath("cron", "jobs.json");
+      const cron = new CronService({
+        scheduler,
+        nowMs: () => Date.now(),
+        storePath,
+        cronEnabled: false,
+        defaultAgentId: "main",
+        cronConfig: { triggers: { enabled: true } },
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
+      });
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const controller = new AbortController();
-      let active = true;
-      const onLifecycle = vi.fn();
-      const manager = createTestApprovalManager(testContext, {
-        resolveAudienceSessionKeys: async (source) => {
-          entered.resolve();
-          await release.promise;
-          return [source];
-        },
-        onLifecycle,
-      });
-      const record = manager.create(
-        { command: "printf prepared", sessionKey: "agent:main:child" },
-        60_000,
-        "approval-preparation-authority",
-      );
-      record.approvalAuthority = () => active;
-      record.approvalSignals = [controller.signal];
-      const insert = vi.spyOn(operatorApprovalStore, "insertOperatorApproval");
-      const pending = manager.register(record, 60_000);
-      const rejected = expect(pending).rejects.toThrow(
-        closed === "retirement"
-          ? "Gateway approval observer closed"
-          : "approval authority is no longer active",
-      );
+      const effect = createDeferredCore<{ ok: true } | { ok: false; error: unknown }>();
+      let handoff: ReturnType<typeof manager.registerDecisionHandoff> | undefined;
       try {
-        await entered.promise;
-        if (closed === "authority") {
-          active = false;
-        } else if (closed === "signal") {
-          controller.abort();
-        } else {
-          manager.retire();
-        }
+        const job = await cron.add({
+          name: "Borrowed approval watcher",
+          enabled: false,
+          schedule: { kind: "stream", command: ["synthetic-source"] },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "Synthetic event" },
+        });
+        const policyKey = "borrowed-watcher-policy";
+        const execPolicy = {
+          kind: "resolved" as const,
+          assertCurrent: (approvedPolicyKey?: string) => {
+            if (approvedPolicyKey !== policyKey) {
+              throw new CronStreamExecApprovalRequiredError(policyKey, "full", "always");
+            }
+          },
+        };
+        const proposal = await cron.update(job.id, { enabled: true }, { execPolicy }).then(
+          () => {
+            throw new Error("Expected approval before enabling the watcher");
+          },
+          (error: unknown) => {
+            if (!(error instanceof CronStreamExecApprovalRequiredError) || !error.mutation) {
+              throw error;
+            }
+            return error.mutation;
+          },
+        );
+        const record = manager.create({ command: "synthetic-source" }, 60_000);
+        await manager.register(record, 60_000);
+        sqliteWorkerOwnerProbe.command(stateWorker, async (command, options, scope) => {
+          if (command.type === "cron.mutateJobs") {
+            entered.resolve();
+            await release.promise;
+          }
+          return await scope.execute(command, options);
+        });
+        handoff = manager.registerDecisionHandoff(record.id, async (decision) => {
+          try {
+            expect(decision).toBe("allow-once");
+            const consumption = expectDefined(
+              manager.prepareConsumeAllowOnce(record.id, `cron.update:${job.id}`),
+              "borrowed approval consumption",
+            );
+            await cron.update(
+              job.id,
+              { enabled: true },
+              {
+                execPolicy,
+                streamExecApproval: {
+                  createdAtMs: proposal.job.createdAtMs,
+                  policyKey,
+                  binding: cronStreamExecApprovalBinding(proposal),
+                  consumption,
+                },
+              },
+            );
+            effect.resolve({ ok: true });
+          } catch (error) {
+            effect.resolve({ ok: false, error });
+          }
+        });
+        await manager.resolve(record.id, "allow-once");
+        expect(
+          await Promise.race([
+            entered.promise.then(() => "storage-wait"),
+            effect.promise.then(() => "effect-settled"),
+          ]),
+        ).toBe("storage-wait");
+        manager.retire();
         release.resolve();
-        await rejected;
-        expect(insert).not.toHaveBeenCalled();
-        expect(onLifecycle).not.toHaveBeenCalled();
-        expect(manager.getLiveSnapshot(record.id)).toBeNull();
+        const outcome = await effect.promise;
+        await handoff.observation;
+        const stored = await getOperatorApprovalDetailed({ id: record.id });
+        expect(outcome).toEqual({ ok: true });
+        expect((await loadCronJobsStore(storePath)).jobs).toMatchObject([
+          { id: job.id, enabled: true },
+        ]);
+        expect(stored).toMatchObject({
+          outcome: "found",
+          record: { decision: "allow-once", consumedBy: `cron.update:${job.id}` },
+        });
+        expect(record.consumedDecision).toBe("allow-once");
       } finally {
         release.resolve();
-        await Promise.allSettled([pending, rejected]);
-        insert.mockRestore();
+        handoff?.abandon();
+        await manager.drain();
+        cron.stop();
+        await cron.waitForIdle();
+        await scheduler.stop();
       }
-    },
-  );
+    });
+  });
+
+  it("refuses insertion when the manager retires during audience preparation", async (testContext) => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const onLifecycle = vi.fn();
+    const manager = createTestApprovalManager(testContext, {
+      resolveAudienceSessionKeys: async (source) => {
+        entered.resolve();
+        await release.promise;
+        return [source];
+      },
+      onLifecycle,
+    });
+    const record = manager.create(
+      { command: "printf prepared", sessionKey: "agent:main:child" },
+      60_000,
+      "approval-preparation-authority",
+    );
+    const insert = vi.spyOn(operatorApprovalStore, "insertOperatorApproval");
+    const pending = manager.register(record, 60_000);
+    const rejected = expect(pending).rejects.toThrow("Gateway approval observer closed");
+    try {
+      await entered.promise;
+      manager.retire();
+      release.resolve();
+      await rejected;
+      expect(insert).not.toHaveBeenCalled();
+      expect(onLifecycle).not.toHaveBeenCalled();
+      expect(manager.getLiveSnapshot(record.id)).toBeNull();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([pending, rejected]);
+      insert.mockRestore();
+    }
+  });
 
   it("does not reuse a resolved exact id as a prefix for another pending approval", async (testContext) => {
     const manager = createTestApprovalManager(testContext);

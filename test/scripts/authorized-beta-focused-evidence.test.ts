@@ -1084,8 +1084,8 @@ describe("authorized beta focused evidence", () => {
       ref: "${{ github.workflow_sha }}",
       path: ".release-validation-tooling",
       "persist-credentials": false,
-      "sparse-checkout": "scripts",
     });
+    expect(toolingCheckout.with).not.toHaveProperty("sparse-checkout");
     const resolveSteps = parentWorkflow.jobs?.resolve_release_target?.steps ?? [];
     const resolveStepNames = resolveSteps.map((step) => step.name);
     expect(resolveStepNames).not.toContain("Install focused release verifier dependency");

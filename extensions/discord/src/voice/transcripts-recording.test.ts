@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createDiscordRecordingFixture } from "./transcripts-recording.test-support.js";
 import {
   discordVoiceTranscriptsSourceProvider,
@@ -594,6 +599,25 @@ defineDiscordVoiceTests((harness) => {
       }
     },
   );
+
+  it("transcribes with media config hot-reloaded after the voice session started", async () => {
+    const audioModel = (model: string): OpenClawConfig => ({
+      tools: { media: { models: [{ provider: "openai", model, capabilities: ["audio"] }] } },
+    });
+    const owner: OpenClawConfig = { commands: { ownerAllowFrom: ["discord:100000000000000001"] } };
+    setRuntimeConfigSnapshot({ ...audioModel("gpt-4o-transcribe"), ...owner });
+    try {
+      const f = await fixture("stt-tts", false, audioModel("gpt-4o-transcribe"));
+      await f.audio("100000000000000001", 1);
+      setRuntimeConfigSnapshot({ ...audioModel("gpt-transcribe"), ...owner });
+      await f.audio("100000000000000001", 2);
+      expect(
+        transcribeAudioFileMock.mock.calls.map(([{ cfg }]) => cfg.tools?.media?.models?.[0]?.model),
+      ).toEqual(["gpt-4o-transcribe", "gpt-transcribe"]);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+  });
 
   it("preserves one complete batch utterance when recording is not active", async () => {
     const f = await fixture("stt-tts", false, {
