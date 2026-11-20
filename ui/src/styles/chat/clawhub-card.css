@@ -117,7 +117,18 @@ openclaw-chat-clawhub-card {
   }
 
   & .chat-clawhub-card__sign-in {
-    min-inline-size: min(100%, 166px);
+    display: inline-grid;
+    place-items: center;
+
+    & > span,
+    &::after {
+      grid-area: 1 / 1;
+    }
+
+    &::after {
+      content: attr(data-alternate-label);
+      visibility: hidden;
+    }
   }
 
   & [data-approval-code] {
