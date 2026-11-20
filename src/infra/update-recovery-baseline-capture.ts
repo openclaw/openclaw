@@ -489,15 +489,18 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       // Plugin trees hold thousands of small files (#201251). Serial fsyncs each wait for
       // their own journal commit; concurrent ones share commits. The manifest still seals last.
-      await runTasksWithConcurrency({
+      // Let in-flight syncs settle before failing so cleanup never races open handles.
+      const synced = await runTasksWithConcurrency({
         tasks: filePayloads.map((payloadPath) => async () => {
           await using payload = await fs.open(payloadPath, "r+");
           await payload.sync();
         }),
         limit: 32,
         errorMode: "stop",
-        throwOnError: true,
       });
+      if (synced.hasError) {
+        throw synced.firstError;
+      }
       assertCurrent();
       await configCapture.revalidate();
       assertCurrent();
