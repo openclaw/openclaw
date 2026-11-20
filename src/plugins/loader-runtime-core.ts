@@ -15,6 +15,7 @@ import {
   resolveRuntimeSubagentMode,
   type PluginLoadCacheContext,
 } from "./loader-load-context.js";
+import { createPluginLoadLoopState } from "./loader-load-loop-state.js";
 import {
   createDeferredGatewayNodesRuntime,
   createDeferredGatewaySubagentRuntime,
@@ -28,10 +29,7 @@ import {
 } from "./loader-provenance.js";
 import { formatPluginFailureSummary } from "./loader-records.js";
 import { samePluginLoadInput } from "./loader-registration-config.js";
-import {
-  loadRuntimePluginCandidate,
-  type PluginLoadLoopState,
-} from "./loader-runtime-candidate.js";
+import { loadRuntimePluginCandidate } from "./loader-runtime-candidate.js";
 import {
   finishPluginCandidate,
   finishPluginPreparations,
@@ -51,7 +49,6 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRegistry,
 } from "./manifest-registry.js";
-import { slotOwnerRequestsMemoryBackends } from "./memory-backend.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { PluginInventoryRetiredError } from "./plugin-instance-error.js";
 import { pluginInvocationContext } from "./plugin-instance-scope.js";
@@ -578,16 +575,10 @@ export function* loadOpenClawPluginsSteps(
         });
       }
     }
-    const state: PluginLoadLoopState = {
-      seenIds: new Map(),
-      selectedMemoryPluginId: null,
-      memorySlotMatched: false,
-      memoryBackendsRequested: slotOwnerRequestsMemoryBackends(
-        manifestRegistry.plugins,
-        context.normalized.slots.memory,
-      ),
-      pluginLoadAttemptCount: 0,
-    };
+    const state = createPluginLoadLoopState(
+      manifestRegistry.plugins,
+      context.normalized.slots.memory,
+    );
     const pluginLoadStartMs = performance.now();
     // Construction owns registration; it is not capability use by the requesting turn.
     const runCandidate = <T>(run: () => T): T =>

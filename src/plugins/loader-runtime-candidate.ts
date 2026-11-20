@@ -12,7 +12,6 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "./candidate-install-owner.js";
 import { capabilityCatalogFamilies, resolvePluginCapabilityCatalog } from "./capability-catalog.js";
-import { resolveMemorySlotDecision } from "./config-state.js";
 import {
   PluginDashboardDeclarationError,
   registerPluginDashboardCapabilities,
@@ -21,6 +20,10 @@ import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadSetupRuntimeChannelCandidate } from "./loader-channel-runtime.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
+import {
+  type PluginLoadLoopState,
+  resolveLoopMemorySlotDecision,
+} from "./loader-load-loop-state.js";
 import {
   formatBundledChannelWrongLoaderError,
   type PluginModuleLoader,
@@ -75,15 +78,6 @@ import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginModule, PluginLogger } from "./types.js";
 
 type PluginRegistryBuilder = ReturnType<typeof createPluginRegistry>;
-
-export type PluginLoadLoopState = {
-  seenIds: Map<string, PluginRecord["origin"]>;
-  selectedMemoryPluginId: string | null;
-  memorySlotMatched: boolean;
-  /** The selected slot owner's manifest asked for every enabled memory plugin as a backend. */
-  memoryBackendsRequested: boolean;
-  pluginLoadAttemptCount: number;
-};
 
 export function* loadRuntimePluginCandidate(params: {
   pendingStateMigration?: DeferredPluginMigration;
@@ -289,12 +283,7 @@ export function* loadRuntimePluginCandidate(params: {
     state.memoryBackendsRequested,
   );
   const memoryDecisionFor = (kind: PluginRecord["kind"]) =>
-    resolveMemorySlotDecision({
-      id: record.id,
-      kind,
-      slot: memorySlot,
-      selectedId: state.selectedMemoryPluginId,
-    });
+    resolveLoopMemorySlotDecision(state, record.id, memorySlot, kind);
   if (
     registrationPlan.runRuntimeCapabilityPolicy &&
     candidate.origin === "bundled" &&
