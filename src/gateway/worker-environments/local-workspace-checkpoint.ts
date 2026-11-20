@@ -515,14 +515,15 @@ export async function recoverLocalWorkspaceCheckpoint(params: {
     Parameters<typeof recoverWorkerWorkspaceReconciliation>[0],
     "assertCurrent" | "workerAuthority"
   >;
-  quiescence?: { pause: () => Promise<void>; markPhase: (phase: "recovery") => void };
+  quiescence?: { pause: () => Promise<void> };
+  markPhase?: (phase: "recovery") => void;
 }) {
   const { selected } = params;
   if (!selected.journal_json) {
     return;
   }
   await params.quiescence?.pause();
-  params.quiescence?.markPhase("recovery");
+  params.markPhase?.("recovery");
   const target = pendingLocalWorkspaceDirection(selected.pending_target);
   if (!selected.journal_pack || !target) {
     throw new Error("Local workspace recovery metadata is incomplete");

@@ -392,6 +392,7 @@ export type PluginManifestConfigContracts = {
 export type PluginManifestCatalog = {
   featured?: boolean;
   order?: number;
+  sidebar?: boolean;
 };
 
 export type PluginManifestTranscriptSource = {

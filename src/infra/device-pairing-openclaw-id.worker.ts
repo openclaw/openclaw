@@ -8,11 +8,13 @@ import type {
   ApproveDevicePairingResult,
   DevicePairingAccessMetadata,
 } from "./device-pairing-core.types.js";
+import { resolveMemberOperatorGrantChange } from "./device-pairing-identity.js";
 import {
   loadDevicePairingStateForMutation,
   resolveRequestedDeviceRoles,
 } from "./device-pairing-state.kernel.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
+import { createDeviceAuthToken } from "./device-pairing-token-utils.js";
 import type { OpenClawIdNodePairingProvenance } from "./device-pairing.types.js";
 import type { EngineConnection } from "./sql-connection.js";
 
@@ -144,4 +146,44 @@ export function removeOpenClawIdNodePairingsInWorker(input: {
     }
   }
   return removed;
+}
+
+/**
+ * Sets an OpenClaw ID member device's operator grant to exactly its role's scopes. An active
+ * token is replaced; a revoked one keeps its revocation, so the member lane still reissues it.
+ */
+export function setOpenClawIdMemberOperatorGrantInWorker(input: {
+  deviceId: string;
+  publicKey: string;
+  scopes: string[];
+  nowMs: number;
+}): boolean {
+  const state = loadDevicePairingStateForMutation(input.nowMs);
+  const device = state.pairedByDeviceId[input.deviceId];
+  const token = device?.tokens?.operator;
+  const change = resolveMemberOperatorGrantChange(device, input.publicKey, input.scopes);
+  if (!device || !token || !change) {
+    return false;
+  }
+  state.pairedByDeviceId[input.deviceId] = {
+    ...device,
+    scopes: change.approvedScopes,
+    approvedScopes: change.approvedScopes,
+    tokens: {
+      ...device.tokens,
+      operator:
+        token.revokedAtMs === undefined
+          ? createDeviceAuthToken({
+              role: "operator",
+              scopes: change.tokenScopes,
+              existing: token,
+              preserveExistingIssuer: true,
+              now: input.nowMs,
+              rotatedAtMs: input.nowMs,
+            })
+          : { ...token, scopes: change.tokenScopes },
+    },
+  };
+  persistDevicePairingStoreState(state, undefined, "paired");
+  return true;
 }

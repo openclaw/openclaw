@@ -16,13 +16,12 @@ import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 export function SessionPicker(props: {
   kind: "where" | "project" | "checkout";
   label: string;
-  value: string;
+  value?: string;
   icon: JSX.Element;
   summary?: string;
-  triggerAttributes?: Pick<
-    JSX.HTMLAttributes<HTMLButtonElement>,
-    "title" | "aria-label" | "aria-description"
-  > & { [name: `data-${string}`]: string | undefined };
+  triggerAttributes?: Pick<JSX.HTMLAttributes<HTMLButtonElement>, "title" | "aria-description"> & {
+    [name: `data-${string}`]: string | undefined;
+  };
   params: NewSessionPlaceControlsOptions;
   children: JSX.Element;
   lazy?: boolean;
@@ -48,7 +47,7 @@ export function SessionPicker(props: {
         ]}
       >
         <button
-          aria-label={props.label}
+          aria-label={props.summary ? `${props.label}, ${props.summary}` : props.label}
           {...props.triggerAttributes}
           id={`new-session-${props.kind}-trigger`}
           ref={(node) => {
@@ -59,6 +58,7 @@ export function SessionPicker(props: {
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
           aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
+          aria-busy={props.value === undefined ? "true" : undefined}
           disabled={
             props.params.submitting ||
             props.params.pendingPlacement ||

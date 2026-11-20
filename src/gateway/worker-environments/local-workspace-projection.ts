@@ -322,6 +322,7 @@ async function settleLocalWorkspace<T>(
             await quiescence?.retire();
           }
           const current = state.current();
+          quiescence?.markPhase("operation.callback");
           return await operation(
             current.baseline_ref
               ? {
@@ -330,13 +331,16 @@ async function settleLocalWorkspace<T>(
                   projectionRevision: current.revision,
                   prepareArchive: state.prepareArchive,
                   canonicalPaths: state.canonicalPaths,
+                  resume: quiescence?.resume,
                   synchronizeProjection: () => state.synchronize("projection"),
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: state.current,
                   workerAuthority: state.workerAuthority,
                 }
               : {
                   worktreeId: worktree.id,
                   projectionRevision: current.revision,
+                  markPhase: quiescence?.markPhase,
                   assertCurrent: store.assertCurrent,
                   workerAuthority: store.workerAuthority,
                 },

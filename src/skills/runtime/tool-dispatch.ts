@@ -56,7 +56,6 @@ export async function resolveSkillDispatchTools(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir?: string;
-  authProfileStoreSource?: boolean;
   sessionEntry?: SessionEntry;
   sessionKey: string;
   workspaceDir: string;
@@ -84,7 +83,7 @@ export async function resolveSkillDispatchTools(params: {
     providerProfile,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
   } = resolveEffectiveToolPolicy({
     config: params.cfg,
     sessionKey: params.sessionKey,
@@ -168,7 +167,7 @@ export async function resolveSkillDispatchTools(params: {
     onMessageToolAvailability: (available) => {
       messageToolAvailable = available;
     },
-    gatewayConfigReadAllowed,
+    gatewayManagementActionsAllowed,
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
     questionInputMode: resolveConversationQuestionInputMode({
@@ -183,7 +182,6 @@ export async function resolveSkillDispatchTools(params: {
     agentGroupSpace: params.sessionEntry?.space,
     agentMemberRoleIds: params.message.memberRoleIds,
     agentDir: params.agentDir,
-    authProfileStoreSource: params.authProfileStoreSource,
     workspaceDir: params.workspaceDir,
     config: params.cfg,
     sessionConfigSource: "runtime",

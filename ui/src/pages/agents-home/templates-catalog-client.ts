@@ -1,4 +1,9 @@
 import type {
+  TemplateLifecyclePlanResult,
+  TemplatePluginAcknowledgement,
+  TemplateSkillAcknowledgement,
+} from "@openclaw/gateway-protocol";
+import type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
   ClawHubTemplateCatalogPreview,
@@ -49,7 +54,7 @@ export async function readTemplatesOverview(
 ): Promise<ClawHubTemplateCatalogOverview | undefined> {
   const result = await client.request<{ overview?: ClawHubTemplateCatalogOverview }>(
     "templates.catalog.search",
-    { overview: true, limit },
+    { overview: true, limit, includeCategoryEntries: true },
   );
   return result.overview
     ? {
@@ -57,6 +62,7 @@ export async function readTemplatesOverview(
         sections: result.overview.sections.map((section) => ({
           category: section.category,
           entries: section.entries.filter(isPublicEntry),
+          additionalEntries: section.additionalEntries?.filter(isPublicEntry),
         })),
       }
     : undefined;
@@ -126,4 +132,61 @@ export async function applyTemplateAdd(
     },
     { onSent: options.onSent },
   );
+}
+
+export type TemplateUploadSource = { kind: "upload"; archiveBase64: string };
+export type TemplateAddReviewPlan = TemplateLifecyclePlanResult & {
+  reviewFiles: NonNullable<TemplateLifecyclePlanResult["reviewFiles"]>;
+};
+
+export async function readTemplateAddReviewPlan(
+  client: GatewayBrowserClient,
+  source: TemplateUploadSource,
+): Promise<TemplateAddReviewPlan> {
+  const plan = await client.request<TemplateLifecyclePlanResult>("templates.add.plan", { source });
+  if (plan.operation !== "add" || !plan.planIntegrity || !Array.isArray(plan.reviewFiles)) {
+    throw new Error("Gateway did not return a valid Add review.");
+  }
+  return { ...plan, reviewFiles: plan.reviewFiles };
+}
+
+/** Local archives always apply the exact reviewed plan, never chat-based Add. */
+export async function applyTemplateUpload(
+  client: GatewayBrowserClient,
+  source: TemplateUploadSource,
+  plan: TemplateAddReviewPlan,
+): Promise<TemplateAddApplyResult> {
+  return await client.request<TemplateAddApplyResult>("templates.add.apply", {
+    source,
+    planIntegrity: plan.planIntegrity,
+    ...(plan.riskAcknowledgementRequired ? { acknowledgeClawHubRisk: true } : {}),
+    acknowledgeCapabilities: plan.pluginReviews
+      .filter((review) => review.ownerAction === "install")
+      .map((review): TemplatePluginAcknowledgement => ({
+        actionId: review.actionId,
+        pluginId: review.pluginId,
+        reviewToken: review.reviewToken,
+        capabilityGrants: review.capabilityGrants,
+        capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
+        acknowledgeRiskWarning: review.riskWarning ? true : undefined,
+      })),
+    acknowledgeSkillWarnings: plan.skillReviews.map((review): TemplateSkillAcknowledgement =>
+      "path" in review
+        ? {
+            actionId: review.actionId,
+            source: "bundled",
+            path: review.path,
+            digest: review.digest,
+            reviewToken: review.reviewToken,
+            acknowledgeRiskWarning: true,
+          }
+        : {
+            actionId: review.actionId,
+            source: "clawhub",
+            ref: review.ref,
+            reviewToken: review.reviewToken,
+            acknowledgeRiskWarning: true,
+          },
+    ),
+  });
 }

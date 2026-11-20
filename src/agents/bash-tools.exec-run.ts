@@ -26,7 +26,6 @@ import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { reserveServiceSlot } from "./bash-process-adopted.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -169,7 +168,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
     execute: async (toolCallId, args, signal, onUpdate) => {
       signal?.throwIfAborted();
       const approvalTransport = defaults?.createApprovalTransport?.(toolCallId, signal);
-      const assertSourceActive = captureAgentToolSourceExecutionGuard(signal);
       assertSupportedExecParams(args);
       const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await (safeBinPolicy ??=
         resolveExecSafeBinRuntimePolicy({
@@ -192,7 +190,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           }
           return policy;
         }));
-      assertSourceActive();
+      signal?.throwIfAborted();
       // Capture settings and cancellation per execution; unused reviewers must not load model runtime.
       let autoReviewer: ExecAutoReviewer | undefined = defaults?.autoReviewer;
       if (!autoReviewer) {
@@ -407,7 +405,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const resolvedExecEnvState = requestPreparation.getResolvedExecEnvPreparedState(params);
         const storeEnv = await resolveStoreEnv();
         const subagentExecution = await resolveSubagentExecution();
-        assertSourceActive();
+        signal?.throwIfAborted();
         const storeBindings = storeEnv.secretEgressBindings ?? [];
         const useSecretEgress = secretEgressEnabled && host === "gateway" && !params.durable;
         const secretEgressBindings = useSecretEgress ? storeBindings : undefined;
@@ -430,6 +428,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           storeEnv: host === "gateway" ? storeEnv.env : undefined,
           storeSecretEnv: useSecretEgress ? storeEnv.secretSentinels : undefined,
           ...preparedRunEnvironment,
+          scratchEnv: await requestPreparation.prepareScratchEnv(host),
           warnings,
         });
 
@@ -549,7 +548,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           );
         }
 
-        assertSourceActive();
+        signal?.throwIfAborted();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,

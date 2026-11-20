@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { newChatPage } from "./chat-flow.test-support.ts";
+import { newChatPage, openAiAuthor } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -80,6 +80,7 @@ suite.define(() => {
         const messageSeq = index + 2;
         const message = {
           role: "assistant",
+          ...openAiAuthor,
           content: [
             { type: "thinking", thinking: thoughts[index] },
             isFinal

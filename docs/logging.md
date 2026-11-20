@@ -543,8 +543,14 @@ both sinks.
 The Gateway logs `slow chat send` when acknowledgement or startup takes at least
 one second. `stage=request` ends at acknowledgement; `stage=startup` ends when
 agent execution starts. `replyInitialization` covers inbound dispatch through
-session preparation. Later prompt, skills, tool catalog, model/auth, and runtime
-preparation belong to `preparation`, before the first model request.
+session preparation. `preparation` covers work before the prepared reply starts.
+`run` covers the prepared reply, including its remaining runtime setup, until
+diagnostics finish. Ordinary startup still stops accounting when agent execution
+starts. A `stage=steer` send can await a whole prepared reply, so its `run` includes
+that turn's execution time rather than charging it to `preparation`. A `stage=queued`
+report stops at the existing queue-disposition boundary; later execution is excluded.
+These consecutive phases do not double-count prepared-reply time. Structured phase
+events use the same names, including `chat.send.run`.
 Fast sends retain numeric phase timings without formatting a log message;
 enabled diagnostic phase subscribers still receive their observations.
 
@@ -554,9 +560,9 @@ binding, cold transcript hydration, writer admission, snapshot reads, and commit
 alongside workspace, Git baseline, hooks, and embedded preparation when used.
 `reply.session.writer` includes both queue waiting and `reply.session.initialize`;
 their difference indicates the writer wait. Parent and child spans overlap and
-must not be summed. Unfinished spans stop at the startup boundary; later model
-and tool latency does not extend them. Structured `chat.send.detail.*` phase
-events use the same durations when diagnostics are enabled.
+must not be summed. Unfinished spans stop when that send's diagnostics finish;
+ordinary startup therefore excludes later model and tool latency. Structured
+`chat.send.detail.*` phase events use the same durations when diagnostics are enabled.
 
 Before acknowledgement, `detail.persist.stage.*` separates pending-input resolution,
 storage preparation, reads, authority preparation, message preparation, and durable

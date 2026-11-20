@@ -1279,6 +1279,11 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
+    // The rollback fixture loads this worker through factory-created descriptors.
+    testFile: "src/cli/update-cli/update-command-database-rollback.test.ts",
+    watchGlobs: ["src/infra/update-physical-database-generations.ts"],
+  },
+  {
     testFile: "src/node-host/node-worker-workspace-retention.test.ts",
     watchGlobs: [
       "src/infra/sqlite-store.worker.ts",

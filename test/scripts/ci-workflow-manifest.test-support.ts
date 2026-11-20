@@ -78,6 +78,7 @@ type CiManifestFixtureOptions = {
   publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
+  extensionLintCapability?: boolean;
   checkPlanSource?: string;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
   ciTypeGraphNames?: string[];
@@ -333,6 +334,12 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
         "scripts/run-tsgo-core-test-shards.mts",
         "scripts/run-additional-boundary-checks.mts",
       ]);
+    }
+    if (options.extensionLintCapability) {
+      writeScript(
+        "ci-extension-lint-plan.mts",
+        "export async function resolveCiExtensionLintSelection() { return null; }\n",
+      );
     }
     if (options.checkFamilyScope) {
       writeFixture(

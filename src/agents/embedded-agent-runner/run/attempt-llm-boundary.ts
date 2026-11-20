@@ -22,6 +22,7 @@ import {
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import { memoizeFrozenPlainDataProjection } from "../../../shared/immutable-data.js";
 import { isTextContentBlock } from "../../content-blocks.js";
+import { PROJECTED_PROMPT_UPDATE } from "../../embedded-agent-helpers/turns.js";
 import {
   escapeInternalRuntimeContextDelimiters,
   isOpenClawSystemUpdateMessage,
@@ -90,13 +91,16 @@ const runtimeContextProjections = [false, true].map((escape) =>
               details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
             };
           }
-          const projected: UserMessage = {
+          const projected: UserMessage & { [PROJECTED_PROMPT_UPDATE]?: true } = {
             role: "user",
             content: message.content,
             timestamp: message.timestamp,
           };
           if (inHistorySystemUpdates) {
             projected.operatorMessage = { turnScoped: details.data.turnScoped };
+          } else {
+            // A symbol key never reaches provider JSON or the transcript.
+            projected[PROJECTED_PROMPT_UPDATE] = true;
           }
           return projected;
         }

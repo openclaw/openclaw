@@ -484,12 +484,6 @@ function* resolveMessageToolSchemaActionsSteps(
   return { actions: Array.from(actions), available };
 }
 
-export function resolveMessageToolActionSchemaActions(
-  params: MessageToolDiscoveryParams,
-): string[] {
-  return runMessageActionDiscovery(resolveMessageToolActionSchemaActionsSteps(params)).actions;
-}
-
 function* resolveMessageToolActionSchemaActionsSteps(
   params: MessageToolDiscoveryParams,
 ): MessageActionDiscoverySteps<{ actions: string[]; available: boolean }> {
@@ -565,10 +559,6 @@ function resolveIncludeBestEffort(params: MessageToolDiscoveryParams): boolean {
     adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true &&
     typeof adapter.durableFinal.reconcileUnknownSend === "function"
   );
-}
-
-export function buildMessageToolSchema(params: MessageToolDiscoveryParams, actions: string[]) {
-  return runMessageActionDiscovery(buildMessageToolSchemaSteps(params, actions));
 }
 
 function* buildMessageToolSchemaSteps(

@@ -60,6 +60,8 @@ export async function continueSessionQueuedInputs(
   options: {
     signal: AbortSignal;
     assertCurrent: () => void;
+    /** Ends every row with this cause instead of replaying it. */
+    endCause?: SessionPendingInputEndCause;
   },
 ): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
@@ -68,10 +70,19 @@ export async function continueSessionQueuedInputs(
   };
   const admit = async (row: SessionPendingInputRow) => {
     assertCurrent();
+    if (options.endCause) {
+      await failQueuedInput(target, row, assertCurrent, options.endCause);
+      return undefined;
+    }
     let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
     let dispatchAttempted = false;
     try {
       const message = parseSessionPendingInputMessage(row.message_json);
+      if (message["__openclaw"]?.activeSteer) {
+        // Native delivery may have succeeded before a crash. Never replay into any run.
+        await failQueuedInput(target, row, assertCurrent, "restart-unrecoverable");
+        return undefined;
+      }
       const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {

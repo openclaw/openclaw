@@ -143,12 +143,19 @@ it.for([
     outcome: { error: "send failed", finalAssistantVisibleText: "" },
     status: "failed",
   },
+  {
+    name: "private result with an unidentified send",
+    privateResult: true,
+    outcome: { error: "send returned no identity", disposition: "ambiguous" },
+    status: "failed",
+  },
 ] as const)("settles a committed result by what its turn did: $name", async (testCase) => {
   const { outcome, status } = testCase;
   const yieldedFinal = "yieldedFinal" in testCase;
   const batch = [raw(), { ...raw(), runId: "second-result" }].map((entry) =>
     Object.assign(entry, {
-      completionTarget: yieldedFinal ? ("parent" as const) : undefined,
+      completionTarget:
+        yieldedFinal || "privateResult" in testCase ? ("parent" as const) : undefined,
       requesterSettleWake: {
         status: "dispatching" as const,
         attemptCount: 1,
@@ -184,6 +191,7 @@ it.for([
     expect(subagent.delivery).toMatchObject({
       status,
       requesterDelivery: { state: "consumed", runId },
+      ...("disposition" in outcome && { disposition: outcome.disposition }),
     });
   }
 });

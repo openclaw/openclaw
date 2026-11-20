@@ -129,6 +129,11 @@ export async function startQuietProvider(options: { baseline?: boolean } = {}) {
               );
               writeOpenAiResponsesSse(
                 response,
+                callTool("automations", { action: "plan", names: [quietFixture.name] }, id),
+              );
+            } else if (call === 1) {
+              writeOpenAiResponsesSse(
+                response,
                 callTool(
                   "automations",
                   {

@@ -210,7 +210,7 @@ child.once("spawn", () => {
       expect(corrected.details).toMatchObject({
         status: "completed",
         exitCode: 0,
-        aggregated: "<>\n<\\0>\nheredoc\\0",
+        aggregated: "<>\n<\\0>\nheredoc\\0\n",
       });
       for (let call = 0; call < 20; call += 1) {
         const result = await exec.execute(`exec-${call}`, {
