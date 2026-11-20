@@ -381,8 +381,9 @@ function resolveSavedMediaExtension(params: {
 }): string {
   const trustedHeaderExt =
     params.headerExt &&
-    isGenericContainerMime(params.detectedMime) &&
-    isImageHeaderMime(params.contentType)
+    ((isGenericContainerMime(params.detectedMime) && isImageHeaderMime(params.contentType)) ||
+      (params.headerExt === ".txt" &&
+        (params.detectedMime === "text/x-sql" || params.detectedMime === "application/sql")))
       ? undefined
       : params.headerExt;
   return (
