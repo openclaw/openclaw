@@ -1949,11 +1949,31 @@
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
 }
 
-.plugin-catalog-results--rows
-  .installed-plugins-card__art
-  .plugins-tile:not(.plugins-tile--fallback) {
-  padding: 9px;
+.plugin-catalog-row[data-plugin-id] .plugin-catalog-card__art {
+  /* Keep the 40px row slot; loaded artwork should not sit on a second tile. */
   background: transparent;
+  box-shadow: none;
+
+  & > .plugins-tile {
+    border-radius: calc(11px * var(--openclaw-corner-radius-scale));
+
+    &:not(.plugins-tile--fallback) {
+      width: 38px;
+      height: 38px;
+    }
+
+    &:not(.plugins-tile--fallback, .skeleton) {
+      background: transparent;
+    }
+
+    &.plugins-tile--fallback {
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+    }
+
+    & > img {
+      padding: 0;
+    }
+  }
 }
 
 .plugin-catalog-results--rows .plugin-card-title-row {
