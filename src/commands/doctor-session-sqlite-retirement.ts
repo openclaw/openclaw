@@ -352,7 +352,9 @@ export async function retireOwnedSessionSqliteRecovery(
     (item) => item.kind === undefined && !unmanifested.has(item.path),
   );
   const captures = candidates.filter(
-    (item) => item.kind === "update-capture" && !unmanifested.has(item.path),
+    (item) =>
+      (item.kind === "update-capture" || item.kind === "database-snapshot") &&
+      !unmanifested.has(item.path),
   );
   const displaced = candidates.filter(
     (item) => item.kind === "displaced-database" && !unmanifested.has(item.path),

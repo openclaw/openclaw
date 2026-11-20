@@ -62,7 +62,7 @@ export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   }
 }
 
-function logicalBytes(directory: string): number {
+export function logicalBytes(directory: string): number {
   let bytes = 0;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
@@ -318,7 +318,10 @@ function collectCaptureRootInventory(params: {
   return { artifacts, identities };
 }
 
-/** Caller holds the cleanup maintenance lock and passes identities from the confirmed selection. */
+/**
+ * Removes whole capture and database snapshot directories. Caller holds the cleanup
+ * maintenance lock and passes identities from the confirmed selection.
+ */
 export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
@@ -338,7 +341,7 @@ export async function retireUpdateCaptures(params: {
         current.dev !== expected.dev ||
         current.ino !== expected.ino
       ) {
-        throw new Error("update capture changed after selection");
+        throw new Error("directory changed after selection");
       }
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {
@@ -351,10 +354,10 @@ export async function retireUpdateCaptures(params: {
       await fs.promises.rm(item.path, { recursive: true });
       item.outcome = "removed";
       item.removedBytes = item.bytes;
-      item.reason = "update-capture-retired";
+      item.reason = `${item.kind}-retired`;
     } catch (error) {
       item.outcome = "failed";
-      item.reason = "update-capture-retirement-failed";
+      item.reason = `${item.kind}-retirement-failed`;
       item.detail = String(error);
     }
   }
