@@ -114,6 +114,20 @@ describe("doctor-contract-registry module loader", () => {
     );
   });
 
+  it("names a failed contract load when a declared migration cannot be listed", () => {
+    mockContract(
+      { providerRenames },
+      {
+        id: "owner",
+        providers: ["old"],
+        doctorContract: { stateMigrations: [{ id: "owner-state" }] },
+      },
+    );
+    expect(() => doctor.listPluginDoctorStateMigrationEntries({ env: {} })).toThrow(
+      /declared by owner\. Its doctor contract failed to load: Provider renames must belong/,
+    );
+  });
+
   it("defers declared provider renames during compatibility preflight", () => {
     mockContract(
       { providerRenames },

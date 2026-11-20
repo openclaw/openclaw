@@ -152,7 +152,7 @@ export function collectDoctorConfigRepairPluginIds(
 function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
   surface: PluginDoctorContractSurface,
-): PluginDoctorContractEntry | PluginDependencyLinkError | null {
+): PluginDoctorContractEntry | Error | null {
   const declaration = record.doctorContract;
   // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
@@ -197,7 +197,7 @@ function loadPluginDoctorContractEntry(
     log.warn(
       `failed to load doctor contract for ${record.id} from ${contractArtifact.modulePath}: ${formatErrorMessage(error)}`,
     );
-    return error instanceof PluginDependencyLinkError ? error : null;
+    return error instanceof Error ? error : new Error(formatErrorMessage(error));
   }
 }
 
@@ -207,9 +207,7 @@ export function loadPluginDoctorRecoveryCliRegistrar(record: PluginManifestRegis
     return undefined;
   }
   const entry = loadPluginDoctorContractEntry(record, "recoveryCli");
-  return entry && !(entry instanceof PluginDependencyLinkError)
-    ? entry.registerRecoveryCli
-    : undefined;
+  return entry && !(entry instanceof Error) ? entry.registerRecoveryCli : undefined;
 }
 
 export function resolvePluginDoctorManifestRecords(
@@ -360,7 +358,7 @@ function loadPluginDoctorContractEntries(params: {
 }): PluginDoctorContractEntry[] {
   return params.records.flatMap((record) => {
     const entry = loadPluginDoctorContractEntry(record, params.surface);
-    return entry && !(entry instanceof PluginDependencyLinkError) ? [entry] : [];
+    return entry && !(entry instanceof Error) ? [entry] : [];
   });
 }
 export function listPluginDoctorLegacyConfigRules(
@@ -461,11 +459,12 @@ export function loadPluginDoctorStateMigrationEntries(
   const entries: PluginDoctorStateMigrationEntry[] = [];
   for (const record of records) {
     onSelectedPlugin?.(record.id);
-    const modern = loadPluginDoctorContractEntry(record, "stateMigrations");
-    if (modern instanceof PluginDependencyLinkError) {
-      onUnavailablePlugin?.(record.id, modern);
+    const loaded = loadPluginDoctorContractEntry(record, "stateMigrations");
+    if (loaded instanceof PluginDependencyLinkError) {
+      onUnavailablePlugin?.(record.id, loaded);
       continue;
     }
+    const modern = loaded instanceof Error ? null : loaded;
     const declaration = record.doctorContract?.stateMigrations;
     const migrations = modern?.stateMigrations ?? [];
     // Validate the whole declaration before callers select a phase or authority.
@@ -484,7 +483,9 @@ export function loadPluginDoctorStateMigrationEntries(
         }))
     ) {
       throw new PluginDoctorStateMigrationDeclarationError(
-        `Refused plugin migrations that do not match the immutable action order and authority declared by ${record.id}.`,
+        `Refused plugin migrations that do not match the immutable action order and authority declared by ${record.id}.${
+          loaded instanceof Error ? ` Its doctor contract failed to load: ${loaded.message}` : ""
+        }`,
       );
     }
     if (modern?.stateMigrations.length) {
