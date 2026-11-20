@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
@@ -44,6 +45,43 @@ describe("runGuidedOnboarding quick start", () => {
       if (choice === "skip") {
         expect(transcript).toContain("Next steps");
       }
+    },
+  );
+
+  it.each([
+    [undefined, "en", "hatch", "openclaw"],
+    ["novice-test", "en", "hatch", "openclaw --profile novice-test"],
+    ["novice-test", "en", "chat", "openclaw --profile novice-test"],
+    ["novice-test", "zh-CN", "hatch", "openclaw --profile novice-test"],
+    ["novice-test", "zh-TW", "hatch", "openclaw --profile novice-test"],
+  ] as const)(
+    "keeps profile %s in %s skipped-AI next steps (%s)",
+    async (profile, locale, handoffMode, command) => {
+      await withEnvAsync(
+        { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: undefined, OPENCLAW_LOCALE: locale },
+        async () => {
+          const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+          promptAuthChoiceGrouped.mockResolvedValueOnce("skip");
+          const deps = setupDeps({ prompter, handoffMode });
+
+          await runGuidedOnboardingImpl(
+            { agentName: "main", acceptRisk: true },
+            makeRuntime(),
+            deps,
+          );
+
+          const notes = vi
+            .mocked(prompter.note)
+            .mock.calls.map(([message]) => message)
+            .join("\n");
+          for (const action of ["onboard", "channels add", "dashboard"]) {
+            expect(notes).toContain("`" + command + " " + action + "`");
+            if (profile) {
+              expect(notes).not.toContain("`openclaw " + action + "`");
+            }
+          }
+        },
+      );
     },
   );
 

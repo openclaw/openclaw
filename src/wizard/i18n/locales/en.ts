@@ -411,7 +411,7 @@ export const en = {
       nextSteps:
         "Workspace: {workspace}\nAdd a channel: `openclaw channels add`\nPrefer chatting? Run `openclaw setup` and say `connect telegram` (or `connect slack`).\nOpen the dashboard: `openclaw dashboard`\nChat later: `openclaw`",
       nextStepsWithoutAi:
-        "Workspace: {workspace}\nAdd AI later: re-run `openclaw onboard`\nAfter AI connects, add a channel: `openclaw channels add`\nOpen the dashboard: `openclaw dashboard`",
+        "Workspace: {workspace}\nAdd AI later: re-run `{onboardCommand}`\nAfter AI connects, add a channel: `{channelsCommand}`\nOpen the dashboard: `{dashboardCommand}`",
       nextStepsTitle: "Next steps",
       noInferenceOptions:
         "No inference option is available yet. Sign in to Claude Code or Codex, or configure an API-key provider, then run onboarding again.",

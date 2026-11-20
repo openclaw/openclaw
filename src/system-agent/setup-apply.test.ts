@@ -463,19 +463,29 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(result.lines).toContain(line);
   });
 
-  it("reports explicitly skipped service installation", async () => {
-    const gateway = { status: "skipped", reason: "explicit" };
-    mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
-    const result = await apply({ surface: "cli", installDaemon: false });
+  it.each([
+    [undefined, "openclaw gateway run"],
+    ["novice-test", "openclaw --profile novice-test gateway run"],
+  ])("reports explicitly skipped service installation for profile %s", async (profile, command) => {
+    await withEnvAsync(
+      { OPENCLAW_PROFILE: profile, OPENCLAW_CONTAINER_HINT: undefined },
+      async () => {
+        const gateway = { status: "skipped", reason: "explicit" };
+        mocks.ensureGatewayService.mockResolvedValueOnce({ gateway });
+        const result = await apply({ surface: "cli", installDaemon: false });
 
-    expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
-      expect.objectContaining({ opts: { installDaemon: false } }),
+        expect(mocks.ensureGatewayService).toHaveBeenCalledWith(
+          expect.objectContaining({ opts: { installDaemon: false } }),
+        );
+        expect(result.gateway).toEqual(gateway);
+        expect(result.lines).toContain(
+          "Gateway: service installation skipped. Run `" +
+            command +
+            "` to start it in the foreground.",
+        );
+        expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
+      },
     );
-    expect(result.gateway).toEqual(gateway);
-    expect(result.lines).toContain(
-      "Gateway: service installation skipped. Run `openclaw gateway run` to start it in the foreground.",
-    );
-    expect(mocks.waitForGatewayReachable).not.toHaveBeenCalled();
   });
 
   it.each(["linux", "win32"] as const)(
