@@ -33,101 +33,15 @@ function git(args, options = {}) {
   return execFileSync(executable, args, { maxBuffer: Infinity, ...options });
 }
 const text = (...args) => decoder.decode(git(args)).trim();
-// stdin plus FD3–6 leaves the lifetime/authority descriptors (7–9) untouched.
-const hashBatchSize = 5;
-function hashBatch(buffers, write = false) {
-  if (!buffers.length) {
-    return [];
-  }
-  if (buffers.length > hashBatchSize || (write && buffers.length !== 1)) {
-    throw new Error("Invalid captured hash batch.");
-  }
-  const directory = fs.mkdtempSync(join(tmpdir(), "openclaw-pr-hash-"));
-  const descriptors = [];
-  let directoryRemoved = false;
-  let operationFailed = false;
-  try {
-    // Finish and close the exclusive writer before opening a fresh read-only
-    // descriptor. Hash captured bytes, never a later read of the authority path.
-    for (const [index, bytes] of buffers.entries()) {
-      const path = join(directory, String(index));
-      fs.writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
-      descriptors.push(fs.openSync(path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW));
-      fs.unlinkSync(path);
-    }
-    // PR supervision requires POSIX. Unlink before dispatch so interruption
-    // cannot leave authority bytes behind while Git owns the descriptors.
-    fs.rmdirSync(directory);
-    directoryRemoved = true;
-    const extra = descriptors.slice(1);
-    const oids = decoder
-      .decode(
-        git(
-          [
-            "hash-object",
-            "--no-filters",
-            ...(write ? ["-w"] : []),
-            "--stdin",
-            ...(extra.length ? ["--", ...extra.map((_, index) => `/dev/fd/${index + 3}`)] : []),
-          ],
-          { stdio: [descriptors[0], "pipe", "pipe", ...extra] },
-        ),
-      )
-      .trim()
-      .split("\n");
-    if (
-      oids.length !== buffers.length ||
-      oids.some(
-        (oid) => !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(oid) || oid.length !== oids[0].length,
-      )
-    ) {
-      throw new Error("Incomplete or invalid captured Git hash output.");
-    }
-    return oids;
-  } catch (error) {
-    operationFailed = true;
-    throw error;
-  } finally {
-    let cleanupError;
-    for (const fd of descriptors) {
-      try {
-        fs.closeSync(fd);
-      } catch (error) {
-        cleanupError ??= error;
-      }
-    }
-    if (!directoryRemoved) {
-      try {
-        fs.rmSync(directory, { recursive: true, force: true });
-      } catch (error) {
-        cleanupError ??= error;
-      }
-    }
-    if (cleanupError && !operationFailed) {
-      throw cleanupError;
-    }
-  }
-}
-
 function hash(bytes, write = false) {
-  return hashBatch([bytes], write)[0];
-}
-
-function hashPaths(paths, allowAbsent = false) {
-  const oids = [];
-  for (let index = 0; index < paths.length; index += hashBatchSize) {
-    const captured = paths
-      .slice(index, index + hashBatchSize)
-      .map((path) => (allowAbsent && !present(path) ? undefined : readRegular(path)));
-    const batch = hashBatch(captured.filter((bytes) => bytes !== undefined));
-    oids.push(...captured.map((bytes) => (bytes === undefined ? "absent" : batch.shift())));
-  }
-  return oids;
-}
-
-function authoritySnapshot() {
-  const oids = hashPaths(authorityPaths, true);
-  return Object.fromEntries(authorityPaths.map((path, index) => [path, oids[index]]));
+  // Hash the captured bytes through stdin, never re-read the authority pathname.
+  return decoder
+    .decode(
+      git(["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"], {
+        input: bytes,
+      }),
+    )
+    .trim();
 }
 
 function exactKeys(value, keys) {
@@ -604,7 +518,9 @@ function incomingSourceSnapshot(pr, source, reviewOid) {
   if (present(bindingPath) || present(".local/review-transition.json")) {
     throw new Error("Incoming baseline admission requires an unbound preparation source.");
   }
-  const authority = authoritySnapshot();
+  const authority = Object.fromEntries(
+    authorityPaths.map((path) => [path, present(path) ? hash(readRegular(path)) : "absent"]),
+  );
   incomingSourceAuthority(pr, source, reviewOid, ".local/prep-context.env");
   git(["verify-commit", source]);
   process.stdout.write(
@@ -627,8 +543,10 @@ function proofInventory(archives) {
       if (evidenceReplay.directories) {
         evidenceReplay.directories[archive] = names;
       }
-      const oids = hashPaths(names.map((name) => join(archive, name)));
-      return [archive, Object.fromEntries(names.map((name, index) => [name, oids[index]]))];
+      return [
+        archive,
+        Object.fromEntries(names.map((name) => [name, hash(readRegular(join(archive, name)))])),
+      ];
     }),
   );
 }
@@ -866,8 +784,8 @@ function completedProof(
     }
   }
   process.stdout.write(
-    Object.entries(authoritySnapshot())
-      .map(([path, oid]) => `${path} ${oid}`)
+    authorityPaths
+      .map((path) => path + " " + (present(path) ? hash(readRegular(path)) : "absent"))
       .join("\n"),
   );
 }
@@ -976,7 +894,9 @@ function prepareProofSource(
     expectedHostedHead: predecessor ? proofHostedHead(pr, source, archive) : meta.headRefOid,
     continuation,
   };
-  const authority = authoritySnapshot();
+  const authority = Object.fromEntries(
+    authorityPaths.map((path) => [path, present(path) ? hash(readRegular(path)) : "absent"]),
+  );
   // Reconstructed product and fixup scope excludes main changes already
   // admitted by the predecessor; those changes do not belong to this review.
   const scope = baselineRefreshCandidate({
@@ -1905,8 +1825,8 @@ function continueSigning(pr, oid, commitPath) {
     }
     state = "complete";
   }
-  const snapshot = Object.entries(authoritySnapshot())
-    .map(([path, oid]) => `${path} ${oid}`)
+  const snapshot = authorityPaths
+    .map((path) => `${path} ${present(path) ? hash(readRegular(path)) : "absent"}`)
     .join("\n");
   if (
     state === "source" &&

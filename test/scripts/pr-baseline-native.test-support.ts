@@ -127,7 +127,7 @@ export function signBaselineRequest(
 }
 
 // Resolve live refs once per response, without caching across authority checks.
-export function writeBaselineGitHubAdapter(path: string, product: string[]) {
+function writeBaselineGitHubAdapter(path: string, product: string[]) {
   writeFileSync(
     path,
     `#!/usr/bin/env node
@@ -182,6 +182,7 @@ export function createIncomingBaselineFixture(
   root: string,
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+  seedRepository?: (repo: string) => void,
 ) {
   const repo = join(root, "repo");
   const home = join(root, "home");
@@ -249,6 +250,7 @@ export function createIncomingBaselineFixture(
   mkdirSync(join(repo, "docs"), { recursive: true });
   const product = Array.from({ length: productCount }, (_, i) => `docs/fix-${i}.md`);
   writeProduct(repo, product, "base\n");
+  seedRepository?.(repo);
   git(repo, "add", ".");
   git(repo, "commit", "-qm", "test: canonical fixture");
   const base = git(repo, "rev-parse", "HEAD");
@@ -453,8 +455,14 @@ export function createBaselineFixture(
   root: string,
   productCount = 16,
   incomingSeverity: "IMPORTANT" | "BLOCKER" = "IMPORTANT",
+  seedRepository?: (repo: string) => void,
 ) {
-  const fixture = createIncomingBaselineFixture(root, productCount, incomingSeverity);
+  const fixture = createIncomingBaselineFixture(
+    root,
+    productCount,
+    incomingSeverity,
+    seedRepository,
+  );
   fixture.pass("prepare-correction-init");
   for (const path of fixture.product) {
     writeFileSync(join(fixture.worktree, path), "corrected\n");

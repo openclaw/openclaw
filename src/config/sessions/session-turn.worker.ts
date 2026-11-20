@@ -37,7 +37,6 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -265,11 +264,6 @@ export function prepareSessionTurn(
       messages,
       coldArchive: undefined,
       version: transcriptState?.version,
-      expectedSessionState:
-        expectedEntry &&
-        buildSessionTranscriptTurnExpectedState(
-          selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
-        ),
       goalId:
         mutation && !result && expectedEntry && input.options.messages.length
           ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id

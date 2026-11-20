@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { cleanScratch, closeScratchCleanupCursor } from "../../infra/scratch-cleanup.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -15,7 +16,7 @@ import {
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit, requireGitBuffer } from "./git.js";
-import { insertRegistryWorktree } from "./registry.js";
+import { insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -39,66 +40,254 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 it.each([false, true])(
-  "compresses separately acquired revisions (promisor=%s)",
+  "folds delta-heavy packs without inflation (promisor=%s)",
   async (promisor) => {
-    const repo = await initRepo(tempDirs.make("worktree-revision-packs-"));
-    await insertRegistryWorktree(env, makeWorktreeRecord(repo, `revisions-${promisor}`));
+    const root = tempDirs.make("worktree-delta-packs-");
+    const repo = await initRepo(root);
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, "delta-packs"));
+    await git(repo, "repack", "-ad");
+    const directory = path.join(repo, ".git/objects/pack");
+    const kept = (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!;
+    await fs.writeFile(path.join(directory, kept.replace(/\.pack$/, ".keep")), "");
+    await fs.link(path.join(directory, kept), path.join(root, "shared.pack"));
+    const keptStat = await fs.stat(path.join(directory, kept));
+    const selected = [];
+    for (let pack = 0; pack < 2; pack++) {
+      const nonce = Buffer.alloc(16, pack);
+      const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(
+        Buffer.alloc(1024),
+      );
+      const commands = [];
+      for (let revision = 0; revision < 1024; revision++) {
+        const bytes = Buffer.from(payload);
+        bytes.writeUInt32LE(revision);
+        commands.push(Buffer.from("blob\ndata 1024\n"), bytes, Buffer.from("\n"));
+      }
+      const before = new Set(await fs.readdir(directory));
+      // Git's bulk importer stores these unreachable revisions with compact offset deltas.
+      await requireGit(repo, ["-c", "fastimport.unpackLimit=0", "fast-import", "--quiet"], {
+        input: Buffer.concat(commands),
+      });
+      const name = (await fs.readdir(directory)).find(
+        (file) => !before.has(file) && file.endsWith(".pack"),
+      )!;
+      if (promisor) {
+        await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
+      }
+      selected.push({ name, size: (await fs.stat(path.join(directory, name))).size });
+    }
+    const objectsBefore = await git(repo, "cat-file", "--batch-all-objects", "--batch-check");
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.issues).toEqual([]);
+    const remaining = await fs.readdir(directory);
+    const outputs = remaining.filter((name) => name.endsWith(".pack") && name !== kept);
+    expect(outputs).toHaveLength(1);
+    expect(selected.every(({ name }) => !remaining.includes(name))).toBe(true);
+    const written = (await fs.stat(path.join(directory, outputs[0]!))).size;
+    const retired = selected.reduce((sum, pack) => sum + pack.size, 0);
+    expect(written / retired).toBeLessThanOrEqual(1.01);
+    expect(remaining.filter((name) => name.endsWith(".promisor"))).toHaveLength(promisor ? 1 : 0);
+    const { ino, nlink, size } = await fs.stat(path.join(directory, kept));
+    expect({ ino, nlink, size }).toEqual({
+      ino: keptStat.ino,
+      nlink: keptStat.nlink,
+      size: keptStat.size,
+    });
+    expect(await git(repo, "cat-file", "--batch-all-objects", "--batch-check")).toBe(objectsBefore);
+    await git(repo, "fsck", "--full", "--no-dangling");
+  },
+);
+
+it("preserves shared packs across local clones and stops rewriting private packs", async () => {
+  const root = tempDirs.make("worktree-hardlinked-packs-");
+  const source = await initRepo(root);
+  const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
+    Buffer.alloc(128 * 1024),
+  );
+  const addPack = async (repo: string, sequence: number) => {
+    payload.writeUInt32LE(sequence);
+    const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: payload });
+    await requireGit(repo, ["pack-objects", path.join(repo, ".git/objects/pack/pack")], {
+      input: `${oid}\n`,
+    });
+    await git(repo, "prune-packed");
+    return oid;
+  };
+  const inventory = async (repo: string) => {
+    const directory = path.join(repo, ".git/objects/pack");
+    return Promise.all(
+      (await fs.readdir(directory))
+        .filter((name) => name.endsWith(".pack"))
+        .toSorted()
+        .map(async (name) => {
+          const { ino, size, nlink } = await fs.stat(path.join(directory, name));
+          return { name, ino, size, nlink };
+        }),
+    );
+  };
+  const objects = [];
+  for (let i = 0; i < 4; i++) {
+    objects.push(await addPack(source, i));
+  }
+  const clones = [];
+  for (let i = 0; i < 3; i++) {
+    const clone = path.join(root, `clone-${i}`);
+    await requireGit(root, ["clone", "--local", "--no-checkout", source, clone]);
+    await insertRegistryWorktree(env, makeWorktreeRecord(clone, `hardlinks-${i}`));
+    clones.push(clone);
+  }
+  const shared = await inventory(source);
+  expect(shared.every((pack) => pack.nlink === 4)).toBe(true);
+  const rows = [];
+  for (let cycle = 0; cycle < 6; cycle++) {
+    if (cycle === 2) {
+      // Equal private peers fold once; the shared history must not affect selection.
+      objects.push(await addPack(clones[0]!, 4), await addPack(clones[0]!, 5));
+    }
+    const before = await inventory(clones[0]!);
+    const progress = new WorktreeGcProgress();
+    await createWorktreeGitMaintenance(env)({ progress });
+    expect(progress.result.issues).toEqual([]);
+    const after = await inventory(clones[0]!);
+    rows.push(after.filter((pack) => !before.some((old) => old.name === pack.name)).length);
+    for (const repo of [source, ...clones]) {
+      const packs = await inventory(repo);
+      expect(packs.filter((pack) => pack.nlink > 1)).toEqual(shared);
+    }
+  }
+  expect(rows).toEqual([0, 0, 1, 0, 0, 0]);
+  expect(
+    await requireGit(clones[0]!, ["cat-file", "--batch-check=%(objecttype)"], {
+      input: `${objects.join("\n")}\n`,
+    }),
+  ).toBe(objects.map(() => "blob").join("\n"));
+
+  // Expiry releases the other inode names; the unchanged consolidation owner can
+  // then fold the formerly shared base packs without duplicating pinned storage.
+  const scratch = path.join(root, ".openclaw/tmp");
+  await fs.mkdir(scratch, { recursive: true });
+  for (const [index, clone] of clones.entries()) {
+    await fs.rename(clone, path.join(scratch, `landing-${index}`));
+    await updateRegistryWorktree(env, `hardlinks-${index}`, { removedAt: Date.now() });
+  }
+  const cursor = {};
+  try {
+    const expired = await cleanScratch({
+      targets: [{ root, kind: "checkout", isLive: () => false }],
+      now: Date.now() + 25 * 60 * 60_000,
+      cursor,
+      assertCurrent() {},
+      pause: async () => {},
+    });
+    expect(expired).toMatchObject({ entriesRemoved: 3, errors: [] });
+  } finally {
+    await closeScratchCleanupCursor(cursor);
+  }
+  expect((await inventory(source)).every((pack) => pack.nlink === 1)).toBe(true);
+  await insertRegistryWorktree(env, makeWorktreeRecord(source, "released-base"));
+  await createWorktreeGitMaintenance(env)({ progress: new WorktreeGcProgress() });
+  expect(await inventory(source)).toHaveLength(1);
+});
+
+it.each([false, true])(
+  "converges overlapping history packs and bounds hourly writes (promisor=%s)",
+  async (promisor) => {
+    const repo = await initRepo(tempDirs.make("worktree-geometric-packs-"));
+    await insertRegistryWorktree(env, makeWorktreeRecord(repo, `geometry-${promisor}`));
     const directory = path.join(repo, ".git", "objects", "pack");
     const payload = createCipheriv("aes-256-ctr", Buffer.alloc(32), Buffer.alloc(16)).update(
-      Buffer.alloc(256 * 1024),
+      Buffer.alloc(32 * 4096),
     );
-    const objects = [];
-    for (let revision = 0; revision < 8; revision++) {
-      const contents = Buffer.from(payload);
-      contents.writeUInt32LE(revision);
+    const objects: string[] = [];
+    const blob = async (contents: Buffer) => {
       const oid = await requireGit(repo, ["hash-object", "-w", "--stdin"], { input: contents });
+      objects.push(oid);
+      return oid;
+    };
+    const pack = async (oids: string[]) => {
       const hash = await requireGit(
         repo,
         ["pack-objects", "--window=0", path.join(directory, "pack")],
-        {
-          input: `${oid}\n`,
-        },
+        { input: `${oids.join("\n")}\n` },
       );
       if (promisor) {
         await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
       }
-      objects.push({ oid, contents });
-    }
-    await git(repo, "prune-packed");
-    const packedBytes = async () => {
-      const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
-      return (
-        await Promise.all(
-          names.map(async (name) => (await fs.stat(path.join(directory, name))).size),
-        )
-      ).reduce((sum, bytes) => sum + bytes, 0);
     };
-    const before = await packedBytes();
-    const progress = new WorktreeGcProgress();
-    // Retirement deadlines are covered in service.gc-performance.test.ts.
+    const stat = fs.stat;
+    const inventory = async () =>
+      Promise.all(
+        (await fs.readdir(directory))
+          .filter((name) => name.endsWith(".pack"))
+          .map(async (name) => [name, (await stat(path.join(directory, name))).size] as const),
+      );
+    const base = [];
+    for (let i = 0; i < 32; i++) {
+      base.push(await blob(payload.subarray(i * 4096, (i + 1) * 4096)));
+    }
+    await pack(base);
+    for (let i = 0; i < 6; i++) {
+      await pack([...base, await blob(Buffer.from(`history-${i}`))]);
+    }
+    // Scale only admission bytes to exercise the 16 GiB limit with tiny real Git packs.
+    using sizes = vi.spyOn(fs, "stat");
+    sizes.mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      if (result && String(args[0]).startsWith(directory) && String(args[0]).endsWith(".pack")) {
+        result.size = Number(result.size) * 32768;
+      }
+      return result;
+    });
+    // The retirement deadline has independent coverage in service.gc-performance.test.ts.
     using clock = vi.spyOn(performance, "now");
     clock.mockReturnValue(0);
-    await createWorktreeGitMaintenance(env)({ progress });
-    expect(progress.result.gitMaintenance?.stage).toBe("completed");
-    expect(await packedBytes()).toBeLessThan(before / 3);
-    expect((await fs.readdir(directory)).filter((name) => name.endsWith(".promisor"))).toHaveLength(
-      promisor ? 1 : 0,
-    );
-    for (const { oid, contents } of objects) {
-      expect(await requireGitBuffer(repo, ["cat-file", "blob", oid])).toEqual(contents);
+    const rows = [];
+    for (let cycle = 0; cycle < 9; cycle++) {
+      const revisions = [];
+      for (let i = 0; i < 8; i++) {
+        const contents = Buffer.from(payload.subarray(0, 4096));
+        contents.writeUInt32LE(cycle * 8 + i);
+        revisions.push(await blob(contents));
+      }
+      for (let i = 0; i < 8; i++) {
+        await pack([...revisions, await blob(Buffer.from(`cycle-${cycle}-${i}`))]);
+      }
+      await git(repo, "prune-packed");
+      const before = new Set((await inventory()).map(([name]) => name));
+      const progress = new WorktreeGcProgress();
+      // Recreating the owner also exercises restart re-arming without persistent scheduling.
+      await createWorktreeGitMaintenance(env)({ progress });
+      expect(progress.result.gitMaintenance?.stage).toBe("completed");
+      const after = await inventory();
+      rows.push({
+        cycle,
+        rewritten: after
+          .filter(([name]) => !before.has(name))
+          .reduce((sum, [, bytes]) => sum + bytes, 0),
+        packs: after.length,
+        bytes: after.reduce((sum, [, bytes]) => sum + bytes, 0),
+      });
     }
+    console.table(rows);
+    const converged = rows.slice(-3);
+    expect(converged.every((row) => row.rewritten < payload.length / 3)).toBe(true);
+    expect(converged.every((row) => row.packs <= 4)).toBe(true);
+    expect(converged.every((row) => row.bytes < payload.length * 2)).toBe(true);
+    expect((await fs.readdir(directory)).filter((name) => name.endsWith(".promisor"))).toHaveLength(
+      promisor ? rows.at(-1)!.packs : 0,
+    );
+    expect(
+      await requireGit(repo, ["cat-file", "--batch-check=%(objecttype)"], {
+        input: `${objects.join("\n")}\n`,
+      }),
+    ).toBe(objects.map(() => "blob").join("\n"));
   },
 );
 
 it("compacts committed loose packs while retaining unpublished temporary packs", async () => {
   const repo = await initRepo(tempDirs.make("worktree-loose-packs-"));
-  await insertRegistryWorktree(
-    env,
-    makeWorktreeRecord(repo, "loose-pack-family", {
-      repoFingerprint: "loose-pack-family",
-      ownerKind: "manual",
-    }),
-  );
+  await insertRegistryWorktree(env, makeWorktreeRecord(repo, "loose-pack-family"));
   await git(repo, "repack", "-a", "-d");
   const directory = path.join(repo, ".git", "objects", "pack");
   const canonical = (await fs.readdir(directory)).find((name) => name.endsWith(".pack"));
@@ -118,16 +307,13 @@ it("compacts committed loose packs while retaining unpublished temporary packs",
     packsAfter: 2,
     stage: "completed",
   });
-  await expect(fs.access(path.join(directory, loose + ".pack"))).rejects.toHaveProperty(
-    "code",
-    "ENOENT",
-  );
-  await expect(fs.access(path.join(directory, loose + ".idx"))).rejects.toHaveProperty(
-    "code",
-    "ENOENT",
-  );
-  await fs.access(path.join(directory, temporary + ".pack"));
-  await fs.access(path.join(directory, temporary + ".idx"));
+  for (const extension of ["pack", "idx"]) {
+    await expect(fs.access(path.join(directory, `${loose}.${extension}`))).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+    await fs.access(path.join(directory, `${temporary}.${extension}`));
+  }
   await git(repo, "fsck", "--no-reflogs");
 });
 

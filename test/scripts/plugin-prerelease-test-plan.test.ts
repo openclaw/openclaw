@@ -570,7 +570,7 @@ export const createExtensionTestShards = () => [{
     ).toBe("matrix.requires_bun == true");
 
     const hourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "");
-    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
+    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat", "21");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
     expect(hourly.result.status, hourly.result.stderr).toBe(0);
@@ -603,7 +603,55 @@ export const createExtensionTestShards = () => [{
     expect(
       boatRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
     ).toEqual(physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row));
-    expect(boatRows.slice(20)).toEqual(physicalRows.slice(20));
+    expect(
+      physicalRows.every((row: { runner_label: string }) => row.runner_label === "ubuntu-24.04"),
+    ).toBe(true);
+    for (const allowance of ["invalid", "1"]) {
+      const limited = runPluginManifest(
+        "independent",
+        "schedule",
+        "",
+        undefined,
+        "boat",
+        allowance,
+      );
+      expect(limited.result.status, limited.result.stderr).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(
+          outputs(limited.output).plugin_prerelease_extension_matrix,
+          "limited Boat matrix",
+        ),
+      ).include;
+      expect(
+        rows.filter((row: { runner_label: string }) => row.runner_label.startsWith("boat")),
+      ).toHaveLength(allowance === "1" ? 1 : 0);
+      expect(
+        rows.every(
+          (row: { runner_label: string }) =>
+            row.runner_label.startsWith("boat") || row.runner_label === "ubuntu-24.04",
+        ),
+      ).toBe(true);
+      expect(rows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row)).toEqual(
+        physicalRows.map(({ runner_label: _label, ...row }: Record<string, unknown>) => row),
+      );
+    }
+    expect(
+      boatRows
+        .filter((row: { runner_label: string }) => row.runner_label.startsWith("boat"))
+        .every((row: { task: string }) => row.task === "extension-file-shard"),
+    ).toBe(true);
+    const mixedBatches = boatRows.filter(
+      (row: { task: string }) => row.task === "extensions-batch",
+    );
+    expect(mixedBatches.length).toBeGreaterThan(0);
+    expect(
+      mixedBatches.every((row: { runner_label: string }) => row.runner_label === "ubuntu-24.04"),
+    ).toBe(true);
+    for (const [index, row] of boatRows.entries()) {
+      if (!row.runner_label.startsWith("boat")) {
+        expect(row).toEqual(physicalRows[index]);
+      }
+    }
     const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
     for (const runner_label of boatLabels) {
       for (const releaseRunnerGroup of ["", "release-runners"]) {
@@ -625,6 +673,7 @@ export const createExtensionTestShards = () => [{
         JSON.parse(expectDefined(matrix, "extension matrix"))
           .include.map(
             ({
+              runner_label: _label,
               requires_bun: _bun,
               test_runtime_policy: _policy,
               test_runtime: _runtime,

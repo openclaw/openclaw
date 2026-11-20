@@ -10,6 +10,9 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call
 import type { TranscriptPolicy } from "../transcript-policy.types.js";
 import { isAnthropicApi } from "./anthropic-api.js";
 
+/** Projection-only: a prompt update sent as user text is a sent turn that later turns never merge into. */
+export const PROJECTED_PROMPT_UPDATE = Symbol("openclaw.projectedPromptUpdate");
+
 const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
 
 export function providerRequiresSignedThinking(provider?: string | null): boolean {
@@ -432,7 +435,8 @@ const agentMessageReplayTurnAdapter: ReplayTurnAdapter<AgentMessage, ReplayConte
       message.role === "user" &&
       !hasRuntimeContextMarker(message) &&
       !message.operatorMessage &&
-      !message.synthetic
+      !message.synthetic &&
+      !(PROJECTED_PROMPT_UPDATE in message)
     );
   },
 };

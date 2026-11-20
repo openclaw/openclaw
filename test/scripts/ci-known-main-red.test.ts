@@ -456,6 +456,28 @@ describe("main failure attribution", () => {
 
 describe("known hourly main failures", () => {
   it.each([
+    ["complete mixed invocations", "", 2, 1],
+    ["failed-only terminal count", "", 1, 0],
+    ["missing passing summary", "Tests 2 passed (2)", 2, 0],
+    ["extra failure", "Error: cleanup failed", 2, 0],
+  ])("checks %s against total completed invocations", (_name, mutation, completed, count) => {
+    const passing = [
+      "[test] starting test/vitest/vitest.process.config.ts",
+      "Test Files 1 passed (1)",
+      "Tests 2 passed (2)",
+    ]
+      .filter((line) => line !== mutation)
+      .concat(mutation.startsWith("Error:") ? [mutation] : [])
+      .map((line) => `[shard:gateway] ${line}`)
+      .join("\n");
+    const log = report().replace(
+      "[shard:gateway] [test] failed 1 Vitest shard in 7s",
+      `${passing}\n[shard:gateway] [test] failed ${completed} Vitest shards in 7s`,
+    );
+    expect(parseNodeFailureReport(log, true)).toHaveLength(count);
+  });
+
+  it.each([
     ["[test] inner parallelism 1", 1],
     ["[test] inner parallelism unknown", 0],
     ["Error: worker failed", 0],

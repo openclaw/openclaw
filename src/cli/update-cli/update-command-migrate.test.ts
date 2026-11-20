@@ -142,7 +142,7 @@ it("retires verified migration originals only after a later native update is acc
       expect(latest.steps).toContainEqual(
         expect.objectContaining({
           step: "diagnostic:recovery-artifact-cleanup",
-          detail: expect.stringContaining("Recovery cleanup removed"),
+          detail: expect.stringContaining("Update backup cleanup removed 1 item ("),
         }),
       );
       await updateFinishCommand(second);

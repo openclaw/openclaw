@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -83,37 +83,25 @@ function fixture(count = 6, format = "sha1") {
     `const fs = require("node:fs"), assert = require("node:assert/strict");
 const held = process.env.CHECK_HASH_LIFETIME ? [7, 8, 9, 10] : [];
 const before = held.map(fd => fs.fstatSync(fd).ino);
-const snapshots = new Set(), open = fs.openSync, close = fs.closeSync;
-let closeFaultInjected = false;
-fs.openSync = function(path, ...args) {
-  const fd = open.call(this, path, ...args);
-  if (String(path).startsWith(process.env.TMPDIR + "/openclaw-pr-hash-") &&
-      args[0] === (fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW)) snapshots.add(fd);
-  return fd;
-};
-fs.closeSync = function(fd) {
-  const captured = snapshots.has(fd);
-  const result = close.call(this, fd);
-  snapshots.delete(fd);
-  if (captured && process.env.FAIL_HASH_CLOSE && !closeFaultInjected) {
-    closeFaultInjected = true;
-    process.stderr.write("fixture snapshot close fault reached\\n");
-    throw new Error("fixture snapshot close failure");
-  }
-  return result;
-};
 process.on("exit", () => {
-  assert.equal(snapshots.size, 0, "captured descriptor leaked");
   assert.deepEqual(held.map(fd => fs.fstatSync(fd).ino), before);
 });
+if (process.env.SIGNAL_HASH) {
+  const cp = require("node:child_process"), run = cp.execFileSync;
+  cp.execFileSync = function(file, args, ...rest) {
+    try { return run.call(this, file, args, ...rest); }
+    catch (error) {
+      if (file === process.env.OPENCLAW_PR_GIT && args[0] === "hash-object" &&
+          error.signal === "SIGTERM") process.stderr.write("fixture Git SIGTERM observed\\n");
+      throw error;
+    }
+  };
+  require("node:module").syncBuiltinESMExports();
+}
 `,
   );
   const argv = ["--require", guard, script, "save-signing-request", "42", root, lock, head];
   const run = (extra: NodeJS.ProcessEnv = {}, held = false) => {
-    const checked = (result: SpawnSyncReturns<string>) => {
-      expect(result.stderr).not.toContain("captured descriptor leaked");
-      return result;
-    };
     const options = {
       cwd: root,
       env: { ...env, ...probe.env, ...extra },
@@ -121,37 +109,35 @@ process.on("exit", () => {
       encoding: "utf8" as const,
     };
     if (!held) {
-      return checked(spawnSync(requireNodeTool("node"), argv, options));
+      return spawnSync(requireNodeTool("node"), argv, options);
     }
     for (const fd of [7, 8, 9, 10]) {
       writeFileSync(join(root, `.local/held-${fd}`), `held ${fd}`, { mode: 0o600 });
     }
-    return checked(
-      spawnSync(
-        "/bin/bash",
-        [
-          "-c",
-          'exec 7<.local/held-7 8<.local/held-8 9<.local/held-9 10<.local/held-10; exec "$@"',
-          "hash-held-descriptors",
-          requireNodeTool("node"),
-          "--require",
-          lifetime,
-          ...argv,
-        ],
-        {
-          ...options,
-          env: {
-            ...options.env,
-            OPENCLAW_PR_LIFETIME_FILE: join(root, ".local/held-7"),
-            OPENCLAW_PR_LIFETIME_ANCESTORS: JSON.stringify([
-              { path: join(root, ".local/held-10"), fd: 10 },
-            ]),
-            CHECK_HASH_LIFETIME: "1",
-            HASH_HELD_7: join(root, ".local/held-7"),
-            HASH_HELD_10: join(root, ".local/held-10"),
-          },
+    return spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        'exec 7<.local/held-7 8<.local/held-8 9<.local/held-9 10<.local/held-10; exec "$@"',
+        "hash-held-descriptors",
+        requireNodeTool("node"),
+        "--require",
+        lifetime,
+        ...argv,
+      ],
+      {
+        ...options,
+        env: {
+          ...options.env,
+          OPENCLAW_PR_LIFETIME_FILE: join(root, ".local/held-7"),
+          OPENCLAW_PR_LIFETIME_ANCESTORS: JSON.stringify([
+            { path: join(root, ".local/held-10"), fd: 10 },
+          ]),
+          CHECK_HASH_LIFETIME: "1",
+          HASH_HELD_7: join(root, ".local/held-7"),
+          HASH_HELD_10: join(root, ".local/held-10"),
         },
-      ),
+      },
     );
   };
   const saved = () =>
@@ -163,28 +149,19 @@ process.on("exit", () => {
 }
 
 describePosix("captured baseline proof hashes", () => {
-  it.each([0, 1, 5, 6, 11])(
-    "seals %i retained blobs with native byte identities and bounded descriptors",
-    (count) => {
-      const f = fixture(count);
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
-      const oid = f.blob(f.bytes);
-      expect(result.stdout).toBe(oid);
-      expect(readFileSync(join(f.root, `.local/prepare-baseline-signing.${oid}.json`))).toEqual(
-        f.bytes,
-      );
-      const sizes = readFileSync(f.probe.batches, "utf8").trim().split("\n").map(Number);
-      // One native process per five retained blobs, plus fresh authority and
-      // request hashing. This bound detects reintroducing one Git per member.
-      expect(sizes.length).toBe(Math.ceil(count / 5) + 2);
-      expect(sizes.every((size) => size >= 1 && size <= 5)).toBe(true);
-      expect(sizes.reduce((sum, size) => sum + size, 0)).toBe(count + 2);
-      expect(f.git(["rev-parse", "HEAD"])).toBe(f.head);
-      expect(f.git(["status", "--porcelain"])).toBe("");
-      f.expectCleanScratch();
-    },
-  );
+  it.each([0, 1, 11])("seals %i retained blobs with native captured byte identities", (count) => {
+    const f = fixture(count);
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    const oid = f.blob(f.bytes);
+    expect(result.stdout).toBe(oid);
+    expect(readFileSync(join(f.root, `.local/prepare-baseline-signing.${oid}.json`))).toEqual(
+      f.bytes,
+    );
+    expect(f.git(["rev-parse", "HEAD"])).toBe(f.head);
+    expect(f.git(["status", "--porcelain"])).toBe("");
+    f.expectCleanScratch();
+  });
 
   it("preserves Git SHA-256 identities without broadening the SHA-1 admission contract", () => {
     const f = fixture(6, "sha256");
@@ -206,53 +183,35 @@ describePosix("captured baseline proof hashes", () => {
     f.expectCleanScratch();
   });
 
-  it.each(["missing", "extra", "invalid", "reversed"])(
-    "refuses %s Git hash output before sealing",
-    (mode) => {
-      const f = fixture();
-      const result = f.run({ HASH_PROBE_OUTPUT: mode });
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        mode === "reversed"
-          ? "Retained proof changed before sealing the signing request."
-          : "Incomplete or invalid captured Git hash output.",
-      );
-      expect(f.saved()).toEqual([]);
-      f.expectCleanScratch();
-    },
-  );
+  it.each(["missing", "extra", "invalid"])("refuses %s Git hash output before sealing", (mode) => {
+    const f = fixture();
+    const result = f.run({ HASH_PROBE_OUTPUT: mode });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Retained proof changed before sealing the signing request.");
+    expect(f.saved()).toEqual([]);
+    f.expectCleanScratch();
+  });
 
   it.each(["FAIL_HASH", "SIGNAL_HASH"])(
-    "cleans captured descriptors after the Git child fails through %s",
+    "fails closed after the Git child fails through %s",
     (fault) => {
       const f = fixture();
       const result = f.run({ [fault]: "1" });
       expect(result.status).toBe(1);
-      expect(readFileSync(f.probe.batches, "utf8").trim().split("\n")).toEqual(["5"]);
+      expect(readFileSync(f.probe.calls, "utf8").trim().split("\n")).toEqual(["0"]);
       expect(result.stderr).toContain(
         fault === "FAIL_HASH" ? "fixture Git hash failure" : "fixture Git hash intentional SIGTERM",
       );
+      if (fault === "SIGNAL_HASH") {
+        expect(result.stderr).toContain("fixture Git SIGTERM observed");
+      }
       expect(f.saved()).toEqual([]);
       expect(f.git(["rev-parse", "HEAD"])).toBe(f.head);
       f.expectCleanScratch();
     },
   );
 
-  it("attempts every snapshot close and retains the original Git failure", () => {
-    const f = fixture();
-    const result = f.run({ FAIL_HASH: "1", FAIL_HASH_CLOSE: "1" });
-    expect(result.status).toBe(1);
-    expect(readFileSync(f.probe.batches, "utf8").trim().split("\n")).toEqual(["5"]);
-    expect(result.stderr).toContain("fixture snapshot close fault reached");
-    expect(result.stderr).toContain("fixture Git hash failure");
-    expect(result.stderr).not.toContain("fixture snapshot close failure");
-    // The preload's exit assertion rejects any later snapshot left unclosed.
-    expect(f.saved()).toEqual([]);
-    expect(f.git(["rev-parse", "HEAD"])).toBe(f.head);
-    f.expectCleanScratch();
-  });
-
-  it("rechecks live authority after hashing the retained snapshots", () => {
+  it("rechecks live authority after hashing the retained bytes", () => {
     const f = fixture();
     const result = f.run({ MUTATE_ORIGINAL: "1" });
     expect(result.status).toBe(1);
@@ -284,7 +243,7 @@ describePosix("captured baseline proof hashes", () => {
     const result = f.run();
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/ELOOP|symbolic links/);
-    expect(existsSync(f.probe.batches)).toBe(false);
+    expect(existsSync(f.probe.calls)).toBe(false);
     expect(readFileSync(join(f.root, ".git/config"))).toEqual(before);
     expect(f.saved()).toEqual([]);
     f.expectCleanScratch();

@@ -322,7 +322,7 @@ function prToolingNamedImportEdges(source) {
     )
   ) {
     const materializer = batch.match(
-      /^  \} else if \(operation === "materialize-dependencies"\) \{\n([\s\S]*?)(?=^  \} else)/mu,
+      /^ {2}\} else if \(operation === "materialize-dependencies"\) \{\n([\s\S]*?)(?=^ {2}\} else)/mu,
     )?.[1];
     if (
       materializer &&

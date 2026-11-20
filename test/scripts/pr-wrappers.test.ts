@@ -2624,7 +2624,12 @@ if [ "\${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}" = "$$" ] &&
   case "$1" in
     "$TMPDIR"/openclaw-pr-anchor-v3.*/scripts/pr)
       anchor=\${1%/scripts/pr}
-      [ "$anchor" -ef /dev/fd/9 ] || exit 97
+      "${requireNodeTool("node")}" --input-type=module -e '
+import { pathToFileURL } from "node:url";
+const anchor = process.argv[1];
+const { claimCreatedAnchor } = await import(pathToFileURL(anchor + "/scripts/pr-lib/cache-lifetime.mjs").href);
+claimCreatedAnchor(anchor, process.ppid);
+' "$anchor" || exit 97
       [ -L "$anchor/node_modules/tsx" ] || exit 98
       rm "$anchor/node_modules/tsx" || exit 99
       printf '%s\\n' "$anchor" > "$PR_TEST_LOST_PIN"

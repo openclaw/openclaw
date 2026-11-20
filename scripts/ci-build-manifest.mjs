@@ -1572,7 +1572,7 @@ const nodeTestShards = targetNodeTestShards
     } catch {
       // Missing accounting must not change or prevent the execution plan.
     }
-    const capacity =
+    let capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat" ||
       (remainingBoatNodeJobs > 0 &&
         !shard.requiresDist &&
@@ -1586,6 +1586,13 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    if (capacity && nodeRunnerBackend === "github") {
+      // Hosted packing assumes 16 GiB. Preserve that floor and its CPU envelope.
+      capacity =
+        capacity.runner === "boat"
+          ? undefined
+          : { ...capacity, cpuBudget: Math.min(capacity.cpuBudget, shard.cpuBudget ?? 4, 4) };
+    }
     const auditCliObservations =
       eventName === "schedule" &&
       isCanonicalRepository &&

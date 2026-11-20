@@ -26,6 +26,69 @@ const retained = [
   "prep.env",
 ];
 
+function observeGitHubRefReads(f: ReturnType<typeof createBaselineFixture>) {
+  const adapter = f.env.OPENCLAW_GH_BIN;
+  const records = join(f.root, "github-ref-observations");
+  const source = readFileSync(adapter, "utf8");
+  const entry = "const root = process.env.FIXTURE_REPO;";
+  expect(source.split(entry)).toHaveLength(2);
+  // Observe the real adapter's native children and responses during publication.
+  // Preserve results/errors; record only fixed query labels, counts and status.
+  writeFileSync(
+    adapter,
+    source.replace(
+      entry,
+      `${entry}
+const request = process.argv.slice(2);
+const observedKind = request[0] === 'api' && request[1] === 'graphql'
+ ? (fs.existsSync(path.join(root,'.local','merge-live.json')) ? 'graphql-supplied' : 'graphql')
+ : request.includes('repos/fixture/repo/pulls/42') ? 'rest' : null;
+const queries = [];
+const nativeExec = cp.execFileSync, nativeLog = console.log;
+let responded = false;
+cp.execFileSync = function(file,args,...options) {
+ const observed = file === 'git' && args[0] === '-C' && args[1] === root && args[2] === 'rev-parse';
+ const names = observed ? args.slice(3).join(',') : '';
+ const query = observed ? {label: {'main,topic':'main-topic','topic,main':'topic-main','main':'main'}[names] || 'unexpected',status:null} : null;
+ if (query) queries.push(query);
+ try {
+  const result = Reflect.apply(nativeExec,this,[file,args,...options]);
+  if (query) query.status = 0;
+  return result;
+ } catch (error) {
+  if (query) query.status = Number.isInteger(error.status) ? error.status : -1;
+  throw error;
+ }
+};
+console.log = function(value,...args) {
+ if (typeof value === 'string' && value.length > 0) responded = true;
+ return Reflect.apply(nativeLog,this,[value,...args]);
+};
+process.on('exit',status => {
+ if (observedKind) fs.appendFileSync(${JSON.stringify(records)},JSON.stringify({kind:observedKind,status,responded,queries})+'\\n');
+});`,
+    ),
+  );
+  return {
+    reset: () => writeFileSync(records, ""),
+    expectResponses: (kinds: string[]) => {
+      const rows = readFileSync(records, "utf8")
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line));
+      expect(rows.length).toBeGreaterThan(0);
+      for (const [ordinal, row] of rows.entries()) {
+        expect(row, `response ${ordinal + 1}`).toMatchObject({ status: 0, responded: true });
+        const label =
+          row.kind === "rest" ? "main-topic" : row.kind === "graphql" ? "topic-main" : "main";
+        expect(row.queries, `response ${ordinal + 1}`).toEqual([{ label, status: 0 }]);
+      }
+      expect(rows.map((row) => row.kind)).toEqual(expect.arrayContaining(kinds));
+    },
+  };
+}
+
 function createFixture(root: string, baseline = false) {
   const f = createBaselineFixture(root, 1);
   if (baseline) {
@@ -619,6 +682,7 @@ describePosix("pending-proof correction publication", () => {
     "publishes only the exact signed OID, baseline/successor=%s",
     (successor) => {
       const f = proofFixture(successor, successor);
+      const refs = observeGitHubRefReads(f);
       const before = f.snapshot([
         "review.json",
         "correction-review.json",
@@ -632,7 +696,9 @@ describePosix("pending-proof correction publication", () => {
           continuation: { head: f.head, tree: f.tree, review: f.reviewOid() },
         });
       }
+      refs.reset();
       expectExit(f.run("prepare-publish-for-proof"), 0);
+      refs.expectResponses(["rest", "graphql"]);
       expect(f.git(f.repo, "rev-parse", "topic")).toBe(f.head);
       f.prepGit("verify-commit", f.head);
       f.expectSnapshot(before);
@@ -642,7 +708,12 @@ describePosix("pending-proof correction publication", () => {
       expect(receipt).toContain(`PUSH_REVIEW_OID=${f.reviewOid()}\n`);
       expect(receipt).toContain("PUSH_PURPOSE=proof\n");
       expect(receipt).toContain("PUSH_PENDING_FINDINGS=I1\n");
+      // Publication moved topic from the incoming OID. The next response must
+      // resolve live refs again instead of reusing the first request's values.
+      expect(f.head).not.toBe(f.incoming);
+      refs.reset();
       expectExit(f.run("prepare-publish-for-proof"), 0);
+      refs.expectResponses(["rest", "graphql"]);
       expect(f.readLocal("prepare-push-result.env").toString()).toBe(receipt);
       // A forged gate stamp cannot turn a proof-only review into landing authority.
       expectExit(
@@ -947,7 +1018,12 @@ process.exit(result.status??1);
       hosted = f.prepGit("commit-tree", "-S", f.tree, "-p", f.incoming, "-m", "Same-tree alias");
       f.git(f.repo, "update-ref", "refs/heads/topic", hosted);
     }
+    const refs = ["auto", "queue", "unknown", "unknown-queue"].includes(fault)
+      ? observeGitHubRefReads(f)
+      : undefined;
+    refs?.reset();
     const result = f.run("prepare-publish-for-proof", [], extra);
+    refs?.expectResponses(["graphql-supplied"]);
     expect(result.status, result.stdout + result.stderr).not.toBe(0);
     expect(f.git(f.repo, "rev-parse", "topic")).toBe(hosted);
     f.expectAbsent("prepare-push-result.env", "prep.env", "gates.env");
