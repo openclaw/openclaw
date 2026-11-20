@@ -34,6 +34,16 @@
  * Native worker code is unchanged between arms; Linux procfs costs need Linux proof.
  * Acceptance: only changed-file bytes lose shared extents, clean old/new templates,
  * A/A controls and five serial A/B pairs; diagnostics must not add material cost.
+ * --filesystem-worker selects the unchanged native filesystem worker from a frozen
+ * repository compiler runtime, avoiding source-loader descendants in process settlement.
+ * --base-advance creates at A, pushes B to a local origin, runs the idle pass,
+ * then measures first and warm creates at B. Run two A/A controls and five
+ * interleaved A/B pairs with one sample per fresh synthetic clone. Acceptance:
+ * first-create native copies 2 -> 1, correct B HEAD/contents, lower latency,
+ * no >20% total idle+first+warm CPU/allocation regression beyond A/A variation.
+ * --alternate-commit alternates source generations without requiring a refresh.
+ * Acceptance: after seeding both commits, no new generation on a flip back;
+ * report owner latency, CPU/allocation, and retained IDs with matched A/A controls.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -53,6 +63,7 @@ const { values } = parseArgs({
     output: { type: "string" },
     samples: { type: "string", default: "5" },
     "default-base": { type: "boolean" },
+    "base-advance": { type: "boolean" },
     "expected-commit": { type: "string" },
     "alternate-policy": { type: "boolean" },
     prewarm: { type: "boolean" },
@@ -63,7 +74,9 @@ const { values } = parseArgs({
     "eviction-delay-ms": { type: "string" },
     "agent-db-fixture": { type: "string" },
     "refresh-commit": { type: "string" },
+    "alternate-commit": { type: "string" },
     "filesystem-owner": { type: "string" },
+    "filesystem-worker": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
@@ -172,11 +185,23 @@ Reflect.set(globalThis, contentionKey, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
-    if (values["filesystem-owner"] && url.endsWith("/src/agents/worktrees/filesystem-native.ts")) {
+    if (
+      (values["filesystem-owner"] || values["filesystem-worker"]) &&
+      url.endsWith("/src/agents/worktrees/filesystem-native.ts")
+    ) {
+      let source = readFileSync(values["filesystem-owner"] ?? new URL(url), "utf8");
+      if (values["filesystem-worker"]) {
+        const resolver = "return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);";
+        assert(source.includes(resolver));
+        source = source.replace(
+          resolver,
+          `return new URL(${JSON.stringify(values["filesystem-worker"])});`,
+        );
+      }
       return {
         format: "module-typescript",
         shortCircuit: true,
-        source: readFileSync(values["filesystem-owner"], "utf8"),
+        source,
       };
     }
     if (
@@ -282,11 +307,15 @@ const { listTemplatesAsync } =
   await import("../../src/agents/worktrees/template-registry-async.js");
 const { nativeWorktreeFilesystem } =
   await import("../../src/agents/worktrees/filesystem-native.js");
-const refreshCommit = values["refresh-commit"]
-  ? await requireGit(repo, ["rev-parse", "--verify", `${values["refresh-commit"]}^{commit}`])
+const alternate = values["alternate-commit"] ?? values["refresh-commit"];
+const refreshCommit = alternate
+  ? await requireGit(repo, ["rev-parse", "--verify", `${alternate}^{commit}`])
   : undefined;
 if (refreshCommit) {
-  assert(process.platform === "darwin", "Clone identity proof requires APFS");
+  assert(
+    values["alternate-commit"] || process.platform === "darwin",
+    "Clone identity proof requires APFS",
+  );
   assert(!values.prewarm && !values["alternate-policy"] && !values["default-base"]);
   await new ManagedWorktreeService({ getConfig: () => config }).create({
     repoRoot: repo,
@@ -355,13 +384,122 @@ const projectOwnerSha256 = projectSelection
       )
       .digest("hex")
   : undefined;
-const rows = [];
+const rows: unknown[] = [];
 try {
   if (projectSelection) {
     // Fixture registration must not warm only the first measured state lookup.
     await drainGlobalSingletonLifecycleState();
   }
-  for (let index = 0; index < samples; index++) {
+  if (values["base-advance"]) {
+    const { prewarmLocalWorkspaceTemplates } =
+      await import("../../src/gateway/worker-environments/local-workspace-prewarm.js");
+    // Startup runs an empty idle pass before later creates; exclude lazy loader cost.
+    await prewarmLocalWorkspaceTemplates({
+      getConfig: () => config,
+      signal: new AbortController().signal,
+    });
+    const service = new ManagedWorktreeService({ getConfig: () => config });
+    const create = (name: string) =>
+      service.create({
+        repoRoot: repo,
+        name,
+        runSetupScript: false,
+        provisionIgnoredFiles: false,
+      });
+    await create("seed");
+    assert(
+      (await listTemplatesAsync(process.env)).some(
+        (entry) => entry.status === "ready" && entry.backend === "btrfs",
+      ),
+      "Base-advance proof requires a ready native btrfs template",
+    );
+    const contents = "synthetic base advance\n";
+    await fs.writeFile(path.join(repo, "advance.txt"), contents);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 ** 2,
+      }).trim();
+    git("add", "advance.txt");
+    git(
+      "-c",
+      "user.name=Synthetic",
+      "-c",
+      "user.email=synthetic@example.invalid",
+      "commit",
+      "-qm",
+      "advance",
+    );
+    git("push", "origin", "main");
+    const target = git("rev-parse", "HEAD");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 31_000;
+    let clones = 0;
+    const copy = nativeWorktreeFilesystem.copy;
+    nativeWorktreeFilesystem.copy = async (...args) => {
+      clones++;
+      await copy(...args);
+    };
+    const childCpu = () => {
+      if (process.platform !== "linux") {
+        return 0;
+      }
+      const fields = readFileSync("/proc/self/stat", "utf8").split(") ")[1]!.split(" ");
+      return (Number(fields[13]) + Number(fields[14])) * 10;
+    };
+    const measure = async (phase: string, run: () => Promise<unknown>) => {
+      const cpu = process.cpuUsage();
+      const mainCpu = process.threadCpuUsage();
+      const allocated = getHeapStatistics().total_allocated_bytes;
+      const children = childCpu();
+      const beforeClones = clones;
+      const start = performance.now();
+      const result = await run();
+      const elapsedMs = performance.now() - start;
+      const used = process.cpuUsage(cpu);
+      const mainUsed = process.threadCpuUsage(mainCpu);
+      const row = {
+        phase,
+        target,
+        elapsedMs,
+        processCpuMs: (used.user + used.system) / 1000,
+        mainThreadCpuMs: (mainUsed.user + mainUsed.system) / 1000,
+        mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+        childCpuMs: childCpu() - children,
+        nativeCopies: clones - beforeClones,
+        load: loadavg(),
+      };
+      rows.push(row);
+      console.log(JSON.stringify(row));
+      return result;
+    };
+    try {
+      await measure("idle", () =>
+        prewarmLocalWorkspaceTemplates({
+          getConfig: () => config,
+          signal: new AbortController().signal,
+        }),
+      );
+      for (const name of ["first", "warm"]) {
+        const created = await measure(name, () => create(name));
+        assert(
+          created &&
+            typeof created === "object" &&
+            "path" in created &&
+            typeof created.path === "string",
+        );
+        assert.equal(git("rev-parse", "HEAD"), target);
+        assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), target);
+        assert.equal(await fs.readFile(path.join(created.path, "advance.txt"), "utf8"), contents);
+        assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+      }
+      await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
+    } finally {
+      Date.now = realNow;
+      nativeWorktreeFilesystem.copy = copy;
+    }
+  }
+  for (let index = 0; index < (values["base-advance"] ? 0 : samples); index++) {
     const requestedCommit = refreshCommit && index % 2 === 0 ? refreshCommit : commit;
     const previous = refreshCommit
       ? (await listTemplatesAsync(process.env)).find((entry) => entry.status === "ready")
@@ -434,6 +572,12 @@ try {
     const processUsed = process.cpuUsage(processCpu);
     const row = {
       index,
+      requestedCommit,
+      generations: values["alternate-commit"]
+        ? (await listTemplatesAsync(process.env))
+            .filter((entry) => entry.status === "ready")
+            .map(({ id, sourceCommit, path: directory }) => ({ id, sourceCommit, directory }))
+        : undefined,
       sourceOnly,
       ownerSha256,
       projectOwnerSha256,
@@ -477,7 +621,7 @@ try {
     }
     assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), requestedCommit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
-    if (refreshCommit) {
+    if (refreshCommit && !values["alternate-commit"]) {
       assert(previous?.backend === "apfs");
       const current = (await listTemplatesAsync(process.env)).find(
         (entry) => entry.cacheKey === previous.cacheKey,

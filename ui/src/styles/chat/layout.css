@@ -2719,6 +2719,18 @@ openclaw-chat-ci-details {
   margin: 0;
 }
 
+/* Callouts near the composer keep its surface like the other neighbors; tone
+   stays in their text or icon, never in the fill. */
+.agent-chat__composer-notices .callout:is(.agent-chat__composer-alert, .agent-chat__talk-status),
+.agent-chat__disabled-banner.callout:not(.agent-chat__disabled-banner--replacement) {
+  border-color: var(--chat-composer-hairline);
+  background: var(--composer-attached-surface);
+}
+
+.agent-chat__disabled-banner.callout.info {
+  color: var(--text);
+}
+
 @media (max-width: 640px) {
   .chat-topbar-notices {
     max-width: calc(100% - 84px);

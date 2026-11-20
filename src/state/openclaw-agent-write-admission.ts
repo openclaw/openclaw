@@ -439,6 +439,14 @@ export async function runOpenClawAgentWorkerWrite<T>(
     // Once admitted, its bounded transaction settles under the ordinary writer rules.
     let draining: Promise<void> | null | undefined;
     while ((draining = admission.queues.get(storePath)?.drainPromise)) {
+      // A foreground owner can await this nested write before releasing its queue.
+      // Let the normal reservation below enforce reentrancy instead of waiting on itself.
+      if (
+        !admission.queues.get(storePath)?.holder?.worker &&
+        isActiveStoreWriter(admission.queues, storePath)
+      ) {
+        break;
+      }
       await racePromiseWithAbortSignal(draining, signal, (aborted) => aborted.reason);
     }
   }

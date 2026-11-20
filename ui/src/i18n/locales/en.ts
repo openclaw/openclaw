@@ -247,7 +247,7 @@ type EnglishCatalog = TranslationMap & {
     failureGuidance: TranslationMap;
   };
   newSession: TranslationMap &
-    Record<"title" | "hint" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
+    Record<"title" | "placementReloadBlocked" | "discardUnsavedAndReload", string>;
   commandPalette: TranslationMap;
   palette: TranslationMap & {
     placeholder: string;
@@ -682,7 +682,6 @@ const startupEnglish = {
   agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
-    hint: "Pick where this session works.",
     placementReloadBlocked: "Recovery needs a reload. Unsaved starts will be lost.",
     discardUnsavedAndReload: "Discard unsaved starts and reload",
   },
@@ -947,6 +946,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1425,21 +1425,13 @@ const startupEnglish = {
   usage: {
     common: {
       emptyValue: "—",
-      unknown: "unknown",
     },
-    loading: {
-      badge: "Loading usage…",
-    },
-    metrics: {
-      tokens: "Tokens",
-      cost: "Cost",
-    },
+    loading: {},
+    metrics: {},
+    // Settings search uses these headings before the Usage route loads.
     heatmap: {
       title: "Token activity",
       subtitle: "Daily token intensity in this range, up to one year.",
-      cellTokens: "{tokens} tokens",
-      less: "Less",
-      more: "More",
     },
     providerUsage: {},
     presets: {},
@@ -1456,9 +1448,6 @@ const startupEnglish = {
       input: "Input",
       cacheWrite: "Cache write",
       cacheRead: "Cache read",
-      total: "Total",
-      tokensByType: "Tokens by type",
-      costByType: "Cost by type",
     },
     overview: {
       title: "Usage overview",
@@ -1562,6 +1551,9 @@ const startupEnglish = {
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
+      startNewSession: "Start a new session",
+      harnessUpdatePrompt:
+        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },
@@ -1621,6 +1613,7 @@ const startupEnglish = {
       preparingContext: "Preparing reply",
       memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
+      preparingTool: "Preparing a tool call",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying",

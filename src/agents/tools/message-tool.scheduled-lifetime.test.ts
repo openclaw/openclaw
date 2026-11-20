@@ -72,19 +72,21 @@ it.for([
   ["poll-partial", "poll", "direct", "partial", partiallyDelivered("poll-partial")],
   ["poll-partial", "poll", "gateway", "partial", partiallyDelivered("poll-partial")],
 ] as const)(
-  "settles %s revocation during %s via %s as %s",
+  "settles %s scope closure during %s via %s as %s",
   async ([revokeAt, action, deliveryMode, outcome, expected], { signal }) => {
     const accepted = outcome !== "rejected";
     const at = (...stages: string[]) => stages.includes(revokeAt);
     const viaGateway = deliveryMode === "gateway";
     const existingGatewayJob = revokeAt === "provider" && deliveryMode === "gateway";
-    const revokedError = "cron message action authority is no longer active";
+    const revokedError = "message action turn capability is no longer active";
     const laterError =
       revokeAt === "poll-provider"
         ? undefined
         : revokeAt === "action"
           ? "Message send aborted"
-          : revokedError;
+          : viaGateway
+            ? "agent tool caller authority is no longer active"
+            : revokedError;
     const registry = pluginRuntime.captureActivePluginRegistrySnapshot();
     const state = await createOpenClawTestState();
     const source = new AbortController();
@@ -365,7 +367,7 @@ it.for([
       if (revokeAt === "action") {
         activeJobs.requestActiveCronJobCancellation(jobId, "Cron job removed by operator.");
       } else {
-        activeJobs.noteActiveCronJobMessageActionAuthorityMutation(jobId);
+        admission.close();
       }
       releaseBoundary.resolve();
 
@@ -374,7 +376,7 @@ it.for([
       } else {
         await expect(pending).rejects.toThrow(
           viaGateway && revokeAt !== "unconfirmed-action"
-            ? "agent runtime authority is no longer active"
+            ? "The message turn has ended. Start a new turn to retry."
             : revokedError,
         );
       }

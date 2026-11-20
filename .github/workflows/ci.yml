@@ -133,6 +133,7 @@ jobs:
       hosted_runner_profile_contract: ${{ steps.runner_profile.outputs.hosted_runner_profile_contract }}
       runner_profile: ${{ steps.runner_profile.outputs.runner_profile }} # hosted-runner-profile-contract-v1
       node_runner_backend: ${{ steps.runner_profile.outputs.node_runner_backend }} # runson-runner-profile-contract-v1
+      boat_node_job_limit: ${{ steps.runner_profile.outputs.boat_node_job_limit }}
       ci_qualification: ${{ steps.runner_profile.outputs.ci_qualification }}
       ci_shape: ${{ steps.runner_profile.outputs.ci_shape }}
       qualification_runner_backend: ${{ steps.runner_profile.outputs.qualification_runner_backend }}
@@ -201,6 +202,7 @@ jobs:
       startup_corpus_test_files_json: ${{ steps.manifest.outputs.startup_corpus_test_files_json }}
       changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
       narrow_check_paths_json: ${{ steps.manifest.outputs.narrow_check_paths_json }}
+      changed_root_test_paths_json: ${{ steps.manifest.outputs.changed_root_test_paths_json }}
       run_check_plan: ${{ steps.manifest.outputs.run_check_plan }}
       shared_sdk_declarations: ${{ steps.manifest.outputs.shared_sdk_declarations }}
       check_plan_input_json: ${{ steps.manifest.outputs.check_plan_input_json }}
@@ -2535,58 +2537,7 @@ jobs:
       - name: Install Playwright WebKit
         id: ui_webkit
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
-        run: &install_playwright_webkit_run |
-          # Hosted images rank one archive mirror first and apt leaves it only on errors,
-          # so a mirror that trickles packages can outlast the job. Download under a
-          # deadline (stopping a download is safe, stopping dpkg is not), retry once
-          # without that mirror, then install from the downloaded archives.
-          set -euo pipefail
-          as_root=()
-          [[ "$(id -u)" == 0 ]] || as_root=(sudo -n)
-          download_only=/etc/apt/apt.conf.d/99openclaw-webkit-download-only
-          mirrors=/etc/apt/apt-mirrors.txt
-          mirrors_backup=
-          restore_apt() {
-            "${as_root[@]}" rm -f "$download_only"
-            if [[ -n "$mirrors_backup" ]]; then
-              "${as_root[@]}" tee "$mirrors" < "$mirrors_backup" > /dev/null
-              mirrors_backup=
-            fi
-          }
-          trap restore_apt EXIT
-          # Run the deadline as root: Playwright's own sudo does not pass it on, so a
-          # deadline outside sudo would leave apt-get downloading with its lock held.
-          # Resolve the CLI as the runner user so pnpm (a Corepack shim) never runs as root.
-          playwright="$(pnpm --dir ui exec which playwright)"
-          download_webkit_deps() {
-            "${as_root[@]}" env "PATH=$PATH" timeout --kill-after=10s "$1" \
-              "$playwright" install-deps webkit
-          }
-          printf 'APT::Get::Download-Only "true";\n' | "${as_root[@]}" tee "$download_only" > /dev/null
-          status=0
-          download_webkit_deps 120s || status=$?
-          if [[ "$status" == 124 || "$status" == 137 ]]; then
-            if [[ -f "$mirrors" ]] && (( $(grep -c . "$mirrors") > 1 )); then
-              echo "::warning::WebKit system packages did not download in 120s from $(head -n 1 "$mirrors" | cut -f 1); retrying with the image's other archive mirrors."
-              mirrors_backup="$(mktemp)"
-              cp "$mirrors" "$mirrors_backup"
-              sed 1d "$mirrors_backup" | "${as_root[@]}" tee "$mirrors" > /dev/null
-              status=0
-              download_webkit_deps 300s || status=$?
-              if [[ "$status" != 0 ]]; then
-                echo "::error::WebKit system packages did not download from the fallback archive mirrors (exit $status)."
-                exit "$status"
-              fi
-            else
-              echo "::warning::WebKit system packages did not download in 120s and no other archive mirror is configured; continuing without a deadline."
-            fi
-          elif [[ "$status" != 0 ]]; then
-            exit "$status"
-          fi
-          "${as_root[@]}" rm -f "$download_only"
-          pnpm --dir ui exec playwright install-deps webkit
-          restore_apt
-          pnpm --dir ui exec playwright install webkit
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Test Control UI WebKit overlays and focus
         if: ${{ !cancelled() && steps.ui_webkit.outcome == 'success' && (steps.ui_bun.outcome == 'success' || steps.ui_bun.outcome == 'skipped') && matrix.shard == 1 && needs.preflight.outputs.run_ui_webkit == 'true' }}
@@ -2710,7 +2661,7 @@ jobs:
 
       - name: Install selected Control UI E2E WebKit
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'webkit')
-        run: *install_playwright_webkit_run
+        uses: ./.ci-harness/.github/actions/setup-playwright-webkit
 
       - name: Prepare selected Control UI E2E Gateway runtime
         if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'runtime')
@@ -3697,7 +3648,7 @@ jobs:
     name: ${{ matrix.check_name || 'checks-node-core-test-nondist-shard' }}
     needs: [preflight]
     if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.run_checks_node_core_nondist == 'true' }}
-    runs-on: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && matrix.runner == 'ubuntu-24.04' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')) }}
+    runs-on: ${{ needs.preflight.outputs.effective_runner_backend == 'boat' && matrix.runner == 'ubuntu-24.04' && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend == 'github' && github.run_attempt == 1 && needs.preflight.outputs.boat_node_job_limit != '' && fromJSON(needs.preflight.outputs.boat_node_job_limit) > 0 && contains(fromJSON('["boat-large","boat-xlarge"]'), matrix.runner) && matrix.runner || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')))) || (needs.preflight.outputs.node_runner_backend == 'runson' && matrix.runner == 'runson-c8i-8xlarge' && github.run_attempt == 1 && format('runs-on={0}-{1}/family=c8i.8xlarge/cpu=32/ram=64/spot=true/retry=false/image=ubuntu24-full-x64/volume=80gb', github.run_id, matrix.check_name) || matrix.runner == 'runson-c8i-8xlarge' && 'ubuntu-24.04' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1 && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && needs.preflight.outputs.node_runner_backend == 'github' && github.run_attempt == 1 && needs.preflight.outputs.boat_node_job_limit != '' && fromJSON(needs.preflight.outputs.boat_node_job_limit) > 0 && contains(fromJSON('["boat-large","boat-xlarge"]'), matrix.runner) && matrix.runner || (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (github.run_attempt != 1 && (needs.preflight.outputs.ci_qualification == 'true' || needs.preflight.outputs.effective_runner_backend == 'boat') && 'github' || needs.preflight.outputs.placement_runner_backend)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && ((matrix.runner == 'blacksmith-8vcpu-ubuntu-2404' && contains(fromJSON('["checks-node-compact-large-9","checks-node-compact-large-5"]'), (matrix.base_check_name || matrix.check_name))) && 'blacksmith-4vcpu-ubuntu-2404' || (startsWith(matrix.runner, 'boat') && github.run_attempt != 1 && 'ubuntu-24.04' || matrix.runner_label || matrix.runner) || (needs.preflight.outputs.effective_runner_backend == 'boat' && github.run_attempt == 1 && 'boat' || 'blacksmith-2vcpu-ubuntu-2404')) || 'ubuntu-24.04')) }}
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
@@ -4144,6 +4095,27 @@ jobs:
             availableParallelism() >= 8 ? 8 : 1;
           process.exitCode = await runChangedCheck(detectChangedLanes(paths), { lintOnly: true, lintSelection, lintThreads });
           CHANGED_LINT
+
+      - name: Run fallback root-test lint
+        if: ${{ !cancelled() && steps.check_setup.outcome == 'success' && steps.bun_setup.outcome == 'success' && matrix.task == 'lint' && !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json) && needs.preflight.outputs.changed_root_test_paths_json && needs.preflight.outputs.changed_root_test_paths_json != '[]' }}
+        env:
+          ROOT_TEST_PATHS_JSON: ${{ needs.preflight.outputs.changed_root_test_paths_json }}
+          OPENCLAW_LOCAL_CHECK: "0"
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import ./scripts/tsx.mjs --input-type=module <<'ROOT_TEST_LINT'
+          import { detectChangedLanes } from "./scripts/changed-lanes.mts";
+          import { runChangedCheck } from "./scripts/check-changed.mts";
+          const paths = JSON.parse(process.env.ROOT_TEST_PATHS_JSON);
+          process.exitCode = await runChangedCheck(detectChangedLanes(paths), {
+            lintOnly: true,
+            lintThreads: 1,
+            lintSelection: {
+              files: [], rootTestFiles: paths, coreStripes: [], extensionStripes: [], groups: [], central: false,
+            },
+          });
+          ROOT_TEST_LINT
 
       - name: Run check shard
         if: ${{ !cancelled() && (steps.check_setup.outcome == 'success' || steps.npm-lock-scope.outputs.skip == 'true') && (matrix.task != 'lint' || steps.bun_setup.outcome == 'success') && (matrix.task != 'lint' || !(needs.preflight.outputs.run_check_plan == 'true' && needs.check-plan.outputs.central_lint_selection_json || needs.preflight.outputs.central_lint_selection_json)) }}
@@ -4876,7 +4848,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/postgres-conformance
         with:
           image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
-          target: src/gateway/server-database-engine.postgres.test.ts
+          target: src/gateway/server-database-engine-cron.postgres.test.ts
 
   check-docs:
     permissions:
@@ -6138,6 +6110,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatSessionsCodingTests
             -only-testing:OpenClawTests/SettingsHubTests
             -only-testing:OpenClawTests/SettingsHubVisualProofTests/testIngressAuthorizedDashboardEntryPointsLoadTheSelectedGatewayPage
             -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
@@ -6196,6 +6169,7 @@ jobs:
               -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.xcresult \
               -parallel-testing-enabled NO \
               -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testWatchMessageDeliveryIsReachableFromSettings \
+              -only-testing:OpenClawUITests/OpenClawSnapshotUITests/testNestedCustomToolsExposeResultsQuietDetailsAndPendingAuthority \
               -only-testing:OpenClawUITests/BootstrapSetupFailureUITests \
               "$test_action"
           fi

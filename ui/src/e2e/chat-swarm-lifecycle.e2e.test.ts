@@ -7,7 +7,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Delegated work history" });
 const sessionKey = "agent:main:dashboard:11111111-2222-4333-8444-555555555555";
-const groupId = "release-review";
+const groupId = `swarm:${sessionKey}:review`;
 const labels = [
   "Check release notes",
   "Review API contracts",
@@ -21,11 +21,11 @@ const message = (
   role: string,
   content: unknown,
   timestamp: number,
-  runId = "review",
+  runId: string | null = "review",
 ) => ({
   role,
   content,
-  __openclaw: { id, runId },
+  __openclaw: { id, ...(runId ? { runId } : {}) },
   timestamp,
 });
 
@@ -62,6 +62,7 @@ suite.define(() => {
         const initial = [
           message("request", "user", "Review the change and publish the PR.", 1),
           message("intro", "assistant", "I’ll review the change before publishing it.", 2),
+          message("peer", "user", "Please flag anything that blocks release.", 2, null),
           message(
             "launch",
             "assistant",
@@ -100,10 +101,12 @@ suite.define(() => {
           historyMessages: initial,
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const pane = page.locator(".chat-pane-cache__pane--active");
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
         await pane
           .getByText("I’ll review the change before publishing it.", { exact: true })
           .waitFor();
+        const swarm = pane.locator('.chat-thread [data-test-id="chat-inline-swarm"]');
+        expect(await swarm.count()).toBe(0);
         await selectChatLayoutAction(pane, "Subagents");
         const panel = pane.locator("openclaw-chat-subagents-panel");
         await expect.poll(() => panel.locator("[data-session-key]").count()).toBe(viewport.count);
@@ -167,14 +170,28 @@ suite.define(() => {
           label: "Review and publish",
           sessionId: "parent",
         };
+        const completedSwarm = swarmSnapshot(
+          groupId,
+          1,
+          children.map((child) => ({ ...child, status: "done" })),
+        );
+        if (viewport.failure) {
+          const group = completedSwarm.groups[0]!;
+          group.done = 0;
+          group.failed = 1;
+          completedSwarm.groups[0] = { ...group, children: [] };
+        }
         await gateway.setMethodResponse("chat.history", {
           messages: completed,
           sessionId: "parent",
         });
-        await gateway.setMethodResponse("sessions.describe", { session: retiredParent });
+        await gateway.setMethodResponse("sessions.describe", {
+          session: { ...retiredParent, swarm: completedSwarm },
+        });
         await gateway.setMethodResponse("sessions.list", chatSessionListResponse([retiredParent]));
         await page.reload();
         await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
+        expect(await swarm.count()).toBe(0);
         // Open retained work, then any aggregates; standalone launches need no second group.
         await pane.locator(".chat-work-group .chat-activity-group__summary").click();
         const closedGroups = pane.locator(

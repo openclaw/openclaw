@@ -14,8 +14,9 @@ import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
+export type ShellNavigationIntent = "sidebar-section";
 
-type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey: string];
+type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtitleKey?: string];
 
 // Pages derives its built-in catalog from these destinations. Personal rail
 // pins reference the catalog without changing its availability. Chat has the
@@ -445,7 +446,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   debug: navigationPresentation("bug", "debug"),
   logs: navigationPresentation("scrollText", "logs"),
   plugin: navigationPresentation("plug", "plugin"),
-  "new-session": ["plus", "newSession.title", "newSession.hint"],
+  "new-session": ["plus", "newSession.title"],
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
@@ -506,5 +507,5 @@ export function formatDocumentTitle(options: {
 
 export function subtitleForRoute(routeId: NavigationRouteId, translate = t): string {
   const subtitleKey = NAVIGATION_PRESENTATION[routeId][2];
-  return translate(subtitleKey);
+  return subtitleKey ? translate(subtitleKey) : "";
 }

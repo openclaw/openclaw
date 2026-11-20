@@ -413,9 +413,10 @@ describe("Code Mode agent-loop error recovery", () => {
     }
   });
 
-  it("preserves native exec refusal diagnostics", async ({ onTestFinished }) => {
+  it("preserves native exec output and refusal diagnostics", async ({ onTestFinished }) => {
     const { state, shell } = await nativeExecFixture("exec-cwd-recovery", onTestFinished, storeEnv);
-    await writeFile(join(state.workspaceDir, "input.txt"), "review-ready");
+    const stdout = "  review-ready\n \n";
+    await writeFile(join(state.workspaceDir, "input.txt"), stdout);
     const execute = vi.spyOn(shell, "execute");
     const command = `${JSON.stringify(globalThis.process.execPath)} -e "require('node:fs').appendFileSync('executions.txt', 'run\\n'); process.stdout.write(require('node:fs').readFileSync('input.txt', 'utf8'))"`;
     const nonzeroCommand = `${JSON.stringify(globalThis.process.execPath)} -e "process.stdout.write('ordinary-exit'); process.exit(7)"`;
@@ -451,7 +452,7 @@ describe("Code Mode agent-loop error recovery", () => {
     );
     expect(results[1]).toMatchObject({
       status: "completed",
-      value: { status: "completed", exitCode: 0, aggregated: "review-ready" },
+      value: { status: "completed", exitCode: 0, aggregated: stdout },
     });
     expect(results[2]).toMatchObject({
       status: "completed",
@@ -526,7 +527,7 @@ describe("Code Mode agent-loop error recovery", () => {
     ]);
     expect(
       readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
-    ).toMatchObject({ status: "completed", value: "original result" });
+    ).toMatchObject({ status: "completed", value: "original result\n" });
     expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
     expect(await readFile(started, "utf8")).toBe("started");
   });

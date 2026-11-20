@@ -11,6 +11,7 @@ import {
 } from "./full-release-publication-contract.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
+import { verifyReceiptRecoveryAuthority } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { createReleaseEvidenceClient, validateReleaseRunEvidence } from "./release-ci-summary.mjs";
 
@@ -54,6 +55,7 @@ function scalarString(value) {
  * @property {{ package?: { version?: unknown } }} [candidateBinding]
  * @property {{ coveragePolicy?: unknown, targetVersion?: unknown, targetContextRef?: unknown, knownFlakyJobsJson?: unknown }} [validationInputs]
  * @property {unknown} [qualificationCoverage]
+ * @property {unknown} [receiptRecovery]
  * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
  */
 /**
@@ -290,7 +292,10 @@ function validatePublicationEvidence(options, evidence) {
         : expectedPublicationOperation,
     );
   }
-  const source = "candidate-owned-admission-v1";
+  const source =
+    evidence.qualification.kind === "recovery"
+      ? "receipt-backed-recovery-v1"
+      : "candidate-owned-admission-v1";
   return { run, source, coveragePolicy };
 }
 
@@ -399,7 +404,9 @@ function candidateArtifactAuthority(manifest, evidence, evidenceClient) {
 }
 
 function candidateArtifactAuthorityRecord(manifest, evidence) {
-  const descriptor = manifest?.sourceAdmission?.qualificationAdmission;
+  const descriptor =
+    manifest?.sourceAdmission?.qualificationAdmission ??
+    manifest?.receiptRecovery?.qualificationAdmission;
   if (!descriptor || !evidence.qualification.admission) {
     throw new Error("Authenticated candidate admission authority is missing");
   }
@@ -407,6 +414,14 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
   return structuredClone({
     descriptor,
     admission: evidence.qualification.admission,
+    recoveryProducer: manifest.receiptRecovery
+      ? {
+          runId: String(manifest.runId),
+          runAttempt: Number(manifest.runAttempt),
+          fullRef: manifest.workflowFullRef,
+          sha: manifest.workflowSha,
+        }
+      : null,
   });
 }
 
@@ -415,6 +430,13 @@ function candidateArtifactAuthorityRecord(manifest, evidence) {
 export function revalidateCandidateArtifactAuthority(authority, evidenceClient) {
   if (authority) {
     evidenceClient.revalidateQualificationAdmissionAuthority(authority);
+    if (authority.recoveryProducer) {
+      if (evidenceClient.verifyReceiptRecoveryAuthority) {
+        evidenceClient.verifyReceiptRecoveryAuthority(authority.recoveryProducer);
+      } else {
+        verifyReceiptRecoveryAuthority(authority.descriptor.repository, authority.recoveryProducer);
+      }
+    }
   }
 }
 
@@ -448,7 +470,8 @@ export async function authenticateCandidateOwnedArtifact({
   publisherFullRef = "refs/heads/main",
   client,
 }) {
-  if (!manifest?.sourceAdmission?.qualificationAdmission) {
+  const recovery = manifest?.receiptRecovery;
+  if (!manifest?.sourceAdmission?.qualificationAdmission && !recovery) {
     throw new Error(
       "Publication requires authenticated P admission; obtain new admitted qualification",
     );

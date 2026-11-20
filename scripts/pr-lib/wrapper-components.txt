@@ -20,11 +20,15 @@ package.json
 packages/acp-core/package.json
 packages/acp-core/src/structured-auth-redaction.ts
 packages/agent-core/package.json
+packages/agent-core/src/harness/compaction/conversation-serialization.ts
+packages/agent-core/src/harness/compaction/file-operations.ts
 packages/agent-core/src/harness/env/kill-tree.ts
 packages/agent-core/src/harness/messages.ts
 packages/agent-core/src/harness/session/background-result-placement.ts
+packages/agent-core/src/harness/session/tool-pairing-facts.ts
 packages/agent-core/src/harness/session/tool-result-pairing.ts
 packages/agent-core/src/harness/session/transcript-model.ts
+packages/agent-core/src/harness/utils/truncate.ts
 packages/agent-core/src/operator-messages.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
@@ -944,6 +948,8 @@ src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
 src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
+src/gateway/openclaw-id/access-plugin.ts
+src/gateway/openclaw-id/member-role-presets.ts
 src/gateway/openclaw-id/tunnel-principal-schema.ts
 src/gateway/openclaw-id/tunnel-principal.ts
 src/gateway/operator-run-recovery-source.codec.ts
@@ -1214,6 +1220,7 @@ src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
 src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
+src/infra/package-update-launcher-names.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-recovery-contract.ts
 src/infra/package-update-refusal.ts
@@ -1931,6 +1938,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
+src/process/idle-io-priority.ts
 src/process/kill-tree.ts
 src/process/linux-core-dump.ts
 src/process/linux-exec-cgroup-device.ts
@@ -2066,11 +2074,13 @@ src/shared/model-key.ts
 src/shared/monotonic-time.ts
 src/shared/node-list-parse.ts
 src/shared/oauth-refresh-outcome.ts
+src/shared/openclaw-id-policy.ts
 src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/rosetta-translation.ts
+src/shared/run-failure-notice.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
@@ -2527,8 +2537,12 @@ src/config/sessions/session-transcript-context-facts.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
 src/config/sessions/session-accessor.sqlite-metadata-read.ts
+src/config/sessions/session-accessor.sqlite-history-navigation.ts
+src/config/sessions/session-accessor.sqlite-model-context-navigation.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
+src/config/sessions/session-accessor.sqlite-reset-window.ts
+src/config/sessions/session-transcript-navigation.ts
 src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
@@ -2861,6 +2875,8 @@ src/sessions/transcript-visible-record.ts
 src/sessions/user-turn-transcript.metadata.ts
 src/sessions/user-turn-transcript.message.ts
 src/shared/assistant-display-content.ts
+src/shared/automation-creation.ts
+src/shared/automation-saved-definition.ts
 src/shared/chat-content.ts
 src/shared/chat-envelope.ts
 src/shared/keyboard-shortcuts.generated.ts
@@ -2934,6 +2950,7 @@ packages/gateway-protocol/src/schema/approval-id.ts
 src/agents/delivery-evidence-values.ts
 src/agents/embedded-agent-runner/message-visibility.ts
 src/auto-reply/reply-payload.ts
+src/chat/automation-job-result.ts
 src/chat/canvas-render.ts
 src/chat/tool-content.ts
 src/gateway/chat-display-projection.canvas.ts
@@ -2989,6 +3006,9 @@ src/commands/doctor/shared/update-phase.ts
 src/infra/session-sqlite-migration-artifact.ts
 src/infra/session-sqlite-migration-issues.ts
 src/infra/session-sqlite-migration-manifest.ts
+src/infra/update-displaced-database-receipt.ts
+src/infra/update-run-reader.ts
+src/state/openclaw-state-db-current-reader.ts
 src/infra/sqlite-integrity-operation.ts
 src/infra/sqlite-migration-scoped-snapshot.ts
 src/infra/update-candidate-plugin-code-links.ts

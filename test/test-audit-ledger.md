@@ -1135,6 +1135,97 @@ Temporary instrumentation was restored byte for byte. Scoped scripts-test
 typecheck, lint, formatting and both line-cap ratchets pass. Independent
 preservation and local ClawSweeper reviews found no actionable defects.
 
+### Standalone resolver fixture cleanup
+
+At `11b65598aa4d6b56ce786a611efbb172775a165b`, the module-resolution and
+fresh-export-resolver suites clear their directory trackers before removal
+and stop at the first error. Reuse the shared cleanup owner in both synchronous
+hooks. Preserve all five declarations / ten expanded cases, including lazy
+builtins and aliases, emitted/typed resolution after pruning and relocation,
+dynamic and shadowed resolution, and fresh-process export recovery/rejection.
+Keep registration of original, typed, image and relocated roots, plus all
+child-process inputs and assertions. Production and shared helpers are unchanged.
+
+Actual Vitest-hook controls reproduce lost failed and unattempted roots in both
+suites. The shared owner preserves the same error, cleans the healthy root,
+retains the failed root and removes it on retry, including a present relocated
+root beside an already absent original root. Clean baseline and candidate runs
+pass all ten cases; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation and local reviews found no actionable defects.
+
+### Standalone declaration fixture cleanup
+
+At `cd2ae19272a3ee7be456385fa7efc56d6e2109a6`, the standalone declaration suite clears its
+temporary-root tracker before removal. A removal failure loses ownership of the
+failed root. Reuse the shared cleanup owner without changing the single
+declaration / case. Retain worker and WebSocket declaration identity, positive
+type compatibility and both expected type errors. Keep registration before
+fallible fixture setup and compiler disposal before teardown.
+
+Actual registered-hook controls reproduce the lost failed and unattempted roots.
+The shared owner preserves the same error, removes the healthy root, retains the
+failed root and removes it on retry. The compiler is disposed before cleanup and
+the dependency symlink target stays intact. Clean baseline and candidate runs
+each pass the case; temporary instrumentation is restored byte for byte.
+Scoped typecheck, lint, formatting and line-cap checks pass. Independent
+preservation review found no gaps. Production and shared helpers are unchanged.
+
+### Remaining standalone fixture cleanup
+
+At `58dbe4055043f7c090a03b3c8a610a9e521e3452`, the metadata, native packaging and
+plugin selection suites clear their root trackers before removal. A failed
+removal loses the failed and unattempted roots. Reuse the shared cleanup owner
+in these three synchronous hooks, preserving metadata global restoration,
+fixture registration and child-process settlement. Retain all 56 declarations /
+89 cases: metadata 26/56, native packaging 25/28 and plugin selection 5/5.
+Production and shared helpers remain unchanged; test code is three lines smaller.
+
+Captured registered-hook controls reproduce the lost failed and unattempted
+roots in all three suites. The shared owner preserves the same error, removes
+the healthy root, retains the failed root and removes it on retry. The native
+control uses the real root/alias pair and checks symlink existence with lstat;
+metadata globals are restored before the removal failure. Clean baseline and
+candidate runs each pass all 89 cases. Temporary instrumentation is restored
+byte for byte. Independent preservation reviews found no gaps. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass.
+
+### Boat release-runner fixture cleanup
+
+At `da816e2190ca2466c0a5cebe32a6aaabea64029a`, the Boat release-runner test clears
+its root tracker before removal. Reuse the shared cleanup owner so a failed
+removal retains its root and does not prevent healthy fixture cleanup. Preserve
+all six declarations / nine expanded cases, fixture executable bytes,
+environment, receipt assertions, Windows skip and synchronous child settlement.
+Production and shared helpers are unchanged; test code is three lines smaller.
+
+Actual registered-hook controls reproduce the original error with lost failed
+and unattempted roots and no retry. The candidate preserves the same error,
+removes the healthy root, retains the failed root and removes it on retry.
+The fixture subprocesses finish before removal. Clean baseline and candidate
+runs each pass all nine cases; temporary instrumentation is restored byte for
+byte. Independent preservation review found no gaps. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass. These CLI tests use
+local provider fixtures; they do not qualify live Boat provisioning.
+
+### Catalog account-identity duplicate layer
+
+At `ccc83c79dbeaaaedfb56ae981e3f1b99c86bd5c3`, removed the metadata-handoff
+suite's copied account-identity block, private helpers and unused imports:
+three declarations / four expanded cases, 201 test lines. Production and shared
+support are unchanged. The scoped-refresh suite retains the identical credential,
+selected-profile and post-startup cases; its endpoint row retains both the
+changed-provider exclusion and unrelated-provider inclusion. Independent review
+found equivalent harness setup and no assertion transfer needed.
+
+The baseline passes 31 cases and the candidate passes all 27 remaining cases
+across both files. Separate endpoint, credential and selected-profile guard
+mutations fail their keeper assertions; all temporary source bytes were restored.
+A reload-auth predicate mutation survives: the post-startup case checks the final
+reload result, not immediate retention before background reacquisition. Both
+copies share that limitation; no stronger timing coverage is claimed. Targeted
+agents-other typecheck, lint, formatting and all three line-count ratchets pass.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

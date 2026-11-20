@@ -11,6 +11,7 @@ import {
   guardWebchatMcpTools,
   readWebchatMcpRequester,
 } from "../../agent-bundle-mcp-webchat-requester.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.wrapper.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
@@ -255,19 +256,21 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+      // Listed tools this turn refuses are never delegated or captured as authority.
+      const executable = schemaProjection.tools.filter(isAgentToolExecutionAvailable);
       // Cron is constructed before bundled tools; capture only the executable
       // surface that survived provider normalization and schema quarantine.
       captureFinalEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
         cronCreatorToolAllowlistCaptureRef,
-        schemaProjection.tools,
+        executable,
         (tool) => getPluginToolMeta(tool),
       );
       if (inheritedToolAllowlist?.length) {
         // Runtime availability limits this turn; independently approved workspace
         // capabilities remain delegable under the same final runtime cap.
         replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, [
-          ...schemaProjection.tools,
+          ...executable,
           ...applyEmbeddedAttemptToolsAllow(
             toolsEnabled ? additionalInheritedToolNamesRef.map((name) => ({ name })) : [],
             effectiveToolsAllow,
@@ -283,8 +286,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionId: params.attempt.sessionId,
       });
       // Presentation-only absence must not become a delegated capability denial.
-      // Capture after final policy/quarantine, then omit from the model surface.
-      return !params.preparedToolBase.messageToolAvailable
+      // Capture after final policy/quarantine, then omit from the model surface,
+      // unless the session lists one fixed set (the call then fails visibly).
+      return !params.preparedToolBase.messageToolAvailable && !params.preparedToolBase.fixedListing
         ? schemaProjection.tools.filter((tool) => tool.name !== "message")
         : schemaProjection.tools;
     };

@@ -967,6 +967,14 @@ struct RootTabsPresentationTests {
         #expect(!RootTabs.sidebarVisibility(layoutMode: .drawer, splitPreference: nil))
     }
 
+    @Test func `destination header control hides only a visible split sidebar`() {
+        // A drawer opening must not change the destination toolbar, so its control stays Show.
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .drawer))
+        #expect(!RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: false, layoutMode: .split))
+        #expect(RootTabs.sidebarHeaderControlHidesSidebar(isSidebarVisible: true, layoutMode: .split))
+    }
+
     private static func sessionEntry(
         key: String,
         archived: Bool? = nil,

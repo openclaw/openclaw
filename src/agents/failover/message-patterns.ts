@@ -71,6 +71,7 @@ export function isPreDispatchToolCallRejectionMessage(errorMessage?: string): bo
   }
   return (
     PRE_DISPATCH_TOOL_CALL_REJECTION_MESSAGES.has(errorMessage) ||
+    errorMessage.startsWith("Provider completed stream with an incomplete tool call: ") ||
     GATEWAY_INVALID_TOOL_INPUT_RE.test(errorMessage.trim())
   );
 }

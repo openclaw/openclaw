@@ -5,7 +5,11 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { StreamFn } from "../runtime/index.js";
+import { AuthStorage } from "../sessions/auth-storage.core.js";
+import { ModelRegistry } from "../sessions/model-registry.core.js";
+import { SettingsManager } from "../sessions/settings-manager.js";
 
 const sent: unknown[] = [];
 const transport: StreamFn = async (model, _context, options) => {
@@ -45,7 +49,7 @@ vi.mock("./extra-params.js", async (importOriginal) => ({
   },
 }));
 
-const { prepareCompactionSessionAgent } = await import("./compaction-session-agent.js");
+const { prepareCompactionSessionStream } = await import("./compaction-session-agent.js");
 
 afterEach(() => {
   resetGlobalHookRunner();
@@ -61,23 +65,36 @@ const model = {
 
 async function prepare() {
   const session = { agent: {} as { streamFn?: StreamFn } };
-  await prepareCompactionSessionAgent({
+  const authStorage = AuthStorage.inMemory();
+  await prepareCompactionSessionStream(
+    {
+      effectiveModel: model,
+      authStorage,
+      provider: "fixture",
+      modelId: "fixture",
+      sessionAgentId: "main",
+      effectiveWorkspace: "/fixture",
+      agentDir: "/fixture/agent",
+      contextTokenBudget: 32_768,
+      runtimePlan: buildAgentRuntimePlan({
+        provider: "fixture",
+        modelId: "fixture",
+        model,
+        workspaceDir: "/fixture",
+      }),
+      resolvedMessageProvider: undefined,
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      hasRuntimeAuthExchange: false,
+      apiKeyInfo: { source: "fixture", mode: "api-key" },
+      params: { sessionId: "fixture-session-id", sessionKey: "fixture-session" },
+      trigger: "manual",
+    },
+    SettingsManager.inMemory(),
+    () => {},
+    "off",
+    undefined,
     session,
-    llmRuntime: {} as never,
-    providerStreamFn: undefined,
-    sessionId: "fixture-session-id",
-    effectiveModel: model as never,
-    authStorage: undefined as never,
-    provider: "fixture",
-    modelId: "fixture",
-    thinkLevel: "off",
-    sessionAgentId: "main",
-    effectiveWorkspace: "/fixture",
-    agentDir: "/fixture/agent",
-    contextTokenBudget: 32_768,
-    params: { sessionKey: "fixture-session" },
-    trigger: "manual",
-  });
+  );
   return session.agent.streamFn!;
 }
 

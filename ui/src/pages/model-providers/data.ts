@@ -51,6 +51,7 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { target: ModelProviderLogoutTarget }
+  | { removeConfigKey: string; defaultModels?: string }
   | {
       removeTargets: ModelProviderRemovalTarget[];
       keptSource?: string;
@@ -63,8 +64,10 @@ export type ModelProviderPendingLogout = { cardId: string; label: string } & (
 export type ModelProviderCard = ProviderPresentation & {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
-  /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
+  /** Preferred entry for presentation and key edits, not a provider-removal target. */
   configKey?: string;
+  /** Exact entries on this card, including aliases without credentials. */
+  configKeys: string[];
   configAuthMode?: string;
   apiKeySupported?: boolean;
   /** Provider ids that own credentials merged into this card. */
@@ -148,6 +151,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       profileOrderLocks: {},
       credentialProviderIds: [],
       logoutTargets: [],
+      configKeys: [],
       configApiKeys: [],
       modelCount: 0,
       availableModelCount: 0,
@@ -219,6 +223,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     if (!card) {
       continue;
     }
+    card.configKeys.push(provider.key);
     card.configKey ??= provider.key;
     if (provider.hasApiKey) {
       card.configKey = provider.key;

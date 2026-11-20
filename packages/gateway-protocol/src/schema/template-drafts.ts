@@ -27,6 +27,8 @@ export const TemplateDraftDocumentSchema = closedObject({
     }),
     { maxItems: 64 },
   ),
+  /** Workspace-relative path of the source agent's avatar image; the only non-text draft input. */
+  avatar: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
 });
 export const TemplatesDraftsCreateParamsSchema = closedObject({
   agentId: Target.agentId,
@@ -92,7 +94,10 @@ export type TemplatesDraftsReviewResult = {
   version: string;
   description: string;
   items: TemplateDraftReviewItem[];
-  files: Array<{ path: string; content: string; workspacePaths?: string[] }>;
+  /** Binary archive files, such as the avatar, are listed without `content`. */
+  files: Array<{ path: string; content?: string; workspacePaths?: string[] }>;
+  /** The packaged avatar as a PNG data URL, when the draft carries one. */
+  iconUrl?: string;
   scope: TemplateDraftDocument["scope"];
   publicationState?:
     | { status: "pending" | "published"; publication: TemplatesDraftsPublishResult }
