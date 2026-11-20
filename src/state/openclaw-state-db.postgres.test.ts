@@ -132,6 +132,7 @@ async function restoreEmptyPredecessorTables(client: pg.Client, previousVersion:
   for (const table of [
     "worker_environments",
     "worker_workspace_pending_results",
+    "worker_session_placements",
     "workspace_setup_state",
   ]) {
     expect((await client.query(`SELECT count(*)::int AS n FROM "${table}"`)).rows).toEqual([

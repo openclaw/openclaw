@@ -87,7 +87,7 @@ it.each(["runtime", "doctor"] as const)(
       using scope = new DatabaseSync(pathname);
       await assertSqliteMigrationScopePreserved(
         scope,
-        ["worker_environments", "schema_meta", "config_machine_state"],
+        ["worker_environments", "worker_session_placements", "schema_meta", "config_machine_state"],
         () => {
           if (owner === "doctor") {
             expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -96,6 +96,7 @@ it.each(["runtime", "doctor"] as const)(
         },
       );
       const database = openOpenClawStateDatabase(options);
+      expect(database.db.prepare("SELECT * FROM worker_session_placements").all()).toEqual([]);
       expect(
         database.db.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),
       ).toEqual(
