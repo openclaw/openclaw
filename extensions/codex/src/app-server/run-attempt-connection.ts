@@ -184,6 +184,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     preparedEnvironment?.managedLocalIdentity === true ||
     (preparedEnvironment !== undefined &&
       Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  const ownsLocalExecution = (appServer: CodexAppServerRuntimeOptions) =>
+    !sandbox?.enabled &&
+    !remoteExec &&
+    appServer.start.transport === "stdio" &&
+    !isCodexAppServerProxyLaunch(appServer.start.args) &&
+    !appServer.remoteWorkspaceRoot;
+  let scratchEnv: Record<string, string> | undefined;
   let shellEnvironment = baseShellEnvironment;
   let shellPathPrepend: readonly string[] | undefined;
   let shellGitConfigParameters: string | undefined;
@@ -194,27 +201,25 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
     // Resolve placement before projecting host PATH; socket peers and remote workspaces
     // own their tool lookup even when their control connection runs on this machine.
-    const ownedLocalProcess =
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot;
+    const ownedLocalProcess = ownsLocalExecution(appServer);
     const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
     shellGitConfigParameters = ownedLocalProcess
       ? preparedEnvironment?.localGitConfigParameters
       : undefined;
     const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
     shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
-    shellEnvironment = hasLocalToolEnv
+    const processEnvironment = hasLocalToolEnv
       ? { ...baseShellEnvironment, ...localToolEnv }
       : baseShellEnvironment;
+    shellEnvironment = ownedLocalProcess
+      ? { ...processEnvironment, ...scratchEnv }
+      : processEnvironment;
     // Tool lookup must not reject native login requests. Codex owns profile and
     // snapshot startup; only the identity restrictions above disable login.
-    return shellEnvironment
+    return processEnvironment
       ? {
           ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
+          start: { ...appServer.start, env: { ...appServer.start.env, ...processEnvironment } },
         }
       : appServer;
   };
@@ -569,13 +574,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }
     // Only local execution roots address Gateway settings; remote paths belong
     // to their executor. Prepare after permission admission and before tools/startup.
-    if (
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot
-    ) {
+    if (ownsLocalExecution(appServer)) {
+      scratchEnv = await params.hostCapabilities.prepareLocalExecScratch?.({
+        cwd: params.sessionRoot ?? effectiveCwd,
+      });
+      shellEnvironment = { ...shellEnvironment, ...scratchEnv };
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: effectiveCwd });
     }
     const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({

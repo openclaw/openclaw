@@ -9,16 +9,15 @@ import {
   Repeat,
   Show,
 } from "solid-js";
-import type { IconName } from "../../components/icon-data.ts";
 import {
   CatalogDiscoveryChip,
   CatalogDiscoveryChips,
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { TemplateCategoryIcon } from "../../components/solid/template-category-icon.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
@@ -27,6 +26,7 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { templateCategories } from "../../lib/template-categories.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
@@ -42,23 +42,6 @@ import {
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
-// ClawHub's current Template taxonomy. The "other" bucket is assigned by ClawHub.
-const templateCategories = [
-  ["", "templatesCatalog.categoryAll", "layoutGrid"],
-  ["personal", "templatesCatalog.categoryPersonal", "users"],
-  ["health", "templatesCatalog.categoryHealth", "activity"],
-  ["travel", "templatesCatalog.categoryTravel", "globe"],
-  ["productivity", "templatesCatalog.categoryProductivity", "listChecks"],
-  ["research", "templatesCatalog.categoryResearch", "search"],
-  ["engineering", "templatesCatalog.categoryEngineering", "braces"],
-  ["governance", "templatesCatalog.categoryGovernance", "shield"],
-  ["operations", "templatesCatalog.categoryOperations", "settings"],
-  ["finance", "templatesCatalog.categoryFinance", "coins"],
-  ["sales", "templatesCatalog.categorySales", "barChart"],
-  ["product", "templatesCatalog.categoryProduct", "box"],
-  ["people", "templatesCatalog.categoryPeople", "users"],
-  ["other", "templatesCatalog.categoryOther", "layers"],
-] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 4;
 // Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
@@ -99,22 +82,22 @@ function TemplateCard(
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
         type="button"
-        class="agents-home__template-card-link"
+        class="plugin-catalog-card__primary-link agents-home__template-card-link"
         aria-label={`${t("templatesCatalog.review")} ${props.entry.displayName}`}
         disabled={!props.entry.latestVersion}
         onClick={() => props.onSelect?.(props.entry)}
       />
-      <div class="agents-home__template-head">
-        <span class="agents-home__template-art" aria-hidden="true">
+      <header class="installed-plugins-card__head agents-home__template-head">
+        <span class="template-art agents-home__template-art" aria-hidden="true">
           <TemplateArtwork src={props.entry.iconUrl} />
         </span>
-        <div class="agents-home__template-content">
-          <div class="agents-home__template-identity">
+        <div class="plugin-catalog-card__content">
+          <div class="plugin-card-title-row agents-home__template-identity">
             <h3>{props.entry.displayName}</h3>
-            <span>{`@${props.entry.ownerHandle}`}</span>
+            <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
           </div>
           {/* Reserve both lines even when a Template has no summary. */}
-          <p class="agents-home__template-summary">{props.entry.summary}</p>
+          <p class="installed-plugins-card__summary">{props.entry.summary}</p>
         </div>
         <button
           type="button"
@@ -136,7 +119,7 @@ function TemplateCard(
               : "templatesCatalog.add",
           )}
         </button>
-      </div>
+      </header>
       <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
         <p class="agents-home__template-error" role="alert">
           {props.addFailure?.message}
@@ -175,14 +158,16 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
               <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
                 {() => (
                   <div class="agents-home__template-card oc-card" data-templates-placeholder>
-                    <div class="agents-home__template-head">
-                      <span class="agents-home__template-art" />
-                      <div class="agents-home__template-content">
-                        <div class="agents-home__template-identity">
+                    <header class="installed-plugins-card__head agents-home__template-head">
+                      <span class="template-art agents-home__template-art" />
+                      <div class="plugin-catalog-card__content">
+                        <div class="plugin-card-title-row agents-home__template-identity">
                           <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                          <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                          <span class="plugin-card-author" style={placeholderBar("40%")}>
+                            {"\u00a0"}
+                          </span>
                         </div>
-                        <p class="agents-home__template-summary">
+                        <p class="installed-plugins-card__summary">
                           <span style={{ display: "block", ...placeholderBar("100%") }}>
                             {"\u00a0"}
                           </span>
@@ -191,7 +176,7 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
                           </span>
                         </p>
                       </div>
-                    </div>
+                    </header>
                   </div>
                 )}
               </Repeat>
@@ -319,7 +304,7 @@ export function TemplatesExplore(
                   <CatalogDiscoveryChip
                     active={view.category === slug}
                     onClick={() => selectCategory(slug)}
-                    icon={<Icon name={icon} />}
+                    icon={<TemplateCategoryIcon icon={icon} />}
                   >
                     {t(label)}
                   </CatalogDiscoveryChip>
@@ -424,7 +409,7 @@ export function TemplatesExplore(
                             result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">
+                          <p class="muted agents-home__template-empty">
                             {t(
                               view.query.trim() || view.category
                                 ? "templatesCatalog.empty"
