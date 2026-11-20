@@ -5,6 +5,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 
 const BASE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TEMPLATES_PATH = path.join(BASE_DIR, "references", "templates.json");
@@ -195,8 +196,13 @@ function escapeXml(value) {
     .replaceAll('"', "&quot;");
 }
 
+// oxlint-disable-next-line eslint/no-control-regex -- XML 1.0 excludes these control characters.
+const INVALID_XML_CHARACTERS =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\ud800-\udfff\ufffe\uffff]/gu;
+
 function wrapText(text, maxChars) {
-  const words = String(text).trim().split(/\s+/).filter(Boolean);
+  const caption = stripVTControlCharacters(text).replace(INVALID_XML_CHARACTERS, "");
+  const words = caption.trim().split(/\s+/).filter(Boolean);
   const lines = [];
   let current = "";
   for (const word of words) {
