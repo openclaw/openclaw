@@ -2,7 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { AssistantMessage } from "../../llm/types.js";
-import { clearBoundaryMaintenance, isBoundaryMaintenanceDeclined } from "../context-pressure.js";
+import { clearBoundaryMaintenance, decideContextPressure } from "../context-pressure.js";
 import { buildAssistantFailoverSignal } from "../embedded-agent-helpers/assistant-message-failures.js";
 import { classifyFailoverSignal } from "../failover/classify.js";
 import { agentSessionAutomaticCompaction } from "../sessions/agent-session-compaction.js";
@@ -25,7 +25,7 @@ import { prepareEmbeddedAttemptPromptPreflight } from "./run/attempt-prompt-pref
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunOverflow } from "./run/overflow-context-recovery.js";
-import { CONTEXT_MAINTENANCE_SIGNAL_TEXT } from "./run/preemptive-compaction.js";
+import { contextPressureSignal } from "./run/preemptive-compaction.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   clearEmbeddedSessionPromptStates,
@@ -427,7 +427,7 @@ describe("recoverEmbeddedRunOverflow", () => {
   ] as const)("continues the turn when boundary maintenance fails: $name", async ({ result }) => {
     mocks.compact.mockResolvedValueOnce(result as CompactionResult);
     const runId = `maintenance-${Math.random()}`;
-    const promptError = new Error(CONTEXT_MAINTENANCE_SIGNAL_TEXT);
+    const promptError = contextPressureSignal("maintenance");
     const input = makeInput({
       promptError,
       attempt: {
@@ -448,7 +448,15 @@ describe("recoverEmbeddedRunOverflow", () => {
       expect(mocks.compact).toHaveBeenCalledOnce();
       expect(input.prepareCurrentTranscriptRetry).toHaveBeenCalled();
       // Maintenance that cannot reduce context is not retried at every later request.
-      expect(isBoundaryMaintenanceDeclined(runId)).toBe(true);
+      expect(
+        decideContextPressure({
+          estimatedPromptTokens: 210_000,
+          windowTokens: 272_000,
+          maintenanceDue: true,
+          boundarySafe: true,
+          runId,
+        }),
+      ).toBeUndefined();
     } finally {
       clearBoundaryMaintenance(runId);
     }
