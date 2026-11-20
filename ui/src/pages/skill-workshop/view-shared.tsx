@@ -1,4 +1,5 @@
 import type {
+  SkillsWorkshopListResult,
   SkillsWorkshopReadResult,
   SkillWorkshopChange,
   SkillWorkshopSkillSummary,
@@ -33,6 +34,12 @@ export type WorkshopView = () => {
   pageOpen: boolean;
   onOpenPage: () => void;
   onClosePage: () => void;
+  /** The start page's view: drafts waiting for a decision, what changed, or every skill. */
+  startView: WorkshopStartView;
+  /** Drafts is offered in Propose mode, while drafts wait, or while it is the open view. */
+  draftsShown: boolean;
+  onStartView: (view: WorkshopStartView) => void;
+  /** Learned skills: the active or the archived list. */
   filter: WorkshopFilter;
   sort: WorkshopSort;
   tab: WorkshopTab;
@@ -188,6 +195,54 @@ export type WorkshopReads = {
 /** The start page lists skills; `open` shows the selected skill or draft as its own page. */
 export type WorkshopPage = { open: () => void; close: () => void };
 
-export type WorkshopFilter = "active" | "drafts" | "archived";
+export type WorkshopFilter = "active" | "archived";
+export type WorkshopStartView = "drafts" | "history" | "skills";
 export type WorkshopSort = "uses" | "recent" | "name";
 export type WorkshopTab = "instructions" | "files" | "history";
+
+export function sortWorkshopSkills(
+  skills: readonly SkillWorkshopSkillSummary[],
+  changes: readonly SkillWorkshopChange[],
+  sort: WorkshopSort,
+): SkillWorkshopSkillSummary[] {
+  const latest = latestChanges(changes);
+  const recent = (skill: SkillWorkshopSkillSummary) =>
+    lastActivityMs(skill, latest.get(skill.name));
+  return skills.toSorted((a, b) =>
+    sort === "name"
+      ? a.name.localeCompare(b.name)
+      : sort === "recent"
+        ? recent(b) - recent(a)
+        : (b.useCount ?? 0) - (a.useCount ?? 0) ||
+          recent(b) - recent(a) ||
+          a.name.localeCompare(b.name),
+  );
+}
+
+export function archivedWorkshopSkills(list: SkillsWorkshopListResult) {
+  return list.archived
+    .filter((skill) => !skill.live && skill.versions.length > 0)
+    .toSorted((a, b) => (b.versions[0]?.createdAtMs ?? 0) - (a.versions[0]?.createdAtMs ?? 0));
+}
+
+/** History: each skill's latest change, newest first, for skills whose page can open. */
+export function workshopHistory(snapshot: WorkshopSnapshot): SkillWorkshopChange[] {
+  const { skills, archived } = snapshot.list;
+  return [...latestChanges(snapshot.changes).values()]
+    .filter(
+      (change) =>
+        skills.some((skill) => skill.name === change.skillName) ||
+        archived.some((skill) => skill.name === change.skillName && skill.versions.length > 0),
+    )
+    .toSorted((a, b) => b.createdAtMs - a.createdAtMs);
+}
+
+/** The page opens on what needs the person: drafts, else what changed, else the skills. */
+export function defaultStartView(snapshot: WorkshopSnapshot): WorkshopStartView {
+  if ((snapshot.list.drafts?.length ?? 0) > 0) {
+    return "drafts";
+  }
+  return workshopHistory(snapshot).length > 0 || snapshot.list.skills.length === 0
+    ? "history"
+    : "skills";
+}

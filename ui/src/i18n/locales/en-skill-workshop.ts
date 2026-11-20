@@ -31,6 +31,17 @@ const enSkillWorkshop = {
       autoTitle:
         "Saves and improves skills while working. Every change is announced and can be undone.",
       updateError: "Couldn’t update the learning mode. Try again.",
+      offState: "Learning off",
+      proposeState: "Learning from work, asks before saving",
+      autoState: "Learning from work, saves on its own",
+    },
+    views: {
+      aria: "Skill workshop views",
+    },
+    history: {
+      today: "Today",
+      thisWeek: "This week",
+      earlier: "Earlier",
     },
     skills: {
       title: "Learned skills",
@@ -47,11 +58,12 @@ const enSkillWorkshop = {
       archived: "Archived",
       archivedAgo: "Archived {time}",
       drafts: "Drafts",
+      search: "Search skills",
+      noMatches: "No skills match your search.",
     },
     drafts: {
       newSkill: "New skill",
       update: "Update",
-      proposed: "Proposed {time}",
       createsSkill: "Creates a new skill",
       updatesSkill: "Changes the live skill",
       apply: "Apply",
@@ -65,6 +77,8 @@ const enSkillWorkshop = {
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
       open: "Open draft",
+      savedFirst: "The current version is saved first, so you can undo.",
+      archiveLater: "You can archive it later.",
       proposedLabel: "Proposed",
       position: "{current} of {total}",
       chatHint:
