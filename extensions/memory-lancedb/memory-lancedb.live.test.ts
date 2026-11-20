@@ -1,4 +1,5 @@
 // Memory Lancedb tests cover memory lancedb plugin behavior.
+import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, test, vi } from "vitest";
 import { installTmpDirHarness } from "./test-helpers.js";
@@ -172,7 +173,13 @@ describeLive("memory plugin live tests", () => {
     const { default: memoryPlugin } = await import("./index.js");
 
     const on = vi.fn();
-    const registerService = vi.fn<NonNullable<TestPluginApiInput["registerService"]>>();
+    const services: OpenClawPluginService[] = [];
+    const registerService: NonNullable<TestPluginApiInput["registerService"]> = (service) => {
+      if (service.apiVersion === 2 || service.apiVersion === 3) {
+        throw new Error("Expected memory-lancedb to register its v1 lifecycle service");
+      }
+      services.push(service);
+    };
     const logs: string[] = [];
     const mockApi = createLiveMemoryPluginApi({
       id: "memory-lancedb",
@@ -232,7 +239,7 @@ describeLive("memory plugin live tests", () => {
       expect(counter.count).toBe(3);
     } finally {
       counter.restore();
-      for (const [service] of registerService.mock.calls) {
+      for (const service of services) {
         await service.stop?.({
           config: mockApi.config,
           stateDir: getDbPath(),
