@@ -3,6 +3,7 @@
  * Run with node --import ./scripts/tsx.mjs scripts/perf/extension-boundary-receipt-measure.mts
  * [baseline-ref|-]. Alternate revisions in fresh processes; compare record digests
  * and use external time for total CPU and peak RSS. This does not measure compilation.
+ * Add --count-relative-paths for separate work counts, not timing qualification.
  */
 import childProcess, { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -17,6 +18,7 @@ import { resolveRepoRoot } from "../lib/repo-root.mjs";
 
 const root = resolveRepoRoot(import.meta.url);
 const revision = process.argv[2] ?? "-";
+const countRelativePaths = process.argv.includes("--count-relative-paths");
 const sources = new Map<string, string>();
 if (revision !== "-") {
   for (const owner of [
@@ -75,12 +77,14 @@ childProcess.spawn = new Proxy(childProcess.spawn, {
     return Reflect.apply(target, receiver, args);
   },
 });
-path.relative = new Proxy(path.relative, {
-  apply(target, receiver, args) {
-    counts.relativePaths++;
-    return Reflect.apply(target, receiver, args);
-  },
-});
+if (countRelativePaths) {
+  path.relative = new Proxy(path.relative, {
+    apply(target, receiver, args) {
+      counts.relativePaths++;
+      return Reflect.apply(target, receiver, args);
+    },
+  });
+}
 syncBuiltinESMExports();
 fs.existsSync = new Proxy(fs.existsSync, {
   apply(target, receiver, args) {
@@ -123,6 +127,7 @@ for (const { extensionId, config } of projects) {
 console.log(
   JSON.stringify({
     revision,
+    countRelativePaths,
     projects: projects.length,
     elapsedMs: performance.now() - started,
     counts,
