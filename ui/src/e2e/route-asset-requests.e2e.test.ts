@@ -137,6 +137,13 @@ suite.define(() => {
         const observation = await visit(page, route);
         if (route === "plugins") {
           expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
+          const frontmatter = controlUiE2eBuiltModuleRequest(
+            "packages/markdown-core/src/frontmatter.ts",
+          );
+          expect(
+            observation.assets.filter((asset) => frontmatter.test(asset.name)),
+            "Browsing the catalog does not open a skill document",
+          ).toHaveLength(0);
         }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
         expect(readyAssets.length).toBeGreaterThan(0);

@@ -3,8 +3,13 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import { pauseVirtualClock, reconnectMockGateway } from "../../test-helpers/control-ui-e2e.ts";
+import { observeLayoutShifts } from "../../test-helpers/control-ui-layout-shift.ts";
 import {
   captureScreenshot,
   calendarInspection,
@@ -382,13 +387,16 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBe(2);
       const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
-      expect(await installedCard.count()).toBe(0);
+      const featured = catalog.locator('[data-catalog-section="featured"]');
+      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+      expect(await featured.locator("h3").first().textContent()).toBe("Memory Plus");
+      expect(await installedCard.getByText("Installed", { exact: true }).isVisible()).toBe(true);
+      expect(await installedCard.getByRole("button").count()).toBe(0);
       const availableCard = catalog
         .locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`)
         .first();
       expect(await availableCard.getByRole("button", { name: /Install/iu }).count()).toBe(1);
       expect(await availableCard.getByText(/downloads/u).count()).toBe(0);
-      await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
 
       await search.fill("memory");
       await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "memory" } });
@@ -633,7 +641,18 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     expect(await text(page, message).count()).toBe(1);
   });
 
-  it("refills sparse overview shelves without losing their available plugins or category order", async () => {
+  const shelfCases = [400, 820, 1280]
+    .flatMap((width) => [
+      [width, 1],
+      [width, 0],
+    ])
+    .concat([[1440, 1]]);
+  it.each(shelfCases)(
+    "refills sparse overview shelves without shifting at %i px (%i initial models)",
+    verifyShelfRefill,
+  );
+
+  async function verifyShelfRefill(width: number, initialModels: number) {
     const method = "plugins.catalog.browse";
     const channels = "Matrix Mattermost Signal IRC Slack Zulip LINE Nextcloud".split(" ");
     const models = "Ollama Cohere Mistral DeepSeek Groq Fireworks Together Cerebras".split(" ");
@@ -697,10 +716,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
             channelItems[5]!,
             ...channelItems.slice(0, 2),
             ...entries("channels", "Telegram Discord Teams WeChat WhatsApp Nostr".split(" "), true),
-            ...modelItems.slice(0, 1),
+            ...modelItems.slice(0, initialModels),
             ...entries(
               "models",
-              ["Bedrock", "OpenAI", "Gemini", "Azure", "Anthropic", "Vertex", "vLLM"],
+              [
+                "Bedrock",
+                "OpenAI",
+                "Gemini",
+                "Azure",
+                "Anthropic",
+                "Vertex",
+                "vLLM",
+                "Local",
+              ].slice(0, 8 - initialModels),
               true,
             ),
             ...memoryItems,
@@ -714,11 +742,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           match: { category },
         })),
       },
-      { width: 1440, height: 1180 },
+      { width, height: 1180 },
     );
     const proofDir =
       process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-        ? createControlUiE2eArtifactDir("plugin-sparse-shelves")
+        ? createControlUiE2eArtifactDir(`plugin-sparse-shelves-${width}-${initialModels}`)
         : null;
     await page.goto(server.baseUrl + "plugins");
     const explore = page.getByRole("region", { name: "Explore plugins" });
@@ -726,7 +754,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
     const cardNames = (slug: string) =>
       shelf(slug).getByRole("heading", { level: 3 }).allTextContents();
     const capture = async (stage: "before" | "after") => {
-      if (proofDir) {
+      if (proofDir && width === 1440) {
         const sections = [shelf("channels"), shelf("models")];
         const frame = await takeControlUiScreenshotFrame(page, explore, sections, {
           animations: "disabled",
@@ -740,26 +768,52 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       }
     };
     await expect.poll(() => cardNames("channels")).toEqual(["Matrix", "Mattermost", "Zulip"]);
-    expect(await cardNames("models")).toEqual(models.slice(0, 1));
-    expect(await cardNames("memory")).toEqual(memory);
+    const visibleCount = width === 400 ? 5 : width === 820 ? 6 : 8;
+    expect(await cardNames("models")).toEqual(models.slice(0, initialModels));
+    expect(await cardNames("memory")).toEqual(memory.slice(0, visibleCount));
+    const headingTops = () =>
+      explore
+        .locator("section h2")
+        .evaluateAll((headings) =>
+          Object.fromEntries(headings.map((h) => [h.textContent, h.getBoundingClientRect().y])),
+        );
+    await waitForControlUiProofSurface(explore, [shelf("memory")]);
+    await waitForControlUiFrameLayout([explore]);
     await capture("before");
+    const held = await headingTops();
+    const shifts = await observeLayoutShifts(page);
+    const stages = [];
     // No user action: the overview stays readable while its continuation requests are held.
     for (const [category, remainder] of [
       ["channels", channelItems.slice(2)],
-      ["models", modelItems.slice(1)],
+      ["models", modelItems.slice(initialModels)],
     ] as const) {
       const params = pageParams(category);
       await expect
         .poll(() => gateway.getRequests(method, params, { exactParams: true }))
         .toHaveLength(1);
       await gateway.resolveDeferred(method, { items: remainder }, { match: params });
+      await expect
+        .poll(() => cardNames(category))
+        .toEqual((category === "channels" ? channels : models).slice(0, visibleCount));
+      await waitForControlUiFrameLayout([explore]);
+      stages.push(await headingTops());
     }
-    await expect.poll(() => cardNames("channels")).toEqual(channels);
-    await expect.poll(() => cardNames("models")).toEqual(models);
-    expect(await cardNames("memory")).toEqual(memory);
+    const observed = await shifts.evaluate((probe) => probe.read());
+    await shifts.evaluate((probe) => probe.stop());
+    await shifts.dispose();
+    expect(await cardNames("memory")).toEqual(memory.slice(0, visibleCount));
     expect(await gateway.getRequests(method, { category: "memory" })).toHaveLength(0);
     await capture("after");
-  });
+    if (proofDir) {
+      await writeFile(
+        path.join(proofDir, "layout.json"),
+        JSON.stringify({ width, initialModels, visibleCount, held, stages, observed }, null, 2),
+      );
+    }
+    expect(stages).toEqual([held, held]);
+    expect(observed.value).toBe(0);
+  }
 
   it("renders grouped catalog cards and switches to raw filtered results", async () => {
     const { page, gateway } = await setup();
@@ -775,8 +829,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       "Featured",
       "Trending",
     ]);
-    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(7);
-    expect(await sections.first().locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count()).toBe(0);
+    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(8);
+    expect(await sections.nth(1).getByRole("link", { name: "Memory Plus" }).count()).toBe(0);
     expect(await sections.first().getByRole("button", { name: "View all" }).count()).toBe(1);
     const matrixCard = explore.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
     await matrixCard.waitFor();
@@ -844,9 +898,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         categories: ["missing-category"],
       },
     }));
-    const featured = discoveryResult.items
-      .filter((plugin) => plugin.catalog.featured && !plugin.local.installed)
-      .slice(0, 2);
+    const featured = discoveryResult.items.filter((plugin) => plugin.catalog.featured).slice(0, 2);
     const other = {
       ...matrixDiscoveryPlugin,
       id: "ch_b3RoZXI",

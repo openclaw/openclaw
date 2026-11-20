@@ -47,10 +47,18 @@ export function createOverviewPreviews(options: {
     }));
   let items = options.overview.items;
   const ids = new Set(items.map((item) => item.id));
-  let pending = 0;
+  type Shelf = (typeof shelves)[number];
+  const pending = new Set<Shelf>();
   let budget = 32;
 
-  async function continueShelf(shelf: (typeof shelves)[number], cursor: string) {
+  function nextCursor(shelf: Shelf) {
+    const cursor = shelf.cursor;
+    return budget > 0 && cursor && !shelf.requested.has(cursor) && shelf.requested.size < 3
+      ? cursor
+      : undefined;
+  }
+
+  async function continueShelf(shelf: Shelf, cursor: string) {
     try {
       const page = await options.load(shelf.slug, cursor, controller.signal);
       if (controller.signal.aborted || page.remoteError) {
@@ -65,15 +73,16 @@ export function createOverviewPreviews(options: {
           ids.add(item.id);
         }
         items = [...items, ...additions];
-        if (options.presented()) {
-          options.publish(items);
-        }
       }
     } catch {
       // Keep the usable preview; explicit refresh starts with a fresh snapshot and budget.
     } finally {
-      pending--;
-      fill();
+      pending.delete(shelf);
+      if (!controller.signal.aborted && options.presented()) {
+        fill();
+        // Publish the rows and their remaining reservations together, even on an empty/error page.
+        options.publish(items);
+      }
     }
   }
 
@@ -84,11 +93,11 @@ export function createOverviewPreviews(options: {
     const installed = indexInstalledCatalog(options.inventory());
     for (const shelf of shelves) {
       // Bound concurrency, total work, and depth even for repeated or empty registry pages.
-      if (pending >= 2 || budget === 0) {
+      if (pending.size >= 2 || budget === 0) {
         break;
       }
-      const cursor = shelf.cursor;
-      if (!cursor || shelf.requested.has(cursor) || shelf.requested.size >= 3) {
+      const cursor = nextCursor(shelf);
+      if (!cursor) {
         continue;
       }
       const available = items.filter(
@@ -100,13 +109,19 @@ export function createOverviewPreviews(options: {
       shelf.requested.add(cursor);
       shelf.cursor = undefined;
       budget--;
-      pending++;
+      pending.add(shelf);
       void continueShelf(shelf, cursor);
     }
   }
   return {
     get items() {
       return items;
+    },
+    get continuableCategories() {
+      // Queued shelves reserve geometry too; two concurrent requests need not finish together.
+      return shelves
+        .filter((shelf) => pending.has(shelf) || nextCursor(shelf))
+        .map((shelf) => shelf.slug);
     },
     fill,
     cancel: () => controller.abort(),
