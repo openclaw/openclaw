@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog-entry.types.js";
 
 export type ProviderCatalogOutcome = {
   provider: string;
