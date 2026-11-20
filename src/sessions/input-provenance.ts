@@ -14,6 +14,13 @@ export type InputProvenance = {
   originSessionId?: string;
   sourceSessionKey?: string;
   sourceChannel?: string;
+  slackSender?: {
+    id: string;
+    workspaceId?: string;
+    kind: "human" | "bot" | "unknown";
+    threadReply: boolean;
+  };
+  slackThreadOpener?: { id: string; workspaceId: string };
   sourceTool?: string;
   sourceRole?: "subagent";
   sourcePromptPrefix?: string;
@@ -87,6 +94,47 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     const normalized = normalizeOptionalString(record[key]);
     if (normalized) {
       provenance[key] = normalized;
+    }
+  }
+  const sender = record.slackSender;
+  if (
+    provenance.kind === "external_user" &&
+    provenance.sourceChannel === "slack" &&
+    sender &&
+    typeof sender === "object" &&
+    "id" in sender &&
+    typeof sender.id === "string" &&
+    /^[UWB][A-Z0-9]{1,32}$/.test(sender.id) &&
+    "kind" in sender &&
+    (sender.kind === "human" || sender.kind === "bot" || sender.kind === "unknown") &&
+    "threadReply" in sender &&
+    typeof sender.threadReply === "boolean"
+  ) {
+    const workspaceId =
+      "workspaceId" in sender &&
+      typeof sender.workspaceId === "string" &&
+      /^T[A-Z0-9]{1,32}$/.test(sender.workspaceId)
+        ? sender.workspaceId
+        : undefined;
+    provenance.slackSender = {
+      id: sender.id,
+      ...(workspaceId ? { workspaceId } : {}),
+      kind: sender.kind,
+      threadReply: sender.threadReply,
+    };
+    const opener = record.slackThreadOpener;
+    if (
+      sender.threadReply &&
+      opener &&
+      typeof opener === "object" &&
+      "id" in opener &&
+      typeof opener.id === "string" &&
+      /^[UW][A-Z0-9]{1,32}$/.test(opener.id) &&
+      "workspaceId" in opener &&
+      typeof opener.workspaceId === "string" &&
+      /^T[A-Z0-9]{1,32}$/.test(opener.workspaceId)
+    ) {
+      provenance.slackThreadOpener = { id: opener.id, workspaceId: opener.workspaceId };
     }
   }
   return provenance;

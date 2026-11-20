@@ -1066,6 +1066,44 @@ export async function prepareSlackMessage(params: {
   });
   const threadStarter = await getThreadStarter();
   const resolvedMessageContent = await resolveMessageContent(message, preloadedDirectMedia);
+  const verifiedSender =
+    opts.senderAuthentication === "verified" && /^[UWB][A-Z0-9]{1,32}$/.test(senderId);
+  const slackUser =
+    verifiedSender && message.user === senderId
+      ? await ctx.resolveUserName(senderId, opts.eventScope)
+      : undefined;
+  const senderKind =
+    isBotMessage || slackUser?.isBot === true
+      ? "bot"
+      : slackUser?.isBot === false
+        ? "human"
+        : "unknown";
+  const senderWorkspaceId = slackUser?.workspaceId;
+  const threadReply =
+    isThreadReply || Boolean(message.thread_ts && message.thread_ts !== message.ts);
+  const openerId =
+    verifiedSender &&
+    threadReply &&
+    threadTs &&
+    threadStarter?.ts === threadTs &&
+    !threadStarter.botId &&
+    threadStarter.userId &&
+    /^[UW][A-Z0-9]{1,32}$/.test(threadStarter.userId)
+      ? threadStarter.userId
+      : undefined;
+  const opener =
+    openerId === senderId
+      ? slackUser
+      : openerId
+        ? await ctx.resolveUserName(openerId, opts.eventScope)
+        : undefined;
+  const slackThreadOpener =
+    openerId &&
+    opener?.isBot === false &&
+    opener.workspaceId &&
+    /^T[A-Z0-9]{1,32}$/.test(opener.workspaceId)
+      ? { id: openerId, workspaceId: opener.workspaceId }
+      : undefined;
   opts.abortSignal?.throwIfAborted();
   if (opts.isRuntimePolicyCurrent?.() === false) {
     return drop("final-route-denied");
@@ -1438,6 +1476,21 @@ export async function prepareSlackMessage(params: {
       },
     },
     extra: {
+      InputProvenance: verifiedSender
+        ? {
+            kind: "external_user",
+            sourceChannel: "slack",
+            slackSender: {
+              id: senderId,
+              ...(senderWorkspaceId && /^T[A-Z0-9]{1,32}$/.test(senderWorkspaceId)
+                ? { workspaceId: senderWorkspaceId }
+                : {}),
+              kind: senderKind,
+              threadReply,
+            },
+            ...(slackThreadOpener ? { slackThreadOpener } : {}),
+          }
+        : undefined,
       GroupThread: groupThread,
       GroupSubject: groupSessionSubject,
       ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,

@@ -363,8 +363,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
       text: "hello",
     });
 
+    ctx.resolveUserName = async () => ({ name: "Alice", workspaceId: "TSENDERHOME", isBot: false });
     const allowed = await prepareMessageWith(ctx, account, message, {
       source: "message",
+      senderAuthentication: "verified",
       eventScope: { teamId: "T123ENTERPRISE", client: ctx.app.client },
     });
     const blocked = await prepareMessageWith(ctx, account, message, {
@@ -373,6 +375,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
 
     assert(allowed, "workspace-qualified channel user");
+    expect(allowed.ctxPayload.InputProvenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "slack",
+      slackSender: { id: "U123", workspaceId: "TSENDERHOME", kind: "human", threadReply: false },
+    });
     expect(blocked).toBeNull();
   });
 
