@@ -464,7 +464,7 @@ describe("renderPluginCatalogResults", () => {
     },
   );
 
-  it("uses only resolved artwork, preferring installed icons and whitening only official images", async () => {
+  it("uses only resolved artwork, preferring installed package icons", async () => {
     const imageUrl = "https://example.com/icon.png";
     const cases = [
       plugin("official-package", { catalog: { packageName: "@openclaw/whatsapp" } }),
@@ -495,7 +495,7 @@ describe("renderPluginCatalogResults", () => {
         iconUrls: { [imageUrl]: "blob:catalog-icon" },
       }),
     );
-    for (const [index, { id, catalog }] of cases.entries()) {
+    for (const [index, { id }] of cases.entries()) {
       const expected = [
         null,
         null,
@@ -506,9 +506,6 @@ describe("renderPluginCatalogResults", () => {
       ][index];
       const art = container.querySelector(`[data-plugin-id="${id}"] .plugin-catalog-card__art`)!;
       expect(art.querySelector("img")?.getAttribute("src") ?? null).toBe(expected);
-      expect(art.querySelector(".plugins-tile--white") !== null).toBe(
-        catalog.official && Boolean(expected),
-      );
     }
   });
 

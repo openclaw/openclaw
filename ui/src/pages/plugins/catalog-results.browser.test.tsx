@@ -459,8 +459,11 @@ it.each([
     expect(artworkSize.height).toBeLessThanOrEqual(artworkSlot.clientHeight);
     expect(getComputedStyle(loadedImage)).toMatchObject({ objectFit: "contain", padding: "0px" });
     expect(getComputedStyle(artworkSlot).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(loadedImage.parentElement!).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    const fallback = find(".plugins-tile--fallback svg", failedCard).getBoundingClientRect();
+    expect(loadedImage.parentElement).toBe(artworkSlot);
+    const fallback = find(
+      ".plugin-catalog-card__art--fallback svg",
+      failedCard,
+    ).getBoundingClientRect();
     expect(fallback.width).toBeGreaterThan(0);
     expect(fallback.height).toBeGreaterThan(0);
     if (official) {
