@@ -13,7 +13,7 @@ import type { MediaAttachment } from "./types.js";
 
 /** Normalizes message context media fields for the media-understanding runner. */
 export function normalizeMediaAttachments(ctx: MsgContext): MediaAttachment[] {
-  const attachments = normalizeAttachments(ctx);
+  const attachments = normalizeAttachments(ctx.media);
   // Cached Telegram sticker descriptions already cover the current attachment,
   // but supplemental quote media still needs normal understanding.
   return ctx.SkipStickerMediaUnderstanding

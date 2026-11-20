@@ -5,7 +5,6 @@ import path from "node:path";
 import timers from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as pressure from "../../infra/host-io-pressure.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -19,7 +18,77 @@ afterEach(() => {
   syncBuiltinESMExports();
 });
 
+it.each([
+  ["btrfs", "7:0", [132, 132, 132, 4]],
+  ["ext4", "7:0", [132, 4]],
+  ["btrfs", "7:1", [132, 4]],
+])("paces reservations only on the removal filesystem (%s, %s)", async (type, device, expected) => {
+  vi.resetModules();
+  const root = directories.make("retired-reservation-");
+  const retired = path.join(root, "retired");
+  const volume = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+  const sysfs = path.join(root, "sys/fs/btrfs", volume);
+  await fs.mkdir(retired);
+  await fs.mkdir(path.join(sysfs, "devices/loop0"), { recursive: true });
+  await fs.mkdir(path.join(sysfs, "allocation/metadata"), { recursive: true });
+  await fs.writeFile(path.join(sysfs, "devices/loop0/dev"), `${device}\n`);
+  const counter = path.join(sysfs, "allocation/metadata/bytes_may_use");
+  await fs.writeFile(counter, "0\n");
+  for (let index = 0; index < 260; index++) {
+    await fs.writeFile(path.join(retired, String(index)), "x");
+  }
+  const open = fs.open.bind(fs);
+  const readFile = fs.readFile.bind(fs);
+  const readdir = fs.readdir.bind(fs);
+  const stat = fs.stat.bind(fs);
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  vi.spyOn(fs, "open").mockImplementation((target, flags, mode) =>
+    open(
+      String(target).startsWith("/sys/") || String(target).startsWith("/proc/")
+        ? path.join(root, String(target))
+        : target,
+      flags,
+      mode,
+    ),
+  );
+  vi.spyOn(fs, "readFile").mockImplementation((target, options) => {
+    if (typeof target === "string" && target.startsWith("/proc/self/fdinfo/")) {
+      return Promise.resolve("mnt_id:\t123\n");
+    }
+    if (target === "/proc/self/mountinfo") {
+      return Promise.resolve(`123 1 0:42 / / rw - ${type} /dev/loop0 rw\n`);
+    }
+    return readFile(target, options);
+  });
+  vi.spyOn(fs, "readdir").mockImplementation((target, options) =>
+    readdir(String(target).startsWith("/sys/") ? path.join(root, String(target)) : target, options),
+  );
+  vi.spyOn(fs, "stat").mockImplementation(async (target, options) => {
+    if (target === "/dev/loop0") {
+      return Object.assign(await stat(retired, { bigint: true }), { rdev: 1792n });
+    }
+    return stat(target, options);
+  });
+  const remaining: number[] = [];
+  const values = [41, 30, 19, 0];
+  vi.spyOn(timers, "setTimeout").mockImplementation(async () => {
+    remaining.push(fsSync.readdirSync(retired).length);
+    await fs.writeFile(counter, String((values.shift() ?? 0) * 1024 ** 3));
+  });
+  const argv = process.argv;
+  syncBuiltinESMExports();
+  process.argv = [argv[0]!, argv[1]!, retired];
+  try {
+    await import("./retired-worktree-cleanup.worker.js");
+  } finally {
+    process.argv = argv;
+  }
+  expect(remaining).toEqual(expected);
+  expect(fsSync.existsSync(retired)).toBe(false);
+});
+
 it("bounds unlink bursts and waits for slow commits even with no PSI pressure", async () => {
+  vi.resetModules();
   const root = directories.make("retired-worktree-batches-");
   const retired = path.join(root, "retired");
   await fs.mkdir(retired);
@@ -29,7 +98,8 @@ it("bounds unlink bursts and waits for slow commits even with no PSI pressure", 
   const batches: number[] = [];
   let remaining = 260;
   const probe = vi.fn().mockResolvedValue(false);
-  vi.spyOn(pressure, "createHostIoPressureProbe").mockReturnValue(probe);
+  const probeModule = await import("../../infra/host-io-pressure.js");
+  vi.spyOn(probeModule, "createHostIoPressureProbe").mockReturnValue(probe);
   const pauses = vi.spyOn(timers, "setTimeout").mockImplementation(async () => {
     const next = fsSync.readdirSync(retired).length;
     batches.push(remaining - next);

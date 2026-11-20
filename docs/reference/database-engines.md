@@ -191,11 +191,15 @@ Do not remove existing data to switch engines.
 Before porting SQLite stores to PostgreSQL, run `openclaw doctor --fix` while
 those stores still use SQLite. The port preflight refuses pending declared
 legacy migrations and names the repairs required before retrying the port.
-A scoped `--family` port checks only migrations declared for that family.
+A scoped `--family` port checks for pending migrations only in that family.
 This includes native Codex task assignments, Matrix inbound dedupe, and legacy
 memory index sidecars.
 Fresh Matrix account roots without legacy inbound-dedupe rows do not need a
 migration completion receipt before porting.
+
+If a selected plugin's Doctor migration contract fails to load, preflight stops
+before copying any stores and reports the plugin and the load error. Fix or
+remove the named plugin, then retry the port.
 
 These migrations are SQLite-only. On PostgreSQL, Doctor records that they are
 not applicable instead of opening the local engine anchor as an application

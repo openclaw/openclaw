@@ -31,6 +31,20 @@ task alive: a new human message in that session needs its own continuation sourc
 The tool stays available because the turn can start children or background work
 later; its availability does not imply that a wait has been registered.
 
+An empty model stop after tool results is not intentional silence. A direct human
+turn in a kept child follows the ordinary human reply policy: an explicit
+`NO_REPLY` stays silent, while a missing answer receives the existing recovery or
+missing-reply notice. Historical asynchronous tool activity alone cannot suppress
+that notice once the work has settled. A retained tool handoff still owns its
+continuation even after its tool call completes: the current turn releases
+ownership, then the handoff result resumes the conversation.
+
+Completion inputs already committed to the requester transcript remain consumed
+when its announcing turn produces no reply; they are not recorded as failed child
+deliveries or replayed. Results not yet consumed remain owed to the requester.
+This does not claim that a channel received an answer: ambiguous outbound delivery
+keeps its separate outcome, and private child input stays private.
+
 Gateway maintenance settles older unreachable yielded session lifecycles with a
 recorded failure, including runs absent from the subagent registry. It preserves active
 execution, queued input, retained continuations and wake-armed process completion.
