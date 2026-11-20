@@ -8,6 +8,7 @@ import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
 } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openAiAuthor } from "./chat-flow.test-support.ts";
 
 let artifactDir: string | undefined;
 beforeEach(() => {
@@ -248,7 +249,7 @@ suite.define(() => {
           timestamp: 2,
         },
         failedTool(3),
-        narration("Recovered on the next autonomous turn.", 4),
+        { ...narration("Recovered on the next autonomous turn.", 4), ...openAiAuthor },
       ],
       {},
       sessionKey,
