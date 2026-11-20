@@ -115,8 +115,13 @@ function CatalogDetailContent(props: {
           )}
         />
       }
+      rail
       titleAction={
         <>
+          {renderPluginAskAction(
+            props.state.onAskPlugin,
+            plugin().local.action !== "install" && !installing(),
+          )}
           {plugin().local.action === "install" || installing() ? (
             <ReasonedDisabledControl
               reason={props.state.installBlockedReason}
@@ -135,10 +140,6 @@ function CatalogDetailContent(props: {
               />
             </ReasonedDisabledControl>
           ) : undefined}
-          {renderPluginAskAction(
-            props.state.onAskPlugin,
-            plugin().local.action !== "install" && !installing(),
-          )}
         </>
       }
       identity={renderPluginPublisher(props.value)}
@@ -181,7 +182,7 @@ function CatalogDetailContent(props: {
 function CatalogDetailLoading() {
   return (
     <section
-      class="plugin-catalog-detail plugin-catalog-detail--loading"
+      class="plugin-catalog-detail plugin-catalog-detail--rail plugin-catalog-detail--loading"
       aria-label={t("pluginsPage.detailLoading")}
     >
       <div class="plugin-catalog-detail__back skeleton" />

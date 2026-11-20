@@ -335,6 +335,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
       <PluginDetailShell
         registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
+        rail
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}
@@ -389,13 +390,13 @@ function PluginOverview(props: DetailProps): JSX.Element {
               />
             }
           >
+            {renderPluginAskAction(props.onAskPlugin, false)}
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
             />
-            {renderPluginAskAction(props.onAskPlugin, false)}
           </Show>
         }
         sidebar={
