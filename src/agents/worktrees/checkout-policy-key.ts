@@ -4,20 +4,20 @@ import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../inf
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { requireGit, worktreePathExists } from "./git.js";
 import { setWorktreePreparationTemplate } from "./preparation-timing.js";
+import type { WorktreeTemplateRecord } from "./template-registry.js";
 
 // Path-dependent filters and sparse configuration need a fresh checkout.
 // Hash effective checkout configuration so policy changes retire the cache.
-export async function resolveWorktreeCheckoutKey(
+export async function resolveWorktreeCheckoutPolicy(
   options: {
     destination: string;
     commonDir: string;
-    commit: string;
     git: WorktreeGitPolicy;
     gitOptions: GitCommandOptions;
   },
   scope: "template" | "prompt" = "template",
-): Promise<string | undefined> {
-  const { git, commit } = options;
+): Promise<((commit: string) => string) | undefined> {
+  const { git } = options;
   if (
     [
       "GIT_INDEX_FILE",
@@ -128,7 +128,121 @@ export async function resolveWorktreeCheckoutKey(
       return undefined;
     }
   }
-  return createHash("sha256")
-    .update(`source-v2\n${git.sourceOnly}\n${commit}\n${checkoutConfig.join("\0")}`)
-    .digest("hex");
+  const policy = checkoutConfig.join("\0");
+  return (commit) =>
+    createHash("sha256").update(`source-v2\n${git.sourceOnly}\n${commit}\n${policy}`).digest("hex");
+}
+
+export async function canAdvanceWorktreeTemplate(
+  previous: WorktreeTemplateRecord,
+  commit: string,
+  git: WorktreeGitPolicy,
+  gitOptions: GitCommandOptions,
+): Promise<boolean> {
+  const changed = await git.run(
+    previous.path,
+    [
+      "diff-tree",
+      "--no-commit-id",
+      "--raw",
+      "--no-abbrev",
+      "--no-renames",
+      "-r",
+      "-z",
+      previous.sourceCommit,
+      commit,
+      "--",
+    ],
+    { ...gitOptions, maxOutputBytes: 16 * 1024 },
+  );
+  if (changed.code !== 0 || changed.termination !== "exit" || changed.stdoutTruncatedBytes) {
+    return false;
+  }
+  const fields = changed.stdout.split("\0").filter(Boolean);
+  if (fields.length > 128) {
+    return false;
+  }
+  const objects: string[] = [];
+  for (let index = 0; index < fields.length; index += 2) {
+    if (path.posix.basename(fields[index + 1]!) === ".gitattributes") {
+      return false;
+    }
+    for (const object of fields[index]!.slice(1).split(" ").slice(2, 4)) {
+      if (!/^0+$/.test(object)) {
+        objects.push(object);
+      }
+    }
+  }
+  if (!objects.length) {
+    return true;
+  }
+  const sizes = await git.run(
+    previous.path,
+    ["cat-file", "--batch-check=%(objecttype) %(objectsize)"],
+    {
+      ...gitOptions,
+      input: objects.join("\n") + "\n",
+      maxOutputBytes: 8192,
+    },
+  );
+  if (sizes.code !== 0 || sizes.termination !== "exit" || sizes.stdoutTruncatedBytes) {
+    return false;
+  }
+  let bytes = 0;
+  for (const line of sizes.stdout.trim().split("\n")) {
+    const [kind, size] = line.split(" ");
+    if (kind !== "blob") {
+      return false;
+    }
+    bytes += Number(size);
+  }
+  return bytes <= 4 * 1024 * 1024;
+}
+
+export async function validateWorktreeTemplateCheckout(
+  existing: WorktreeTemplateRecord,
+  options: { commonDir: string; git: WorktreeGitPolicy; gitOptions: GitCommandOptions },
+): Promise<boolean> {
+  const { git, gitOptions } = options;
+  // Include config.worktree: a clean sparse template can look like a full checkout.
+  const policy = await resolveWorktreeCheckoutPolicy({ ...options, destination: existing.path });
+  if (policy?.(existing.sourceCommit) !== existing.contentKey) {
+    return false;
+  }
+  const status = await git.run(
+    existing.path,
+    ["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
+    gitOptions,
+  );
+  // NUL records keep filenames from impersonating HEAD headers.
+  const fields = status.stdout.split("\0");
+  const heads = fields.filter((field) => field.startsWith("# branch.oid "));
+  return (
+    status.termination === "exit" &&
+    status.code === 0 &&
+    !status.stdoutTruncatedBytes &&
+    fields.pop() === "" &&
+    fields.every((field) => field.startsWith("# ")) &&
+    heads.length === 1 &&
+    heads[0] === `# branch.oid ${existing.sourceCommit}`
+  );
+}
+
+export async function canRefreshWorktreeTemplate(
+  existing: WorktreeTemplateRecord,
+  commit: string,
+  contentKey: string,
+  options: { commonDir: string; git: WorktreeGitPolicy; gitOptions: GitCommandOptions },
+): Promise<boolean> {
+  // Attribute changes can transform unchanged blobs; rebuild those trees.
+  const attributes = await options.git.run(
+    existing.path,
+    ["diff-tree", "--quiet", "-r", existing.sourceCommit, commit, "--", ":(glob)**/.gitattributes"],
+    options.gitOptions,
+  );
+  if (attributes.code !== 0 || attributes.termination !== "exit") {
+    return false;
+  }
+  const policy = await resolveWorktreeCheckoutPolicy({ ...options, destination: existing.path });
+  return policy?.(commit) === contentKey;
 }

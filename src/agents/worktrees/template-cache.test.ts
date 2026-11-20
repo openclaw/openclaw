@@ -166,10 +166,14 @@ it.each(["cold", "idle"])("shares %s preparation and reader custody", async (sta
   }
   const { entered, finish, prepare: build, validate } = preparationGate();
   const mutate = vi.spyOn(allocation, "withWorktreeMutationLease");
-  const first = prepare({ prepare: build, validate });
+  const first = prepare({
+    prepare: build,
+    validate,
+    options: { ...options, idleIoPriority: true },
+  });
   await entered;
   const attempted = observeReaderAttempt();
-  const second = prepare({ prepare: build, validate });
+  const second = prepare({ prepare: build, validate, canAdvanceWhilePreparing: async () => true });
   await attempted;
   finish();
   const [left, right] = await Promise.all([first, second]);

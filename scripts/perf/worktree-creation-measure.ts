@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { channel } from "node:diagnostics_channel";
@@ -59,6 +60,17 @@ import { getHeapStatistics } from "node:v8";
  * interleaved A/B pairs with one sample per fresh synthetic clone. Acceptance:
  * first-create native copies 2 -> 1, correct B HEAD/contents, lower latency,
  * no >20% total idle+first+warm CPU/allocation regression beyond A/A variation.
+ * --inflight starts the first create when the idle build begins cloning the previous
+ * generation, without delaying either operation. --large-advance changes an 8 MiB
+ * blob instead of one short file. The total row owns overlapping CPU/allocation;
+ * never sum concurrent idle/foreground rows. Unchanged source extents stay shared.
+ * --sandbox-counterfactual join|advance isolates sandbox contention after managed B
+ * is ready. Both use real template/checkout/install/manifest owners. The advance
+ * arm verifies that Git alone leaves stale install output, then reinstalls and
+ * captures a new manifest. This is an optimistic timing bound for a private advance,
+ * not a shipped path: generic install-output containment validation is not modeled.
+ * Compare two A/A controls and five serial counterbalanced pairs; require exact
+ * HEAD, tree/index, source and dependency contents, and report whole-pass resource cost.
  * --alternate-commit alternates source generations without requiring a refresh.
  * Acceptance: after seeding both commits, no new generation on a flip back;
  * report owner latency, CPU/allocation, and retained IDs with matched A/A controls.
@@ -72,6 +84,9 @@ const { values } = parseArgs({
     samples: { type: "string", default: "5" },
     "default-base": { type: "boolean" },
     "base-advance": { type: "boolean" },
+    inflight: { type: "boolean" },
+    "sandbox-counterfactual": { type: "string" },
+    "large-advance": { type: "boolean" },
     "first-send-image": { type: "string" },
     "expected-inline-builds": { type: "string", default: "0" },
     "expected-commit": { type: "string" },
@@ -460,13 +475,32 @@ try {
       return { ...created, sessionKey };
     };
     await create("seed");
+    const counterfactual = values["sandbox-counterfactual"];
+    assert(
+      !counterfactual ||
+        (values["first-send-image"] && ["join", "advance"].includes(counterfactual)),
+    );
+    if (counterfactual) {
+      await prewarmLocalWorkspaceTemplates({
+        getConfig: () => config,
+        signal: new AbortController().signal,
+      });
+    }
+    const priorSandbox = counterfactual
+      ? (await listTemplatesAsync(process.env)).find(
+          (entry) => entry.status === "ready" && entry.backend === "sandbox-btrfs",
+        )
+      : undefined;
+    assert(!counterfactual || priorSandbox);
     assert(
       (await listTemplatesAsync(process.env)).some(
         (entry) => entry.status === "ready" && entry.backend === "btrfs",
       ),
       "Base-advance proof requires a ready native btrfs template",
     );
-    const contents = "synthetic base advance\n";
+    const contents = values["large-advance"]
+      ? "x".repeat(8 * 1024 ** 2)
+      : "synthetic base advance\n";
     await fs.writeFile(path.join(repo, "advance.txt"), contents);
     const git = (...args: string[]) =>
       execFileSync("git", ["-C", repo, ...args], {
@@ -487,10 +521,24 @@ try {
     const target = git("rev-parse", "HEAD");
     const realNow = Date.now;
     Date.now = () => realNow() + 31_000;
+    if (counterfactual) {
+      // Isolate the sandbox template decision: managed B already exists in both arms.
+      await create("sandbox-target");
+    }
     let clones = 0;
+    const copyPhase = new AsyncLocalStorage<string>();
+    const phaseClones = new Map<string, number>();
+    const entered = Promise.withResolvers<void>();
     const copy = nativeWorktreeFilesystem.copy;
     nativeWorktreeFilesystem.copy = async (...args) => {
       clones++;
+      const phase = copyPhase.getStore();
+      if (phase) {
+        phaseClones.set(phase, (phaseClones.get(phase) ?? 0) + 1);
+      }
+      if (phase === "idle" && (!priorSandbox || args[0] === priorSandbox.path)) {
+        entered.resolve();
+      }
       await copy(...args);
     };
     const childCpu = () => {
@@ -517,9 +565,21 @@ try {
       const beforeClones = clones;
       const start = performance.now();
       const phases: string[] = [];
-      const result = await withDiagnosticsTimelineObserver((name) => {
-        phases.push(name);
-      }, run);
+      const phaseDurationsMs: Record<string, number> = {};
+      const result = await copyPhase.run(phase, () =>
+        withDiagnosticsTimelineObserver((name, _attributes, durationMs) => {
+          phases.push(name);
+          const recordDuration = (elapsed: number) => {
+            phaseDurationsMs[name] = (phaseDurationsMs[name] ?? 0) + elapsed;
+          };
+          if (durationMs !== undefined) {
+            recordDuration(durationMs);
+            return undefined;
+          }
+          const started = performance.now();
+          return () => recordDuration(performance.now() - started);
+        }, run),
+      );
       const elapsedMs = performance.now() - start;
       const used = process.cpuUsage(cpu);
       const mainUsed = process.threadCpuUsage(mainCpu);
@@ -527,6 +587,7 @@ try {
         phase,
         target,
         elapsedMs,
+        phaseDurationsMs,
         monotonicStartUs,
         monotonicEndUs: Number(process.hrtime.bigint() / 1000n),
         containerCpuMs:
@@ -535,7 +596,8 @@ try {
         mainThreadCpuMs: (mainUsed.user + mainUsed.system) / 1000,
         mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
         childCpuMs: childCpu() - children,
-        nativeCopies: clones - beforeClones,
+        nativeCopies:
+          values.inflight || counterfactual ? (phaseClones.get(phase) ?? 0) : clones - beforeClones,
         templateBuilds: phases.filter(
           (name) =>
             name === "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build",
@@ -547,65 +609,224 @@ try {
       console.log(JSON.stringify(row));
       return { result, row };
     };
+    let idle: Promise<unknown> | undefined;
     try {
-      await measure("idle", () =>
-        prewarmLocalWorkspaceTemplates({
-          getConfig: () => config,
-          signal: new AbortController().signal,
-        }),
-      );
-      for (const name of ["first", "warm"]) {
-        const { result: created, row: creation } = await measure(name, () => create(name));
-        assert(
-          created &&
-            typeof created === "object" &&
-            "path" in created &&
-            typeof created.path === "string",
+      await measure("total", async () => {
+        idle = measure("idle", () =>
+          prewarmLocalWorkspaceTemplates({
+            getConfig: () => config,
+            signal: new AbortController().signal,
+          }),
         );
-        assert.equal(git("rev-parse", "HEAD"), target);
-        assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), target);
-        assert.equal(await fs.readFile(path.join(created.path, "advance.txt"), "utf8"), contents);
-        assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
-        if (values["first-send-image"]) {
-          assert.equal(creation.nativeCopies, 1, "Create must only clone its warm template");
-          const { result: projection, row: measured } = await measure(`${name}-send`, () =>
-            withWorktreePreparationTiming("sandbox", async () => {
-              using prepared = await prepareLocalSandboxWorkspace({
-                cfg: config,
-                agentId: "main",
-                sandbox,
-                sessionKey: created.sessionKey,
-                workspaceDir: created.path,
-              });
-              assert(prepared);
-              return prepared.workspaceDir;
+        if (values.inflight || counterfactual) {
+          await Promise.race([
+            entered.promise,
+            idle.then(() => {
+              throw new Error("Idle build did not clone a prior generation");
             }),
+          ]);
+        } else {
+          await idle;
+        }
+        if (counterfactual && priorSandbox) {
+          const { withWorktreeMutationLease } =
+            await import("../../src/agents/worktrees/allocation.js");
+          const { prepareLocalWorkspaceTemplate, cloneLocalWorkspaceTemplate } =
+            await import("../../src/gateway/worker-environments/local-workspace-template.js");
+          const { prepareLocalWorkspaceCheckout } =
+            await import("../../src/gateway/worker-environments/local-workspace-checkout.js");
+          const { prepareSandboxDependencyTemplate, resolveSandboxDependencyTemplateIdentity } =
+            await import("../../src/agents/sandbox/dependency-template.js");
+          const { captureTemplateWorkspaceManifest } =
+            await import("../../src/gateway/worker-environments/workspace-manifest-worker.js");
+          const destination = path.join(output, "private-projection");
+          await measure(`sandbox-${counterfactual}`, () =>
+            withWorktreeMutationLease(
+              {
+                env: process.env,
+                id: "synthetic-private-projection",
+                signal: new AbortController().signal,
+              },
+              async (allocation) => {
+                const guard = { ...allocation, signal: allocation.signal! };
+                const identity = await resolveSandboxDependencyTemplateIdentity(sandbox, {
+                  signal: guard.signal,
+                  assertCurrent: guard.commitGuard,
+                });
+                assert(identity);
+                const params = {
+                  source: repo,
+                  repoRoot: repo,
+                  baseCommit: target,
+                  temporaryRoot: output,
+                  templateRoot: path.dirname(path.dirname(priorSandbox.path)),
+                  env: process.env,
+                  sandbox,
+                  identity,
+                  buildCacheInputs: [],
+                  guard,
+                  branch: "counterfactual",
+                  destination,
+                };
+                if (counterfactual === "join") {
+                  assert(await cloneLocalWorkspaceTemplate(params));
+                  return;
+                }
+                const previous = await prepareLocalWorkspaceTemplate({
+                  ...params,
+                  baseCommit: priorSandbox.sourceCommit,
+                });
+                assert(previous?.manifest);
+                try {
+                  await previous.backend.cloneTemplate(previous.record.path, destination, guard);
+                  await prepareLocalWorkspaceCheckout({
+                    source: repo,
+                    destination,
+                    temporaryRoot: output,
+                    baseCommit: target,
+                    retainedCommit: previous.record.sourceCommit,
+                    branch: "counterfactual",
+                    signal: guard.signal,
+                    assertCurrent: guard.commitGuard,
+                    workerAuthority: guard.workerAuthority,
+                  });
+                  // A Git-only advance is deliberately checked before repairing its stale install output.
+                  assert.notEqual(
+                    await fs.readFile(
+                      path.join(destination, "node_modules/source-dependent.txt"),
+                      "utf8",
+                    ),
+                    contents,
+                  );
+                  const installed = await prepareSandboxDependencyTemplate({
+                    directory: destination,
+                    cfg: sandbox,
+                    identity,
+                    scopeKey: "synthetic-private-advance",
+                    signal: guard.signal,
+                    assertCurrent: guard.commitGuard,
+                    rollbackGuard: guard.rollbackGuard,
+                  });
+                  assert(installed.installed);
+                  assert.equal(await requireGit(destination, ["status", "--porcelain"]), "");
+                  await captureTemplateWorkspaceManifest(
+                    {
+                      root: destination,
+                      baseCommit: target,
+                      buildCacheInputs: [],
+                      previous: { ...previous.manifest, changedPaths: ["advance.txt"] },
+                    },
+                    guard.signal,
+                  );
+                } finally {
+                  await previous.record.release();
+                }
+              },
+            ),
           );
-          assert.equal(await requireGit(projection, ["rev-parse", "HEAD"]), target);
-          assert.equal(await requireGit(projection, ["status", "--porcelain"]), "");
-          assert.equal(await fs.readFile(path.join(projection, "advance.txt"), "utf8"), contents);
+          await idle;
+          assert.equal(await requireGit(destination, ["rev-parse", "HEAD"]), target);
           assert.equal(
-            await fs.readFile(path.join(projection, "node_modules/source-dependent.txt"), "utf8"),
+            await requireGit(destination, ["write-tree"]),
+            git("rev-parse", `${target}^{tree}`),
+          );
+          assert.equal(await requireGit(destination, ["status", "--porcelain"]), "");
+          assert.equal(await fs.readFile(path.join(destination, "advance.txt"), "utf8"), contents);
+          assert.equal(
+            await fs.readFile(path.join(destination, "node_modules/source-dependent.txt"), "utf8"),
             contents,
           );
           assert.equal(
-            (
-              await fs.readFile(path.join(projection, "node_modules/install-priority.txt"), "utf8")
-            ).trim() === "idle",
-            Number(values["expected-inline-builds"]) === 0,
+            await requireGit(priorSandbox.path, ["rev-parse", "HEAD"]),
+            priorSandbox.sourceCommit,
           );
           assert.equal(
-            measured.templateBuilds,
-            name === "first" ? Number(values["expected-inline-builds"]) : 0,
+            await fs.readFile(
+              path.join(priorSandbox.path, "node_modules/source-dependent.txt"),
+              "utf8",
+            ),
+            "synthetic base A\n",
           );
-          assert.equal(
-            measured.manifestCaptures,
-            name === "first" ? Number(values["expected-inline-builds"]) : 0,
-          );
+          return;
         }
-      }
+        for (const name of ["first", "warm"]) {
+          if (name === "warm") {
+            await idle;
+          }
+          const { result: created, row: creation } = await measure(name, () => create(name));
+          assert(
+            created &&
+              typeof created === "object" &&
+              "path" in created &&
+              typeof created.path === "string",
+          );
+          assert.equal(git("rev-parse", "HEAD"), target);
+          assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), target);
+          assert.equal(
+            await requireGit(created.path, ["write-tree"]),
+            git("rev-parse", `${target}^{tree}`),
+          );
+          assert.equal(await fs.readFile(path.join(created.path, "advance.txt"), "utf8"), contents);
+          assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+          if (values.inflight && process.platform === "linux") {
+            const sharing = execFileSync(
+              "btrfs",
+              ["filesystem", "du", "--raw", "-s", path.join(created.path, "packages")],
+              { encoding: "utf8" },
+            );
+            const fields = sharing.trim().split("\n").at(-1)!.trim().split(/\s+/);
+            assert.equal(
+              Number(fields[1]),
+              0,
+              "Unchanged source files must retain their shared extents",
+            );
+          }
+          if (values["first-send-image"]) {
+            assert.equal(creation.nativeCopies, 1, "Create must only clone its warm template");
+            const { result: projection, row: measured } = await measure(`${name}-send`, () =>
+              withWorktreePreparationTiming("sandbox", async () => {
+                using prepared = await prepareLocalSandboxWorkspace({
+                  cfg: config,
+                  agentId: "main",
+                  sandbox,
+                  sessionKey: created.sessionKey,
+                  workspaceDir: created.path,
+                });
+                assert(prepared);
+                return prepared.workspaceDir;
+              }),
+            );
+            assert.equal(await requireGit(projection, ["rev-parse", "HEAD"]), target);
+            assert.equal(await requireGit(projection, ["status", "--porcelain"]), "");
+            assert.equal(await fs.readFile(path.join(projection, "advance.txt"), "utf8"), contents);
+            assert.equal(
+              await fs.readFile(path.join(projection, "node_modules/source-dependent.txt"), "utf8"),
+              contents,
+            );
+            assert.equal(
+              (
+                await fs.readFile(
+                  path.join(projection, "node_modules/install-priority.txt"),
+                  "utf8",
+                )
+              ).trim() === "idle",
+              Number(values["expected-inline-builds"]) === 0,
+            );
+            assert.equal(
+              measured.templateBuilds,
+              name === "first" ? Number(values["expected-inline-builds"]) : 0,
+            );
+            assert.equal(
+              measured.manifestCaptures,
+              name === "first" ? Number(values["expected-inline-builds"]) : 0,
+            );
+          }
+        }
+        await idle;
+      });
       await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
     } finally {
+      await idle;
       Date.now = realNow;
       nativeWorktreeFilesystem.copy = copy;
     }

@@ -53,7 +53,7 @@ import type { WorktreeWorkerAuthority } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
 export const WORKTREE_TEMPLATE_DIRECTORY = ".templates";
-const pendingPreparations = new Map<string, Promise<void>>();
+const pendingPreparations = new Map<string, { promise: Promise<void>; background: boolean }>();
 
 export async function retainWorktreeTemplate(
   env: NodeJS.ProcessEnv,
@@ -295,6 +295,7 @@ export async function prepareWorktreeTemplate(params: {
   backend: string;
   reuseOnly?: boolean;
   backgroundUsedAt?: number;
+  canAdvanceWhilePreparing?: (record: WorktreeTemplateRecord) => Promise<boolean>;
   requireSpace: () => Promise<void>;
   /** Immutable generations consume producer validation; mutable templates revalidate on reuse. */
   validate?: (
@@ -345,13 +346,48 @@ export async function prepareWorktreeTemplate(params: {
       ]);
       const pending = pendingPreparations.get(preparationKey);
       if (!pending) {
-        pendingPreparations.set(
-          preparationKey,
-          new Promise<void>((resolve) => {
+        pendingPreparations.set(preparationKey, {
+          background: params.options.idleIoPriority === true,
+          promise: new Promise<void>((resolve) => {
             finishPreparation = resolve;
           }),
-        );
+        });
         break;
+      }
+      if (pending.background && params.canAdvanceWhilePreparing) {
+        const previous = await readTemplateAsync(
+          params.env,
+          params.cacheKey,
+          assertCallerCurrent,
+          undefined,
+          params.options.workerAuthority,
+        );
+        if (previous?.status === "ready" && previous.backend === params.backend) {
+          // Only an existing reader can lend producer validation without the build lease.
+          retained = await retainWorktreeTemplate(
+            params.env,
+            {
+              cacheKey: previous.cacheKey,
+              contentKey: previous.contentKey,
+              backend: previous.backend,
+            },
+            assertCallerCurrent,
+            undefined,
+            params.options.workerAuthority,
+          );
+          if (retained) {
+            if (await params.canAdvanceWhilePreparing(retained)) {
+              setWorktreePreparationTemplate("warm", {
+                reason: "advance-from-previous",
+                priorSourceCommit: retained.sourceCommit.slice(0, 12),
+                requestedSourceCommit: params.sourceCommit.slice(0, 12),
+              });
+              return retained;
+            }
+            await retained.release();
+            retained = undefined;
+          }
+        }
       }
       // Wait for local publication, then acquire our own reader. Idle templates
       // still need validation; the persisted lease coordinates other processes.
@@ -360,7 +396,7 @@ export async function prepareWorktreeTemplate(params: {
       const deadline = AbortSignal.timeout(waiting.waitMs);
       try {
         await racePromiseWithAbortSignal(
-          pending,
+          pending.promise,
           params.options.signal ? AbortSignal.any([params.options.signal, deadline]) : deadline,
         );
         assertCallerCurrent();
@@ -594,7 +630,7 @@ export async function prepareWorktreeTemplate(params: {
     throw error;
   } finally {
     setWorktreePreparationTemplate(undefined, {
-      identity: `${params.backend}:${params.cacheKey}:${params.contentKey}`,
+      identity: `${params.backend}:${params.cacheKey}:${retained?.contentKey ?? params.contentKey}`,
     });
     if (finishPreparation && preparationKey) {
       pendingPreparations.delete(preparationKey);

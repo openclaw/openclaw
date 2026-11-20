@@ -113,7 +113,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
         request,
         usedAt: Date.now(),
         nextFetchAt,
-        targetCommit: request.template.sourceCommit,
+        targetCommit: request.targetCommit ?? request.template.sourceCommit,
         preparedCommit: request.template.sourceCommit,
       });
       if (recipes.size > 32) {

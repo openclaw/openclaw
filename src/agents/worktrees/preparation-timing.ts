@@ -55,6 +55,7 @@ type PreparationPhase =
   | "templateClone"
   | "templateValidateOutput"
   | "templateApply"
+  | "templateAdvance"
   | "snapshot"
   | "synchronizeCanonical"
   | "synchronizeProjection"
