@@ -113,11 +113,11 @@ function applyRemoteModelCatalogUpdateNow(
           }
         }
         // This attempt's fence; a config publication aborts it and replaces the owners.
-        const signal = host.getCancellationSignal();
+        const fence = host.getCancellationSignal();
         try {
           if (
             !(await withRemoteModelCatalogSnapshot(catalog, () =>
-              publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous, signal),
+              publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous, fence),
             ))
           ) {
             return "superseded";
@@ -125,11 +125,11 @@ function applyRemoteModelCatalogUpdateNow(
           notifyPreparedModelRuntimePublication({ phase: "published" });
           return "published";
         } catch (error) {
-          if (signal.reason instanceof PreparedModelRuntimePublicationSupersededError) {
+          if (fence.reason instanceof PreparedModelRuntimePublicationSupersededError) {
             // Follow that publication: adopt over its owners once it settles.
             continue;
           }
-          if (error instanceof PreparedModelRuntimePublicationSupersededError || signal.aborted) {
+          if (error instanceof PreparedModelRuntimePublicationSupersededError || fence.aborted) {
             return "superseded";
           }
           throw error;

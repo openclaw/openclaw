@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import { createGatewayUpdateCheck } from "../infra/update-startup-scheduler.js";
@@ -150,7 +150,7 @@ describe("hosted catalog adoption during a config publication", () => {
     markStaleForConfigPublication();
     read.release();
     // Let the adoption reach the first replacement before the reload supersedes it.
-    await new Promise((resolve) => setImmediate(resolve));
+    await nextEventLoopTurn();
     const reload = reloadModelRuntime();
 
     expect(await adoption).toBe("published");
