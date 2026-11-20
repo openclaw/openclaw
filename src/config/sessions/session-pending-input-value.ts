@@ -1,7 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionPendingInputReceipt } from "./session-history-read.types.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInput, SessionPendingInputRow } from "./session-pending-input.types.js";

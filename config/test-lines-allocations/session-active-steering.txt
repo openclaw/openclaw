@@ -5,4 +5,4 @@
 # matching and changed input through the Gateway handler. Remaining cases guard distinct
 # target, authority, persistence, default-off, and legacy-data contracts; no duplicate suite.
 # Revocation-only off/on tests were deleted; no replacement reload-race suite.
-398
+397

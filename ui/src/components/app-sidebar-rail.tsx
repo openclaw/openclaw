@@ -283,8 +283,12 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             aria-label={titleForRoute("sessions")}
             aria-pressed={sessionsPressed() ? "true" : "false"}
             onClick={() => {
-              // Already showing its list, Sessions stays put rather than leaving the page.
-              if (sessionsPressed()) {
+              const state = host.router?.getState();
+              const pending = state?.pendingMatches[0];
+              const destination = (pending ?? state?.matches[0])?.routeId ?? host.activeRouteId;
+              const returnToSession = !isMobileNavLayout() && !isSessionRouteId(destination);
+              // The visible list can still look selected while a cold page is taking over.
+              if (sessionsPressed() && !(pending && returnToSession)) {
                 return;
               }
               host.navigationView = "sessions";
@@ -295,11 +299,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               }
               // Off a session page, Sessions returns to the session last open, in its preferred
               // face; the mobile drawer closes on navigation, so there it only opens the list.
-              if (
-                !host.onExitSettings &&
-                !isMobileNavLayout() &&
-                !isSessionRouteId(host.activeRouteId)
-              ) {
+              if (!host.onExitSettings && returnToSession) {
                 if (host.sessionKey) {
                   host.selectSession(host.sessionKey);
                 } else {

@@ -18,8 +18,8 @@ import {
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveChatAbortDiagnosticReason } from "../chat-abort-diagnostics.js";

@@ -712,6 +712,21 @@ An individual kernel reclaim write can exceed that retry budget. If
 directory; its remaining cache stays charged to the parent. The shared
 `unscoped` fallback and aggregate resource policy remain in place.
 
+If a command finishes while a sibling, descendant, or its anchor still occupies
+the leaf, OpenClaw watches `cgroup.events` and retries when it becomes empty.
+There is one watch per leaf, capped at 256; watches close on removal or Gateway
+shutdown. A shallow sweep after startup admission settles and on the existing
+15-minute idle maintenance cadence catches old leaves, missed notifications,
+and watch overflow. Each pass considers at most 256 leaves and rotates through
+larger inventories. Active Gateway work can defer an idle pass. No process is
+killed or moved to make a leaf empty.
+
+The `agent exec cgroup cleanup: source=...` log reports `reclaimed`, `removed`,
+`skippedPopulated`, `errors`, and current `watching` counts. `reclaimed` counts
+leaves with a successful reclaim request, not bytes reclaimed; `removed` confirms
+directory removal. A helper or daemon that remains alive keeps its leaf populated
+and is intentionally skipped.
+
 An aggregate `io.max` ceiling covers agent-exec IO on each device backing the
 Gateway state directory. Non-rotational devices receive **250 MiB/s in each
 direction and 40,960 read/write operations per second**, independent of RAM or

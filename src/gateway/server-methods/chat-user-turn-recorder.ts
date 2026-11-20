@@ -20,16 +20,16 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { getRpcSourceIdentity } from "../../sessions/session-controller.rpc-sources.js";
+import type {
+  UserTurnInput,
+  PersistedUserTurnMessage,
+} from "../../sessions/user-turn-input.types.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
-import type {
-  PersistedUserTurnMessage,
-  UserTurnOriginalInputCommit,
-} from "../../sessions/user-turn-transcript.types.js";
+import type { UserTurnOriginalInputCommit } from "../../sessions/user-turn-transcript.types.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";

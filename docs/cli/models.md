@@ -259,7 +259,7 @@ The command requires the local Gateway to be stopped. Stop it through its
 service owner, run the refresh, then start it again. It takes exclusive offline
 ownership through download and write settlement, and refuses while a Gateway
 owns the state directory. A successful result describes the saved download;
-the next Gateway start loads compatible metadata. The running Gateway continues
+the next Gateway start and local `models list` load compatible metadata. The running Gateway continues
 to perform its own scheduled catalog refreshes.
 If `models.catalogRefresh.enabled` is `false`, the command reports that refresh
 is disabled.

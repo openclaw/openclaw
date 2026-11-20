@@ -567,6 +567,12 @@ const startupEnglish = {
     description: "The agent is getting ready. This view will load automatically.",
     short: "Starting up…",
   },
+  routeNotFound: {
+    title: "Page not found",
+    description:
+      "This link is invalid or no longer available. Check the address or return to chat.",
+    goToChat: "Go to chat",
+  },
   lazyView: {
     errorTitle: "Couldn’t load this panel.",
     genericSubtitle: "Try again.",
@@ -1238,6 +1244,7 @@ const startupEnglish = {
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
+      recentSessionsUnavailable: "Recent sessions unavailable.",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",

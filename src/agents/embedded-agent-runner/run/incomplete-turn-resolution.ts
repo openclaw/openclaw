@@ -120,6 +120,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
+    assistantState.silent ||
     (toolFailurePayload && hasTerminalOutput) ||
     (params.attempt.lastToolError && !toolFailurePayload) ||
     params.hasIntentionalTerminalCompletion ||
@@ -134,14 +135,13 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  // Failed or incomplete model steps still need a warning when their lifecycle
-  // snapshot contains unfinished work; only a normal stop can leave that work pending.
+  // Started async work is historical evidence, not a continuation or a reply.
+  // Only unfinished lifecycle work can still own this normal stop.
   if (
-    hasAsyncActivity(params.attempt.toolMetas) ||
-    (!params.aborted &&
-      assistant?.stopReason === "stop" &&
-      (params.attempt.itemLifecycle.activeCount > 0 ||
-        params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount))
+    !params.aborted &&
+    assistant?.stopReason === "stop" &&
+    (params.attempt.itemLifecycle.activeCount > 0 ||
+      params.attempt.itemLifecycle.completedCount < params.attempt.itemLifecycle.startedCount)
   ) {
     return null;
   }

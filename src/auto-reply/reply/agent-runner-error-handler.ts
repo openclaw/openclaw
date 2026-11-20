@@ -197,7 +197,7 @@ export async function handleAgentExecutionError(params: {
     }
     takePendingLifecycleTerminal().emit("error", err, {
       errorNotice:
-        "This request was not started because the requester no longer has access to this channel.",
+        "This request was not started because the requester no longer has access to this channel. Review the channel access settings; once access is restored, ask the requester to send the request again.",
     });
     turn.replyOperation?.fail("run_failed", err);
     await params.modelPatch.fail(err);

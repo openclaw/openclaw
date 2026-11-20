@@ -72,7 +72,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   session-pr-reader-lifetime.real-gateway sidebar-running-counts.real-gateway task-pull-requests.real-gateway
   skill-workshop-plugin-enable.real-gateway
   stale-build-recovery.production
-  usage-sessions-owner-attribution worker-initial-setup.real-gateway`
+  unknown-route.real-gateway usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
   .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFiles, workboardFile);
@@ -412,6 +412,16 @@ describe("Control UI E2E resource ownership", () => {
       )
       .toSorted();
     expectInventory(result, inventory);
+    // These HTTP/plugin fixtures share the invocation's native worker build.
+    const workerBorrowers = new Set([
+      "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
+      "ui/src/e2e/plugin-panel-icons.e2e.test.ts",
+      "ui/src/e2e/route-asset-requests.e2e.test.ts",
+      "ui/src/e2e/team-scale-cold-load.e2e.test.ts",
+    ]);
+    expect(
+      result.shards.filter((shard) => shard.some((file) => workerBorrowers.has(file))),
+    ).toHaveLength(1);
     const reused = probeOwnership({ reuseProductionArtifact: true });
     expect(reused.files).toEqual(result.files);
     expect(reused.shards).toEqual(result.shards);
@@ -529,7 +539,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(60);
+      expect(parallel).toHaveLength(61);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

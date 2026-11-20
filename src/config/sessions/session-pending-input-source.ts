@@ -1,5 +1,5 @@
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
-import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
