@@ -186,8 +186,9 @@ it.for(
       } else {
         expect(retained).toBe(authority);
       }
-      // The wake's optional re-check has nothing to call; `assertCurrent` carries the refusal.
-      expect(retained.reauthorize).toBeUndefined();
+      // Upstream #202318: a captured continuation re-checks its origin's device and restored
+      // policy when the wake starts; a live source has no start re-check of its own.
+      expect(typeof retained.reauthorize).toBe(source === "saved" ? "function" : "undefined");
 
       if (change === "role demoted") {
         setUserProfileRole(admin.profile.id, "member");
