@@ -50,6 +50,10 @@ const SUPPORTED_CONSTRAINT_ONLY_KEYS = new Set([
   "minLength",
   "maxLength",
   "pattern",
+  // Provider model maps refine selected keys with patternProperties (e.g. bundled vLLM
+  // entries); the map stays editable through additionalProperties, so the keyword must
+  // not push the whole map into Raw mode.
+  "patternProperties",
   // Zod emits `format` for .url()/.email(); isJsonSchemaValueValid enforces the
   // formats TypeBox knows and admits unknown ones, so the field stays editable
   // instead of pushing every plugin URL/email setting into Raw mode.
