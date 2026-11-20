@@ -1325,7 +1325,13 @@ import: the agent 36 exact-path indexes support indexed lookup even before
 ## Roll back to SQLite
 
 Use the current compatible binary, keep the PostgreSQL secret available, and
-stop all writers. Run a **new reverse port**:
+stop all writers. [Installation ownership](/reference/database-engines#gateway-ownership-in-postgresql)
+requires every configurable family to use PostgreSQL. If you enabled it, set
+`database.postgres.ownership` to `state-directory` or remove the setting before
+porting any family to SQLite. If an earlier port is interrupted,
+[roll it back](#recover-an-interrupted-port) before editing the config.
+
+Run a **new reverse port**:
 
 ```bash
 openclaw database port --to sqlite --dry-run
