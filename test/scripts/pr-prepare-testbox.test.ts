@@ -136,7 +136,7 @@ it.each(
       ...(mode === "boat"
         ? [{ failure: "cleanup", stages: ["build", "check", "test"], docsOnly: false }]
         : []),
-    ].map((scenario) => ({ ...scenario, mode })),
+    ].map((scenario) => Object.assign(scenario, { mode })),
   ),
 )(
   "isolates ordered $mode prepare gates (failure=$failure, docsOnly=$docsOnly)",
