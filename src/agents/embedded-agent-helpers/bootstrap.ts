@@ -296,6 +296,31 @@ function clampToBudget(content: string, budget: number): string {
     : `${truncateUtf16Safe(content, budget - 1)}…`;
 }
 
+const missingBootstrapContextFiles = new WeakSet<object>();
+const MISSING_BOOTSTRAP_CONTEXT_FILE = Symbol.for("openclaw.bootstrap.missingContextFile");
+
+export function markBootstrapMissingContextFile<T extends object>(file: T): T {
+  missingBootstrapContextFiles.add(file);
+  try {
+    Object.defineProperty(file, MISSING_BOOTSTRAP_CONTEXT_FILE, {
+      value: true,
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+  } catch {
+    // Ignore non-extensible objects.
+  }
+  return file;
+}
+
+export function isBootstrapMissingContextFile(file: object): boolean {
+  return (
+    missingBootstrapContextFiles.has(file) ||
+    Boolean((file as Record<symbol, unknown>)[MISSING_BOOTSTRAP_CONTEXT_FILE])
+  );
+}
+
 export function buildBootstrapContextFiles(
   files: (Omit<WorkspaceBootstrapFile, "name"> & { name: string })[],
   opts?: {
@@ -322,13 +347,17 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
-    const appendContext = (content: string, includePersonalUser = false) => {
+    const appendContext = (content: string, includePersonalUser = false, isMissing = false) => {
       remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
-      result.push({
+      const entry: EmbeddedContextFile = {
         path: pathValue,
         content,
         ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
-      });
+      };
+      if (isMissing) {
+        markBootstrapMissingContextFile(entry);
+      }
+      result.push(entry);
     };
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${pathValue}`;
@@ -336,7 +365,7 @@ export function buildBootstrapContextFiles(
       if (!cappedMissingText) {
         break;
       }
-      appendContext(cappedMissingText);
+      appendContext(cappedMissingText, false, true);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {

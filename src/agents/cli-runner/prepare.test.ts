@@ -1348,7 +1348,7 @@ describe("prepareCliRunContext", () => {
     expect(context.systemPrompt).toContain("## Bootstrap Pending");
     expect(context.systemPrompt).toContain(expectedText);
     if (nativeToolMode === "always-on") {
-      expect(context.systemPrompt).toContain("## " + bootstrapPath);
+      expect(context.systemPrompt).toContain("## BOOTSTRAP.md");
       expect(context.systemPrompt).toContain("Complete the first-run ritual");
       expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([
         expect.objectContaining({
@@ -1358,7 +1358,7 @@ describe("prepareCliRunContext", () => {
         }),
       ]);
     } else {
-      expect(context.systemPrompt).not.toContain("## " + bootstrapPath);
+      expect(context.systemPrompt).not.toContain("## BOOTSTRAP.md");
       expect(context.systemPrompt).not.toContain("Complete the first-run ritual");
       expect(context.systemPromptReport.injectedWorkspaceFiles).toEqual([]);
     }

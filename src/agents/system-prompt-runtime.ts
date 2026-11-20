@@ -10,7 +10,38 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 import type { SystemPromptRuntimeInfo } from "./system-prompt.types.js";
 
 /** Stands in for a blind child's withheld agent workspace path. */
-const BLIND_WORKSPACE_PLACEHOLDER = "<workspace>";
+export const BLIND_WORKSPACE_PLACEHOLDER = "<workspace>";
+
+const MODEL_IDENTITY_PREFIX = "Current model identity:";
+
+export function buildModelIdentityPromptLine(model?: string): string | undefined {
+  const trimmed = model?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return `${MODEL_IDENTITY_PREFIX} ${trimmed}. If asked what model you are, answer with this value for the current run.`;
+}
+
+/** Builds the generated directory section, attaching the blind explanation at render time when blind is true. */
+export function buildDirectorySection(params: {
+  hasSeparateRuntimeCwd: boolean;
+  runtimeCwd: string;
+  sanitizedWorkspaceDir: string;
+  displayWorkspaceDir: string;
+  blind?: boolean;
+}): string[] {
+  const explanation = params.blind
+    ? `\n${BLIND_WORKSPACE_PLACEHOLDER} stands for a withheld path; use paths relative to the working directory.`
+    : "";
+  if (params.hasSeparateRuntimeCwd) {
+    return [
+      "## Directory Roles",
+      `Working directory: ${sanitizeForPromptLiteral(params.runtimeCwd)} (tools and deliverables).${explanation}`,
+      `Agent workspace: ${params.sanitizedWorkspaceDir} (AGENTS.md/SOUL.md, other agent instructions, MEMORY.md/memory only; use absolute paths).`,
+    ];
+  }
+  return ["## Workspace", `Working directory: ${params.displayWorkspaceDir}${explanation}`];
+}
 
 /** A blind child's Runtime facts omit its model, default model, agent, session and repository. */
 export function blindRuntime(
@@ -66,12 +97,9 @@ export function blindWorkspace(
       BLIND_WORKSPACE_PLACEHOLDER,
     );
   }
-  // The directory section comes first; explain the placeholder where the model meets it.
-  return withheld.replace(
-    /^Working directory: .*$/mu,
-    (line) =>
-      `${line}\n${BLIND_WORKSPACE_PLACEHOLDER} stands for a withheld path; use paths relative to the working directory.`,
-  );
+  // The generated directory section carries its blind explanation from buildDirectorySection;
+  // no prompt-wide fallback: one owner annotates the section at render time.
+  return withheld;
 }
 
 export function buildRuntimeLine(
