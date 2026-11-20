@@ -15,6 +15,7 @@ import {
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
+import { positionTranscriptBlock } from "./chat-transcript-geometry.ts";
 import {
   TranscriptRowKeyContext,
   type TranscriptContent,
@@ -85,6 +86,7 @@ function TranscriptRows(props: {
   snapshot: TranscriptLayoutProps;
   measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
   columnRef: (element: HTMLDivElement) => void;
+  blockRef: (element: HTMLDivElement) => void;
 }) {
   const presented = useContext(ContentPresentation);
   const virtualRows = createMemo(() => {
@@ -125,10 +127,8 @@ function TranscriptRows(props: {
         {props.snapshot.overlay}
         <div
           class="chat-virtual-block"
-          style={{
-            // WebKit 26.4 omits ancestor transforms from top-layer CSS anchor coordinates.
-            top: `${blockStart() - props.snapshot.virtualizer.options.scrollMargin}px`,
-          }}
+          ref={(block) => props.blockRef(block)}
+          style={{ top: `${blockStart() - props.snapshot.virtualizer.options.scrollMargin}px` }}
         >
           <For each={virtualRows()} keyed={(row) => row.key}>
             {(virtualRow) => {
@@ -228,6 +228,7 @@ export class ChatTranscriptRenderer {
   private prewarming?: ReturnType<PrewarmModule["createTranscriptRowPrewarmer"]>;
   private element?: HTMLDivElement;
   private column?: HTMLDivElement;
+  private block?: HTMLDivElement;
   private accepted?: TranscriptLayoutProps;
   private committed?: TranscriptLayoutProps;
   private lifecycle?: SolidRenderLifecycle<TranscriptLayoutProps>;
@@ -273,6 +274,29 @@ export class ChatTranscriptRenderer {
 
   get columnElement(): HTMLDivElement | undefined {
     return this.column;
+  }
+
+  /** Reposition the displayed window, which can outlive a pending Solid refresh. */
+  positionDisplayedBlock(virtualizer: TranscriptLayoutProps["virtualizer"]): void {
+    const block = this.block;
+    if (!block) {
+      return;
+    }
+    let first: HTMLElement | undefined;
+    for (const row of virtualizer.elementsCache.values()) {
+      if (
+        row.parentElement === block &&
+        row.dataset.preparedRow !== "true" &&
+        (!first || virtualizer.indexFromElement(row) < virtualizer.indexFromElement(first))
+      ) {
+        first = row;
+      }
+    }
+    // The range commit refreshed offsets, including rows outside the next virtual window.
+    const item = first && virtualizer.measurementsCache[virtualizer.indexFromElement(first)];
+    if (item && first && item.key === first.dataset.virtualRowKey) {
+      positionTranscriptBlock(block, item, virtualizer.options.scrollMargin);
+    }
   }
 
   subscribe(listener: () => void): () => void {
@@ -379,6 +403,13 @@ export class ChatTranscriptRenderer {
           return;
         }
         this.committed = current;
+        // Use the committed window, not native-cache rows still awaiting ref registration.
+        const first = current.virtualizer
+          .getVirtualItems()
+          .find((row) => current.activeRowKeys.has(String(row.key)));
+        if (this.block) {
+          positionTranscriptBlock(this.block, first, current.virtualizer.options.scrollMargin);
+        }
         // Keep layout measurable, but do not paint the initial estimated range
         // before the session owner has placed it at the correct reading edge.
         this.syncInitialPosition();
@@ -442,6 +473,9 @@ export class ChatTranscriptRenderer {
                     columnRef={(column) => {
                       this.column = column;
                     }}
+                    blockRef={(block) => {
+                      this.block = block;
+                    }}
                   />
                 </ContentPresentation>
               </TranscriptMediaDisconnect>
@@ -485,5 +519,6 @@ export class ChatTranscriptRenderer {
     this.layoutEffects.clear();
     this.element = undefined;
     this.column = undefined;
+    this.block = undefined;
   }
 }

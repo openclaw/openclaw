@@ -1,9 +1,21 @@
-import { measureElement, type Virtualizer } from "@tanstack/virtual-core";
+import { measureElement, type VirtualItem, type Virtualizer } from "@tanstack/virtual-core";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import type { TranscriptViewportMeasurement } from "./chat-transcript-scroll-events.ts";
 
 export const POSITION_RAIL_MARKER_HEIGHT = 10;
 const POSITION_RAIL_MARKER_OVERSCAN = 6;
+
+/** WebKit omits ancestor transforms from top-layer CSS anchor coordinates. */
+export function positionTranscriptBlock(
+  block: HTMLElement,
+  first: VirtualItem | undefined,
+  scrollMargin: number,
+): void {
+  const top = `${first ? first.start - scrollMargin : 0}px`;
+  if (block.style.top !== top) {
+    block.style.top = top;
+  }
+}
 
 export function positionRailWindowIndexes(
   count: number,

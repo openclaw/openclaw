@@ -11,7 +11,10 @@ type ReaderAnchorHost = {
   readonly virtualizer: TranscriptVirtualizer;
   readonly layout: TranscriptLayoutOwner;
   readonly offsetState: TranscriptOffsetState;
-  readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
+  readonly renderer: Pick<
+    ChatTranscriptRenderer,
+    "columnElement" | "queueAfterCommit" | "positionDisplayedBlock"
+  >;
   readonly initialRange: { readonly pending: boolean };
   readonly prependAnchor: { readonly messageKey: string | null };
   readonly headerHeight: number;
@@ -548,6 +551,9 @@ export class TranscriptReaderAnchor {
       // A smaller range can clamp the native offset before its correction is written.
       const offset = this.host.scrollElement?.scrollTop;
       this.commitRange();
+      if (flowMoved) {
+        this.host.renderer.positionDisplayedBlock(virtualizer);
+      }
       this.scrollBy(owed, offset);
     }
     // Virtual-core notifies when its scrolling state ends.

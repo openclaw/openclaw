@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { action, createEffect, createRoot, createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -314,6 +314,40 @@ it("admits an incoming row above the reader once it is measured", async () => {
   expect(
     requireElement(host, '.chat-virtual-row[data-index="2"]').hasAttribute("data-prepared-row"),
   ).toBe(false);
+});
+
+it("keeps the displayed reader still when a predecessor is measured during a pending refresh", async () => {
+  const { host, viewport, virtualizer } = await mountPane(false, 120, undefined, 500);
+  const style = document.createElement("style");
+  style.textContent =
+    '.geometry-transcript-fixture .chat-virtual-row[data-index="2"] { height: 98px; }';
+  host.append(style);
+  scrollReader(viewport, 499);
+  await Promise.resolve();
+  flush();
+  viewport.dispatchEvent(new Event("scrollend"));
+  const predecessor = requireElement(host, '.chat-virtual-row[data-index="2"][data-prepared-row]');
+  const retained = requireElement(host, '.chat-virtual-row[data-index="4"]');
+  const top = retained.getBoundingClientRect().top;
+  const offset = viewport.scrollTop;
+  const refresh = Promise.withResolvers<void>();
+  // Native measurement lands while Solid still displays the previous row window.
+  const pending = action(function* () {
+    virtualizer.resizeItem(2, predecessor.getBoundingClientRect().height);
+    yield refresh.promise;
+  })();
+  try {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
+  } finally {
+    refresh.resolve();
+    await pending;
+  }
+  await expect.poll(() => predecessor.hasAttribute("data-prepared-row")).toBe(false);
+  expect(viewport.scrollTop).toBe(offset - 22);
+  expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
 });
 
 it.each([

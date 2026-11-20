@@ -67,7 +67,11 @@ it.each([
         virtualizer,
         layout: new TranscriptLayoutOwner(() => {}),
         offsetState,
-        renderer: { columnElement: column, queueAfterCommit: () => {} },
+        renderer: {
+          columnElement: column,
+          queueAfterCommit: () => {},
+          positionDisplayedBlock: () => {},
+        },
         initialRange: { pending: false },
         prependAnchor: { messageKey: null },
         headerHeight: 0,
