@@ -65,6 +65,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/acp/translator.session-setup.test.ts",
   "src/acp/translator.stop-reason.test.ts",
   "src/agents/scheduled-message-invocation.test.ts",
+  "src/agents/embedded-agent-runner.cache-prefix.test.ts",
   "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/embedded-agent-runner/session-prompt-state.tool-usage.worker.test.ts",
   "src/agents/embedded-agent-runner.responses-cold-prefix.test.ts",

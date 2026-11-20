@@ -255,10 +255,12 @@ export async function runEmbeddedReleasePrefixScenario(
             effectivePayload = {
               ...payload,
               input: effectiveInput.map((item) => {
-                // Responses may omit provider item envelopes during replay; call IDs
-                // and function-call-output envelopes remain part of the input contract.
+                // Cold replay omits provider item envelopes, including reasoning IDs
+                // that may name unstored records. Ciphertext, call IDs, and all
+                // model-visible content remain part of the exact prefix contract.
                 return isRecord(item) &&
                   (item.type === "function_call" ||
+                    item.type === "reasoning" ||
                     (item.type === "message" && item.role === "assistant"))
                   ? omitWireFields(item, ["id", "status"])
                   : item;
