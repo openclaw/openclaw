@@ -10,6 +10,7 @@ import {
   type ActiveRemoteModelCatalog,
   type RemoteCatalogPublicationResult,
 } from "../model-catalog/remote-overlay.js";
+import { PluginInventoryRetiredError } from "../plugins/plugin-instance-error.js";
 import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import {
@@ -123,8 +124,10 @@ function applyRemoteModelCatalogUpdateNow(
         notifyPreparedModelRuntimePublication({ phase: "published" });
         return "published";
       } catch (error) {
+        // A config reload that replaced the plugin inventory mid-build also supersedes adoption.
         if (
           error instanceof PreparedModelRuntimePublicationSupersededError ||
+          error instanceof PluginInventoryRetiredError ||
           host.getCancellationSignal().aborted
         ) {
           return "superseded";

@@ -28,6 +28,7 @@ import {
   prepareRemoteModelCatalogStartupSnapshot,
 } from "../model-catalog/remote-overlay.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
+import { PluginInventoryRetiredError } from "../plugins/plugin-instance-error.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createEnteredGate } from "./entered-gate.test-support.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
@@ -581,6 +582,21 @@ describe("remote catalog publication boundaries", () => {
     } finally {
       commit.resolve();
       await Promise.allSettled([adoption, recovery]);
+      pricingSpy.mockRestore();
+    }
+  });
+
+  it("reports a plugin inventory retired by a config reload as superseded, then adopts on retry", async () => {
+    await setup();
+    const pricingSpy = vi
+      .spyOn(pricing, "prepareModelPricingContext")
+      .mockRejectedValueOnce(new PluginInventoryRetiredError());
+    try {
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("superseded");
+      expect(captureRemoteModelCatalogSnapshot()?.generatedAt).toBe(200);
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+      expect(captureRemoteModelCatalogSnapshot()?.generatedAt).toBe(300);
+    } finally {
       pricingSpy.mockRestore();
     }
   });
