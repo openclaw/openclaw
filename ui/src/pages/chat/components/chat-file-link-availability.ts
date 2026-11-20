@@ -34,10 +34,11 @@ export async function checkFileLinkAvailability(
     checksByWorkspace.set(workspace, checks);
   }
   const { availability, waiting } = checks;
+  const currentWorkspace = state.sessionWorkspaceState;
   const requests = new Map<string, { files: Reference[]; keys: string[] }>();
   for (const element of links) {
     const previous = unavailableFileLinks.get(element);
-    if (previous?.scope === scope) {
+    if (previous?.checks === checks) {
       continue;
     }
     const anchor = previous?.anchor ?? element;
@@ -62,7 +63,7 @@ export async function checkFileLinkAvailability(
     const key = JSON.stringify([sessionKey, target.messageEntryId ?? null, target.path]);
     const known = availability.get(key);
     if (known === "missing") {
-      unlink(anchor, scope);
+      unlink(anchor, checks);
     } else if (known === "pending") {
       waiting.get(key)?.add(anchor);
     } else if (known === undefined) {
@@ -87,7 +88,10 @@ export async function checkFileLinkAvailability(
       const batch = files.slice(start, start + MAX_FILES_PER_REQUEST);
       const batchKeys = keys.slice(start, start + MAX_FILES_PER_REQUEST);
       const settle = (result: SessionWorkspaceStatResult | null) => {
-        if (checksByWorkspace.get(workspace) !== checks) {
+        if (
+          state.sessionWorkspaceState !== currentWorkspace ||
+          checksByWorkspace.get(workspace) !== checks
+        ) {
           return;
         }
         for (const [index, key] of batchKeys.entries()) {
@@ -100,7 +104,7 @@ export async function checkFileLinkAvailability(
           } else {
             availability.set(key, status);
             if (status === "missing") {
-              anchors?.forEach((anchor) => unlink(anchor, scope));
+              anchors?.forEach((anchor) => unlink(anchor, checks));
             }
           }
         }
@@ -115,11 +119,11 @@ export async function checkFileLinkAvailability(
 
 const unavailableFileLinks = new WeakMap<
   HTMLElement,
-  { anchor: HTMLAnchorElement; scope: string }
+  { anchor: HTMLAnchorElement; checks: object }
 >();
 
 /** Demoted references retain their anchor for a subsequent owner-driven recheck. */
-function unlink(anchor: HTMLAnchorElement, scope: string) {
+function unlink(anchor: HTMLAnchorElement, checks: object) {
   if (!anchor.isConnected) {
     return;
   }
@@ -130,7 +134,7 @@ function unlink(anchor: HTMLAnchorElement, scope: string) {
   if (focused) {
     text.tabIndex = -1;
   }
-  unavailableFileLinks.set(text, { anchor, scope });
+  unavailableFileLinks.set(text, { anchor, checks });
   anchor.replaceWith(text);
   if (focused) {
     text.focus({ preventScroll: true });
