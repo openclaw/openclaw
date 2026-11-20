@@ -410,7 +410,7 @@ it(
                   throw new Error(
                     "Removed automation made another provider request from its retired notice",
                   );
-                // The second notice turn's read is closed before disclosure.
+                // The second notice stops after its history read has been admitted.
                 case 18: {
                   expect(JSON.stringify(body.input)).toContain(
                     'Automation \\"Closing proof\\" was auto-disabled',
@@ -561,8 +561,7 @@ it(
             runIds: expect.arrayContaining([authority.operationalRunInstance.runId]),
           },
         );
-        // Stop acknowledges cancellation before the direct-host runtime retires its claim.
-        // Keep the admitted read held until that exact disclosure authority is gone.
+        // Stop can acknowledge early; release the admitted read only after this notice retires.
         await observe(retired.promise);
         await observe(noticeReceipt(jobs.closing).settled);
         releaseHold();
@@ -627,10 +626,11 @@ it(
             /^(Error: Automation operator source changed|TypeError: agent runtime authority is no longer active)$/,
           ),
         });
-        // Closed during the awaited read: the handler responds with nothing at all.
-        expect(closedOutcome).toEqual({
+        // Ending the run doesn't revoke an admitted read or let the stopped notice consume it.
+        expect(closedOutcome).toMatchObject({
           id: jobs.closing.id,
-          threw: expect.stringContaining("agent runtime authority is no longer active"),
+          ok: true,
+          payload: { entries: [{ jobId: jobs.closing.id, status: "error" }] },
         });
         expect(lateNoticeRequest ?? "").not.toContain('"entries"');
         // Asserted scheduler provenance on a non-owner client turn unlocks nothing.
