@@ -35,29 +35,6 @@ const followup = createLazyImportLoader(() => import("./subagent-followup.runtim
 const conversationResult = createLazyImportLoader(() => import("../conversation-result.js"));
 const notification = createLazyImportLoader(() => import("../delivery.js"));
 
-/**
- * Run history outlives the transient run session, so scheduler-claimed runs link to their
- * recorded Automation run. History records the scheduler's start time (`runningAtMs`); the
- * executor's later `runStartedAt` would not match. Synthetic jobs (hooks, plugin triggers) are
- * never persisted and have no start time, and `deleteAfterRun` jobs may be gone before the link
- * is opened (the Automations route loads the live job), so both keep the session link.
- */
-function resolveInspectionUrl(params: DispatchCronDeliveryParams): string | undefined {
-  const { job, cfgWithAgentDefaults: cfg } = params;
-  const startedAtMs = job.state?.runningAtMs;
-  if (startedAtMs !== undefined && job.deleteAfterRun !== true) {
-    return resolveControlUiAutomationRunUrl(cfg, {
-      jobId: job.id,
-      runId: createCronExecutionId(job.id, startedAtMs),
-    });
-  }
-  return resolveControlUiSessionUrl(cfg, {
-    sessionKey: params.runSessionKey,
-    fallbackAgentId: params.agentId,
-    exactKey: true,
-  });
-}
-
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
@@ -380,7 +357,19 @@ export async function dispatchCronDelivery(
           );
         },
         tts: { auto: params.ttsAuto },
-        inspectionUrl: resolveInspectionUrl(params),
+        // Run history outlives the run's session alias, so a scheduler-claimed run links to its
+        // recorded run; unclaimed synthetic jobs (hooks, plugin triggers) keep the session link.
+        inspectionUrl:
+          params.job.state.runningAtMs === undefined
+            ? resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+                sessionKey: params.runSessionKey,
+                fallbackAgentId: params.agentId,
+                exactKey: true,
+              })
+            : resolveControlUiAutomationRunUrl(params.cfgWithAgentDefaults, {
+                jobId: params.job.id,
+                runId: createCronExecutionId(params.job.id, params.job.state.runningAtMs),
+              }),
         abortSignal: params.abortSignal ?? new AbortController().signal,
         bestEffort: params.deliveryBestEffort,
         completion: {
