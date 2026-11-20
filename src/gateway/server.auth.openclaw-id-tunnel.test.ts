@@ -480,6 +480,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
     { from: "viewer", to: "operator", revoked: true },
     { from: "viewer", to: "operator", revoked: false },
     { from: "operator", to: "viewer", revoked: true },
+    { from: "operator", to: "viewer", revoked: false },
   ] as const)(
     "a $from browser changed to $to reconnects at the new role (token revoked: $revoked)",
     async ({ from, to, revoked }) => {
@@ -523,6 +524,11 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         expect(grantedScopes(again.res)).toEqual(PRESETS[to].scopes.toSorted());
       }
       expect((await listDevicePairing()).pending).toEqual([]);
+      // The stored grant is exactly the new role: never operator.admin, and narrowed on demotion.
+      const stored = await getPairedDevice(deviceId);
+      const roleGrant = to === "viewer" ? ["operator.sessions.read"] : PRESETS.operator.scopes;
+      expect(stored?.approvedScopes?.toSorted()).toEqual(roleGrant.toSorted());
+      expect(stored?.tokens?.operator?.scopes?.toSorted()).toEqual(roleGrant.toSorted());
     },
   );
 
@@ -656,6 +662,20 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
       expect(res.error?.message).toMatch(
         _reason === "removed" ? /no longer has access to this claw/ : /access-record-inactive/,
       );
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("a member whose role grants nothing is refused before its browser is paired", async () => {
+    const identityPath = makeIdentityPath(`openclaw-tunnel-norole-${randomUUID()}.sqlite`);
+    const { ws, res } = await connectTunnel(GUEST_KEY, { identityPath });
+    try {
+      expect(res.ok).toBe(false);
+      expect(res.error?.message).toMatch(/access-record-inactive/);
+      const { deviceId } = loadOrCreateDeviceIdentity({ path: identityPath });
+      expect(await getPairedDevice(deviceId)).toBeNull();
+      expect((await listDevicePairing()).pending).toEqual([]);
     } finally {
       ws.close();
     }

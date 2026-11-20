@@ -17,6 +17,7 @@ import {
   approveOpenClawIdNodeInWorker,
   consumeOpenClawIdNodePairingInWorker,
   removeOpenClawIdNodePairingsInWorker,
+  setOpenClawIdMemberOperatorGrantInWorker,
 } from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
@@ -27,6 +28,10 @@ export const devicePairingOperations = {
   ),
   "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
     removeOpenClawIdNodePairingsInWorker,
+  ),
+  "devicePairing.setOpenClawIdMemberGrant": devicePairingMutation(
+    setOpenClawIdMemberOperatorGrantInWorker,
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.registerJoinCode": devicePairingMutation(
     (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
