@@ -365,13 +365,10 @@ When you open an entry from browse or search, the overview shows the artwork,
 name, description, and publisher already available in the catalog while the
 remaining details load.
 
-Open a skill on a plugin detail page to browse its complete declared folder. The
-viewer starts with `SKILL.md`, includes unlinked files and nested folders, and
-renders full Markdown documents. Files that cannot render, exceed the read
-limits, or are unavailable remain visible with an explanation. Installed and
-catalog plugins use the same viewer; catalog reads stay pinned to the selected
-release and do not install or execute the plugin. This viewer has no search or
-Copy controls. Reading a bundle requires `operator.read`.
+Open a skill on a plugin detail page to read its `SKILL.md` in a dialog without
+leaving the page. Installed and catalog plugins use the same read-only viewer.
+Catalog previews stay pinned to the selected release and do not install or
+execute the plugin. Reading a preview requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
