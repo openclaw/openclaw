@@ -1,0 +1,2 @@
+# Backport #197737: provider-declared credential contracts, authoritative denial versus readiness, and runtime-plan diagnostics/valid subscription forwarding.
+98
