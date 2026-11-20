@@ -286,6 +286,7 @@ export function withPreparedSessionSharingSource(params: {
 
 /** Accepted input follows only its own committed lifecycle and keeps that effect's custody. */
 export function createAdmittedSessionSharingAuthority(params: {
+  onIncarnationTransition?: (previous: string | null, current: string) => void;
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
@@ -321,6 +322,7 @@ export function createAdmittedSessionSharingAuthority(params: {
           (current.sessionId !== previous.sessionId ||
             current.lifecycleRevision !== previous.lifecycleRevision)
         ) {
+          params.onIncarnationTransition?.(admittedTarget.sessionId, current.sessionId);
           admittedTarget = {
             ...admittedTarget,
             sessionId: current.sessionId,

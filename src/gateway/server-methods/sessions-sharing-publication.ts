@@ -4,6 +4,7 @@ import type {
   SessionSharingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
+import { revokeSessionParticipation } from "../session-participation-lifetime.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { SharingActorFacts } from "./sessions-sharing-identities.js";
@@ -47,6 +48,14 @@ export function publishSessionMemberAccessReduced(params: {
   access?: SessionMemberPermissionLevel;
   ts: number;
 }): void {
+  if (params.access !== "send") {
+    revokeSessionParticipation({
+      profileId: params.identityId,
+      agentId: params.target.agentId,
+      sessionKey: params.target.canonicalKey,
+      sessionId: params.target.entry.sessionId,
+    });
+  }
   publishSharingChange({
     context: params.context,
     actor: params.actor,

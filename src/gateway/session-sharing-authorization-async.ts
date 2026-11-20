@@ -119,6 +119,7 @@ export async function prepareSessionPrincipalRunAuthority(
 async function prepareSessionPrincipalRunAccess(params: {
   context: GatewayRequestContext;
   profileId: string;
+  participationCeiling?: import("../agents/participation-ceiling.js").ParticipationCeiling;
   agentId: string;
   sessionKey: string;
   sessionId: string;
@@ -166,7 +167,17 @@ async function prepareSessionPrincipalRunAccess(params: {
         operatorRoleSubject(profile),
       )?.scopes;
     }
-    if (!scopes || resolveMissingOperatorScope(["operator.sessions.write"], scopes) !== null) {
+    const scope = params.participationCeiling
+      ? "operator.sessions.read"
+      : "operator.sessions.write";
+    if (
+      params.participationCeiling &&
+      (params.participationCeiling.profileId !== params.profileId ||
+        params.participationCeiling.sessionKey !== params.sessionKey)
+    ) {
+      throw new Error("Participation source does not match its original target.");
+    }
+    if (!scopes || resolveMissingOperatorScope([scope], scopes) !== null) {
       throw new Error("Session principal has no current run authority.");
     }
     return scopes;
@@ -273,7 +284,7 @@ async function prepareSessionPrincipalRunAccess(params: {
     return {
       client,
       assertCurrent,
-      signal: recorded?.authority.signal,
+      signal: AbortSignal.any([recorded?.authority.signal, sharing.participationSignal].filter((signal): signal is AbortSignal => signal !== undefined)),
       gatewayAccessGrant: original
         ? original.gatewayAccessGrant
         : access
@@ -354,6 +365,7 @@ export async function resolveSessionMutationAuthorizationAsync(
       : undefined;
   // Match the chat handler's command interpretation: cancellation must not join startup.
   const stopCommand =
+    !params.participationRequired &&
     chatParams?.suppressCommandInterpretation !== true &&
     chatParams?.intent === undefined &&
     chatMessage?.ok === true &&
@@ -511,6 +523,9 @@ export async function resolveSessionMutationAuthorizationAsync(
       return result;
     }
     const authorization = result.authorization;
+    if (authorization.release) {
+      creationReleases.push(authorization.release);
+    }
     const prepareWorkerGrant = authorization.prepareWorkerGrant;
     if (prepareWorkerGrant) {
       authorization.prepareWorkerGrant = async (source) => {
@@ -540,6 +555,7 @@ export async function resolveSessionMutationAuthorizationAsync(
         },
         retain,
         retainForRun: () => ({
+          signal: authorization.participationSignal,
           // Published facts stay live without repeating history preparation or transport admission.
           assertCurrent: () =>
             (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)(),

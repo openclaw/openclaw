@@ -370,6 +370,38 @@ export function authorizeOperatorScopesForRequiredScope(
   return { allowed: false, missingScope: requiredScope };
 }
 
+/** Pending target-bound requirement, never an operator scope or an implicit creation grant. */
+export function requiresSessionParticipation(
+  method: string,
+  scopes: readonly string[],
+  params: unknown,
+): boolean {
+  if (!operatorScopeSatisfied("operator.sessions.read", scopes)) {
+    return false;
+  }
+  if (["chat.send", "chat.abort", "session.typing"].includes(method)) {
+    return true;
+  }
+  const patch = asOptionalRecord(params);
+  return (
+    method === "sessions.patch" &&
+    Boolean(
+      patch &&
+      ["read-only", "guarded", "workspace"].includes(String(patch.permissionMode)) &&
+      Object.keys(patch).every((key) =>
+        [
+          "key",
+          "agentId",
+          "expectedSessionId",
+          "expectedLifecycleRevision",
+          "expectedPermissionMode",
+          "permissionMode",
+        ].includes(key),
+      ),
+    )
+  );
+}
+
 export function isGatewayMethodClassified(method: string): boolean {
   return isCoreGatewayMethodClassified(method) || resolveScopedMethod(method) !== undefined;
 }

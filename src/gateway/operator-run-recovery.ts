@@ -17,6 +17,7 @@ import {
   type GatewayOperatorRunAdmissionInput,
   type PreparedGatewayOperatorRunAuthority,
 } from "./operator-run-authority.js";
+import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import {
   decodeQueuedOperatorRecoverySource,
   type OperatorRunRecoverySnapshot,
@@ -146,5 +147,5 @@ export async function captureGatewayOperatorContinuation(
     source: inherited.source,
     scopes: intersectOperatorScopes(restored.authority.scopes, input.client?.connect.scopes ?? []),
   });
-  return { authority, release: restored.release };
+  return retainGatewayOperatorInvocation({ authority, release: restored.release }, input.invocationAuthority);
 }

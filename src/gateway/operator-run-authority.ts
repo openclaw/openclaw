@@ -39,6 +39,7 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -247,7 +248,10 @@ export async function prepareGatewayOperatorRunAuthority(
             return inherited.modelPolicy;
           },
         });
-    return { authority, release: inherited.retain?.() ?? (() => {}) };
+    return retainGatewayOperatorInvocation(
+      { authority, release: inherited.retain?.() ?? (() => {}) },
+      params.invocationAuthority,
+    );
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;
