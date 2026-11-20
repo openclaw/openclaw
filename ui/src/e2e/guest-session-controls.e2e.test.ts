@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
@@ -46,6 +47,11 @@ suite.define(() => {
       const otherAgentSession = sharedSession("agent:research:other-work", "Research notes");
       const gateway = await installMockGateway(page, {
         subscriptionInitialHistory: false,
+        heldRequests: [
+          { method: "sessions.describe" },
+          { method: "chat.startup" },
+          { method: "chat.history" },
+        ],
         operatorScopes: ["operator.sessions.write"],
         agentModel: "openai/model-a",
         models,
@@ -69,7 +75,45 @@ suite.define(() => {
           },
         },
       });
-      const navigate = async (row: Pick<GatewaySessionRow, "displayName" | "key">) => {
+      // Finish every setup read while retaining broad holds for the reconnect boundary.
+      const heldReadMethods = new Set(["sessions.describe", "chat.startup", "chat.history"]);
+      const settledReads = new Set<string>();
+      const settleSetupReads = async (heldKey?: string) => {
+        await expect
+          .poll(async () => {
+            let released = 0;
+            for (const method of heldReadMethods) {
+              const requests = await gateway.getRequests(method);
+              for (const request of requests) {
+                const params = requireRecord(request.params);
+                if (
+                  settledReads.has(request.id) ||
+                  (heldKey && (params.key === heldKey || params.sessionKey === heldKey))
+                ) {
+                  continue;
+                }
+                await gateway.resolveDeferred(method, undefined, {
+                  match: params,
+                  exactParams: true,
+                });
+                settledReads.add(request.id);
+                released += 1;
+              }
+            }
+            return (
+              released === 0 &&
+              (await page.evaluate(() => {
+                const snapshot = window.openclawControlUi?.snapshot();
+                return snapshot?.gatewayPhase === "connected" && snapshot.ready;
+              }))
+            );
+          })
+          .toBe(true);
+      };
+      const navigate = async (
+        row: Pick<GatewaySessionRow, "displayName" | "key">,
+        settle = true,
+      ) => {
         const target = sessionNavigationTarget({
           face: "chat",
           sessionKey: row.key,
@@ -93,9 +137,14 @@ suite.define(() => {
           ) as (HTMLElement & { sessionKey?: string }) | null;
           return pane?.sessionKey === key;
         }, row.key);
+        if (settle) {
+          await settleSetupReads();
+        }
       };
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, foreign.key));
+        await waitForControlUiGatewayReady(page);
+        await settleSetupReads();
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = pane.locator(".agent-chat__composer-combobox > textarea");
         await expect.poll(() => composer.isDisabled()).toBe(true);
@@ -154,8 +203,6 @@ suite.define(() => {
           void application.sessions.refreshList({ force: true });
         });
         await gateway.waitForRequest("sessions.list", { after: listCount });
-        await gateway.deferNext("chat.startup", { sessionKey: key });
-        await gateway.deferNext("sessions.describe", { key });
         await gateway.resolveDeferred("sessions.create", {
           key,
           entry: { sessionId },
@@ -201,8 +248,8 @@ suite.define(() => {
           ],
         });
         await gateway.resolveDeferred("sessions.list", roster);
-        await gateway.resolveDeferred("chat.startup");
-        await gateway.resolveDeferred("sessions.describe");
+        // Drain setup reads without removing the broad holds needed after reconnect.
+        await settleSetupReads();
         await expect.poll(() => composer.isEditable()).toBe(true);
         if (initialRun === "rejected") {
           await expect
@@ -276,22 +323,45 @@ suite.define(() => {
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })
         ).length;
+        await settleSetupReads();
+        const stopDescribeCount = (await gateway.getRequests("sessions.describe", { key })).length;
         await gateway.setOnline(false);
         await expect.poll(() => stop.isEnabled()).toBe(true);
         await stop.click();
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-        await navigate(otherAgentSession);
+        await navigate(otherAgentSession, false);
+        // Reconnect lists must not independently restore the target's ownership.
+        await gateway.setMethodResponse("sessions.list", {
+          cases: [
+            { match: { agentId: "research" }, response: sessionsListResponse([otherAgentSession]) },
+            { response: sessionsListResponse([foreign, otherAgentSession]) },
+          ],
+        });
         await gateway.setOnline(true);
+        console.info("[queued-stop] settling only non-target reconnect reads");
+        await settleSetupReads(key);
+        console.info("[queued-stop] waiting for reconnect research roster request");
         await gateway.waitForRequest("sessions.list", {
           after: researchListCount,
           match: { agentId: "research" },
         });
         await expect.poll(() => composer.isDisabled()).toBe(true);
+        console.info("[queued-stop] waiting for fresh target descriptor request");
+        const stopDescribe = await gateway.waitForRequest("sessions.describe", {
+          after: stopDescribeCount,
+          match: { key },
+        });
+        expect(requireRecord(stopDescribe.params)).toMatchObject({ key });
+        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.describe");
+        heldReadMethods.delete("sessions.describe");
+        console.info("[queued-stop] waiting for owned queued Stop replay");
         expect(requireRecord((await gateway.waitForRequest("chat.abort")).params)).toMatchObject({
           sessionKey: key,
           runId,
         });
         expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
+        await gateway.setMethodResponse("sessions.list", roster);
         await gateway.emitGatewayEvent("chat", { sessionKey: key, runId, state: "aborted" });
         await navigate(own);
         await expect.poll(() => composer.isEditable()).toBe(true);

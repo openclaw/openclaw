@@ -680,6 +680,15 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
       // The owner can publish its first result synchronously before the handle returns.
       this.projectObservedSessionRow();
       const observation = binding.observation;
+      const pendingAbort = state.pendingAbort;
+      if (
+        pendingAbort &&
+        !observation.hasObserved &&
+        uiConversationMatches(state, pendingAbort.sessionKey, key, agentId, pendingAbort.agentId)
+      ) {
+        // A parked pane skips resource discovery, but its queued Stop needs current ownership.
+        refreshRunner.refresh();
+      }
       const transcriptSessionId = state.currentSessionId ?? retainedTranscriptSessionId;
       if (
         previousObservationSessionId &&
