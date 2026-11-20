@@ -1,6 +1,5 @@
-import { randomUUID } from "node:crypto";
 import type { Context } from "grammy";
-import { resolveAgentDir, resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
@@ -14,7 +13,6 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { formatProviderLoginCommand } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -73,6 +71,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { prepareTelegramPickerSelection } from "./model-picker-selection.js";
 import {
   buildTelegramNativeCommandCallbackData,
   hasTelegramOpaqueCallbackPrefix,
@@ -81,6 +80,7 @@ import {
   parseTelegramOpaqueCallbackData,
 } from "./native-command-callback-data.js";
 import { isTelegramMessageNotModifiedError } from "./network-errors.js";
+import { recordPendingPickerSelection, sessionModelRef } from "./picker-pending-selection.js";
 import {
   hasTelegramQuestionCallbackPrefix,
   parseTelegramQuestionCallbackData,
@@ -527,60 +527,17 @@ export function createTelegramCallbackRouter({
 
         commandText = `/model ${selection.provider}/${selection.model}`;
         try {
-          const storePath = resolveStorePath(runtimeCfg.session?.store, {
-            agentId: sessionState.agentId,
-          });
-          const resolvedDefault = resolveDefaultModelForAgent({
-            cfg: runtimeCfg,
-            agentId: sessionState.agentId,
-          });
-          const isDefaultSelection =
-            selection.provider === resolvedDefault.provider &&
-            selection.model === resolvedDefault.model;
-          const persistedSessionEntry = sessionState.sessionEntry;
-          const sessionEntryMissing = persistedSessionEntry === undefined;
-          const sessionEntry = persistedSessionEntry ?? {
-            sessionId: randomUUID(),
-            updatedAt: Date.now(),
-          };
-          const previousAuthProfileId = sessionEntry.authProfileOverride?.trim();
-          const sessionStore = { [sessionState.sessionKey]: sessionEntry };
-          const currentModelRef = sessionState.model?.trim();
-          const currentModelSeparator = currentModelRef?.indexOf("/") ?? -1;
-          const currentSelection =
-            currentModelRef && currentModelSeparator > 0
-              ? {
-                  provider: currentModelRef.slice(0, currentModelSeparator),
-                  model: currentModelRef.slice(currentModelSeparator + 1),
-                }
-              : resolvedDefault;
-          const applied = await retryModelAction(() =>
-            applySessionModelSelection({
+          const { input, isDefaultSelection, previousAuthProfileId, sessionStore } =
+            prepareTelegramPickerSelection({
               cfg: runtimeCfg,
               agentId: sessionState.agentId,
               sessionKey: sessionState.sessionKey,
-              storePath,
-              sessionEntry,
-              sessionStore,
-              allowCreate: sessionEntryMissing,
-              defaultProvider: resolvedDefault.provider,
-              defaultModel: resolvedDefault.model,
-              currentProvider: currentSelection.provider,
-              currentModel: currentSelection.model,
-              modelCatalog: modelData.modelCatalog,
-              canPersistStickyModelSelection: false,
-              // The shared selection owner enforces the picker auth policy
-              // from these menu facts; this adapter only renders its result.
-              authReadinessMenu: modelData.modelMenu,
-              request: {
-                provider: selection.provider,
-                model: selection.model,
-                isDefault: isDefaultSelection,
-                runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
-              },
-              markLiveSwitchPending: true,
-            }),
-          );
+              sessionEntry: sessionState.sessionEntry,
+              currentModelRef: sessionState.model,
+              modelData,
+              selection,
+            });
+          const applied = await retryModelAction(() => applySessionModelSelection(input));
           if (applied.status !== "applied") {
             if (applied.status === "rejected" && applied.reason === "auth" && applied.authBlock) {
               const authBlock = applied.authBlock;
@@ -593,8 +550,28 @@ export function createTelegramCallbackRouter({
                 fitsTelegramCallbackData(signInCallback)
                   ? [[{ text: "🔐 Sign in", callback_data: signInCallback }]]
                   : [];
+              const offerSignIn = signInRow.length > 0;
+              if (offerSignIn) {
+                // A successful sign-in from this button applies the blocked selection.
+                recordPendingPickerSelection(
+                  {
+                    accountId,
+                    agentId: sessionState.agentId,
+                    sessionKey: sessionState.sessionKey,
+                  },
+                  {
+                    provider: selection.provider,
+                    model: selection.model,
+                    sessionModelRef: sessionModelRef(sessionState.sessionEntry),
+                    currentModelRef: sessionState.model,
+                  },
+                );
+              }
+              const nextStep = offerSignIn
+                ? "Sign in below and this chat switches to it."
+                : "After connecting, select the model again.";
               await showModelReply(
-                `⚠️ Model not changed: ${selection.provider}/${selection.model} needs a working sign-in first.\n\n${authBlock.notice}\n\nAfter connecting, select the model again. Your current model is unchanged.`,
+                `⚠️ Model not changed: ${selection.provider}/${selection.model} needs a working sign-in first.\n\n${authBlock.notice}\n\n${nextStep} Your current model is unchanged.`,
                 [...signInRow, ...buildProviderKeyboard(providerInfos)],
               );
               return;

@@ -26,6 +26,7 @@ import {
   resetNativeCommandMenuMocks,
 } from "./bot-native-commands.menu-test-support.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { recordPendingPickerSelection } from "./picker-pending-selection.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "telegram-login-worker-");
 let sessionStore: Record<string, SessionEntry>;
@@ -90,6 +91,23 @@ const sessionMocks = vi.hoisted(() => ({
     ok: true,
     target: { sessionId: "login-session" },
   })),
+}));
+
+const pickerMocks = vi.hoisted(() => ({
+  applySessionModelSelection:
+    vi.fn<typeof import("openclaw/plugin-sdk/model-session-runtime").applySessionModelSelection>(),
+  buildPreparedModelsProviderData:
+    vi.fn<
+      typeof import("openclaw/plugin-sdk/models-provider-runtime").buildPreparedModelsProviderData
+    >(),
+}));
+vi.mock("openclaw/plugin-sdk/model-session-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/model-session-runtime")>()),
+  applySessionModelSelection: pickerMocks.applySessionModelSelection,
+}));
+vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
+  buildPreparedModelsProviderData: pickerMocks.buildPreparedModelsProviderData,
 }));
 
 // mock-isolation: Keep session database startup outside the command fixture.
@@ -622,5 +640,81 @@ describe("registerTelegramNativeCommands /login", () => {
     } else {
       expectKept(sendMessage);
     }
+  });
+});
+
+describe("Telegram /login after the picker sign-in gate", () => {
+  const scope = { accountId: "default", agentId: "main", sessionKey: "agent:main:main" };
+  const blocked = {
+    provider: "openai",
+    model: "gpt-6",
+    sessionModelRef: "deepseek/deepseek-flash",
+    currentModelRef: "deepseek/deepseek-flash",
+  };
+  const onDeepseek = () =>
+    sessionEntry({ providerOverride: "deepseek", modelOverride: "deepseek-flash" });
+
+  beforeEach(() => {
+    resetLoginCommandMocks();
+    pickerMocks.buildPreparedModelsProviderData.mockReset().mockResolvedValue({
+      byProvider: new Map([["openai", new Set(["gpt-6"])]]),
+      providers: ["openai"],
+      resolvedDefault: { provider: "openai", model: "gpt-5.4" },
+      modelNames: new Map(),
+      modelCatalog: [],
+    });
+    pickerMocks.applySessionModelSelection
+      .mockReset()
+      .mockResolvedValue({ status: "applied", agentRuntime: "openclaw" } as never);
+  });
+
+  it("switches the chat to the blocked model once sign-in completes", async () => {
+    sessionStore = { "agent:main:main": onDeepseek() };
+    recordPendingPickerSelection(scope, blocked);
+    const { handler, sendMessage } = await registerSessionLogin(savedLogin("openai:codex"));
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() =>
+      expect(messages(sendMessage)).toContain(
+        "OpenAI login complete. Model changed to openai/gpt-6.",
+      ),
+    );
+    expect(pickerMocks.applySessionModelSelection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        currentProvider: "deepseek",
+        currentModel: "deepseek-flash",
+        request: expect.objectContaining({ provider: "openai", model: "gpt-6" }),
+      }),
+    );
+    expect(messages(sendMessage)).not.toContain(completed);
+  });
+
+  it("keeps a model picked while signing in and names the blocked one to select", async () => {
+    sessionStore = {
+      "agent:main:main": sessionEntry({ providerOverride: "zai", modelOverride: "glm-5.3" }),
+    };
+    recordPendingPickerSelection(scope, blocked);
+    const { handler, sendMessage } = await registerSessionLogin(savedLogin("openai:codex"));
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() =>
+      expect(messages(sendMessage)).toContain(
+        "OpenAI login complete. Select openai/gpt-6 again with /models.",
+      ),
+    );
+    expect(pickerMocks.applySessionModelSelection).not.toHaveBeenCalled();
+  });
+
+  it("reports plain completion when no picker selection is waiting", async () => {
+    sessionStore = { "agent:main:main": onDeepseek() };
+    const { handler, sendMessage } = await registerSessionLogin(savedLogin("openai:codex"));
+
+    await handler(ownerContext());
+
+    await vi.waitFor(() => expect(messages(sendMessage)).toContain(completed));
+    expect(pickerMocks.applySessionModelSelection).not.toHaveBeenCalled();
   });
 });

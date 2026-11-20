@@ -26,6 +26,8 @@ import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
+import { applyPendingTelegramPickerSelection } from "./model-picker-selection.js";
+import { takePendingPickerSelection } from "./picker-pending-selection.js";
 import { loadTelegramSendModule } from "./send-runtime.js";
 
 const activeTelegramProviderLoginFlows = createProviderLoginFlowRegistry();
@@ -258,15 +260,57 @@ export async function executeTelegramLoginCommand(params: {
       }
       const sessionModel =
         targetSessionEntryAtStart?.modelOverride ?? targetSessionEntryAtStart?.model;
+      // A sign-in started from the picker gate finishes the selection it blocked.
+      const pickerScope = {
+        accountId: dispatch.route.accountId,
+        agentId: dispatch.route.agentId,
+        sessionKey: dispatch.targetSessionKey,
+      };
+      const blockedSelection =
+        loginResult.authRefresh === "refreshed"
+          ? takePendingPickerSelection(pickerScope, loginChoice.providerId)
+          : undefined;
+      let blockedSelectionApplied = false;
+      if (blockedSelection) {
+        try {
+          assertCurrent();
+          blockedSelectionApplied = await applyPendingTelegramPickerSelection({
+            cfg: getRuntimeConfig(),
+            agentId: dispatch.route.agentId,
+            sessionKey: dispatch.targetSessionKey,
+            sessionEntry: await dispatch.nativeCommandRuntime.getSessionEntryAsync({
+              agentId: dispatch.route.agentId,
+              sessionKey: dispatch.targetSessionKey,
+              storePath: resolveStorePath(dispatch.runtimeCfg.session?.store, {
+                agentId: dispatch.route.agentId,
+              }),
+            }),
+            pending: blockedSelection,
+          });
+        } catch (error) {
+          flowSignal.throwIfAborted();
+          dispatch.runtime.error?.(
+            danger(
+              `telegram ${formatProviderLoginCommand(loginChoice.command)} completed but could not apply the selected model: ${String(error)}`,
+            ),
+          );
+        }
+      }
+      const blockedRef =
+        blockedSelection && `${blockedSelection.provider}/${blockedSelection.model}`;
       terminalMessage = [
-        formatProviderLoginCompletion(
-          loginChoice,
-          loginResult.authRefresh,
-          sessionSwitchFailed,
-          nextProfileId && sessionModel
-            ? { model: sessionModel, profileId: nextProfileId }
-            : undefined,
-        ),
+        blockedSelectionApplied
+          ? `${loginChoice.providerLabel} login complete. Model changed to ${blockedRef}.`
+          : blockedRef && !sessionSwitchFailed
+            ? `${loginChoice.providerLabel} login complete. Select ${blockedRef} again with /models.`
+            : formatProviderLoginCompletion(
+                loginChoice,
+                loginResult.authRefresh,
+                sessionSwitchFailed,
+                nextProfileId && sessionModel
+                  ? { model: sessionModel, profileId: nextProfileId }
+                  : undefined,
+              ),
         loginResult.modelAccess?.message,
       ]
         .filter(Boolean)

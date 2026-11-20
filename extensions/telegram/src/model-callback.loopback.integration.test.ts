@@ -22,6 +22,7 @@ import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-author
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { buildModelsKeyboard } from "./model-buttons.js";
+import { takePendingPickerSelection } from "./picker-pending-selection.js";
 import { resetTelegramClientOptionsCacheForTests, sendMessageTelegram } from "./send.js";
 
 const TOKEN = "123456:loopback-token";
@@ -496,6 +497,17 @@ describe("Telegram model callback loopback", () => {
           text: expect.stringContaining("Sign in"),
           callback_data: `tgcmd:/login ${PROVIDER}`,
         });
+        // The Sign in button leaves the blocked model waiting for that sign-in.
+        expect(
+          takePendingPickerSelection(
+            {
+              accountId: "default",
+              agentId: "main",
+              sessionKey: `agent:main:telegram:direct:${CHAT_ID}`,
+            },
+            PROVIDER,
+          ),
+        ).toMatchObject({ provider: PROVIDER, model: MODEL });
         expect(
           (await listSessionEntriesAsync({ agentId: "main", storePath }))[0]?.entry.modelOverride,
         ).toBeUndefined();

@@ -95,7 +95,7 @@ describe("resolveModelSelectionAuthBlock", () => {
     expect(block?.notice).toContain("`openclaw models auth login --provider opencode-go`");
   });
 
-  it("points custom providers without a login route at the setup guide", () => {
+  it("points custom providers without a login route at the setup guide, with no sign-in button", () => {
     const menu = buildMenu({
       readiness: {
         "custom-route/chat": { availability: false, unavailableReason: "missing-auth" },
@@ -107,6 +107,7 @@ describe("resolveModelSelectionAuthBlock", () => {
       model: "chat",
     });
     expect(block?.notice).toContain("custom-provider guide");
+    expect(block?.loginSupported).toBe(false);
   });
 
   it.each([
@@ -153,20 +154,6 @@ describe("resolveModelSelectionAuthBlock", () => {
     expect(
       resolveModelSelectionAuthBlock({ menu, provider: "meta", model: "muse-spark-1.3" }),
     ).toBeUndefined();
-  });
-
-  it("marks blocks without a login route as not button-offerable", () => {
-    const menu = buildMenu({
-      readiness: {
-        "custom-route/chat": { availability: false, unavailableReason: "missing-auth" },
-      },
-    });
-    const block = resolveModelSelectionAuthBlock({
-      menu,
-      provider: "custom-route",
-      model: "chat",
-    });
-    expect(block?.loginSupported).toBe(false);
   });
 
   it("does not block when readiness is unknown", () => {
