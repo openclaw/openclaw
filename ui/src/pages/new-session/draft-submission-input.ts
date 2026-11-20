@@ -68,7 +68,7 @@ export function prepareDraftSubmission(
     profileId,
     start,
     end,
-    ...(access ? { access } : {}),
+    access,
   }));
   const attachments = body.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {

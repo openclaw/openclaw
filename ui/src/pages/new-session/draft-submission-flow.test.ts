@@ -339,7 +339,7 @@ describe("DraftSubmissionFlow", () => {
           });
         });
       flow.setMessage("  @Alex keep the accepted prompt  ", [
-        { profileId: "profile-alex", start: 2, end: 7 },
+        { profileId: "profile-alex", start: 2, end: 7, access: "suggest" },
       ]);
       stubObjectUrls("blob:accepted-note");
       const attachment = registerTextPayload("accepted-note");
@@ -377,7 +377,7 @@ describe("DraftSubmissionFlow", () => {
         },
       });
       expect(retained?.message?.["__openclaw"]).toMatchObject({
-        humanMentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
+        humanMentions: [{ profileId: "profile-alex", start: 0, end: 5, access: "suggest" }],
       });
       expect(getChatAttachmentDataUrl(attachment)).toBeNull();
       if (next === "reconnect") {
