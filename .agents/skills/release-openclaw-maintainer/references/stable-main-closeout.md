@@ -9,7 +9,11 @@ publishing stable also advanced `main`.
 
 Closeout requires the original successful stable/full FRV with soak and blocking
 performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
-decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+decisions. An original published receipt-recovery aggregate is also eligible: closeout
+authenticates it through the shared release evidence owner, including the original
+qualification receipts, successful recovery seal, and current operator authority.
+The recovery run/attempt and published manifest remain unchanged; a matching
+display name alone never qualifies recovery. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
 skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched required assets remain blocking. ClawHub
