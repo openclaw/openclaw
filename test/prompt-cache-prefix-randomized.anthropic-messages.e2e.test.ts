@@ -4,7 +4,8 @@ import { it } from "vitest";
 import { usePrefixRandomizedJourney } from "./prompt-cache-prefix-randomized.test-support.js";
 
 const runJourney = usePrefixRandomizedJourney();
-const SEEDS = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? "1,2").split(",").map(Number);
+// Seed 6 hits the known skill-list change after a config reload, which each file's seeds must show.
+const SEEDS = (process.env.OPENCLAW_PREFIX_RANDOM_SEEDS ?? "1,6").split(",").map(Number);
 
 for (const seed of SEEDS) {
   it(`keeps the session prefix append-only for journey seed ${seed}`, { timeout: 600_000 }, () =>

@@ -182,6 +182,37 @@ const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream", "openai-compl
 // The known-break name for that merge.
 const SILENT_MERGE = "silent-merge";
 
+// Anthropic with Tool Search on: after a `config.patch` reload (refreshConfigReloadSkills ->
+// refreshSkillsDiscovery reason "config-change" -> bumpSkillsSnapshotVersion,
+// src/skills/runtime/refresh.ts), a later ordinary turn rebuilds the prompt: skills added
+// mid-session move into the system prompt's skill list, and the "System prompt update" messages that
+// carried them as appended deltas drop out of the history. Seen in seed 6: skills added at steps 9
+// and 12, a model switch at step 14 rebuilt without them (allowed: they arrive as deltas), and the
+// user turn at step 21 rebuilds. Owner: follow-up "skills refresh after config reload".
+const SKILL_AFTER_RELOAD = "skills-refresh-after-config-reload";
+
+// One `<skill>` entry of the system prompt's skill list (newlines may be JSON-escaped there).
+const SKILL_ENTRY = /(?:\n|\\n) *<skill>(?:\n|\\n)[\s\S]*?<\/skill>/g;
+const PROMPT_UPDATE = /^\{"role":"user","content":\[\{"type":"text","text":"System prompt update\./;
+
+/**
+ * True when `current` is `previous` with more skills in the system prompt and without some prompt
+ * update messages, plus new messages. Everything else must match.
+ */
+export function skillListGrew(previous: WireRequest, current: WireRequest): boolean {
+  const known = new Set(previous.system.match(SKILL_ENTRY));
+  const system = current.system.replace(SKILL_ENTRY, (entry) => (known.has(entry) ? entry : ""));
+  const kept = new Set(current.messages);
+  const messages = previous.messages.filter(
+    (message) => kept.has(message) || !PROMPT_UPDATE.test(message),
+  );
+  return (
+    system !== current.system &&
+    system === previous.system &&
+    !prefixChange({ ...previous, messages }, { ...current, system })
+  );
+}
+
 /**
  * True when `current` differs from `previous` only by that merge: the first changed message is a
  * user message whose content blocks start with the old ones, the extra blocks are the following
@@ -260,6 +291,7 @@ export function usePrefixRandomizedJourney() {
           (entry) => entry.owner,
         ),
         ...(SILENT_MERGE_APIS.has(surface.api) ? [SILENT_MERGE] : []),
+        ...(surface.api === "anthropic-messages" && surface.toolSearch ? [SKILL_AFTER_RELOAD] : []),
       ];
       expect(known.filter((owner) => !matched.has(owner))).toEqual([]);
     }
@@ -603,10 +635,18 @@ export function usePrefixRandomizedJourney() {
             SILENT_MERGE_APIS.has(api) &&
             journey.slice(0, current.step).includes("silent") &&
             isSilentTurnMerge(previous.request, current.request);
+          const skillAfterReload =
+            api === "anthropic-messages" &&
+            toolSearch &&
+            journey.slice(0, current.step).includes("toolsChanged") &&
+            skillListGrew(previous.request, current.request);
           if (change && !rebuild && silentMerge) {
             matched.add(SILENT_MERGE);
           }
-          if (change && !rebuild && !silentMerge) {
+          if (change && !rebuild && skillAfterReload) {
+            matched.add(SKILL_AFTER_RELOAD);
+          }
+          if (change && !rebuild && !silentMerge && !skillAfterReload) {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }

@@ -2,5 +2,6 @@
 # plus the seeded randomized journey suite (requested by the prompt-cache owner), and known-break
 # checks that compare the whole request with negative controls (review round 3), and the default
 # Tool Search surface with an opt-out variant and a cron-first tool-list step (requested by the
-# prompt-cache owner).
-655
+# prompt-cache owner), and expiring known-break entries with a skills-refresh entry and its negative
+# controls (review round 4).
+686

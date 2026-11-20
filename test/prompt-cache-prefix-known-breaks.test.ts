@@ -1,7 +1,11 @@
 // Known prefix breaks must not hide a second change in the same request.
 import { describe, expect, it } from "vitest";
 import type { WireRequest } from "./helpers/fake-model-transports.js";
-import { historyChange, unknownChange } from "./prompt-cache-prefix-randomized.test-support.js";
+import {
+  historyChange,
+  skillListGrew,
+  unknownChange,
+} from "./prompt-cache-prefix-randomized.test-support.js";
 import { KNOWN_BREAKS } from "./prompt-cache-prefix-stability.test-support.js";
 
 // Plain words stand for messages; JSON messages pass through unchanged.
@@ -105,5 +109,24 @@ describe("known prefix breaks", () => {
       false,
     );
     expect(known("google-generative-ai", previous, request(["u1", cut, "a1", "u2"]))).toBe(true);
+  });
+
+  it("accepts the skill-list rebuild only when nothing else changed", () => {
+    const skill = (name: string) => `\n  <skill>\n    <name>${name}</name>\n  </skill>`;
+    const system = (...names: string[]) => `rules<available_skills>${names.map(skill).join("")}`;
+    const update = JSON.stringify({
+      role: "user",
+      content: [{ type: "text", text: "System prompt update. ## Skills" }],
+    });
+    const previous = { ...request(["u1", update, "a1"]), system: system("a", "c") };
+    const rebuilt = { ...request(["u1", "a1", "u2"]), system: system("a", "b", "c") };
+    expect(skillListGrew(previous, rebuilt)).toBe(true);
+    expect(skillListGrew(previous, { ...rebuilt, system: `${system("a", "b", "c")}x` })).toBe(
+      false,
+    );
+    expect(skillListGrew(previous, { ...rebuilt, messages: request(["u0", "a1"]).messages })).toBe(
+      false,
+    );
+    expect(skillListGrew(previous, { ...previous, messages: rebuilt.messages })).toBe(false);
   });
 });
