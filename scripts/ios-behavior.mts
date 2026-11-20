@@ -1265,7 +1265,7 @@ const cases: Record<string, Case> = {
   "disclosure-header-still": {
     kind: "guard",
     prepare: prepareHistory,
-    async run(_session, file) {
+    async run(_session, file): Promise<Result> {
       const layout = await openHistoryChat();
       const area = readableArea(layout);
       let header = disclosureHeader(area);
