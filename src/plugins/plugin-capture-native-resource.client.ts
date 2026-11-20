@@ -56,6 +56,7 @@ export function createPluginCaptureResourceClient(
   port.on("message", receive);
   port.on("close", fail);
   port.on("messageerror", fail);
+  port.unref();
   const start = (command: PluginCaptureResourceCommand) => {
     if (unavailable) {
       throw unavailable;
@@ -67,6 +68,7 @@ export function createPluginCaptureResourceClient(
     } = { completion: createDeferredCore() };
     void call.completion.promise.catch(() => {});
     pending.set(id, call);
+    port.ref();
     port.postMessage({ id, command });
     return { id, call };
   };
@@ -84,6 +86,9 @@ export function createPluginCaptureResourceClient(
         return unwrap(await call.completion.promise);
       } finally {
         pending.delete(id);
+        if (!pending.size) {
+          port.unref();
+        }
       }
     },
     requestSync(command: PluginCaptureResourceCommand) {
@@ -104,6 +109,9 @@ export function createPluginCaptureResourceClient(
         return unwrap(call.reply).root;
       } finally {
         pending.delete(id);
+        if (!pending.size) {
+          port.unref();
+        }
       }
     },
   };
@@ -196,6 +204,8 @@ export async function createPluginCaptureOwner(
       port1.postMessage(reply);
     };
     port1.on("message", receive);
+    // The execution worker keeps active preparation alive, not this idle relay.
+    port1.unref();
     return {
       port: port2,
       service() {

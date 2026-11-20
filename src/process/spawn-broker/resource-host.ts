@@ -74,6 +74,14 @@ export class BrokerResourceClaims {
   get hasOpenClaims() {
     return [...this.claims.values()].some((claim) => !claim.closed);
   }
+  // Physical custody outlives execution. Only unsettled work pins the host process.
+  get needsReference() {
+    return [...this.claims.values()].some(
+      (claim) =>
+        !claim.closed &&
+        (!claim.created || Boolean(claim.failure || claim.pending) || claim.ownerMessages.size > 0),
+    );
+  }
   get admissionClosed() {
     return this.failure !== undefined || this.sealed;
   }
@@ -141,6 +149,7 @@ export class BrokerResourceClaims {
         claim.ownerMessages.set(sequence, { request, size: serialized.length });
         this.bufferedBytes += serialized.length;
         this.bufferedMessages++;
+        this.host.refreshReference();
         void (async () => {
           await claim.attached.promise;
           active();
@@ -172,6 +181,7 @@ export class BrokerResourceClaims {
         const completion = createDeferredCore();
         void completion.promise.catch(() => {});
         claim.pending = { requestId, completion };
+        this.host.refreshReference();
         void (async () => {
           await claim.attached.promise;
           active();
@@ -181,6 +191,7 @@ export class BrokerResourceClaims {
         })().catch((error: unknown) => {
           if (claim.pending?.requestId === requestId) {
             claim.pending = undefined;
+            this.host.refreshReference();
             completion.reject(toErrorObject(error, "Native resource close delivery failed"));
           }
         });
@@ -229,6 +240,7 @@ export class BrokerResourceClaims {
         return;
       }
       claim.created = true;
+      this.host.refreshReference();
     } else if (
       response.type === "resource-owner-received" ||
       response.type === "resource-owner-rejected"
@@ -238,6 +250,7 @@ export class BrokerResourceClaims {
         claim.ownerMessages.delete(response.sequence);
         this.bufferedBytes -= pending.size;
         this.bufferedMessages--;
+        this.host.refreshReference();
         if (response.type === "resource-owner-rejected") {
           const error = toErrorObject(
             decodeNativeWorkerFailure(response.error),
@@ -268,6 +281,7 @@ export class BrokerResourceClaims {
       if (claim.pending?.requestId === response.requestId) {
         const pending = claim.pending;
         claim.pending = undefined;
+        this.host.refreshReference();
         pending.completion.reject(
           response.resourceError
             ? new BrokerNativeResourceCloseError(response.error)
@@ -337,6 +351,7 @@ export class BrokerResourceClaims {
       return false;
     }
     claim.failure = error;
+    this.host.refreshReference();
     claim.attached.reject(error);
     claim.pending?.completion.reject(error);
     claim.pending = undefined;

@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { MessageChannel } from "node:worker_threads";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { NativeWorker } from "./worker-native-handle.js";
 import type { NativeWorkerRuntime } from "./worker-native-lifecycle.types.js";
 
@@ -39,12 +40,18 @@ it.each(["execution", "resource"] as const)(
       refreshReference: vi.fn(),
       resourceBroker: () => broker,
     };
+    const { port1, port2 } = new MessageChannel();
+    onTestFinished(() => {
+      port1.close();
+      port2.close();
+    });
     const worker = new NativeWorker(
       runtime,
       1,
       new URL("file:///synthetic/worker.mjs"),
       false,
       true,
+      { port: port1, service() {}, dispose: () => port2.close() },
     );
     const exited = vi.fn();
     const failed = vi.fn();
@@ -54,10 +61,15 @@ it.each(["execution", "resource"] as const)(
       moduleUrl: "file:///synthetic/resource.mjs",
       workerDataKey: "resource",
     });
+    expect(port1.hasRef()).toBe(false);
+    expect(worker.needsReference).toBe(true);
+    worker.unref();
+    expect(worker.needsReference).toBe(false);
     const failure = new Error("synthetic broker startup failure");
     failResource!(failure);
     expect(failed).toHaveBeenCalledWith(failure);
     const stopped = worker.stop();
+    expect(worker.needsReference).toBe(true);
     const observeExecution = () => worker.receive({ type: "execution-exit", id: 1, code: 7 });
     const observeResource = () => closeResource!();
     (first === "execution" ? observeExecution : observeResource)();

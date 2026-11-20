@@ -332,7 +332,9 @@ paths. Host cache and recovery leases can retain native captures after preparati
 or its execution source has fully closed, so an unexpected preparation-worker exit
 cannot prematurely release a token. Ordinarily, the last lease retires the physical
 root. Loaded native code retains its physical custody and the unrefed existing
-broker until host exit; closing a cache does not unload native code.
+broker until host exit; closing a cache does not unload native code. Idle capture
+custody does not keep a programmatic host alive: active execution and capture
+requests hold process references, as do resource initialization and cleanup.
 Unbound execution sources reuse that process-owned broker across ordinary Gateway
 close/restart, including when an old cache lease closes after successor admission.
 Transport loss or supervisor-loss recovery leaves terminal broker authority; a

@@ -199,6 +199,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       }
     };
     connection?.port.on("message", forward);
+    // The runtime references active work and joins; idle resource relays do not pin exit.
+    connection?.port.unref();
     const dispose = () => {
       if (disposed) {
         return;
