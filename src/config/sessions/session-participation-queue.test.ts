@@ -34,7 +34,7 @@ it("retires exact persisted participant inputs atomically before downgrade/remov
           ["foreign", scope.sessionKey, "current", "other"],
           ["incarnation", scope.sessionKey, "old", "participant"],
           ["sibling", "agent:main:sibling", "sibling", "participant"],
-        ]) {
+        ] as const) {
           const id = `${name}-${suffix}`;
           withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
             executeSqliteQuerySync(
