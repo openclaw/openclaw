@@ -6,11 +6,14 @@ const { describeImageWithModelCore } = await import("../../media-understanding/i
 
 image.installImageRuntimeTestHooks();
 it("does not retry an aborted reasoning-only image response", async () => {
-  const provider = "openai";
+  // Exercise response handling, not the credential routes covered by image.auth-routing.test.ts.
+  const provider = "acme";
   const model = "gpt-5.4-mini";
   image.mockImageModel({ provider, id: model, api: "openai-responses" });
   image.imageRuntimeMocks.completeMock.mockResolvedValue(
     makeAssistantMessageFixture({
+      provider,
+      model,
       stopReason: "aborted",
       errorMessage: undefined,
       content: [{ type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }],
@@ -18,6 +21,6 @@ it("does not retry an aborted reasoning-only image response", async () => {
   );
   await expect(
     describeImageWithModelCore({ ...image.imageRequestDefaults(), provider, model }),
-  ).rejects.toThrow("Image model failed (openai/gpt-5.4-mini)");
+  ).rejects.toThrow("Image model failed (acme/gpt-5.4-mini)");
   expect(image.imageRuntimeMocks.completeMock).toHaveBeenCalledOnce();
 });
