@@ -354,7 +354,7 @@ describe("ChatGPT token-sharing authorization", () => {
         agent_name_hint: "OpenClaw",
         scope: "openid email profile resource.invoke chatgpt.tokens.use.direct offline_access",
       });
-      // A first OpenAI login runs on OpenClaw's harness; reconnecting keeps the runtime.
+      // Sign in with ChatGPT asks for OpenClaw's harness; the host applies it to first logins only.
       expect(registered.agentRuntimeId).toBe("openclaw");
       const credential = oauthCredential(registered);
       expect(credential).toMatchObject({
@@ -392,7 +392,6 @@ describe("ChatGPT token-sharing authorization", () => {
         profileId: "openai:my-account",
         credential: { clientId: registeredId },
       });
-      expect(reconnected).not.toHaveProperty("agentRuntimeId");
     },
   );
 

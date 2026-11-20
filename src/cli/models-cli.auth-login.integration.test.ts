@@ -1,4 +1,5 @@
 // Exercises the shipped models auth login command across shared credential and local order owners.
+import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createOAuthRefreshCredential } from "../agents/auth-profiles/credential-fixtures.test-support.js";
@@ -22,7 +23,7 @@ const STALE_PROFILE_ID = "openai:stale-login";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(async () => ({ refreshed: true })),
-  runAuth: vi.fn(async () => ({
+  runAuth: vi.fn<ProviderPlugin["auth"][number]["run"]>(async () => ({
     profiles: [
       {
         profileId: "openai:fresh-login",
@@ -84,10 +85,10 @@ describe("models auth login owner integration", () => {
     );
   }
 
-  const login = () =>
+  const login = (...extra: string[]) =>
     runRegisteredCli({
       register: registerModelsCli,
-      argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main"],
+      argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main", ...extra],
     });
   const expectSavedCredential = () =>
     expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject({
@@ -116,6 +117,32 @@ describe("models auth login owner integration", () => {
       );
     });
   });
+
+  it.each([
+    { prior: false, runtime: { id: "openclaw" } },
+    { prior: true, runtime: undefined },
+  ])(
+    "pins the login's runtime only on a first provider login (prior: $prior)",
+    async ({ prior, runtime }) => {
+      await withLoginState(async (state) => {
+        if (prior) {
+          await login();
+        }
+        // A named profile hides the agent's other OpenAI profiles from the plugin, not from the host.
+        mocks.runAuth.mockResolvedValueOnce({
+          profiles: [{ profileId: "openai:work", credential: createOAuthRefreshCredential() }],
+          defaultModel: "openai/gpt-5.5",
+          agentRuntimeId: "openclaw",
+        });
+        await login("--profile-id", "openai:work");
+
+        const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+        expect(config.agents.entries.main.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual(
+          runtime,
+        );
+      });
+    },
+  );
 
   it("reports partial success when the local order owner is busy", async () => {
     await withLoginState(async (state) => {

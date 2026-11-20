@@ -83,6 +83,8 @@ async function writePlugin(state: OpenClawTestState, baseUrl: string) {
               input: ["text"], contextWindow: 32768, maxTokens: 1024,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
           } } } },
+          defaultModel: ${JSON.stringify(`${provider}/fixture-model`)},
+          agentRuntimeId: "openclaw",
         };
       } }],
     }); },
@@ -242,6 +244,10 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
               "fixture-model",
             );
             expect(JSON.parse(afterConfig).agents.defaults.model).toBeUndefined();
+            // The terminal's credential-only login keeps the first-login runtime choice.
+            expect(
+              JSON.parse(afterConfig).agents.entries.main.models[`${provider}/fixture-model`],
+            ).toEqual({ agentRuntime: { id: "openclaw" } });
           } else {
             expect(profiles?.[profileId]).toBeUndefined();
             expect(afterConfig).toBe(beforeConfig);

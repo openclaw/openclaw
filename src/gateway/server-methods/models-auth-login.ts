@@ -146,6 +146,8 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   method: choice.methodId,
                   ownerPluginId: choice.pluginId,
                   credentialOnly: true,
+                  // The terminal login, like the offline one, keeps the first-login runtime choice.
+                  keepAgentRuntime: Boolean(params.expectedOwnerId),
                   agent: params.agentId,
                   config: context.getRuntimeConfig(),
                   runtime,

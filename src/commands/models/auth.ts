@@ -57,7 +57,7 @@ import {
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
-import { applyLoginAgentRuntime } from "./auth-login-runtime.js";
+import { applyLoginAgentRuntime, resolveLoginConnectionResult } from "./auth-login-runtime.js";
 import {
   looksLikeOpenAIApiKey,
   normalizeManualAuthProvider,
@@ -292,22 +292,11 @@ async function runProviderAuthMethod(
     browserAuthorization: params.browserAuthorization,
   });
   params.signal?.throwIfAborted();
-  const connectionResult: ProviderAuthResult = params.credentialOnly
-    ? {
-        profiles: result.profiles,
-        notes: result.notes,
-        ...(result.configPatch
-          ? {
-              configPatch: {
-                ...(result.configPatch.models?.providers
-                  ? { models: { providers: result.configPatch.models.providers } }
-                  : {}),
-                ...(result.configPatch.plugins ? { plugins: result.configPatch.plugins } : {}),
-              },
-            }
-          : {}),
-      }
-    : result;
+  const connectionResult = resolveLoginConnectionResult(result, {
+    ...params,
+    providerId: params.provider.id,
+    priorProfiles: params.existingProfiles ?? store.profiles,
+  });
   const resolvedIdentity = resolveReloginProfileIdentity({
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
@@ -721,6 +710,8 @@ export type ModelsAuthLoginFlowResult = {
 export type ModelsAuthLoginFlowOptions = LoginOptions & {
   ownerPluginId?: string;
   credentialOnly?: boolean;
+  /** A credential-only login still saves the plugin's runtime choice for its suggested model. */
+  keepAgentRuntime?: boolean;
   assertCurrent?: () => void;
   config?: OpenClawConfig;
   runtime: RuntimeEnv;
