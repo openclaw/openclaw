@@ -281,7 +281,8 @@ export class StorageIngestion extends StorageLifecycle {
           input,
           withdrawn,
           prior && !prior.intent.startsWith("remember:")
-            ? (JSON.parse(prior.receipt) as Receipt)
+            ? // SAFETY: accept serializes a typed Receipt; journal recovery only updates Receipt fields.
+              (JSON.parse(prior.receipt) as Receipt)
             : undefined,
         ),
         fingerprint: data.ontology?.fingerprint,
