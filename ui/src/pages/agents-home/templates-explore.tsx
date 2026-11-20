@@ -43,11 +43,16 @@ import {
 registerEnglishCatalog(registerTemplatesEnglish);
 
 const SECTION_SIZE = 4;
+const OVERVIEW_FRESH_MS = 30_000;
 // Enough placeholders and decoded artwork to cover a tall first screen.
 const SKELETON_SECTIONS = 4;
 const FIRST_SCREEN_SIZE = 24;
 type TemplateCategory = (typeof templateCategories)[number];
-type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
+type TemplateSection = {
+  category: TemplateCategory;
+  entries: TemplateCatalogEntry[];
+  additionalEntries?: TemplateCatalogEntry[];
+};
 type TemplateCatalog = {
   entries: TemplateCatalogEntry[];
   featured: TemplateCatalogEntry[];
@@ -82,22 +87,22 @@ function TemplateCard(
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
         type="button"
-        class="agents-home__template-card-link"
+        class="plugin-catalog-card__primary-link agents-home__template-card-link"
         aria-label={`${t("templatesCatalog.review")} ${props.entry.displayName}`}
         disabled={!props.entry.latestVersion}
         onClick={() => props.onSelect?.(props.entry)}
       />
-      <div class="agents-home__template-head">
-        <span class="agents-home__template-art" aria-hidden="true">
+      <header class="installed-plugins-card__head agents-home__template-head">
+        <span class="template-art agents-home__template-art" aria-hidden="true">
           <TemplateArtwork src={props.entry.iconUrl} />
         </span>
-        <div class="agents-home__template-content">
-          <div class="agents-home__template-identity">
+        <div class="plugin-catalog-card__content">
+          <div class="plugin-card-title-row agents-home__template-identity">
             <h3>{props.entry.displayName}</h3>
-            <span>{`@${props.entry.ownerHandle}`}</span>
+            <span class="plugin-card-author">{`@${props.entry.ownerHandle}`}</span>
           </div>
           {/* Reserve both lines even when a Template has no summary. */}
-          <p class="agents-home__template-summary">{props.entry.summary}</p>
+          <p class="installed-plugins-card__summary">{props.entry.summary}</p>
         </div>
         <button
           type="button"
@@ -119,7 +124,7 @@ function TemplateCard(
               : "templatesCatalog.add",
           )}
         </button>
-      </div>
+      </header>
       <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
         <p class="agents-home__template-error" role="alert">
           {props.addFailure?.message}
@@ -158,14 +163,16 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
               <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
                 {() => (
                   <div class="agents-home__template-card oc-card" data-templates-placeholder>
-                    <div class="agents-home__template-head">
-                      <span class="agents-home__template-art" />
-                      <div class="agents-home__template-content">
-                        <div class="agents-home__template-identity">
+                    <header class="installed-plugins-card__head agents-home__template-head">
+                      <span class="template-art agents-home__template-art" />
+                      <div class="plugin-catalog-card__content">
+                        <div class="plugin-card-title-row agents-home__template-identity">
                           <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
-                          <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                          <span class="plugin-card-author" style={placeholderBar("40%")}>
+                            {"\u00a0"}
+                          </span>
                         </div>
-                        <p class="agents-home__template-summary">
+                        <p class="installed-plugins-card__summary">
                           <span style={{ display: "block", ...placeholderBar("100%") }}>
                             {"\u00a0"}
                           </span>
@@ -174,7 +181,7 @@ function TemplateCatalogSkeleton(props: { overview: boolean }) {
                           </span>
                         </p>
                       </div>
-                    </div>
+                    </header>
                   </div>
                 )}
               </Repeat>
@@ -197,6 +204,7 @@ export function TemplatesExplore(
     scope: GatewayConnectionScope;
     query: string;
     category: string;
+    expandedEntries?: TemplateCatalogEntry[];
     ready?: Promise<void>;
     isCurrent: () => boolean;
   }>();
@@ -224,19 +232,24 @@ export function TemplatesExplore(
   });
   onSettled(() => () => cancelSearch());
 
-  function loadCatalog(category = view.category, query = view.query, delay = 0) {
+  function loadCatalog(
+    category = view.category,
+    query = view.query,
+    options: { delay?: number; expandedEntries?: TemplateCatalogEntry[] } = {},
+  ) {
     cancelSearch();
     const scope = gateway.capture();
     if (!scope || !canSearch()) {
       return;
     }
     loadedForConnection = true;
-    const { ready, isCancelled, cancel } = createPageRequestDelay(delay);
+    const { ready, isCancelled, cancel } = createPageRequestDelay(options.delay ?? 0);
     cancelSearch = cancel;
     setRequest({
       scope,
       query,
       category,
+      expandedEntries: options.expandedEntries,
       ready,
       isCurrent: () =>
         !isCancelled() &&
@@ -249,17 +262,17 @@ export function TemplatesExplore(
     setView((draft) => {
       draft.query = query;
     });
-    loadCatalog(view.category, query, 150);
+    loadCatalog(view.category, query, { delay: 150 });
   }
 
-  function selectCategory(category: string) {
+  function selectCategory(category: string, expandedEntries?: TemplateCatalogEntry[]) {
     if (category === view.category) {
       return;
     }
     setView((draft) => {
       draft.category = category;
     });
-    loadCatalog(category);
+    loadCatalog(category, view.query, { expandedEntries });
   }
 
   const unavailable = () => gateway.connected && !canSearch();
@@ -318,6 +331,8 @@ export function TemplatesExplore(
               <Show when={request()} keyed>
                 {(current) => {
                   const overview = !current.query.trim() && !current.category;
+                  // Count read and artwork time too; a delayed response does not renew the shelf.
+                  const startedAt = Date.now();
                   const readCatalog = async (): Promise<TemplateCatalog> => {
                     if (current.ready) {
                       await current.ready;
@@ -338,10 +353,10 @@ export function TemplatesExplore(
                           entries: [],
                           featured: catalog.featured,
                           sections: templateCategories.slice(1).flatMap((category) => {
-                            const entries = catalog.sections.find(
-                              (section) => section.category === category[0],
-                            )?.entries;
-                            return entries?.length ? [{ category, entries }] : [];
+                            const section = catalog.sections.find(
+                              (candidate) => candidate.category === category[0],
+                            );
+                            return section?.entries.length ? [{ ...section, category }] : [];
                           }),
                         };
                       }
@@ -381,10 +396,19 @@ export function TemplatesExplore(
                       sections: sections.filter((section) => section.entries.length > 0),
                     };
                   };
-                  const result = createMemo(async () => {
-                    const catalog = await readCatalog();
-                    await preloadTemplateArtwork(firstScreenArtwork(catalog));
-                    return catalog;
+                  const result = createMemo<TemplateCatalog>(() => {
+                    if (current.expandedEntries) {
+                      return { entries: current.expandedEntries, featured: [], sections: [] };
+                    }
+                    return readCatalog().then(async (catalog) => {
+                      // Category cards reserve their icon space. Reveal the complete list as soon
+                      // as it arrives; the browser loads the visible icons rather than blocking
+                      // every card on a second batch of up to 24 artwork decodes.
+                      if (!current.category || current.query.trim()) {
+                        await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                      }
+                      return catalog;
+                    });
                   });
                   return (
                     <Errored
@@ -407,7 +431,7 @@ export function TemplatesExplore(
                             result().sections.length === 0
                           }
                         >
-                          <p class="agents-home__template-empty">
+                          <p class="muted agents-home__template-empty">
                             {t(
                               view.query.trim() || view.category
                                 ? "templatesCatalog.empty"
@@ -442,7 +466,19 @@ export function TemplatesExplore(
                               <CatalogDiscoverySection
                                 id={section().category[0]}
                                 title={t(section().category[1])}
-                                onViewAll={() => selectCategory(section().category[0])}
+                                onViewAll={() => {
+                                  const { category, entries, additionalEntries } = section();
+                                  const age = Date.now() - startedAt;
+                                  const canExpand =
+                                    additionalEntries &&
+                                    current.isCurrent() &&
+                                    age >= 0 &&
+                                    age < OVERVIEW_FRESH_MS;
+                                  selectCategory(
+                                    category[0],
+                                    canExpand ? [...entries, ...additionalEntries] : undefined,
+                                  );
+                                }}
                                 viewAllLabel={t("templatesCatalog.viewAll")}
                               >
                                 <div
