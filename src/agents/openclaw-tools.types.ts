@@ -189,8 +189,8 @@ export type OpenClawToolsOptions = {
   cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  /** Prepared profile authority for the gateway tool's configuration-read actions. */
-  gatewayConfigReadAllowed?: boolean;
+  /** Whether the tool profile exposes Gateway management actions beyond maintenance. */
+  gatewayManagementActionsAllowed?: boolean;
   /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
   cronCreatorToolAllowlist?: CronToolOptions["creatorToolAllowlist"];
   cronCreatorToolAllowlistCaptureRef?: CronToolOptions["creatorToolAllowlistCaptureRef"];

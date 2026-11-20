@@ -1,10 +1,13 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as sessionEntryReads from "../config/sessions/session-entry-read-runtime.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -96,4 +99,110 @@ it.each(["nested-hidden", "direct-visible"] as const)(
         }
       }
     }),
+);
+
+it.each([false, true])("isolates failed ancestry (direct owner: %s)", (directOwner) =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const profile = ensureGatewayOwnerProfile("Restart owner");
+    const roots = ["healthy-first", "broken", "healthy-last"].map((name) => ({
+      agentId: "main",
+      sessionKey: `agent:main:dashboard:${name}`,
+      sessionId: name,
+    }));
+    const claims = roots.map((root) => {
+      replaceSessionEntrySync(root, {
+        sessionId: root.sessionId,
+        updatedAt: 1,
+        status: "done",
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      });
+      const worker = `agent:main:subagent:${root.sessionId}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: worker },
+        {
+          sessionId: worker,
+          updatedAt: 1,
+          createdVia: "spawn",
+          spawnedBy: root.sessionKey,
+          parentSessionKey: root.sessionKey,
+        },
+      );
+      subagentRuns.set(
+        worker,
+        createSubagentRunRecord({
+          runId: worker,
+          childSessionKey: worker,
+          childAgentId: "main",
+          requesterSessionKey: root.sessionKey,
+          requesterAgentId: "main",
+        }),
+      );
+      return {
+        worker,
+        claim: claimAgentRunContext(
+          worker,
+          { agentId: "main", ...(directOwner ? { sessionKey: worker, sessionId: worker } : {}) },
+          { trackOwner: true, ownsContext: directOwner },
+        ),
+      };
+    });
+    const brokenWorker = expectDefined(claims[1], "broken claim").worker;
+    const healthyRoots = [
+      expectDefined(roots[0], "first root").sessionKey,
+      expectDefined(roots[2], "last root").sessionKey,
+    ];
+    const failure = new Error("ancestry metadata unavailable");
+    const read = sessionEntryReads.readSessionEntryReadOnlyInWorker;
+    const reads = vi
+      .spyOn(sessionEntryReads, "readSessionEntryReadOnlyInWorker")
+      .mockImplementation((scope) =>
+        scope.sessionKey === brokenWorker ? Promise.reject(failure) : read(scope),
+      );
+    const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+    const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
+      accepted: Promise.resolve({ ok: true }),
+      id: "healthy-root-resume",
+      settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+      cancel: () => false,
+    });
+    try {
+      await persistRunningSessionsForRestart({ cfg });
+      expect(roots.map((root) => loadExactSessionEntry(root)?.entry.resumeAfterRestart)).toEqual([
+        {},
+        undefined,
+        {},
+      ]);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), {
+        sessionKey: brokenWorker,
+        error: failure,
+      });
+      for (const { worker, claim } of claims) {
+        releaseAgentRunContext(worker, claim);
+        subagentRuns.delete(worker);
+      }
+      await resumeMarkedSessions({
+        context: createContext([], () => cfg),
+        signal: new AbortController().signal,
+        log: { warn() {} },
+      });
+      expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
+        healthyRoots.toSorted(),
+      );
+      expect(roots.map((root) => loadExactSessionEntry(root)?.entry.resumeAfterRestart)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+    } finally {
+      reads.mockRestore();
+      warn.mockRestore();
+      resume.mockRestore();
+      for (const { worker, claim } of claims) {
+        releaseAgentRunContext(worker, claim);
+        subagentRuns.delete(worker);
+      }
+    }
+  }),
 );

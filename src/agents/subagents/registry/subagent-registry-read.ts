@@ -12,6 +12,7 @@ import {
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
 } from "./subagent-child-owner-match.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import {
   getRecordedSubagentChildAuthority,
   getSubagentActivationRuns,
@@ -135,16 +136,29 @@ export async function resolveRootSubagentRequester(
 }
 
 export async function listLiveSubagentRootSessions(): Promise<SubagentRootRequester[]> {
-  const requests: Promise<SubagentRootRequester>[] = [];
+  const requests: Promise<SubagentRootRequester | undefined>[] = [];
   for (const runId of listLiveAgentRunIds()) {
     const entry = subagentRuns.get(runId);
     if (!entry || !isSubagentRunLive(entry)) {
       continue;
     }
-    requests.push(resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId));
+    requests.push(
+      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch(
+        (error: unknown) => {
+          subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+            sessionKey: entry.childSessionKey,
+            error,
+          });
+          return undefined;
+        },
+      ),
+    );
   }
   const roots = new Map<string, SubagentRootRequester>();
   for (const root of await Promise.all(requests)) {
+    if (!root) {
+      continue;
+    }
     roots.set(JSON.stringify([root.agentId, root.storePath, root.sessionKey]), root);
   }
   return [...roots.values()];
