@@ -554,6 +554,7 @@ async function runSubagentAnnounceFlowBound(
           completionTarget: params.completionTarget,
           childSessionKey: params.childSessionKey,
           childSessionId: announceSessionId,
+          childRunId: params.childRunId,
           taskLabel,
           outcome,
           killed,

@@ -5,7 +5,38 @@ import {
   buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
 } from "./subagents/completion/subagent-completion-instructions.js";
+import { SUBAGENT_RESTART_INTERRUPTED_ERROR } from "./subagents/registry/subagent-registry-restart-custody.js";
 import type { SubagentRunOutcome } from "./subagents/subagent-run-outcome.types.js";
+
+/** The error upstream's graceful shutdown records (terminateLiveSubagentsForShutdown). */
+const GATEWAY_STOPPED_ERROR = "Gateway stopped";
+
+/**
+ * A Gateway stop or restart that ended the run is not a task failure: name what ended it, the
+ * run, and what was retained, so the requester can choose to re-dispatch or abandon the task.
+ */
+function describeGatewayInterruption(params: {
+  outcome: SubagentRunOutcome;
+  childRunId: string;
+  noVisibleResult?: boolean;
+}): string | undefined {
+  const { outcome, childRunId } = params;
+  const cause =
+    outcome.status !== "error"
+      ? undefined
+      : outcome.error === GATEWAY_STOPPED_ERROR
+        ? `stopped by a graceful Gateway shutdown before run ${childRunId} finished (recorded error: ${GATEWAY_STOPPED_ERROR})`
+        : outcome.error === SUBAGENT_RESTART_INTERRUPTED_ERROR
+          ? `interrupted: the Gateway restarted before run ${childRunId} ended, and no graceful shutdown reached it`
+          : undefined;
+  if (!cause) {
+    return undefined;
+  }
+  const retained = params.noVisibleResult
+    ? "No result or partial result was retained; any work it saved before then stays in its child session. Inspect it before re-dispatching or abandoning the task."
+    : "Its last output before then follows as a partial result.";
+  return `${cause}. Not a task failure; the run was not resumed. ${retained}`;
+}
 
 function buildAnnounceReplyInstruction(params: {
   requesterIsSubagent: boolean;
@@ -41,6 +72,7 @@ export function buildSubagentAnnounceMessages(params: {
   completionTarget?: "parent";
   childSessionKey: string;
   childSessionId: string;
+  childRunId: string;
   taskLabel: string;
   outcome: SubagentRunOutcome;
   /** A killed child produces no further output, so its notice never waits for one. */
@@ -56,15 +88,16 @@ export function buildSubagentAnnounceMessages(params: {
 } {
   const statusLabel = params.killed
     ? describeChildrenEndedWithoutResult([params.taskLabel])
-    : params.outcome.status === "ok"
-      ? "completed; ready for parent review"
-      : params.outcome.status === "timeout"
-        ? params.outcome.error
-          ? `timed out: ${params.outcome.error}`
-          : "timed out"
-        : params.outcome.status === "error"
-          ? `failed: ${params.outcome.error || "unknown error"}`
-          : "finished with unknown status";
+    : (describeGatewayInterruption(params) ??
+      (params.outcome.status === "ok"
+        ? "completed; ready for parent review"
+        : params.outcome.status === "timeout"
+          ? params.outcome.error
+            ? `timed out: ${params.outcome.error}`
+            : "timed out"
+          : params.outcome.status === "error"
+            ? `failed: ${params.outcome.error || "unknown error"}`
+            : "finished with unknown status"));
   const replyInstruction = buildAnnounceReplyInstruction(params);
   const internalEvents: AgentInternalEvent[] = [
     {
