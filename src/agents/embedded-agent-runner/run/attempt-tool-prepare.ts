@@ -42,6 +42,7 @@ import {
 } from "../../tool-fs-policy.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
+import { listsFixedToolSet } from "../../tool-search-config.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
@@ -123,12 +124,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
-  const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
-    disableTools: attempt.disableTools,
-    isRawModelRun,
-    toolsEnabled,
-    toolsAllow: toolsAllowWithForcedRuntimeTools,
-  });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
     trigger: attempt.trigger,
@@ -156,6 +151,19 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     toolSearchControlsEnabled: toolSearchControlsEnabledForRun,
     toolSearchRuntimeConfig,
   } = toolSurfaceRuntime.plan;
+  // A run's allowlist refuses what it does not name instead of narrowing a fixed listing.
+  const fixedListing = listsFixedToolSet(
+    toolSearchConfig,
+    toolSearchControlsEnabledForRun,
+    attempt.sessionKey,
+  );
+  const toolsAllowGated = attempt.toolsAllow !== undefined && fixedListing;
+  const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
+    disableTools: attempt.disableTools,
+    isRawModelRun,
+    toolsEnabled,
+    toolsAllow: toolsAllowGated ? undefined : toolsAllowWithForcedRuntimeTools,
+  });
   if (isCodeModeDiagnosticEnabled()) {
     logCodeModeDiagnostic(log, "activation", {
       runId: attempt.runId,
@@ -258,9 +266,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,
   );
-  const allowsConversationTool = (name: string) =>
+  const allowsConversationTool = (name: string, policy = runtimeCapabilityProfile.policy) =>
     projectConversationToolNames({
-      capabilityProfile: runtimeCapabilityProfile,
+      capabilityProfile: { ...runtimeCapabilityProfile, policy },
       toolNames: [name],
       warn: () => undefined,
     }).length === 1;
@@ -274,7 +282,21 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       preparedRequesterPolicy: runtimeCapabilityProfile.policy,
       pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
     });
-  const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
+  // A fixed listing decides the computer schema from session facts; the turn policy gates calls.
+  const { policy } = runtimeCapabilityProfile;
+  const computerAllowed =
+    shouldConstructTools &&
+    allowsConversationTool(
+      "computer",
+      fixedListing
+        ? {
+            ...policy,
+            groupPolicy: undefined,
+            senderPolicy: undefined,
+            runtimeToolPolicyForInheritance: undefined,
+          }
+        : policy,
+    );
   const pairedNodeComputerUse = (
     await loadPairedComputerUseAvailabilityForSurface({
       computerAllowed,
@@ -434,9 +456,12 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         );
       }
       params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-      constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
-        toolMeta: (tool) => getPluginToolMeta(tool),
-      });
+      // On a fixed listing the assembly's turn policy already refuses what the allowlist omits.
+      constructedToolsRaw = toolsAllowGated
+        ? boundTools
+        : applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
+            toolMeta: (tool) => getPluginToolMeta(tool),
+          });
       params.markCoreToolStage("attempt:tools-allow");
     }
     const toolsRaw = constructedToolsRaw;
@@ -506,8 +531,8 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         ]);
         attempt.permissionMode = mode ?? undefined;
         attempt.execOverrides = { ...baseExecOverrides };
-        const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
-        const nextTools = await constructTools(policy, toolAbortSignal);
+        const permission = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
+        const nextTools = await constructTools(permission, toolAbortSignal);
         toolsRaw.splice(0, toolsRaw.length, ...nextTools);
       },
       get webSearchUnconfigured() {
@@ -543,6 +568,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       releaseTools,
       toolSearchCatalogRef,
       toolSurfaceRuntime,
+      fixedListing,
       toolSearchConfig,
       toolSearchControlsEnabledForRun,
       toolSearchRuntimeConfig,
