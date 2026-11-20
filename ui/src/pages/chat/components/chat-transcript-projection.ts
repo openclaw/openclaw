@@ -13,6 +13,7 @@ import type { AutomationProjection } from "../chat-automation-projection-loader.
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
+import { currentChatSharingNotices, projectChatSharingNotice } from "../chat-sharing-notice.ts";
 import { indexRecordedSubagentStopNames } from "../chat-subagent-history.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
@@ -105,6 +106,12 @@ export function projectChatTranscript(
   const assistantIdentity = resolveTranscriptAssistantIdentity(props);
   const locale = i18n.getLocale();
   const searchFiltering = search.open && Boolean(search.query.trim());
+  const sharingNotices = searchFiltering
+    ? []
+    : currentChatSharingNotices(
+        props.historyState,
+        props.currentAgentId ?? props.fullMessageAgentId,
+      );
   const expandedAssistantMessages = transcript.expandedAssistantMessages;
   const recovery = projectTranscriptRecovery(expandedAssistantMessages, actionProps);
   const subagents = projectSubagentStatus(actionProps, searchFiltering);
@@ -253,6 +260,7 @@ export function projectChatTranscript(
   // while older history exists so the reader can request the next page.
   const isEmpty =
     transcriptItems.length === 0 &&
+    sharingNotices.length === 0 &&
     !props.loading &&
     !subagents.wait &&
     !hasTypingActors &&
@@ -606,6 +614,13 @@ export function projectChatTranscript(
       content: new GuardedTranscriptItem([content], content),
       after,
     });
+  for (const notice of sharingNotices) {
+    appendContent(
+      `${notice.key}:${locale}`,
+      { kind: "notice", item: projectChatSharingNotice(notice) },
+      notice.afterMessageId ? messageRowKeysById.get(notice.afterMessageId) : notice.afterMessageId,
+    );
+  }
   for (const { afterMessageId, content } of realtimeConversation.blocks()) {
     appendContent(
       afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,

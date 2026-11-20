@@ -6,7 +6,6 @@ const catalog = {
   chat: {
     sessionSharing: {
       noPeopleFound: "No people match your search.",
-      loweringAccessCancelsQueued: "Lowering access cancels {name}’s queued messages",
       tryAnotherName: "Try another name",
       visibility: "Visibility",
       publishDraft: "Publish draft",

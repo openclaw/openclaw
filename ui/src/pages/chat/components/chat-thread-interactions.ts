@@ -30,6 +30,7 @@ import type { InlineCommandPresentation } from "../chat-inline-command-presentat
 // Pane-local search, context menus, selection actions, and presentation resets.
 import type { ChatToolMessageSource } from "../chat-run-presentation.ts";
 import type { SubagentRoster } from "../chat-spawned-subagent.ts";
+import type { ChatState } from "../chat-state-contract.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { resetChatThreadState } from "../chat-thread.ts";
 import type { ChatTranscriptMetadata } from "../chat-transcript-metadata.ts";
@@ -162,6 +163,8 @@ export type ChatThreadProps = Omit<
     /** Existing pane owner, forwarded into the transcript's detached render root. */
     toolMessageSource?: ChatToolMessageSource;
     guardianNotices?: ChatGuardianNotice[];
+    /** Pane scope for transient sharing notices, separate from canonical history. */
+    historyState?: ChatState;
     streamSegments: ChatStreamSegment[];
     reasoning?: import("../tool-stream-contract.ts").ChatReasoning | null;
     stream: string | null;
