@@ -7,6 +7,8 @@
  * Run A/A then interleaved baseline/candidate processes, at least five pairs.
  * --allocations and --cpu-profile are separate diagnostic runs. Counts include
  * simulated subscriptions; explicit models.list probes are reported separately.
+ * --controls-only warms every burst kind, then measures duplicate no-op/model
+ * controls for A/A comparison. Start each process below 8 one-minute load.
  */
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -31,9 +33,14 @@ const { values } = parseArgs({
     clients: { type: "string", default: "14" },
     allocations: { type: "boolean" },
     "cpu-profile": { type: "boolean" },
+    "controls-only": { type: "boolean" },
   },
 });
 assert(values["state-dir"] && values.output);
+const startLoad = loadavg();
+if (values["controls-only"]) {
+  assert(startLoad[0]! < 8, "Control arm must start below 8 one-minute load");
+}
 const root = path.resolve(values["state-dir"]);
 const fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 const count = Number(values.clients);
@@ -272,14 +279,15 @@ try {
   }
   const owner = () =>
     getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main", config: getRuntimeConfig() });
-  for (const [label, patch] of [
+  const bursts = [
     ["control-1", { browser: { profiles: {} } }],
     ["control-2", { browser: { profiles: {} } }],
     // Compare model invalidation before browser writes can warm only the baseline's rebuilds.
     ["model", { agents: { defaults: { model: { primary: "fixture/second" } } } }],
     ["create", { browser: { profiles: { temporary: { cdpPort: 18801 } } } }],
     ["remove", { browser: { profiles: { temporary: null } } }],
-  ] as const) {
+  ] as const;
+  async function runBurst(label: string, patch: unknown, record = true) {
     await drain();
     const before = owner();
     const revision = await clients[0]!.request<{ hash: string }>("config.get", {});
@@ -289,7 +297,7 @@ try {
     if (values.allocations) {
       await inspector.post("HeapProfiler.startSampling", samplingOptions);
     }
-    if (values["cpu-profile"]) {
+    if (record && values["cpu-profile"]) {
       await inspector.post("Profiler.enable");
       await inspector.post("Profiler.start");
     }
@@ -323,16 +331,20 @@ try {
       const { profile } = await inspector.post("HeapProfiler.stopSampling");
       allocationBytes = profile.samples.reduce((sum, sample) => sum + sample.size, 0);
     }
-    if (values["cpu-profile"]) {
+    if (record && values["cpu-profile"]) {
       const { profile } = await inspector.post("Profiler.stop");
       writeFileSync(`${values.output}.${label}.cpuprofile`, JSON.stringify(profile), {
         flag: "wx",
       });
     }
     const retainedRuntime = before?.isCurrent === owner()?.isCurrent;
-    assert.equal(retainedRuntime, label !== "model", `Unexpected runtime replacement for ${label}`);
+    assert.equal(
+      retainedRuntime,
+      !label.startsWith("model"),
+      `Unexpected runtime replacement for ${label}`,
+    );
     assert.deepEqual(errors, []);
-    results.push({
+    return {
       label,
       wallMs,
       cpuMs: (thread.user + thread.system) / 1000,
@@ -344,7 +356,28 @@ try {
       scopes: [...scopes],
       refetches: { ...counts },
       modelsProbeMs: [...probeMs],
-    });
+    };
+  }
+  const resetModel = { agents: { defaults: { model: { primary: "fixture/first" } } } };
+  if (values["controls-only"]) {
+    // Exercise the real callbacks and all read/write worker classes before timing.
+    for (const [label, patch] of bursts) {
+      await runBurst(label, patch, false);
+    }
+    await runBurst("model-reset", resetModel, false);
+  }
+  const measuredStartLoad = loadavg();
+  if (values["controls-only"]) {
+    assert(measuredStartLoad[0]! < 8, "Warmed control arm must start below 8 one-minute load");
+    for (const [label, patch] of bursts.slice(0, 3)) {
+      results.push(await runBurst(label, patch));
+    }
+    await runBurst("model-reset", resetModel, false);
+    results.push(await runBurst("model-repeat", bursts[2][1]));
+  } else {
+    for (const [label, patch] of bursts) {
+      results.push(await runBurst(label, patch));
+    }
   }
   if (values["baseline-dir"]) {
     assert(
@@ -359,6 +392,9 @@ try {
         variant: values["baseline-dir"] ? "baseline" : "candidate",
         node: process.version,
         load: loadavg(),
+        startLoad,
+        measuredStartLoad,
+        warmedControls: values["controls-only"] === true,
         clients: count,
         distinctSessions: new Set(sessionKeys.values()).size,
         fixture,
