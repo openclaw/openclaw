@@ -16,7 +16,10 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as pluginConfig from "../plugins/config-state.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store-path.js";
+import { projectInstalledPluginIndexPolicy } from "../plugins/installed-plugin-index.js";
 import * as manifestNormalization from "../plugins/manifest-model-id-normalization.js";
 import { normalizeManifestModelPricing } from "../plugins/manifest-model-provider-normalizers.js";
 import type { PersistedInstalledPluginIndexCacheEntry } from "../plugins/plugin-cache-management.js";
@@ -137,6 +140,53 @@ describe("hosted model pricing", () => {
   });
 
   afterEach(resetPricing);
+
+  it("prices the prepared activation snapshot and follows enablement reloads", async () => {
+    await using cache = createPluginCache();
+    await withPluginCache(cache, async () => {
+      const prepare = (enabled: boolean) => {
+        const config: OpenClawConfig = {
+          plugins: { entries: { fixture: { enabled } } },
+          models: { catalogRefresh: { enabled: false } },
+        };
+        const snapshot = createPluginMetadataSnapshotFixture({
+          plugins: [
+            {
+              id: "fixture",
+              origin: "global",
+              modelCatalog: {
+                providers: {
+                  fixture: { models: [{ id: "model", cost: { input: 7, output: 9 } }] },
+                },
+              },
+            },
+          ],
+        });
+        snapshot.index.plugins = projectInstalledPluginIndexPolicy({
+          plugins: snapshot.index.plugins,
+          config,
+          env: {},
+        });
+        return { config, snapshot: pluginMetadata.finalizePluginMetadataSnapshot(snapshot) };
+      };
+      const enabled = prepare(true);
+      const disabled = prepare(false);
+      const activation = vi.spyOn(pluginConfig, "createPluginActivationSource");
+      for (const generation of [enabled, disabled, enabled]) {
+        await withPluginMetadataSnapshotScope(
+          generation.snapshot,
+          async () => {
+            const context = await prepareModelPricingContext(generation.config);
+            expect(resolveModelPricing(context, "fixture/model")?.input).toBe(
+              generation === enabled ? 7 : undefined,
+            );
+          },
+          { config: generation.config, trustConfigIdentity: true },
+        );
+      }
+      expect(activation).not.toHaveBeenCalled();
+    });
+  });
 
   it("keeps normalized indexes scoped to their policy and observes model-file prices", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-prepared-pricing-"));

@@ -89,7 +89,7 @@ function activeManifestRegistry(
   return {
     diagnostics: snapshot.manifestRegistry.diagnostics,
     plugins: snapshot.manifestRegistry.plugins.filter((plugin) =>
-      isInstalledPluginEnabled(snapshot.index, plugin.id, config),
+      isInstalledPluginEnabled(snapshot.index, plugin.id),
     ),
   };
 }
