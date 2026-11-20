@@ -37,6 +37,7 @@ import {
   reserved,
   settled,
   shape,
+  shapeWithRepairSource,
   unleased,
   updater,
   type Dead,
@@ -179,7 +180,9 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
 
       const [repairRun] = finalizationRuns();
       expect(repairRun?.runId).not.toBe(stage?.runId);
-      expect(shape(stage)).toEqual(shape(repairRun));
+      expect(shapeWithRepairSource(stage, finished.runId)).toEqual(
+        shapeWithRepairSource(repairRun, repaired.runId),
+      );
       expect(settledConfig()).toEqual(configAfterUpdate);
       expect(shape(getUpdateRun(finished.runId))).toEqual(shape(getUpdateRun(repaired.runId)));
       // Repair reports its own result; the update's stage reported none.

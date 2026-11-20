@@ -428,6 +428,23 @@ export const shape = (run: UpdateRunRecord | undefined) =>
     serving: [run.verification.serviceRunning, run.verification.settled],
     steps: run.steps.map((step) => [step.step, step.status]),
   };
+
+/** Verify each link against its own killed run before comparing the two repair records. */
+export function shapeWithRepairSource(run: UpdateRunRecord | undefined, sourceRunId: string) {
+  const sourceStep = `finalize:repair-history:source:${sourceRunId}`;
+  const record = shape(run);
+  expect(record?.steps).toContainEqual([sourceStep, "completed"]);
+  return (
+    record && {
+      ...record,
+      steps: record.steps.map(([step, status]) => [
+        step === sourceStep ? "finalize:repair-history:source:<killed-run>" : step,
+        status,
+      ]),
+    }
+  );
+}
+
 /** The update stopped on the stage's failure, named repair, and nothing exited the process. */
 export function expectFinishFailure(refused: unknown, runId: string, detail: string) {
   expect(String(refused)).toContain(

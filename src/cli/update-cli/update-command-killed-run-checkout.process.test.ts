@@ -21,6 +21,7 @@ import {
   reserved,
   settled,
   shape,
+  shapeWithRepairSource,
   writeBuild,
 } from "./update-command-killed-run.process.test-support.js";
 import { updateRepairCommand } from "./update-repair-command.js";
@@ -97,7 +98,9 @@ describe.skipIf(process.platform === "win32")(
 
         const [repairRun] = finalizationRuns();
         expect(repairRun?.runId).not.toBe(stage?.runId);
-        expect(shape(stage)).toEqual(shape(repairRun));
+        expect(shapeWithRepairSource(stage, finished.runId)).toEqual(
+          shapeWithRepairSource(repairRun, repaired.runId),
+        );
         expect(loadPluginCohortRecovery(repaired.runId)).toBeUndefined();
         expect(shape(getUpdateRun(finished.runId))).toEqual(shape(getUpdateRun(repaired.runId)));
       }));

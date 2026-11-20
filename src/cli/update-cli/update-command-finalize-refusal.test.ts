@@ -486,7 +486,7 @@ it.each([
       );
       if (!inherited) {
         expect(renderUpdateRunReport(run).headline).toBe(
-          "⚠️ OpenClaw repair failed: repair-failed.",
+          "⚠️ Update repair failed for 2026.9.5: repair-failed.",
         );
         expect(renderUpdateRunReport(run).markdown).toContain("diagnose this repair failure");
       }

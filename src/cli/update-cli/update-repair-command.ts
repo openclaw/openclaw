@@ -85,6 +85,7 @@ import {
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
+import { readUpdateRepairHistory } from "./update-finalization-lifecycle.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
 import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
 import {
@@ -415,7 +416,18 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
         `Warning: Update history reconciliation could not complete: ${String(error)}`,
       );
     }
-    return await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined, retained);
+    const repairHistory = readUpdateRepairHistory(
+      interruptedGateway?.runId ?? recoveryRunIds[0],
+      options,
+      lastRun,
+    );
+    return await updateFinalizeCommand(
+      opts,
+      recoveryRunIds,
+      handoff ?? undefined,
+      retained,
+      repairHistory,
+    );
   };
 
   if (

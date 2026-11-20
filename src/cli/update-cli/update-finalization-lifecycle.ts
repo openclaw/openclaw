@@ -23,6 +23,7 @@ import {
   adoptUpdateRun,
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   heartbeatUpdateRun,
   recordUpdateRunDiagnostic,
   recordUpdateRunPhase,
@@ -30,6 +31,7 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import {
+  isStandaloneUpdateRepair,
   UPDATE_REPAIR_HISTORY_STEP_PREFIX,
   type UpdateRunRecord,
   type UpdateRunStep,
@@ -83,6 +85,33 @@ export type UpdateFinalizationPhase = {
   assertCurrent: () => void;
   deadlineAtMs?: number;
 };
+
+export type UpdateRepairHistory = {
+  run: UpdateRunRecord;
+  relationship: "source" | "previous";
+};
+
+/** Capture reporting facts from the repair owner's selection before admitting a new run. */
+export function readUpdateRepairHistory(
+  sourceRunId: string | undefined,
+  options: Parameters<typeof getUpdateRun>[1],
+  previous?: UpdateRunRecord,
+): UpdateRepairHistory | undefined {
+  try {
+    const source = sourceRunId ? getUpdateRun(sourceRunId, options) : undefined;
+    if (source?.status === "failed" && !isStandaloneUpdateRepair(source)) {
+      return { run: source, relationship: "source" };
+    }
+    if (previous?.status === "failed" && !isStandaloneUpdateRepair(previous)) {
+      return { run: previous, relationship: "previous" };
+    }
+  } catch (error) {
+    defaultRuntime.error(
+      `Warning: Could not read earlier update history: ${formatErrorMessage(error)}`,
+    );
+  }
+  return undefined;
+}
 
 export class UpdateFinalizationLifecycle {
   readonly startedAt = performance.now();
@@ -154,8 +183,12 @@ export class UpdateFinalizationLifecycle {
     return this.runId;
   }
 
-  recordRepairHistory(run: UpdateRunRecord, relationship: "source" | "previous"): void {
-    if (this.runId && this.ownsRepairRun) {
+  recordRepairHistory(history: UpdateRepairHistory | undefined): void {
+    if (!this.runId || !this.ownsRepairRun || !history) {
+      return;
+    }
+    const { run, relationship } = history;
+    try {
       recordUpdateRunStep(
         this.runId,
         {
@@ -165,6 +198,10 @@ export class UpdateFinalizationLifecycle {
           detail: run.reason ?? undefined,
         },
         this.ledgerOptions,
+      );
+    } catch (error) {
+      defaultRuntime.error(
+        `Warning: Could not record earlier update history: ${formatErrorMessage(error)}`,
       );
     }
   }

@@ -616,7 +616,7 @@ export async function inspectInterruptedUpdateRecovery(
         timeout: opts.timeout,
         fullIntegrityCheck: opts.fullIntegrityCheck,
       },
-      [runId],
+      runId,
     ).catch((cause: unknown) => {
       throw failed(formatErrorMessage(cause), cause);
     });

@@ -5,7 +5,6 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { retainCurrentDeferredUpdateWarnings } from "../../infra/deferred-update-warnings.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
@@ -27,7 +26,6 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
-import { isStandaloneUpdateRepair } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
@@ -83,7 +81,11 @@ import {
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
 import { resolveServiceRefreshEnv, withUpdateInProgressEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage, type UpdateTriageTarget } from "./update-command-triage.js";
-import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
+import {
+  readUpdateRepairHistory,
+  UpdateFinalizationLifecycle,
+  type UpdateRepairHistory,
+} from "./update-finalization-lifecycle.js";
 import { settleManagedHandoffPluginCohort } from "./update-plugin-cohort-settlement.js";
 import { restoreRepairGateway } from "./update-repair-service.js";
 import {
@@ -102,9 +104,10 @@ export async function updateFinalizeCommand(
   handoff?: ManagedHandoffRepair,
   // Finalization can succeed while repair-retained custody still blocks the next update.
   retained?: RetainedUpdateCustodyReport,
+  repairHistory?: UpdateRepairHistory,
 ): Promise<void> {
   await withUpdateDatabaseEngine(process.env, () =>
-    finalizeUpdate(opts, recoveryRunIds, handoff, retained),
+    finalizeUpdate(opts, recoveryRunIds, handoff, retained, { repairHistory }),
   );
 }
 
@@ -116,9 +119,10 @@ export async function updateFinalizeCommand(
  */
 export async function finishInterruptedUpdate(
   opts: UpdateFinalizeOptions,
-  recoveryRunIds: readonly string[],
+  sourceRunId: string,
 ): Promise<InterruptedUpdateFinalization> {
   const stage: InterruptedUpdateFinalization = {};
+  const recoveryRunIds = [sourceRunId];
   await withUpdateDatabaseEngine(process.env, async () => {
     const options = {
       env: resolveServiceRefreshEnv(process.env, tryProcessCwd()),
@@ -135,7 +139,10 @@ export async function finishInterruptedUpdate(
         );
       },
     );
-    await finalizeUpdate(opts, recoveryRunIds, undefined, undefined, stage);
+    await finalizeUpdate(opts, recoveryRunIds, undefined, undefined, {
+      stage,
+      repairHistory: readUpdateRepairHistory(sourceRunId, options),
+    });
   });
   return stage;
 }
@@ -145,7 +152,10 @@ async function finalizeUpdate(
   recoveryRunIds?: readonly string[],
   handoff?: ManagedHandoffRepair,
   retained?: RetainedUpdateCustodyReport,
-  stage?: InterruptedUpdateFinalization,
+  {
+    stage,
+    repairHistory,
+  }: { stage?: InterruptedUpdateFinalization; repairHistory?: UpdateRepairHistory } = {},
 ): Promise<void> {
   await settleManagedHandoffPluginCohort();
   // Refuse retained recovery before discovery; preflight rechecks before state writes.
@@ -251,6 +261,7 @@ async function finalizeUpdate(
               const prepared = await lifecycle.run("targetConfigValidation", (phase) =>
                 prepareUpdateFinalization(opts, root, installKind, requestedChannel, phase),
               );
+              lifecycle.recordRepairHistory(repairHistory);
               return await updateFinalizeCommandInternal(
                 opts,
                 { ...prepared, nodeRunner },
@@ -376,25 +387,6 @@ async function updateFinalizeCommandInternal(
   const interruptedGateway = recoveryRunIds.length
     ? findUpdateGatewayStop(listUpdateRuns({ limit: 100 }))
     : undefined;
-  if (lifecycle.ownsUpdateRepairRun) {
-    try {
-      const sourceId = interruptedGateway?.runId ?? recoveryRunIds[0];
-      const source = sourceId ? getUpdateRun(sourceId) : undefined;
-      if (source?.status === "failed" && !isStandaloneUpdateRepair(source)) {
-        lifecycle.recordRepairHistory(source, "source");
-      } else {
-        // A prior failure stays visible even when recovery did not select a source run.
-        const previous = listUpdateRuns({ limit: 2 }).find((run) => run.runId !== invokingRunId);
-        if (previous?.status === "failed" && !isStandaloneUpdateRepair(previous)) {
-          lifecycle.recordRepairHistory(previous, "previous");
-        }
-      }
-    } catch (error) {
-      defaultRuntime.error(
-        `Warning: Could not record earlier update history: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
   let doctorWarnings: string[] = [];
   const onDoctorWarnings = (warnings: string[]) => {
     doctorWarnings = normalizeUpdatePostInstallDoctorWarnings([...doctorWarnings, ...warnings]);
