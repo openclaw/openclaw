@@ -418,22 +418,15 @@ relevant config key in the error.
 
 ## Observe a Swarm
 
-Keep the parent session open in Chat while a swarm is active. In the Control UI,
-the Swarm grid appears inside the turn that launched the group. A square shows
-each available worker’s status; select it to open the worker in **Subagents** if
-its session is available. Groups with a custom ID shared across turns aren’t
-assigned to a turn; open **Subagents** to inspect their available children.
-
-The grid shows up to 64 markers, while counts include every accepted worker.
-**Failed or stopped** groups failures, timeouts, and cancellations. These are
-worker outcomes, not confirmation that the parent wrote a final reply. The
-Gateway supplies up to four active groups and the latest finished group, so a
-completed grid can survive a reload and child session cleanup, but is not a
-permanent execution archive.
+In the Control UI, open **Subagents** from the parent chat’s side panel to
+follow available swarm workers. Select a worker to open its transcript.
+The parent turn’s activity keeps the launch and collector results even after
+worker sessions expire.
 
 Native Android, iOS, and macOS chat surfaces show active-only phase-grouped
-grids between the transcript and composer, capped at 256 markers per phase with an overflow count. Accessible labels
-identify each child's status. Native clients present killed and timed-out children
+grids between the transcript and composer, capped at 256 markers per phase with
+an overflow count. Accessible labels identify each child's status.
+Native clients present killed and timed-out children
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
