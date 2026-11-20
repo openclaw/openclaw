@@ -427,6 +427,7 @@ export function createAgentHarnessHostCapabilities(params: {
         pluginExecutionAuthority: callerIdentity?.operatorAuthority,
         pluginExecutionSkillsSnapshot: skillsSnapshot,
         assertInvocationCurrent: assertCurrent,
+        prepareHostFileMutation: assertActive.prepareSessionSourceStorageEffect,
         nativeHarnessExecution: !denyToolCalls ? nativeLocalExecution : undefined,
         // Tool creation cannot certify the harness's additional execution gates.
         unverifiedExecutionPolicy: true as const,

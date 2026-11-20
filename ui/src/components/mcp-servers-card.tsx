@@ -53,8 +53,7 @@ import {
   SettingsStatus,
   SettingsToggle,
 } from "./solid/settings-ui.tsx";
-import { createWizardLogin } from "./wizard-login-controller.tsx";
-import { WizardLogin } from "./wizard-login-view.tsx";
+import { createWizardLogin, WizardLogin } from "./wizard-login-controller.tsx";
 import "../styles/exec-approval-card.css";
 
 registerMcpManagementEnglish();

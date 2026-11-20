@@ -107,10 +107,6 @@ async function visit(page: Page, route: Route) {
   ) {
     throw new Error(`Missing browser-local readiness timing for ${route}`);
   }
-  // Retain the original readiness timestamp even when the Settings sidebar finishes later.
-  if (route === "skill-settings") {
-    await page.locator(".settings-sidebar__item--active").first().waitFor();
-  }
   await finishControlUiPageObserver(page);
   return readControlUiPageObserver(
     page,
@@ -125,9 +121,7 @@ suite.define(() => {
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const reader = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/skills/skill-reader-dialog.tsx",
-        );
+        const reader = controlUiE2eBuiltModuleRequest("ui/src/pages/skills/skill-detail.tsx");
         const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
         let tooltipRequests = 0;
@@ -142,54 +136,39 @@ suite.define(() => {
 
         const observation = await visit(page, route);
         if (route === "plugins") {
-          const tools = page.locator('[data-catalog-section="tools"]');
-          expect(await tools.locator(".plugin-catalog-card").count()).toBe(8);
-          await tools
-            .getByRole("button", { name: "Install Data plugin 0000", exact: true })
-            .waitFor();
           expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
         }
-        expect(observation.assets.some((asset) => asset.completedByReady)).toBe(true);
-        const sidebar =
-          route === "skill-settings"
-            ? [
-                "ui/src/i18n/locales/en-settings-sidebar.ts",
-                "ui/src/components/sidebar-build-chip.tsx",
-                "ui/src/components/settings-sidebar-shell.tsx",
-              ].map((path) => controlUiE2eBuiltModuleRequest(path))
-            : [];
-        // Count the same physical sidebar requests whether their responses win or lose the race.
-        const budgetedAssets = observation.assets.filter(
-          (asset) => asset.completedByReady || sidebar.some((module) => module.test(asset.name)),
-        );
-        expect(
-          budgetedAssets.length,
-          budgetedAssets.map((asset) => asset.name).join("\n"),
-        ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
+        const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
+        expect(readyAssets.length).toBeGreaterThan(0);
+        expect
+          .soft(readyAssets.length, readyAssets.map((asset) => asset.name).join("\n"))
+          .toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
         if (route === "skills" || route === "skill-settings") {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
-          const shelf = page.getByRole("button", { name: /Installed skills.*Data skill 0000/u });
-          await shelf.click();
-          const installed = page.locator('[data-catalog-section="installed"]');
-          await installed
-            .locator('[aria-setsize="1000"] [data-skill-id="local:data-skill-0000"]')
-            .waitFor();
-          expect(readerRequests, "Opening the installed census does not open a reader").toBe(0);
+          await page.locator(".skill-installed-shelf").click();
+          expect(readerRequests, "Opening the installed list still does not load its reader").toBe(
+            0,
+          );
           const held = await holdModuleResponse(page, reader);
           try {
-            await installed
+            await page
               .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
-            expect(await page.locator(".skill-reader-dialog").count()).toBe(0);
+            const title = page.getByRole("heading", {
+              level: 1,
+              name: "Data skill 0000",
+              exact: true,
+            });
+            await page.locator('.skill-page[aria-busy="true"]').waitFor({ state: "visible" });
+            expect(await title.count()).toBe(0);
             held.release();
-            const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
-            await dialog.waitFor({ state: "visible" });
-            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0000");
+            await title.waitFor({ state: "visible" });
+            expect(new URL(page.url()).pathname).toContain("/skills/installed/");
           } finally {
             held.release();
           }

@@ -4,7 +4,7 @@ import {
   titleForRoute,
   type NavigationRouteId,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginSettingsIdFromPath } from "../app-route-paths.ts";
+import { pathForRoute, pluginSettingsIdFromPath, skillPageFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -29,6 +29,9 @@ function settingsParentRoute(
 ): NavigationRouteId | null {
   if (routeId === "plugin-settings" && pluginSettingsIdFromPath(pathname, basePath)) {
     return "plugin-settings";
+  }
+  if (routeId === "skill-settings" && skillPageFromPath(pathname, basePath)) {
+    return "skill-settings";
   }
   const owner = settingsNavigationOwnerRoute(routeId);
   return owner === routeId ? null : owner;

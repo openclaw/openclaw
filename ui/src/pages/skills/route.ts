@@ -1,22 +1,23 @@
 import { definePage, type RouteLoaderOptions } from "@openclaw/uirouter";
 import { routePageSpec } from "../../app-route-paths.ts";
-import type { SolidRouteModule } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadSkillStatusReport } from "../../lib/skills/status-report.ts";
+import { skillsRouteLocation } from "./route-location.ts";
 import type { SkillsRouteData } from "./view-types.ts";
 
 function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discovery" | "settings") {
   return definePage({
     ...routePageSpec(routeId),
-    loaderDeps: (_context: ApplicationContext, location) => location.search,
+    // A skill's page is a place in the loaded list, not another read: only the agent reloads it.
+    loaderDeps: (_context: ApplicationContext, location) =>
+      new URLSearchParams(skillsRouteLocation(location).search).get("agent") ?? "",
     loader: async (
       context: ApplicationContext,
       options: RouteLoaderOptions,
     ): Promise<SkillsRouteData> => {
-      const search = new URLSearchParams(options.location.search);
-      const clawhubRef = search.get("clawhub") ?? undefined;
+      const search = new URLSearchParams(skillsRouteLocation(options.location).search);
       const gateway = context.gateway;
       const gatewaySnapshot = gateway.snapshot;
       const agents = context.agents;
@@ -62,11 +63,12 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         selectionIntentRevision,
         reportRead,
         error,
-        clawhubRef,
       };
     },
-    component: (): Promise<SolidRouteModule<SkillsRouteData>> =>
-      surface === "discovery" ? import("./discovery-view.tsx") : import("./settings-view.tsx"),
+    component: () =>
+      import("./skills-page.tsx").then((module) => ({
+        renderSolid: module.createSkillsRenderer(surface),
+      })),
   });
 }
 

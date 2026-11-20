@@ -8,8 +8,6 @@ export type SolidRouteProps<Data = unknown> = {
   presented: boolean;
 };
 
-export type SolidRouteModule<Data> = { renderSolid: Component<SolidRouteProps<Data>> };
-
 // The alias preserves Data inference between route loaders and page components.
 type ForwardedRouteProps<Data> = { routeData: Data | undefined; loaderPending: boolean };
 
@@ -18,7 +16,7 @@ export function defineSolidPage<Id extends RouteId, Context = unknown, Data = un
   id: Id,
   load: () => Promise<Component<ForwardedRouteProps<Data>>>,
   options: Omit<PageDefinition<Id, Context, unknown, Data>, "id" | "path" | "component"> = {},
-): PageDefinition<Id, Context, SolidRouteModule<Data>, Data> {
+): PageDefinition<Id, Context, { renderSolid: Component<SolidRouteProps<Data>> }, Data> {
   return definePage({
     ...routePageSpec(id),
     ...options,

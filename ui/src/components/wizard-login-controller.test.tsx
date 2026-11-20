@@ -7,8 +7,11 @@ import type { WizardNextResult } from "../api/types.ts";
 import * as uuid from "../lib/uuid.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { createWizardLogin, type WizardLoginState } from "./wizard-login-controller.tsx";
-import { WizardLogin } from "./wizard-login-view.tsx";
+import {
+  createWizardLogin,
+  WizardLogin,
+  type WizardLoginState,
+} from "./wizard-login-controller.tsx";
 
 afterEach(() => vi.restoreAllMocks());
 
