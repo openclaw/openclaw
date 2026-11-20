@@ -2,10 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, onTestFinished } from "vitest";
+import { expect, onTestFinished, type TestContext } from "vitest";
 import { acquireGatewayTestClient } from "../../../../test/helpers/gateway-client.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.js";
+import { runQaGatewayTestFixture } from "../../../../test/helpers/qa-gateway-test-lifetime.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { GatewayClient } from "../../../gateway/client.js";
@@ -254,6 +254,7 @@ export async function runWithLiveSubagentGateway(
     sessionVisibility?: "tree";
   },
   body: (context: LiveSubagentContext) => Promise<void>,
+  testContext: Pick<TestContext, "signal" | "onTestFinished">,
 ): Promise<void> {
   expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
   const model = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
@@ -297,7 +298,8 @@ export async function runWithLiveSubagentGateway(
       `${JSON.stringify(redactSecrets(evidence), null, 2)}\n`,
     );
   };
-  await runQaGatewayFixture(
+  await runQaGatewayTestFixture(
+    testContext,
     async () => {
       const gates = await createExternalGates();
       gateServer = gates;

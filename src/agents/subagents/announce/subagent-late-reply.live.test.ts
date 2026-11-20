@@ -18,7 +18,7 @@ const describeLive = enabled ? describe : describe.skip;
 describeLive("OpenAI requested child completion", () => {
   it(
     "delivers a requested late child result once with a visible parent answer",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"] },
         async ({ gateway, gates, start, record, waitForFinal }) => {
@@ -135,6 +135,7 @@ describeLive("OpenAI requested child completion", () => {
           expect(listSubagentRunsForRequester(parentKey)).toHaveLength(1);
           expect(gate.snapshot()).toEqual({ requests: 1, waiting: 0, released: true });
         },
+        testContext,
       );
     },
     15 * 60_000,

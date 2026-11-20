@@ -24,7 +24,7 @@ function isForwardedPeerMessage(message: Record<string, unknown>): boolean {
 describeLive("OpenAI independent peer coordination", () => {
   it(
     "delivers a delayed peer reply to the requester exactly once without automatic peer turns",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"], peerSessions: true },
         async ({ gateway, gates, start, record }) => {
@@ -158,6 +158,7 @@ describeLive("OpenAI independent peer coordination", () => {
             });
           }
         },
+        testContext,
       );
     },
     15 * 60_000,

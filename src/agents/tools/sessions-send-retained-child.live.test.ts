@@ -32,7 +32,7 @@ const describeLive = enabled ? describe : describe.skip;
 describeLive("retained native child continuation", () => {
   it(
     "continues the same child through sessions_send after display retention expires",
-    async () => {
+    async (testContext) => {
       await runWithLiveSubagentGateway(
         { additionalTools: ["sessions_send"], sessionVisibility: "tree" },
         async ({ gateway, gates, start, record, waitForDescendantSettlement }) => {
@@ -495,6 +495,7 @@ describeLive("retained native child continuation", () => {
             details: watchedSend?.details,
           });
         },
+        testContext,
       );
     },
     10 * 60_000,
