@@ -187,6 +187,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
 
   it.for([false, true])(
     "keeps CLI coordination in the task completion path for visible=%s children and later turns",
+    { timeout: 20 * 60_000 },
     async (visible, testContext) => {
       await runWithLiveSubagentGateway(
         {},
@@ -343,7 +344,6 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
         testContext,
       );
     },
-    20 * 60_000,
   );
 
   it(
@@ -548,6 +548,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
 
   it.for(["timeout", "cancellation", "service_failure"] as const)(
     "reports a child's %s truthfully while preserving its successful sibling",
+    { timeout: 15 * 60_000 },
     async (interruption, testContext) => {
       await runWithLiveSubagentGateway(
         {},
@@ -825,6 +826,5 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
         testContext,
       );
     },
-    15 * 60_000,
   );
 });
