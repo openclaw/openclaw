@@ -368,6 +368,8 @@ describe("renderPluginCatalogResults", () => {
             ["productivity", "Productivity", "package"],
             ["research", "Research", "globe"],
             ["web", "Research", "globe"],
+            ["household", "Household", "package"],
+            ["entertainment", "Entertainment", "package"],
           ] as const
         ).map(([slug, label, icon], order) => ({ slug, label, icon, description: label, order })),
       }),
@@ -377,12 +379,16 @@ describe("renderPluginCatalogResults", () => {
         <Icon name="listTodo" />
         <Icon name="search" />
         <Icon name="globe" />
+        <Icon name="home" />
       </>
     ));
     const shapes = (nodes: Iterable<SVGElement>) => Array.from(nodes, (svg) => svg.innerHTML);
-    expect(
-      shapes(container.querySelectorAll<SVGElement>(".plugin-catalog-chip svg")).slice(3),
-    ).toEqual(shapes(expected.container.querySelectorAll("svg")));
+    const icons = Array.from(
+      container.querySelectorAll<SVGElement>(".plugin-catalog-chip svg"),
+    ).slice(3);
+    expect(shapes(icons.slice(0, -1))).toEqual(shapes(expected.container.querySelectorAll("svg")));
+    // Entertainment keeps the popcorn artwork rather than the plugin-supplied box.
+    expect(icons.at(-1)?.querySelector('path[d="M10 22 9 8"]')).toBeTruthy();
   });
 
   it("uses the package fallback for unknown and inherited category icon names", async () => {
