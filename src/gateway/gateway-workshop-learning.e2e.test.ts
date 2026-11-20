@@ -303,9 +303,10 @@ Retain the distinct rollback procedure after verifying the previous public gener
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
+            // Forks retain the session tool surface, where plugin tools use the catalog.
             const workshopCall = (action: string, args: Record<string, unknown> = {}) => ({
-              name: "skill_workshop",
-              args: { action, name: "map-publication", ...args },
+              name: "dispatch_action",
+              args: { id: "skill_workshop", args: { action, name: "map-publication", ...args } },
             });
             const patch = { old_text: oldRule, new_text: newRule, reason };
             reviewActions = [
