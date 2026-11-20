@@ -3,6 +3,7 @@ import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressV2,
 } from "openclaw/plugin-sdk/gateway-ingress";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeHash } from "./protocol.js";
 import {
@@ -288,9 +289,11 @@ describe("MCP relay transport and authority", () => {
   });
 
   it.each(["owner", "person"] as const)(
-    "persists only the code hash and keeps %s profile IDs out of pairing offers",
+    "pairs %s with definitions alone while keeping profile IDs out of pairing offers",
     async (principal) => {
-      const f = await fixture();
+      const f = await fixture(undefined, {
+        config: () => ({ gateway: { roles: { definitions: {} } } }),
+      });
       await expect(f.service.pair()).rejects.toMatchObject({ code: "unavailable" });
       await f.ready();
       await f.clock.advanceBy(0);
@@ -298,7 +301,11 @@ describe("MCP relay transport and authority", () => {
         undefined,
         principal === "person" ? PERSON_AUTHORITY : undefined,
       );
-      const offer = await f.socket.nextFrame();
+      const offer = await awaitGateBeforeSettlement(
+        f.socket.nextFrame(),
+        pairing,
+        "Pairing settled before offering a code",
+      );
       expect(offer).toEqual({
         type: "req",
         id: expect.any(String),
@@ -348,6 +355,23 @@ describe("MCP relay transport and authority", () => {
           params: { grantId: "gr_again", codeHash: codeHash(paired.code), client: CLIENT },
         }),
       ).toEqual(denied("reused", "not_found"));
+    },
+  );
+
+  it.each(["default-role", "trusted-proxy"] as const)(
+    "refuses owner pairing for %s without recording a code",
+    async (mode) => {
+      const f = await fixture(undefined, {
+        config: () => ({
+          gateway:
+            mode === "default-role"
+              ? { roles: { default: "guest", definitions: {} } }
+              : { auth: { mode: "trusted-proxy" } },
+        }),
+      });
+      await f.ready();
+      await expect(f.service.pair()).rejects.toThrow("person-bound grant");
+      expect(f.storage.persisted()).not.toContain('"code:');
     },
   );
 

@@ -140,6 +140,7 @@ function hasRowBaseline(view: SessionListView): boolean {
 export class SessionListViewCache {
   private readonly lists = new Map<string, SessionListView>();
   private readonly selections = new Set<SessionListView>();
+  private readonly rowViews = new Map<string, Set<SessionListView>>();
   private rowEncodings = new WeakMap<
     GatewaySessionRow,
     { refs: number; bytes: number; extraBytes: number; factBytes: number }
@@ -160,10 +161,8 @@ export class SessionListViewCache {
   }
 
   invalidateRows(key?: string) {
-    for (const view of this.lists.values()) {
-      if (key === undefined || view.rowKeys?.has(key)) {
-        this.retireRows(view);
-      }
+    for (const view of key === undefined ? this.lists.values() : (this.rowViews.get(key) ?? [])) {
+      this.retireRows(view);
     }
   }
 
@@ -195,6 +194,7 @@ export class SessionListViewCache {
   }
 
   retireRows(view: SessionListView) {
+    this.releaseRowKeys(view);
     if (view.rows && this.lists.get(view.key) === view) {
       this.releaseRowEncodings(view.rows);
     }
@@ -202,7 +202,6 @@ export class SessionListViewCache {
       this.retainRows(view, view.rows);
     }
     view.rows = undefined;
-    view.rowKeys = undefined;
     view.encodedBytes = 0;
     this.update(view);
   }
@@ -215,6 +214,7 @@ export class SessionListViewCache {
     extraRowEncodingBytes?: (row: GatewaySessionRow) => number,
   ) {
     const retained = this.lists.get(view.key) === view;
+    this.releaseRowKeys(view);
     if (retained && view.rows) {
       this.releaseRowEncodings(view.rows);
     }
@@ -228,7 +228,27 @@ export class SessionListViewCache {
       (retained ? this.retainRowEncodings(rows, view.rowKeys!, extraRowEncodingBytes) : 0) +
       serializedJsonArrayBytes(rows) +
       sharedBytes;
+    for (const key of view.rowKeys ?? []) {
+      let views = this.rowViews.get(key);
+      if (!views) {
+        this.rowViews.set(key, (views = new Set()));
+      }
+      views.add(view);
+    }
     this.update(view);
+  }
+
+  private releaseRowKeys(view: SessionListView) {
+    // Membership must retire with rows, including replacement and eviction;
+    // otherwise the reverse index retains dead views and repeats invalidation.
+    for (const key of view.rowKeys ?? []) {
+      const views = this.rowViews.get(key);
+      views?.delete(view);
+      if (views?.size === 0) {
+        this.rowViews.delete(key);
+      }
+    }
+    view.rowKeys = undefined;
   }
 
   private retainRowEncodings(
@@ -322,7 +342,8 @@ export class SessionListViewCache {
       1024 +
       view.key.length * 2 +
       rowRefs * 8 +
-      (view.rowKeys?.size ?? 0) * 32 +
+      // Charge both membership directions, conservatively including shared key buckets.
+      (view.rowKeys?.size ?? 0) * 96 +
       pairRefs * 8 +
       (entryRefs - pairRefs) * 48 +
       (view.partitions?.size ?? 0) * 64 +
@@ -382,6 +403,7 @@ export class SessionListViewCache {
   }
 
   private remove(view: SessionListView) {
+    this.releaseRowKeys(view);
     if (view.rows) {
       this.releaseRowEncodings(view.rows);
     }
@@ -409,6 +431,7 @@ export class SessionListViewCache {
     this.refs = 0;
     this.lists.clear();
     this.selections.clear();
+    this.rowViews.clear();
     this.rowEncodings = new WeakMap();
     scheduleRetentionReport();
   }

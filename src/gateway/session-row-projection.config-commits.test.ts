@@ -135,6 +135,36 @@ it("retains resident rows across projection-neutral commits and unchanged admiss
     ] satisfies [string, OpenClawConfig | undefined, number][]) {
       await verifyRows(event, () => (update ? reload(update) : readmit()), expected);
     }
+    for (const fastModeDefault of [true, false]) {
+      const result = await verifyRows(
+        "agent defaults",
+        () =>
+          reload({
+            agents: {
+              ...cfg.agents,
+              entries: {
+                main: { fastModeDefault, reasoningDefault: fastModeDefault ? "on" : "off" },
+                other: {},
+              },
+            },
+          }),
+        count,
+      );
+      expect(result.sessions.every((row) => row.effectiveFastMode === fastModeDefault)).toBe(true);
+      expect(
+        result.sessions.every((row) => row.reasoningDefault === (fastModeDefault ? "on" : "off")),
+      ).toBe(true);
+      seedRow("agent:main:config-0", {
+        sessionId: "config-0",
+        updatedAt: count + 1,
+        label: "Changed after reload",
+      });
+      const changed = (await list()).sessions.find((row) => row.key === "agent:main:config-0")!;
+      expect(changed).toMatchObject({
+        label: "Changed after reload",
+        effectiveFastMode: fastModeDefault,
+      });
+    }
     const scope = { agentId: "main", sessionKey: "agent:main:config-0" };
     seedRow(scope.sessionKey, {
       sessionId: "config-0",

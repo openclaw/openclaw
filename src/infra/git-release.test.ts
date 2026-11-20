@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -14,6 +15,7 @@ import {
   usesGitReleases,
 } from "./git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
+import { listPackageReleases } from "./package-release-retention.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -47,6 +49,52 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
+    it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
+      const { prefix } = await setup();
+      const root = (await createGitReleaseDirs(prefix)).releaseRoot;
+      // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
+      await fs.cp(
+        fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
+        path.join(root, "extensions", "deepseek"),
+        { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
+      );
+      await publishGitRelease({ prefix, releaseRoot: root, trial: false });
+
+      // The Gateway names its root by the release link, as the MCP web-search request does.
+      const contract = loadPluginPublicArtifactModuleSync<{
+        createDeepSeekWebSearchProvider: unknown;
+      }>({
+        pluginRoot: path.join(gitReleaseSlot(prefix), "extensions", "deepseek"),
+        artifactBasename: "web-search-contract-api.js",
+        origin: "bundled",
+      });
+      expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
+    });
+
+    it("keeps listing releases built under node_modules after the link moves out", async () => {
+      const { prefix } = await setup();
+      // A release built before #201874 keeps its package at lib/node_modules/openclaw.
+      const old = path.join(prefix, "releases", "git-old", "lib", "node_modules", "openclaw");
+      await fs.mkdir(old, { recursive: true });
+      await fs.writeFile(
+        path.join(old, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+      );
+      await publishGitRelease({
+        prefix,
+        releaseRoot: await release(prefix, "2.0.0", ""),
+        trial: false,
+      });
+
+      const releases = await listPackageReleases(gitReleaseSlot(prefix));
+      expect(releases.map(({ id, version, selected }) => ({ id, version, selected }))).toEqual(
+        expect.arrayContaining([
+          { id: "git-old", version: "1.0.0", selected: false },
+          expect.objectContaining({ version: "2.0.0", selected: true }),
+        ]),
+      );
+    });
+
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
       const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');
@@ -337,20 +385,52 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       await expect(fs.access(trial)).rejects.toThrow();
     });
 
-    it("maps a release entry to its launcher and back", async () => {
-      const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
-      const entry = path.join(gitReleaseSlot(prefix), "dist", "index.js");
-      const launcher = resolveGitReleaseLauncherForEntrypoint(entry);
+    it.each(["openclaw", "lib/node_modules/openclaw"])(
+      "keeps the service on the release launcher for %s",
+      async (relativeSlot) => {
+        const { prefix } = await setup();
+        const slot = path.join(prefix, relativeSlot);
+        const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(path.join(root, "dist", "index.js"), "");
+        await fs.mkdir(path.dirname(slot), { recursive: true });
+        await fs.symlink(path.relative(path.dirname(slot), root), slot);
+        const entry = path.join(slot, "dist", "index.js");
+        const launcher = path.join(prefix, "openclaw-launcher.mjs");
+        // A legacy install retains the launcher written by its older updater.
+        await fs.writeFile(launcher, "");
+        const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
+        const service = await resolveGatewayProgramArguments({
+          cliEntrypoint: entry,
+          runtime: "node",
+          runtimePath: process.execPath,
+          port: 18789,
+        });
+        expect(service.programArguments.slice(-4)).toEqual([
+          launcher,
+          "gateway",
+          "--port",
+          "18789",
+        ]);
+        expect(resolveGitReleaseLauncherForEntrypoint(entry)).toBe(launcher);
+        expect(resolveGitReleaseEntrypointForLauncher(launcher)).toBe(entry);
+        expect(resolveGitReleaseLauncherForEntrypoint("/opt/openclaw/dist/index.js")).toBeNull();
+        if (relativeSlot === "openclaw") {
+          expect(await writeGitReleaseLauncher(prefix)).toBe(launcher);
+        }
+      },
+    );
 
-      expect(launcher).toBe(path.join(prefix, "openclaw-launcher.mjs"));
-      expect(resolveGitReleaseEntrypointForLauncher(launcher!)).toBe(entry);
-      expect(resolveGitReleaseLauncherForEntrypoint("/opt/openclaw/dist/index.js")).toBeNull();
-      expect(await writeGitReleaseLauncher(prefix)).toBe(launcher);
+    it("does not use another package's release as the Git launcher", async () => {
+      const { prefix } = await setup();
+      const slot = path.join(prefix, "other");
+      const root = path.join(prefix, "releases", "git-fixture", "other");
+      await fs.mkdir(root, { recursive: true });
+      await fs.symlink(path.relative(prefix, root), slot);
+
+      expect(
+        resolveGitReleaseLauncherForEntrypoint(path.join(slot, "dist", "index.js")),
+      ).toBeNull();
     });
 
     it("keeps a service unit that names the launcher across release switches", async () => {
@@ -371,7 +451,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: true,
           env: {},
           command: { programArguments: [process.execPath, launcher, "gateway", "--port", "1"] },
-          runtime: { status: "running" },
+          runtime: { status: "running", systemd: { managerUid: 1001 } },
         },
       });
 
@@ -392,7 +472,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           running: entry !== null,
           env: {},
           command: entry ? { programArguments: [process.execPath, entry, "gateway"] } : null,
-          runtime: { status: entry ? "running" : "stopped" },
+          runtime: { status: entry ? "running" : "stopped", systemd: { managerUid: 1001 } },
           ...(sealed
             ? { definitionMutationCapability: { kind: "sealed", reason: "symlink" } }
             : {}),

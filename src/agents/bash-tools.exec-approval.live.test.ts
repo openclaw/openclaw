@@ -116,7 +116,7 @@ describe.skipIf(!live || process.platform === "win32")("exec approval with a liv
             throw new Error(`Unexpected exec status: ${result.details.status}`);
           }
           expect(result.details.exitCode).toBe(0);
-          expect(result.details.aggregated).toBe("approved.txt");
+          expect(result.details.aggregated).toBe("approved.txt\n");
           console.log(
             JSON.stringify({
               reviews,

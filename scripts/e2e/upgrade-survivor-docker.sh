@@ -196,6 +196,14 @@ BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
 SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 UPDATE_RESTART_MODE="${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-manual}"
+if [ "$SCENARIO" = "git-release" ]; then
+  export OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1
+  # The baseline is main commit 7db69bedeab6, which reports 2026.11.5 and has the
+  # node_modules release layout; the published v2026.11.5 tag does not.
+  BASELINE_SPEC="${BASELINE_SPEC:-openclaw@2026.11.5}"
+  # Three full source builds (baseline, first hop, second hop) run in the container.
+  DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3600s}"
+fi
 if [ "$SCENARIO" = "abandoned-update" ] && [ -z "${OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE:-}" ]; then
   UPDATE_RESTART_MODE="auto-auth"
 fi
@@ -412,7 +420,21 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   CANDIDATE_IS_CURRENT=0
   CANDIDATE_SPEC=""
 
-  if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
+  if [ "$SCENARIO" = "git-release" ]; then
+    if [ "$BASELINE_SPEC" != "openclaw@2026.11.5" ] || [ "$CANDIDATE_RAW" != current ] ||
+      [ "$UPDATE_RESTART_MODE" != manual ] || [ "$LIVE_ENABLED" != 0 ]; then
+      echo "git-release requires baseline 2026.11.5 (main 7db69bedeab6), candidate current, manual restart, and no live models" >&2
+      exit 2
+    fi
+    CANDIDATE_KIND="git"
+    CANDIDATE_SPEC="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+    source_git="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir)"
+    baseline_sha="$(git -C "$ROOT_DIR" rev-parse '7db69bedeab6^{commit}')"
+    UPGRADE_SCENARIO_ARGS+=(
+      -v "$source_git:/tmp/openclaw-source.git:ro"
+      -e "OPENCLAW_UPGRADE_SURVIVOR_GIT_BASELINE_SHA=$baseline_sha"
+    )
+  elif [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] || [ "$CANDIDATE_RAW" = "current" ]; then
     PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor)"
     CANDIDATE_KIND="tarball"
     CANDIDATE_IS_CURRENT=1

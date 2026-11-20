@@ -27,11 +27,21 @@ import {
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+  type OpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { retainGatewayOperatorRun } from "./operator-run-cancellation.js";
+import { captureGatewayOperatorContinuation } from "./operator-run-recovery.js";
 import { pairedOperator, recoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createChatRunState } from "./server-chat-state.js";
 import { createChatSendWorkAdmission } from "./server-methods/chat-send-work-admission.js";
@@ -231,6 +241,134 @@ async function createCancellationFixture(cfg: OpenClawConfig, stateDir: string) 
 }
 
 describe("operator access cancellation", () => {
+  it.each(["profile", "member", "owner"] as const)(
+    "owns %s run policy cancellation separately from its admitted request",
+    cancellationCase(async (f, kind) => {
+      const profile = ensureProfileForEmail("run-policy@example.test");
+      setUserProfileRole(profile.id, "worker");
+      const config: OpenClawConfig = {
+        ...f.context.getRuntimeConfig(),
+        gateway: {
+          openclawId: { enabled: kind !== "profile" },
+          roles: {
+            ...(kind === "member" ? {} : { default: "worker" }),
+            definitions: {
+              worker: { sessions: { others: "none" }, agents: "*", scopes: ["operator.write"] },
+              reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      };
+      const principal: OpenClawIdTunnelPrincipal | undefined =
+        kind === "profile"
+          ? undefined
+          : {
+              ...(kind === "member" ? { kind, accountId: "run-policy", role: "worker" } : { kind }),
+              peerKey: `iroh:${"dc".repeat(32)}`,
+              authority: { clawId: "run-claw", rootPub: "root", listedSeq: 1 },
+            };
+      if (principal?.kind === "member") {
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+      }
+      setOpenClawIdTunnelPrincipalLookup(() => principal);
+      try {
+        const origin = await recoveryFixture(f.stateDir, profile.id, {
+          config,
+          openclawIdPrincipal: principal,
+          scopes: ["operator.write"],
+        });
+        const request = await origin.restore();
+        let releaseHold: (() => void) | undefined;
+        try {
+          f.context.resolveGatewayContext = () => origin.context;
+          const run = await f.register("role-bound-run");
+          const retained = await run.retain(
+            undefined,
+            createSyntheticPluginRuntimeClient({
+              authenticatedUserProfile: origin.client.authenticatedUserProfile,
+              operatorRoleActor: { kind: "operator", profileId: profile.id },
+              operatorRunAuthority: request.authority,
+              scopes: ["operator.write"],
+            }),
+          );
+          // Queue/child holds retain cancellation even after the accepting caller releases.
+          releaseHold = retained.authority!.retain!();
+          retained.release();
+          setUserProfileRole(profile.id, "reader");
+          invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
+          expect(retained.authority!.signal?.aborted).toBe(kind !== "owner");
+          if (kind === "owner") {
+            expect(retained.authority!.assertCurrent).not.toThrow();
+            setOpenClawIdTunnelPrincipalLookup(() => undefined);
+            expect(retained.authority!.signal?.aborted).toBe(true);
+          }
+          expect(retained.authority!.assertCurrent).toThrow();
+          expect(request.authority.signal?.aborted).toBe(false);
+          expect(request.authority.assertCurrent).not.toThrow();
+          expect(request.authority.reauthorize).toThrow();
+          await expect(origin.restore()).rejects.toThrow();
+        } finally {
+          releaseHold?.();
+          request.release();
+        }
+      } finally {
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
+      }
+    }),
+  );
+
+  it("refuses new work from a demoted nonrecoverable request without aborting that request", async () => {
+    await withCancellationFixture(async (f) => {
+      const profile = ensureProfileForEmail("plugin-request@example.test");
+      setUserProfileRole(profile.id, "worker");
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "worker",
+            definitions: {
+              worker: { sessions: { others: "none" }, agents: "*", scopes: ["operator.write"] },
+              reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      };
+      f.context.getRuntimeConfig = () => config;
+      const client = createSyntheticPluginRuntimeClient({
+        operatorRoleActor: { kind: "operator", profileId: profile.id },
+        scopes: ["operator.write"],
+      });
+      const request = expectDefined(
+        await captureGatewayOperatorRunAuthority({ client, context: f.context }),
+        "admitted plugin request",
+      );
+      try {
+        expect(request.authority.recoverySnapshot).toBeUndefined();
+        const continuation = createSyntheticPluginRuntimeClient({
+          operatorRunAuthority: request.authority,
+          scopes: ["operator.write"],
+        });
+        setUserProfileRole(profile.id, "reader");
+        invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
+        await expect(
+          captureGatewayOperatorContinuation({ client: continuation, context: f.context }),
+        ).rejects.toThrow("Your operator role changed");
+        const next = await f.register("demoted-continuation");
+        await expect(next.retain(undefined, continuation)).rejects.toThrow(
+          "Your operator role changed",
+        );
+        expect(request.authority.signal?.aborted).toBe(false);
+        expect(request.authority.assertCurrent).not.toThrow();
+      } finally {
+        request.release();
+      }
+    });
+  });
+
   it.each(["agent:main:cron-sender", "agent:main:guest-and-staff"] as const)(
     "an accepted turn sent from %s keeps its authority after the occurrence retires",
     cancellationCase(async (f, sender) => {
@@ -260,10 +398,31 @@ describe("operator access cancellation", () => {
         expect(retained.authority!.assertCurrent).not.toThrow();
         expect(retained.authority!.signal?.aborted).not.toBe(true);
         target.expectCurrent();
-        // The accepted turn still enforces the sender's device, profile and role.
+        const continuationClient = createSyntheticPluginRuntimeClient({
+          authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
+          operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+          operatorRunAuthority: retained.authority!,
+          agentToolCaller: { agentId: "main", sessionKey: sender },
+          scopes: ["operator.write"],
+        });
+        const beforeRevocation = await f.register(
+          "before-device-revocation",
+          undefined,
+          {},
+          false,
+          true,
+        );
+        const admittedChild = await beforeRevocation.retain(undefined, continuationClient);
+        // Revocation refuses the next start without canceling already-admitted work.
         invalidateGatewayDeviceRevocation(occurrence.context, "recovery-device", "operator");
-        expect(retained.authority!.assertCurrent).toThrow();
-        expect(retained.authority!.signal?.aborted).toBe(true);
+        const next = await f.register("after-device-revocation", undefined, {}, false, true);
+        await expect(next.retain(undefined, continuationClient)).rejects.toThrow(
+          "Restart recovery operator source policy changed.",
+        );
+        expect(retained.authority!.assertCurrent).not.toThrow();
+        expect(retained.authority!.signal?.aborted).not.toBe(true);
+        expect(admittedChild.authority!.assertCurrent).not.toThrow();
+        expect(admittedChild.authority!.signal?.aborted).not.toBe(true);
       } finally {
         restored.release();
       }

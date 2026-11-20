@@ -67,18 +67,19 @@ const originalFetch = globalThis.fetch;
 globalThis.fetch = async (input, init) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
+  if (method === "GET" && url.href === "https://registry.npmjs.org/@openai/codex/latest") {
+    return Response.json({ version: "0.169.0" });
+  }
   const route =
-    method === "GET" && url.href === "https://registry.npmjs.org/@openai/codex/latest"
-      ? "/codex/latest"
-      : method === "GET" && url.href === "https://api.openai.com/v1/models"
-        ? "/platform/models"
-        : method === "GET" &&
-            url.origin === "https://chatgpt.com" &&
-            url.pathname === "/backend-api/codex/models" &&
-            url.searchParams.size === 1 &&
-            Boolean(url.searchParams.get("client_version"))
-          ? "/platform/access-programs"
-          : undefined;
+    method === "GET" && url.href === "https://api.openai.com/v1/models"
+      ? "/platform/models"
+      : method === "GET" &&
+          url.origin === "https://chatgpt.com" &&
+          url.pathname === "/backend-api/codex/models" &&
+          url.searchParams.size === 1 &&
+          Boolean(url.searchParams.get("client_version"))
+        ? "/platform/access-programs"
+        : undefined;
   if (!route) {
     if (method === "GET" && url.href === "https://clawhub.ai/v1/feeds/plugins") {
       // Optional plugin discovery is outside this model proof. Preserve its real

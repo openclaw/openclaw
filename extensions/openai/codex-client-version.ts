@@ -1,18 +1,16 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-// ChatGPT gates each subscription model on the Codex client version that lists it
-// (`minimal_client_version`). OpenClaw lists as the newest published Codex, so a model
-// appears as soon as OpenAI ships the Codex release that supports it, without an
-// OpenClaw release. The Codex harness still runs only what its own binary lists.
+// The subscription catalog's client_version follows Codex releases, independently
+// of OpenClaw attribution and the selected app-server binary.
 
 // Bundled @openai/codex pin: the floor when the registry cannot be read. The
 // client-version contract test keeps it equal to extensions/codex's exact dependency.
 const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "0.169.0";
 
 const CODEX_LATEST_VERSION_URL = "https://registry.npmjs.org/@openai/codex/latest";
-// npm publishes a Codex release at most a few times a day; a launch needs one refresh.
 const CODEX_LATEST_VERSION_TTL_MS = 6 * 60 * 60_000;
-const CODEX_LATEST_VERSION_TIMEOUT_MS = 5_000;
+// Leave most of the selected-account discovery's five-second budget for /models.
+const CODEX_LATEST_VERSION_TIMEOUT_MS = 1_000;
 const STABLE_VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 
 function compareStableVersions(left: string, right: string): number {

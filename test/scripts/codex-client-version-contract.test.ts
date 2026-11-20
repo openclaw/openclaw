@@ -8,8 +8,8 @@ const OPENAI_CLIENT_VERSION_URL = new URL(
   "../../extensions/openai/codex-client-version.ts",
   import.meta.url,
 );
-const OPENAI_CODEX_CLIENT_VERSION_FLOOR_PATTERN =
-  /^const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "([^"]+)";$/mu;
+// Read the bundled version literal without depending on its private binding name.
+const BUNDLED_CODEX_VERSION_PATTERN = /^const [\w$]+ = "(\d+\.\d+\.\d+)";$/mu;
 
 function readManagedCodexVersion(): string {
   const packageJson = JSON.parse(fs.readFileSync(CODEX_PACKAGE_JSON_URL, "utf8")) as {
@@ -24,7 +24,7 @@ function readManagedCodexVersion(): string {
 
 function readOpenAICodexClientVersionFloor(): string {
   const source = fs.readFileSync(OPENAI_CLIENT_VERSION_URL, "utf8");
-  const version = OPENAI_CODEX_CLIENT_VERSION_FLOOR_PATTERN.exec(source)?.[1];
+  const version = BUNDLED_CODEX_VERSION_PATTERN.exec(source)?.[1];
   if (!version) {
     throw new Error("extensions/openai/codex-client-version.ts must declare the Codex floor");
   }

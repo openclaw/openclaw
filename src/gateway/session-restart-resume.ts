@@ -1,18 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import {
-  resolveSessionYieldWait,
-  listLiveSubagentRootSessions,
-  listYieldWaitingSessions,
-  resolveRootSubagentRequester,
-} from "../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSessionYieldWait } from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "../auto-reply/reply/session-event-handoff.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   applySessionEntryReplacements,
   patchSessionEntryCore,
@@ -29,29 +21,17 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  getAgentRunContext,
-  hasAgentRunContextExecutionOwner,
-  listLiveAgentRunIds,
-} from "../infra/agent-run-registry.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { completeGatewayAgentRestartRecovery } from "../infra/gateway-boot-lifecycle.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { getSessionControllerEntryForOperation } from "../sessions/session-controller.identity.js";
-import { findSessionControllerOperationByRunId } from "../sessions/session-controller.queries.js";
-import {
-  activeSessionOperations,
-  hasCommittedReplyOperationOutcome,
-} from "../sessions/session-controller.state.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
 import {
   waitForAgentInputAdmission,
   withAgentInputRecovery,
 } from "../state/agent-database-preparation-context.js";
-import { resolveExplicitIncognitoAgentSqliteTarget } from "../state/openclaw-agent-db.paths.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -75,19 +55,10 @@ import {
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import {
-  captureSessionRestartOperatorSource,
-  prepareSessionSystemTurnAuthority,
-} from "./session-system-turn-authority.js";
-
-type SessionIdentity = {
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-  sessionId?: string;
-  needsResume: boolean;
-  parked?: boolean;
-  operatorSource?: NonNullable<InternalSessionEntry["resumeAfterRestart"]>["operatorSource"];
-};
+  selectLiveRestartResumeSessions,
+  type SessionIdentity,
+} from "./session-restart-resume-selection.js";
+import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
 /** Snapshot only live owners after admission closes, before shutdown aborts them. */
 export async function persistRunningSessionsForRestart(params: {
@@ -110,92 +81,9 @@ async function persistRunningSessions(
   summary: ReturnType<typeof createRestartResumeSummary>,
 ): Promise<void> {
   const assertCurrent = () => params.signal?.throwIfAborted();
-  // Enumeration is synchronous; persistence checks custody again at the write boundary.
+  // Snapshot live owners before ancestry reads; persistence checks custody again before writing.
   assertCurrent();
-  const sessions = new Map<string, SessionIdentity>();
-  const add = (input: Partial<SessionIdentity> & { sessionKey: string }) => {
-    const root = input.parked
-      ? input
-      : resolveRootSubagentRequester(input.sessionKey, input.agentId);
-    const agentId =
-      root.agentId ??
-      parseAgentSessionKey(root.sessionKey)?.agentId ??
-      resolveDefaultAgentId(params.cfg);
-    const storePath =
-      root.storePath ??
-      (root.sessionKey === input.sessionKey ? input.storePath : undefined) ??
-      resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const skip =
-      (resolveExplicitIncognitoAgentSqliteTarget(storePath, { agentId })
-        ? "incognito"
-        : undefined) ?? restartResumeSkipReason(root.sessionKey);
-    if (skip && !(skip === "subagent" && input.parked)) {
-      summary.record(agentId, root.sessionKey, skip);
-      return;
-    }
-    const key = JSON.stringify([agentId, root.sessionKey]);
-    const existing = sessions.get(key);
-    if (!existing) {
-      summary.record(agentId, root.sessionKey, "persistence-incomplete");
-      sessions.set(key, {
-        agentId,
-        storePath,
-        sessionKey: root.sessionKey,
-        sessionId: root.sessionKey === input.sessionKey ? input.sessionId : undefined,
-        needsResume: input.needsResume !== false,
-        parked: input.parked,
-        operatorSource: root.sessionKey === input.sessionKey ? input.operatorSource : undefined,
-      });
-    } else {
-      existing.needsResume ||= !input.parked && input.needsResume !== false;
-      if (root.sessionKey === input.sessionKey && input.operatorSource) {
-        existing.operatorSource = input.operatorSource;
-      }
-    }
-  };
-  for (const operation of activeSessionOperations()) {
-    const restartAborted = isAgentRunRestartAbortReason(operation.abortSignal.reason);
-    if (operation.abortSignal.aborted && !restartAborted) {
-      summary.record(
-        operation.agentId ??
-          parseAgentSessionKey(operation.key)?.agentId ??
-          resolveDefaultAgentId(params.cfg),
-        operation.key,
-        "already-aborted",
-      );
-      continue;
-    }
-    const target = getSessionControllerEntryForOperation(operation).target;
-    add({
-      sessionKey: operation.key,
-      agentId: operation.agentId,
-      sessionId: operation.sessionId,
-      storePath: target?.physicalStorePath ?? target?.storeScope,
-      operatorSource: captureSessionRestartOperatorSource(operation),
-      // Completed replies can retain execution custody only to settle workspace uploads.
-      needsResume:
-        (!operation.result || restartAborted) && !hasCommittedReplyOperationOutcome(operation),
-    });
-  }
-  for (const runId of listLiveAgentRunIds()) {
-    if (!hasAgentRunContextExecutionOwner(runId)) {
-      continue;
-    }
-    const operation = findSessionControllerOperationByRunId(runId);
-    if (operation && hasCommittedReplyOperationOutcome(operation)) {
-      continue;
-    }
-    const run = getAgentRunContext(runId);
-    if (run?.sessionKey) {
-      add({ sessionKey: run.sessionKey, agentId: run.agentId, sessionId: run.sessionId });
-    }
-  }
-  for (const root of listLiveSubagentRootSessions()) {
-    add(root);
-  }
-  for (const session of listYieldWaitingSessions()) {
-    add(session);
-  }
+  const sessions = await selectLiveRestartResumeSessions(params.cfg, summary);
   const selectors = new Map<string, { first: SessionIdentity; batch: SessionIdentity[] }>();
   for (const session of sessions.values()) {
     const key = JSON.stringify([session.agentId, session.storePath]);
@@ -247,7 +135,11 @@ async function persistRunningSessions(
             });
             preserve.push({ session, preserve: queued.preserve });
             if (!session.needsResume) {
-              summary.record(session.agentId, sessionKey, "reply-completed");
+              summary.record(
+                session.agentId,
+                sessionKey,
+                session.scheduledAutomation ? "automation-owned" : "reply-completed",
+              );
               continue;
             }
             replacements.push({
@@ -265,7 +157,9 @@ async function persistRunningSessions(
         },
       });
       for (const { session, preserve } of preserveQueued) {
-        summary.record(session.agentId, session.sessionKey, "marked");
+        if (session.needsResume) {
+          summary.record(session.agentId, session.sessionKey, "marked");
+        }
         preserve();
       }
     }),
@@ -499,13 +393,20 @@ async function resumeRestartStore(
             if (!selected) {
               return { result: undefined };
             }
-            const parked = (await hasInterruptedCommittedRequesterSettleInput(
-              { ...target, agentId, sessionKey, sessionId: selected.sessionId },
-              selected,
-            ))
-              ? undefined
-              : resolveSessionYieldWait(sessionKey, selected, agentId);
             const skip = restartResumeSkipReason(sessionKey, selected);
+            let parked = resolveSessionYieldWait(sessionKey, selected, agentId);
+            if (parked === "unreachable" && !skip) {
+              parked = "resume";
+            }
+            if (
+              parked &&
+              (await hasInterruptedCommittedRequesterSettleInput(
+                { ...target, agentId, sessionKey, sessionId: selected.sessionId },
+                selected,
+              ))
+            ) {
+              parked = undefined;
+            }
             const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
             const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,
@@ -654,7 +555,7 @@ async function resumeRestartStore(
             await recordRestartResumeFailure({
               target: { ...target, agentId, sessionKey },
               entry,
-              runId: snapshotEntry.lifecycleRunId ?? entry.lastRunId,
+              runId: snapshotEntry.activeWriterRunId ?? snapshotEntry.lifecycleRunId,
               admissionStage,
               error,
               signal,

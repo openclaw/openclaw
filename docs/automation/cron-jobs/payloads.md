@@ -133,6 +133,11 @@ model restrictions once when it starts. A later revocation or policy change
 applies to the next occurrence, which is refused with a message asking you to
 recreate the automation from an authenticated turn; the job is then disabled.
 The already-started occurrence keeps its captured restriction until it finishes.
+Rotating a shared Gateway token or password refuses jobs created through it. A job
+created through [trusted-proxy authentication](/gateway/trusted-proxy-auth) follows
+its proxy user's grant instead: changing `trustedProxies`, `userHeader`, or
+`requiredHeaders` keeps it, while removing the user from `allowUsers`, changing
+its identity scopes, or leaving trusted-proxy mode refuses it.
 
 The link names the creating conversation by key. After a message edit, branch
 switch, or reset, a linked detached job keeps that conversation's workspace,
@@ -385,8 +390,9 @@ the content instead of overwriting another edit.
 Use a normal final reply for a visible result and `NO_REPLY` for silence.
 `record_result` accepts one outcome (`no_change`, `progress`, `done`, `blocked`,
 or `needs_attention`). `no_change` needs no summary; every other outcome requires
-a trimmed summary of 1–2000 characters. It records the result without sending a
-notification by itself. Structured results are retained in run history. After a
+a trimmed summary of 1–2000 characters. Repeating the accepted result returns it
+again; a different second result is rejected. It records the result without
+sending a notification by itself. Structured results are retained in run history. After a
 successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result
@@ -394,8 +400,12 @@ boilerplate to the conversation. This is not a delivery retry queue. `no_change`
 keeps runner delivery silent without hiding execution failures. A `progress`,
 `done`, `blocked`, or `needs_attention` summary is the run's authored outcome:
 an earlier tool failure the run moved past no longer adds a generic
-`⚠️ <tool> failed` notice to an otherwise silent run. The failure stays visible
-in the transcript and progress lane. Adaptive scheduling still uses `next_check` on a paced
+`⚠️ <tool> failed` notice to an otherwise silent run. The notice names the
+called tool, not the Tool Search dispatcher. The failure stays visible
+in the transcript and progress lane. A failed tool call counts as recovered
+once the same tool later succeeds. A call to a tool the run does not have never
+runs, so the next tool call that runs and succeeds recovers it. A run that only
+made that call and then ended silently is still a failure. Adaptive scheduling still uses `next_check` on a paced
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 

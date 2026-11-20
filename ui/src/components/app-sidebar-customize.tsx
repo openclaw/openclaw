@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type {
   PluginCatalogEntry,
   PluginsListResult,
@@ -167,7 +176,8 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
   const allowed = createMemo(() =>
     canCallGatewayMethod(gateway.read().snapshot, "plugins.list", "operator.read"),
   );
-  const inventory = createMemo(() => {
+  // Optional shortcuts must not hold route updates while inventory refreshes.
+  const inventory = createDeferred(() => {
     epoch();
     generation();
     return allowed()

@@ -101,10 +101,12 @@ suite.define(() => {
         expect(saved.model).toBe("fixture/current");
         expect(await card.textContent()).not.toContain("could not refresh");
 
-        await card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).click();
+        await card
+          .getByRole("button", { name: "Remove saved access: Fixture", exact: true })
+          .click();
         await page
           .locator("openclaw-modal-dialog")
-          .getByRole("button", { name: "Remove provider", exact: true })
+          .getByRole("button", { name: "Remove saved access", exact: true })
           .click();
         await expect
           .poll(async () => (await persistedAuth()).profiles["fixture:manual"])
@@ -148,7 +150,7 @@ suite.define(() => {
         }
         await expect
           .poll(() =>
-            card.getByRole("button", { name: "Remove provider: Fixture", exact: true }).count(),
+            card.getByRole("button", { name: "Remove saved access: Fixture", exact: true }).count(),
           )
           .toBe(0);
       },

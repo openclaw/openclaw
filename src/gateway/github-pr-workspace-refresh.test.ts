@@ -36,38 +36,57 @@ describe("imported PR source refresh", () => {
     );
     await f.invoke();
     await fs.writeFile(path.join(f.projection, "saved-note.txt"), "keep this guest work\n");
-    await f.local!.git("-C", f.upstream, "checkout", "topic/existing");
-    const generated = path.join(f.upstream, "generated-fixture");
-    await fs.mkdir(generated);
-    // Cross the public changed-path budget with real Git source files. Buckets
-    // keep Git tree insertion linear without changing the result's file count.
-    for (let index = 0; index < 50_001; index++) {
-      const bucket = path.join(generated, String(Math.floor(index / 1000)));
-      if (index % 1000 === 0) {
-        await fs.mkdir(bucket);
+    const git = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+    const gitWithInput = async (args: string[], input: string) => {
+      const result = await transport(["git", "-C", f.upstream, ...args], { input });
+      if (result.code !== 0) {
+        throw new Error(result.stderr.toString("utf8"));
       }
-      await fs.writeFile(path.join(bucket, `${index}.txt`), "synthetic\n");
-    }
-    await f.local!.git("-C", f.upstream, "add", "-A");
-    await f.local!.git(
-      "-C",
-      f.upstream,
-      "commit",
-      "--quiet",
+      return result.stdout.toString("utf8").trim();
+    };
+    await git("checkout", "topic/existing");
+    const originalHead = await git("rev-parse", "HEAD");
+    const originalTree = await git("rev-parse", "HEAD^{tree}");
+    const blob = await gitWithInput(["hash-object", "-w", "--stdin"], "synthetic\n");
+    // The donor is fetched as Git objects. Preserve the oversized tree without
+    // materializing its 50,001 identical files in a second working directory.
+    await git("read-tree", originalTree);
+    await gitWithInput(
+      ["update-index", "-z", "--index-info"],
+      Array.from(
+        { length: 50_001 },
+        (_, index) =>
+          `100644 ${blob}\tgenerated-fixture/${Math.floor(index / 1000)}/${index}.txt\0`,
+      ).join(""),
+    );
+    const oversizedTree = await git("write-tree");
+    const oversizedHead = await git(
+      "commit-tree",
+      oversizedTree,
+      "-p",
+      originalHead,
       "-m",
       "Accidentally track generated files",
     );
-    f.pr.head.sha = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
-    f.branch.commit.sha = f.pr.head.sha;
+    await git("update-ref", "refs/heads/topic/existing", oversizedHead, originalHead);
+    await git("read-tree", originalTree);
+    f.pr.head.sha = oversizedHead;
+    f.branch.commit.sha = oversizedHead;
 
     await expect(f.invoke()).rejects.toThrow(/Workspace result changes .*gitignore/u);
     expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(
       "keep this guest work\n",
     );
 
-    await fs.rm(generated, { recursive: true });
-    await f.local!.git("-C", f.upstream, "add", "-A");
-    await f.local!.git("-C", f.upstream, "commit", "--quiet", "-m", "Remove generated files");
+    const removalHead = await git(
+      "commit-tree",
+      originalTree,
+      "-p",
+      oversizedHead,
+      "-m",
+      "Remove generated files",
+    );
+    await git("update-ref", "refs/heads/topic/existing", removalHead, oversizedHead);
     const headCommit = await f.advanceHead({ ".gitignore": "generated-fixture/\n" });
     expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit });
     expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(

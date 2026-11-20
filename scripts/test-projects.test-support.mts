@@ -768,7 +768,6 @@ const HAPPY_PATH_PROMPT_SNAPSHOT_HELPER_TEST_TARGETS = ["test/scripts/prompt-sna
 const APPCAST_TEST_TARGETS = ["test/appcast.test.ts", "test/scripts/make-appcast.test.ts"];
 const CODEX_VERSION_CONTRACT_TEST_TARGETS = [
   "extensions/codex/src/manifest.test.ts",
-  "extensions/openai/openai-provider.test.ts",
   "test/scripts/codex-client-version-contract.test.ts",
 ];
 // The iframe script and native document load as assets outside the import graph.

@@ -445,23 +445,33 @@ const enSettings = {
     },
     transcription: {
       title: "Speech to text",
-      description:
-        "Speech to text for Talk dictation and inbound voice notes (tools.media). Status shows the provider Talk uses.",
+      description: "How Talk hears you, and which model transcribes voice notes.",
       unavailableHint: "Connect to the Gateway to check speech-to-text readiness.",
       failedHint: "Couldn’t check speech-to-text readiness.",
-      noProvider: "No speech-to-text model is configured yet.",
-      readyWithoutProvider: "A configured local transcription model is ready.",
+      readyWithoutProvider: "A local transcription model is ready.",
+      talkTitle: "Talk",
+      talkVoiceCall: "{provider} live transcription, set in Voice Call settings.",
+      talkVoiceModel: "{provider}, set by the voice model in AI Agents settings.",
+      talkAutomatic: "{provider} live transcription, picked automatically from your keys.",
+      talkNotSetUp: "Not set up yet. Add a live transcription key in Voice Call settings.",
+      talkUsesVoiceNotes: "Uses the voice notes model below.",
+      talkUsesFallback: "Uses {provider}, because the voice notes model below isn’t ready.",
+      talkUses: "Uses {provider}.",
+      change: "Change",
+      setUp: "Set up",
+      voiceNotesTitle: "Voice notes",
+      voiceNotesDescription:
+        "Transcribes voice notes you send. Automatic tries your audio models in order.",
       modelTitle: "Speech-to-text model",
-      modelDescription:
-        "Used for voice notes, and for Talk dictation when no streaming transcription provider or speech-to-text voice-model default is configured; those take precedence for Talk. Automatic tries configured audio models in order.",
       invalidModel:
         "“{value}” isn’t a provider/model reference, so it wasn’t saved. Use provider/model, for example openrouter/openai/whisper-large-v3-turbo.",
       automatic: "Automatic",
       custom: "Other model (provider/model)",
-      preferredNotReadyTitle: "Preferred model",
       providerNotReady: "Not ready",
       providerNotReadyDescription:
         "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      providerKeyOutsideModels:
+        "{provider} can’t transcribe yet. Models can’t add its key: set it in the Gateway’s environment, or pick another model.",
       openModels: "Open Models",
     },
   },
@@ -1251,6 +1261,12 @@ const enSettings = {
     remove: {
       action: "Remove provider",
       title: "Remove {provider}?",
+      config:
+        "This deletes the Gateway settings for {key}, including its configured model list. Saved accounts and credentials managed outside OpenClaw may still make the provider available. Models downloaded on the provider’s server are not deleted.",
+      configNote: "Removed provider configuration for {key}.",
+      configChanged: "The configuration changed. Review the provider and confirm removal again.",
+      accessAction: "Remove saved access",
+      accessTitle: "Remove saved access to {provider}?",
       accounts:
         "This removes the saved accounts for {provider} available to this agent. Shared accounts are also removed for other agents that use them. Active replies for this provider on the selected agent may stop.",
       keys: "Saved API keys for {key} and its configured aliases will also be deleted. Provider settings and external secrets stay in place.",

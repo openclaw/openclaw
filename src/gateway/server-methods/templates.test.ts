@@ -53,6 +53,38 @@ describe("ClawHub Template catalog Gateway methods", () => {
     expect(listClawHubTemplates).not.toHaveBeenCalled();
   });
 
+  it("requests certified category entries from ClawHub only for an opted-in overview", async () => {
+    const source = await vi.importActual<typeof import("../../templates/clawhub-source.js")>(
+      "../../templates/clawhub-source.js",
+    );
+    readClawHubTemplatesOverview.mockImplementationOnce(source.readClawHubTemplatesOverview);
+    using fetch = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      Response.json({
+        complete: true,
+        completeCategoryEntries: true,
+        featured: [],
+        sections: [{ category: "research", items: [] }],
+      }),
+    );
+    const replies = await catalogRequest("templates.catalog.search", {
+      overview: true,
+      includeCategoryEntries: true,
+      limit: 3,
+    });
+    expect(replies[0]?.[1]).toEqual({
+      entries: [],
+      overview: {
+        featured: [],
+        sections: [{ category: "research", entries: [], additionalEntries: [] }],
+      },
+    });
+    const request = expectDefined(fetch.mock.calls[0]?.[0], "ClawHub overview request");
+    const url = new URL(request instanceof Request ? request.url : request);
+    expect(url.pathname + url.search).toBe(
+      "/api/v1/templates/overview?limit=3&include=categoryEntries",
+    );
+  });
+
   it.each([true, false])(
     "returns a bounded overview while Labs remains enabled (%s)",
     async (complete) => {
