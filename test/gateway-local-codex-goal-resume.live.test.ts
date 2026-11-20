@@ -10,6 +10,7 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "../src/gateway/gateway-cli-backend.live-helpers.js";
+import { liveOpenAiApiKeyModels } from "../src/gateway/live-openai-models.test-support.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import {
   createCodexHarnessLiveInstance,
@@ -53,9 +54,13 @@ it.skipIf(!enabled)(
       throw new Error("Set OPENCLAW_LIVE_CODEX_HARNESS_MODEL to an available native Codex model");
     }
     const token = `goal-proof-${randomUUID()}`;
-    const instance = await createCodexHarnessLiveInstance(token, "codex-auth");
-    // Native auth uses only the disposable HOME staged by the live-test owner.
-    instance.env.CODEX_HOME = path.join(os.homedir(), ".codex");
+    const authMode =
+      process.env.OPENCLAW_LIVE_CODEX_HARNESS_AUTH === "api-key" ? "api-key" : "codex-auth";
+    const instance = await createCodexHarnessLiveInstance(token, authMode);
+    // Native subscription auth uses only the disposable HOME staged by the live-test owner.
+    if (authMode === "codex-auth") {
+      instance.env.CODEX_HOME = path.join(os.homedir(), ".codex");
+    }
     let client: GatewayClient | undefined;
     const sessionKey = `agent:main:local-goal-resume-${randomUUID()}`;
     const marker = `GOAL_RESUMED_${randomUUID()}`;
@@ -75,10 +80,24 @@ it.skipIf(!enabled)(
         plugins: {
           allow: ["codex"],
           entries: {
-            codex: { enabled: true, config: { appServer: { mode: "yolo", homeScope: "user" } } },
+            codex: {
+              enabled: true,
+              config: {
+                appServer: {
+                  mode: "yolo",
+                  ...(authMode === "codex-auth" ? { homeScope: "user" } : {}),
+                },
+              },
+            },
           },
           slots: { memory: "none" },
         },
+        ...(authMode === "api-key"
+          ? {
+              secrets: { providers: { default: { source: "env" } } },
+              models: liveOpenAiApiKeyModels(),
+            }
+          : {}),
         agents: {
           defaults: {
             workspace: instance.state.workspaceDir,
