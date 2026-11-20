@@ -530,19 +530,15 @@ export function usePrefixStabilityJourney() {
         const allOtherBreaks = prefixBreaks(otherRequests);
         const otherMessage = JSON.stringify(allOtherBreaks, null, 2);
         const inOverflow = ({ at }: { at: number }) => at > overflowStartAt && at < overflowEndAt;
-        // The pressure check acted inside the overflow run.
-        expect(allOtherBreaks.some(inOverflow), otherMessage).toBe(true);
         const otherBreaks = prefixBreaks(otherRequests, isKnown("other"));
+        // The pressure check compacted once inside the overflow run (a known trim alone does not
+        // count), then the explicit compaction.
+        const overflowCompactions = otherBreaks.filter(inOverflow);
+        expect(overflowCompactions.length, otherMessage).toBe(1);
         expect(
           otherBreaks.map(({ at }) => at),
           otherMessage,
-        ).toEqual([
-          ...otherBreaks
-            .filter(inOverflow)
-            .slice(0, 1)
-            .map(({ at }) => at),
-          otherCompactionAt,
-        ]);
+        ).toEqual([overflowCompactions[0]!.at, otherCompactionAt]);
         for (const { at } of otherBreaks) {
           // The summary leads the rebuilt history (after the instructions item on Responses).
           expect(otherRequests[at]!.messages.slice(0, 2).join("\n"), otherMessage).toContain(
