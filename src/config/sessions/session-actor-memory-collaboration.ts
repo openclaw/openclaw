@@ -82,7 +82,12 @@ export function mutateSessionActorMemoryCollaboration(
       if (!identityId || !addedBy) {
         throw new Error("session member identity and actor are required");
       }
-      const member = { identityId, addedBy, addedAt: params.addedAt ?? Date.now() };
+      const member = {
+        identityId,
+        addedBy,
+        addedAt: params.addedAt ?? Date.now(),
+        ...(params.access !== undefined ? { access: params.access } : {}),
+      };
       const inserted = !state.hot.members.some((row) => row.identityId === toUSVString(identityId));
       if (inserted) {
         state.hot.members.push({
@@ -103,6 +108,7 @@ export function mutateSessionActorMemoryCollaboration(
                 sessionId: entry.sessionId,
                 identityId: toUSVString(identityId),
                 present: true,
+                ...(params.access !== undefined ? { access: params.access } : {}),
               },
             }
           : {}),

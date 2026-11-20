@@ -369,7 +369,9 @@ CREATE TABLE "session_members" (
   "identity_id" text COLLATE "C" NOT NULL,
   "added_by" text COLLATE "C" NOT NULL,
   "added_at" bigint NOT NULL,
-  PRIMARY KEY ("session_key", "identity_id")
+  "access" text COLLATE "C",
+  PRIMARY KEY ("session_key", "identity_id"),
+  CHECK ("access" IS NULL OR ("access" IN ('read', 'suggest', 'send')))
 );
 
 CREATE TABLE "session_nodes" (

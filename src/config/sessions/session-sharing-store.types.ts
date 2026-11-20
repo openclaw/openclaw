@@ -61,6 +61,7 @@ export type SessionSuggestionFinalizeParams = SessionSuggestionReleaseParams & {
 type OwnerPublication = { facts?: Extract<SessionRowFacts, { kind: "owner" }> };
 
 export type SessionMemberAdd = {
+  access?: SessionMember["access"];
   identityId: string;
   addedBy: string;
   addedAt?: number;

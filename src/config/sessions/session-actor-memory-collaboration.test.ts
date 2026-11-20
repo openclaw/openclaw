@@ -135,10 +135,11 @@ describe("memory collaboration through the public adapters", () => {
         identityId: "viewer",
         addedBy: "owner",
         addedAt: 10,
+        access: "suggest",
       });
       expect(grant.inserted).toBe(true);
       expect((await readSessionMembersInWorker(scope)).members).toEqual([
-        { identityId: "viewer", addedBy: "owner", addedAt: 10 },
+        { identityId: "viewer", addedBy: "owner", addedAt: 10, access: "suggest" },
       ]);
       await removeSessionMemberInWorker(scope, "viewer", grant.member);
       await addSessionMemberInWorker(scope, {

@@ -49,6 +49,7 @@ export const SCHEMA_MIGRATION_BACKUP_TABLES: Record<
     42: ["agent_tool_usage"],
     // Pending input columns and legacy retirement facts change together.
     43: ["session_pending_inputs"],
+    44: ["session_members"],
   },
   state: {
     [CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION]: [

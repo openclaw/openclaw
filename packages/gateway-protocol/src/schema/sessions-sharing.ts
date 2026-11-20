@@ -61,10 +61,13 @@ export const SessionPublicShareSetResultSchema = closedObject({
 
 export const SessionMembersListParamsSchema = closedObject(SessionSharingTargetParamsSchema);
 
+export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
+
 export const SessionMemberSchema = closedObject({
   identityId: NonEmptyString,
   addedBy: NonEmptyString,
   addedAt: Type.Integer({ minimum: 0 }),
+  access: Type.Optional(SessionMemberPermissionLevelSchema),
 });
 
 export const SessionMemberEvidenceSchema = Object.assign(
@@ -74,6 +77,7 @@ export const SessionMemberEvidenceSchema = Object.assign(
     /** Explicit principal-less evidence; omission means no actor evidence was supplied. */
     addedByState: Type.Optional(Type.Literal("unknown")),
     addedAt: Type.Integer({ minimum: 0 }),
+    access: Type.Optional(SessionMemberPermissionLevelSchema),
   }),
   { not: { required: ["addedBy", "addedByState"] } },
 );
@@ -87,8 +91,6 @@ export const SessionMembersListResultSchema = closedObject({
   role: SessionSharingRoleSchema,
   allowedVisibilities: Type.Array(SessionVisibilitySchema),
 });
-
-export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
 
 export const SessionMemberPermissionSchema = closedObject({
   identityId: NonEmptyString,
