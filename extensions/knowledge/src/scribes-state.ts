@@ -11,6 +11,7 @@ import {
   scribeLabel,
   type RunMessageCheck,
   type ScribeDefinition,
+  type ScribePlugin,
 } from "./scribes-catalog.js";
 
 export type ScribeStatus =
@@ -109,7 +110,8 @@ export type ScribeSnapshot = {
 
 /**
  * Whether a plugin a scribe needs can be used: not installed, turned off, installed but not
- * signed in to its service, or ready.
+ * signed in to its service (for a channel plugin: no configured, running default account), or
+ * ready.
  */
 export type PluginReadiness = "missing" | "disabled" | "needs-sign-in" | "ready";
 
@@ -127,6 +129,11 @@ export type ScribeDetection = {
   memoryFile?: { size?: number } | null;
   /** Readiness of the plugins scribes need, by plugin id. */
   plugins?: Record<string, PluginReadiness>;
+  /**
+   * Whether a channel plugin's default account has a usable user token, by plugin id. Absent
+   * when it could not be read.
+   */
+  userTokens?: Record<string, boolean>;
 };
 
 /** The Gateway access scribe reads need: the page host's authenticated request. */
@@ -485,48 +492,100 @@ async function conversationCount(host: ScribeReader, agentId: string, archived: 
 }
 
 /**
- * Readiness of one plugin from plugins.inspect. A plugin the Gateway does not know is rejected
- * as an invalid request; any other failure is left unknown (undefined).
+ * The default account of a channel from channels.status: ready when it is configured, enabled and
+ * running, and whether it has a usable user token (undefined when the account does not say).
+ * Undefined when channels.status can't be read.
+ */
+async function channelAccount(host: ScribeReader, channel: string) {
+  const result = await host
+    .request<{
+      channelAccounts?: Record<string, unknown[]>;
+      channelDefaultAccountId?: Record<string, string>;
+    }>("channels.status", { channel })
+    .catch(() => undefined);
+  if (!result) {
+    return undefined;
+  }
+  const defaultId = result.channelDefaultAccountId?.[channel];
+  const account = (result.channelAccounts?.[channel] ?? []).find(
+    (row) => isRecord(row) && row.accountId === defaultId,
+  );
+  if (!isRecord(account)) {
+    return { ready: false };
+  }
+  const status = account.userTokenStatus;
+  return {
+    ready: account.enabled !== false && account.configured === true && account.running === true,
+    ...(typeof status === "string" && { userToken: status === "available" }),
+  };
+}
+
+/**
+ * Readiness of one plugin from plugins.inspect, and for a channel plugin from its default
+ * account in channels.status, with whether that account has a user token. A plugin the Gateway
+ * does not know is rejected as an invalid request; any other failure is left unknown (undefined).
  */
 async function pluginReadiness(
   host: ScribeReader,
-  pluginId: string,
-): Promise<PluginReadiness | undefined> {
+  plugin: ScribePlugin,
+): Promise<{ readiness?: PluginReadiness; userToken?: boolean }> {
   const result = await host
     .request<{
       plugin?: { installed?: boolean; enabled?: boolean };
       mcpAuth?: { state?: string }[];
-    }>("plugins.inspect", { pluginId })
+    }>("plugins.inspect", { pluginId: plugin.id })
     .catch((error: unknown) =>
       isRecord(error) && error.gatewayCode === "INVALID_REQUEST" ? null : undefined,
     );
   if (result === undefined) {
-    return undefined;
+    return {};
   }
   if (!result?.plugin?.installed) {
-    return "missing";
+    return { readiness: "missing" };
   }
   if (!result.plugin.enabled) {
-    return "disabled";
+    return { readiness: "disabled" };
   }
   // Every MCP server the plugin declares must be signed in; one without sign-in has no entries.
-  return (result.mcpAuth ?? []).every((server) => server.state === "authorized")
-    ? "ready"
-    : "needs-sign-in";
+  if (!(result.mcpAuth ?? []).every((server) => server.state === "authorized")) {
+    return { readiness: "needs-sign-in" };
+  }
+  if (!plugin.channel) {
+    return { readiness: "ready" };
+  }
+  // A channel plugin reads through its account: installed and on is not enough.
+  const account = await channelAccount(host, plugin.channel.id);
+  if (!account) {
+    return {};
+  }
+  return {
+    readiness: account.ready ? "ready" : "needs-sign-in",
+    ...(account.userToken !== undefined && { userToken: account.userToken }),
+  };
 }
 
 // The plugins scribes need, once each.
-const scribePluginIds = () => [
-  ...new Set(SCRIBES.flatMap((scribe) => (scribe.plugin ? [scribe.plugin.id] : []))),
-];
-
-// Readiness by plugin id, leaving out plugins that could not be read.
-async function detectPlugins(host: ScribeReader) {
-  const ids = scribePluginIds();
-  const states = await Promise.all(ids.map((id) => pluginReadiness(host, id)));
-  return Object.fromEntries(
-    ids.flatMap((id, i) => (states[i] === undefined ? [] : [[id, states[i]] as const])),
+const scribePlugins = () =>
+  SCRIBES.flatMap((scribe) => scribe.plugin ?? []).filter(
+    (plugin, i, all) => all.findIndex((other) => other.id === plugin.id) === i,
   );
+
+// Readiness and user tokens by plugin id, leaving out what could not be read.
+async function detectPlugins(host: ScribeReader) {
+  const plugins = scribePlugins();
+  const states = await Promise.all(plugins.map((plugin) => pluginReadiness(host, plugin)));
+  const readiness: Record<string, PluginReadiness> = {};
+  const userTokens: Record<string, boolean> = {};
+  plugins.forEach((plugin, i) => {
+    const state = states[i]!;
+    if (state.readiness !== undefined) {
+      readiness[plugin.id] = state.readiness;
+    }
+    if (state.userToken !== undefined) {
+      userTokens[plugin.id] = state.userToken;
+    }
+  });
+  return { readiness, userTokens };
 }
 
 /** Facts the Available rows can show honestly. Failed reads leave their fields out. */
@@ -557,8 +616,14 @@ export async function detectSources(host: ScribeReader, agentId: string): Promis
             : {};
     }
   }
-  if (plugins.status === "fulfilled" && Object.keys(plugins.value).length) {
-    detection.plugins = plugins.value;
+  if (plugins.status === "fulfilled") {
+    const { readiness, userTokens } = plugins.value;
+    if (Object.keys(readiness).length) {
+      detection.plugins = readiness;
+    }
+    if (Object.keys(userTokens).length) {
+      detection.userTokens = userTokens;
+    }
   }
   return detection;
 }

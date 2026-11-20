@@ -634,7 +634,13 @@ function detail(
   const readiness = neededPluginState(scribe, detection);
   if (scribe.plugin && readiness) {
     const value = el("span", undefined, "scribe-status");
-    value.append(el("span", pluginStateText(scribe.plugin, readiness)));
+    const userToken = scribe.plugin.channel && detection.userTokens?.[scribe.plugin.id];
+    value.append(
+      el(
+        "span",
+        `${pluginStateText(scribe.plugin, readiness)}${userToken === undefined ? "" : userToken ? " · user token configured" : " · no user token"}`,
+      ),
+    );
     if (readiness !== "ready") {
       value.append(
         pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),
