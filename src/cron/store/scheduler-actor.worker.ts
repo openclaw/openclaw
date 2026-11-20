@@ -30,7 +30,8 @@ import { hasMissedCronSlotSinceLastRun, isRunnableJob } from "../service/timer-r
 import type { CronJob } from "../types.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
-import { requestAndDrainCronRunsInWorker, waitsForCronRunSlot } from "./run-queue.worker.js";
+import { waitsForCronRunSlot } from "./run-queue-slots.worker.js";
+import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -579,7 +580,7 @@ export function runCronSchedulerInWorker(
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,
           memoryAllowsExtraRun: snapshot.config.memoryAllowsExtraRun,
-          blockedExtraRunProviders: snapshot.config.blockedExtraRunProviders,
+          providerBackoff: snapshot.config.providerBackoff,
           hostProcessId: snapshot.config.hostProcessId,
           pluginCommandHosts: snapshot.config.pluginCommandHosts,
         },
@@ -590,6 +591,9 @@ export function runCronSchedulerInWorker(
       result.launches.push(...requested.launches);
       result.preparing.push(...requested.preparing);
       result.skipped.push(...requested.skipped);
+      if (requested.promotedReceiptIds) {
+        result.promotedReceiptIds = requested.promotedReceiptIds;
+      }
       result.jobs.push(...requested.accepted.map((entry) => entry.job));
       result.jobs.push(...requested.launches.map((entry) => entry.job));
       result.jobs.push(...requested.skipped.flatMap((entry) => (entry.job ? [entry.job] : [])));

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
-import { MAX_CRON_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -32,6 +31,12 @@ import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 import { readCronEventClaimInDatabase, transferCronEventInDatabase } from "./event-ingress.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import { recordSkippedCronRequestInDatabase } from "./run-history.kernel.js";
+import {
+  createCronRunSlots,
+  isCheckingCondition,
+  startsWithoutRunSlot,
+  waitsForCronRunSlot,
+} from "./run-queue-slots.worker.js";
 import type {
   CronRunQueueOperations,
   CronRunRequestContext,
@@ -58,51 +63,6 @@ const MAX_CONCURRENT_CONDITION_CHECKS = 3;
 
 function query(db: EngineConnection) {
   return getNodeSqliteKysely<CronRunReceiptDatabase>(db);
-}
-
-/** A condition check is the opening phase of a run; at most three runs are in that phase. */
-function isCheckingCondition(job: CronStoredJob): boolean {
-  return (
-    job.state.runningAtMs !== undefined &&
-    job.state.conditionCheckReceiptId === job.state.runningReceiptId
-  );
-}
-
-/**
- * A timed check holds no run slot: it is short and bounded, and run slots are for payloads.
- * A requested check keeps the slot it was activated with. So does a script payload's check,
- * whose time budget cannot pause while it waits for a slot.
- */
-function startsWithoutRunSlot(job: CronStoredJob, receiptId: string): boolean {
-  return job.payload.kind !== "script" && parseCronScheduledRunId(receiptId) !== undefined;
-}
-
-/** A fired condition waiting for a run slot: it holds neither a check nor a slot. */
-export function waitsForCronRunSlot(
-  job: CronStoredJob | undefined,
-  receiptId = job?.state.runningReceiptId,
-): boolean {
-  return (
-    receiptId !== undefined &&
-    job?.state.runningAtMs !== undefined &&
-    job.state.runningReceiptId === receiptId &&
-    job.state.runSlotWaitReceiptId === receiptId
-  );
-}
-
-function countRunSlotsInUse(
-  receipts: readonly { receiptId: string; jobId: string }[],
-  jobs: ReadonlyMap<string, CronStoredJob>,
-): number {
-  return receipts.filter((receipt) => {
-    const job = jobs.get(receipt.jobId);
-    return (
-      job?.state.runningReceiptId === receipt.receiptId &&
-      job.state.runningAtMs !== undefined &&
-      !waitsForCronRunSlot(job, receipt.receiptId) &&
-      !(isCheckingCondition(job) && startsWithoutRunSlot(job, receipt.receiptId))
-    );
-  }).length;
 }
 
 function loadJobs(db: EngineConnection, storeKey: string) {
@@ -415,7 +375,6 @@ function drainCronQueueInDatabase(
       error: row.error_text ?? "cron: queued request was cancelled",
     }));
   const receipts = rows.filter((row) => row.status === "running").map(receiptFromRow);
-  let activeCount = countRunSlotsInUse(receipts, jobs);
   // Fired conditions waiting for a run slot take their turn among queued runs by due time.
   const queued = receipts
     .filter(
@@ -437,24 +396,14 @@ function drainCronQueueInDatabase(
   // At most three runs check a condition at once; the rest stay queued in due order with no
   // running marker, so they spend no run budget and keep their occurrence across a restart.
   let checkingCount = [...jobs.values()].filter(isCheckingCondition).length;
-  // Once every base slot is busy, one more run may start per drain while memory is free, so each
-  // later drain reads memory again with that run counted.
-  let extraRunOpen = input.memoryAllowsExtraRun === true;
-  const baseSlots = Math.max(1, input.maxConcurrentRuns);
-  const hasRunSlot = (provider?: string) =>
-    activeCount < baseSlots ||
-    (extraRunOpen &&
-      activeCount < MAX_CRON_CONCURRENT_RUNS &&
-      (provider === undefined || !input.blockedExtraRunProviders?.includes(provider)));
-  const takeRunSlot = (job: CronStoredJob, receiptId: string) => {
-    if (activeCount >= baseSlots) {
-      job.state.extraRunSlotReceiptId = receiptId;
-      extraRunOpen = false;
-    } else {
-      delete job.state.extraRunSlotReceiptId;
-    }
-    activeCount += 1;
-  };
+  const { hasRunSlot, takeRunSlot, promotedReceiptIds } = createCronRunSlots(
+    { ...input, db },
+    receipts,
+    jobs,
+  );
+  if (promotedReceiptIds.size > 0) {
+    result.promotedReceiptIds = [...promotedReceiptIds];
+  }
   for (const receipt of queued) {
     const handle = receiptHandle(receipt);
     const job = jobs.get(receipt.jobId)!;
@@ -621,7 +570,7 @@ export function requestAndDrainCronRunsInWorker(
     | "requests"
     | "maxConcurrentRuns"
     | "memoryAllowsExtraRun"
-    | "blockedExtraRunProviders"
+    | "providerBackoff"
     | "schedulingPaused"
     | "preparingAgentIds"
     | "busyConversationJobIds"

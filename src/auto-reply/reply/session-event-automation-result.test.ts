@@ -164,6 +164,7 @@ it.for(["resume", "cancel"] as const)(
           cfg: config,
           job: makeCronJob({ sessionTarget: `session:${scope.sessionKey}` }),
           text: scheduledText,
+          deliveryAttemptFence: null,
           abortSignal: AbortSignal.any([signal, stopWaiting.signal]),
           providerRunSlot: {
             tryStart: () => allowed,

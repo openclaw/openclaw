@@ -24,6 +24,12 @@ export type CronSkippedRequest = {
   eventInvalidated?: true;
 };
 
+/** Host observations used by the worker when allocating a known provider an extra slot. */
+export type CronProviderBackoffSnapshot = {
+  allowances: { provider: string; slots: number }[];
+  charges: { receiptId: string; provider?: string }[];
+};
+
 export type CronRunQueueOperations = {
   "cron.requestRuns": {
     input: {
@@ -54,8 +60,7 @@ export type CronRunQueueOperations = {
       maxConcurrentRuns: number;
       /** At least 1 GiB was free when the host read memory: see `cronMemoryAllowsExtraRun`. */
       memoryAllowsExtraRun?: boolean;
-      /** Providers whose parked receipts can only take a default slot on this drain. */
-      blockedExtraRunProviders?: string[];
+      providerBackoff?: CronProviderBackoffSnapshot;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
       preparingAgentIds?: string[];
@@ -76,6 +81,7 @@ export type CronRunQueueOperations = {
       launches: CronQueuedRun[];
       preparing: CronQueuedRun[];
       skipped: CronSkippedRequest[];
+      promotedReceiptIds?: string[];
     };
   };
   "cron.cancelRequests": {

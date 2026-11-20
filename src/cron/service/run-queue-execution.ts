@@ -15,7 +15,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { isJobEnabled } from "./jobs-scheduling.js";
 import { assertExecutionPolicy } from "./jobs-validation.js";
 import { clearManualCronJobActive, markManualCronJobActive } from "./ops-shared.js";
-import { createCronExtraRunCharge } from "./provider-backoff.js";
+import type { createCronExtraRunCharge } from "./provider-backoff.js";
 import { createCronRunHandle } from "./run-history.js";
 import type { CronRunOptions as RunOptions } from "./run-queue-requests.js";
 import { awaitCronRunQueueTurn, wakeCronRunQueues } from "./run-queue-wake.js";
@@ -133,6 +133,7 @@ export async function launchCronRun(
   state: CronServiceState,
   entry: CronQueuedRun,
   pending: CronLaunchContext,
+  charge: ReturnType<typeof createCronExtraRunCharge>,
   cancel: (reason: string) => Promise<void>,
 ) {
   const { options } = pending;
@@ -254,18 +255,6 @@ export async function launchCronRun(
   pending.started = true;
   pending.activation.resolve();
   const onExit = options.onExit;
-  let extraSlot = entry.job.state.extraRunSlotReceiptId === entry.runReceipt.receiptId;
-  const charge = createCronExtraRunCharge();
-  const onGranted = (extra: boolean) => {
-    extraSlot = extra;
-  };
-  const tryStartProvider = (provider: string) => {
-    if (!extraSlot || charge.tryCharge(provider)) {
-      return true;
-    }
-    charge.move(undefined);
-    return false;
-  };
   let result: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
     result = await executeJobCoreWithTimeout(state, executionJob, {
@@ -275,15 +264,16 @@ export async function launchCronRun(
       streamBatch: options.streamBatch,
       streamScheduleKey: options.streamScheduleKey,
       streamSourceIdentity: options.streamSourceIdentity,
-      onConditionFired: (wait) => takeRunSlot(state, entry, pending, { ...wait, onGranted }),
+      onConditionFired: (wait) =>
+        takeRunSlot(state, entry, pending, { ...wait, onGranted: charge.onGranted }),
       providerRunSlot: {
-        tryStart: tryStartProvider,
+        tryStart: charge.tryStart,
         wait: async (provider, signal) => {
-          while (!tryStartProvider(provider)) {
+          while (!charge.tryStart(provider)) {
             const slot = await takeRunSlot(state, entry, pending, {
               signal,
               parkProvider: provider,
-              onGranted,
+              onGranted: charge.onGranted,
             });
             if (slot === "stopped") {
               signal.throwIfAborted();
@@ -292,11 +282,7 @@ export async function launchCronRun(
           }
         },
       },
-      onProviderAttempt: (provider) => {
-        if (extraSlot) {
-          charge.move(provider);
-        }
-      },
+      onProviderAttempt: charge.move,
       runReceipt: entry.runReceipt,
       runReceiptContext: pending.context,
       executionIdentity: createCronReceiptExecutionIdentity(
@@ -326,11 +312,10 @@ export async function launchCronRun(
         resolveAgentRunErrorLifecycleFields(error, undefined).stopReason === "restart",
     });
   }
-  const releaseCharge = () => charge.move(undefined);
   if (result.executionSettlement) {
-    void result.executionSettlement.then(releaseCharge, releaseCharge);
+    void result.executionSettlement.then(charge.release, charge.release);
   } else {
-    releaseCharge();
+    charge.release();
   }
   options.onTriggerDisposition?.(
     hasUnstartedCronAdmission(result) && result.admissionDeferredReason === "busy"

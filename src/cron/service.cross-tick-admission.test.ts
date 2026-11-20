@@ -19,7 +19,7 @@ import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import {
-  blockedCronExtraRunProviders,
+  captureCronProviderBackoff,
   watchCronProviderPushback,
 } from "./service/provider-backoff.js";
 import { waitForCronRunQueue } from "./service/run-queue.js";
@@ -477,19 +477,20 @@ const rateLimited = (provider = "stand-in") =>
     },
   });
 
-it("parks a fired condition's payload once and lets another provider use the extra slot", async () => {
+it("recovers after default runs finish and resumes the same parked condition", async () => {
   let nowMs = Date.now();
   const dueAtMs = nowMs + 1_000;
-  const waits = dueJob("waits", nowMs, dueAtMs);
-  waits.schedule = { kind: "every", everyMs: 300_000, anchorMs: dueAtMs };
+  const waits = dueJob("waits", nowMs, dueAtMs + 1_000);
+  waits.schedule = { kind: "every", everyMs: 300_000, anchorMs: dueAtMs + 1_000 };
   waits.trigger = { script: "return { fire: true }" };
-  const healthy = dueJob("healthy", nowMs, dueAtMs + 1_000);
+  const healthy = dueJob("healthy", nowMs, dueAtMs + 2_000);
   const store = await seedJobs([
-    ...Array.from({ length: 8 }, (_, index) => dueJob(`base-${index}`, nowMs, dueAtMs)),
+    ...Array.from({ length: 16 }, (_, index) => dueJob(`burst-${index}`, nowMs, dueAtMs)),
     waits,
     healthy,
   ]);
   const finish = createDeferred();
+  const finishDefault = createDeferred();
   const started: string[] = [];
   const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
   const state = cron.createCronRegressionState({
@@ -498,12 +499,14 @@ it("parks a fired condition's payload once and lets another provider use the ext
     cronConfig: { triggers: { enabled: true } },
     evaluateCronTrigger,
     runIsolatedAgentJob: async ({ job, providerRunSlot, abortSignal }) => {
-      const provider = job.id === waits.id ? "stand-in" : "healthy";
+      const provider = job.id === healthy.id ? "healthy" : "stand-in";
       if (providerRunSlot && !providerRunSlot.tryStart(provider)) {
         await providerRunSlot.wait(provider, expectDefined(abortSignal, "cron run abort signal"));
       }
-      started.push(job.id);
-      await finish.promise;
+      const position = started.push(job.id);
+      if (job.id !== healthy.id) {
+        await (position <= 8 ? finishDefault : finish).promise;
+      }
       return { status: "ok" as const };
     },
   });
@@ -513,12 +516,22 @@ it("parks a fired condition's payload once and lets another provider use the ext
     nowMs = dueAtMs;
     await wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(8));
-    rateLimited();
     vi.spyOn(process, "availableMemory").mockReturnValue(1024 ** 3);
+    for (let count = 9; count <= 16; count++) {
+      await wake(state);
+      await vi.waitFor(() => expect(started).toHaveLength(count));
+    }
+    rateLimited();
+    const jobs = async () => (await loadCronStore(store.storePath)).jobs;
+    finishDefault.resolve();
+    await vi.waitFor(async () => {
+      expect((await jobs()).filter((job) => job.state.runningAtMs !== undefined)).toHaveLength(8);
+    });
+    nowMs += 1_000;
     await wake(state);
     let parkedReceipt: string | undefined;
     await vi.waitFor(async () => {
-      const job = (await loadCronStore(store.storePath)).jobs.find(({ id }) => id === waits.id);
+      const job = (await jobs()).find(({ id }) => id === waits.id);
       parkedReceipt = job?.state.runSlotWaitReceiptId;
       expect(parkedReceipt).toEqual(expect.any(String));
       expect(job?.state.runningReceiptId).toBe(parkedReceipt);
@@ -527,12 +540,16 @@ it("parks a fired condition's payload once and lets another provider use the ext
     await wake(state);
     await vi.waitFor(() => expect(started).toContain(healthy.id));
     expect(started).not.toContain(waits.id);
+    await vi.waitFor(async () => {
+      expect((await jobs()).find(({ id }) => id === healthy.id)?.state.lastRunStatus).toBe("ok");
+    });
     vi.setSystemTime(Date.now() + 60_000);
     await wake(state);
     await vi.waitFor(() => expect(started).toContain(waits.id));
     expect(store.receipt(waits)?.receiptId).toBe(parkedReceipt);
     expect(evaluateCronTrigger).toHaveBeenCalledOnce();
   } finally {
+    finishDefault.resolve();
     finish.resolve();
     stop(state);
     await Promise.all(sessions);
@@ -630,7 +647,7 @@ it("counts hook sessions sharing automation's budget when a provider pushes back
     );
     // Eight automation runs and eight hook turns are in flight: pushback limits automation.
     rateLimited();
-    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
+    expect(captureCronProviderBackoff()?.allowances).toEqual([{ provider: "stand-in", slots: 0 }]);
   } finally {
     stopWatch();
     end.resolve();
@@ -651,7 +668,7 @@ it("starts the quiet minute again on pushback that cannot lower the limit", asyn
     await vi.waitFor(() => expect(inFlight()).toBe(9));
     // Nine automation sessions and a rate limit: automation drops to its eight default slots.
     rateLimited();
-    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
+    expect(captureCronProviderBackoff()?.allowances).toEqual([{ provider: "stand-in", slots: 0 }]);
     ends[0]?.resolve();
     await sessions[0];
     // Another rate limit at eight sessions cannot lower the limit, but the next run still
@@ -659,9 +676,9 @@ it("starts the quiet minute again on pushback that cannot lower the limit", asyn
     after(50_000);
     rateLimited();
     after(10_000);
-    expect(blockedCronExtraRunProviders()).toEqual(["stand-in"]);
+    expect(captureCronProviderBackoff()?.allowances).toEqual([{ provider: "stand-in", slots: 0 }]);
     after(50_000);
-    expect(blockedCronExtraRunProviders()).toEqual([]);
+    expect(captureCronProviderBackoff()?.allowances).toEqual([{ provider: "stand-in", slots: 1 }]);
   } finally {
     stopWatch();
     ends.forEach((end) => end.resolve());
