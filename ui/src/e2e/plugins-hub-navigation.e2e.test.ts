@@ -176,8 +176,8 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
   );
 }
 
-async function installButtonPresentation(page: Page) {
-  const button = page.getByRole("button", { name: /^Install /u }).first();
+async function catalogActionPresentation(page: Page, name: string) {
+  const button = page.getByRole("button", { name, exact: true }).first();
   await button.waitFor({ state: "visible" });
   return button.evaluate((element) => {
     const style = getComputedStyle(element);
@@ -234,31 +234,18 @@ suite.define(() => {
   it("keeps model-provider video capabilities discoverable in Media across pagination", async () => {
     const context = await createContext({ width: 1200, height: 928 });
     const page = await context.newPage();
-    const local: PluginsListResult = {
-      plugins: ["novita", "zai"].map((id) => {
-        return {
-          id,
-          name: id === "zai" ? "Z.AI" : "Novita",
-          packageName: "@openclaw/" + id,
-          clawhubPackage: "@openclaw/" + id,
-          origin: "bundled",
-          installed: true,
-          enabled: true,
-          state: "enabled" as const,
-          description: "Model inference and video generation.",
-          categories: ["models"],
-          capabilityCategories: ["media"],
-        };
-      }),
-      diagnostics: [],
-      mutationAllowed: true,
-    };
-    expect(local.plugins.map((plugin) => plugin.categories)).toEqual([["models"], ["models"]]);
-    expect(local.plugins.map((plugin) => plugin.capabilityCategories)).toEqual([
-      ["media"],
-      ["media"],
-    ]);
-    // Gateway wire fixtures; the catalog owners test category derivation and joining.
+    // The Gateway joins published categories and local capabilities. Ordinary browse shelves
+    // list plugins to add, so include both available providers and an installed counterpart.
+    const installedProvider = {
+      id: "local-video",
+      name: "Local Video",
+      origin: "bundled",
+      installed: true,
+      enabled: true,
+      state: "enabled",
+      categories: ["models"],
+      capabilityCategories: ["media"],
+    } satisfies PluginsListResult["plugins"][number];
     const novita = {
       id: "ch_QG9wZW5jbGF3L25vdml0YQ",
       catalog: {
@@ -271,18 +258,34 @@ suite.define(() => {
         publishedToClawHub: true,
       },
       local: {
-        present: true,
-        installed: true,
-        enabled: true,
-        state: "enabled",
-        pluginId: "novita",
-        action: "manage",
+        present: false,
+        installed: false,
+        enabled: false,
+        state: "not-installed",
+        action: "install",
       },
     } satisfies PluginDiscoveryEntry;
     const zai = {
       id: "ch_QG9wZW5jbGF3L3phaQ",
       catalog: { ...novita.catalog, name: "Z.AI", packageName: "@openclaw/zai" },
-      local: { ...novita.local, pluginId: "zai" },
+      local: novita.local,
+    } satisfies PluginDiscoveryEntry;
+    const localVideo = {
+      id: "local_bG9jYWwtdmlkZW8",
+      catalog: {
+        name: installedProvider.name,
+        categories: ["models", "media"],
+        official: true,
+        publishedToClawHub: false,
+      },
+      local: {
+        present: true,
+        installed: true,
+        enabled: true,
+        state: "enabled",
+        pluginId: installedProvider.id,
+        action: "manage",
+      },
     } satisfies PluginDiscoveryEntry;
     const fal = {
       id: "ch_QG9wZW5jbGF3L2ZhbA",
@@ -296,23 +299,11 @@ suite.define(() => {
         downloads: 1000,
         publishedToClawHub: true,
       },
-      local: {
-        present: false,
-        installed: false,
-        enabled: false,
-        state: "not-installed",
-        action: "install",
-      },
+      local: novita.local,
     } satisfies PluginDiscoveryEntry;
     const publishedNovita = {
-      id: novita.id,
-      catalog: {
-        ...fal.catalog,
-        name: "Novita",
-        packageName: "@openclaw/novita",
-        categories: ["models", "media"],
-      },
-      local: novita.local,
+      ...novita,
+      catalog: { ...novita.catalog, family: fal.catalog.family, downloads: fal.catalog.downloads },
     } satisfies PluginDiscoveryEntry;
     // The baseline exposed purpose metadata but no derived Media membership.
     const beforeNovita = { ...novita, catalog: { ...novita.catalog, categories: ["models"] } };
@@ -324,16 +315,16 @@ suite.define(() => {
       },
       beforeModels: { items: [beforeNovita, beforeZai] },
       beforeMedia: { items: [fal], nextCursor: "media-page-two" },
-      all: { items: [fal, novita, zai], categories: discoveryCategories.categories },
-      models: { items: [novita, zai] },
-      media: { items: [fal, novita, zai], nextCursor: "media-page-two" },
+      all: { items: [fal, novita, zai, localVideo], categories: discoveryCategories.categories },
+      models: { items: [novita, zai, localVideo] },
+      media: { items: [fal, novita, zai, localVideo], nextCursor: "media-page-two" },
       nextMedia: { items: [publishedNovita] },
     } satisfies Record<string, PluginsCatalogBrowseResult>;
     const gateway = await installMockGateway(page, {
       featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
       methodResponses: {
         ...methodResponses,
-        "plugins.list": local,
+        "plugins.list": { plugins: [installedProvider], diagnostics: [], mutationAllowed: true },
         "plugins.catalog.browse": captureUiProof ? catalogPages.beforeAll : catalogPages.all,
       },
     });
@@ -370,12 +361,17 @@ suite.define(() => {
         await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.all);
         await chips.getByRole("button", { name: "All", exact: true }).click();
       }
-      await expect
-        .poll(() => page.locator('[data-catalog-section="models"] .plugin-catalog-card').count())
-        .toBe(2);
-      await expect
-        .poll(() => page.locator('[data-catalog-section="media"] .plugin-catalog-card').count())
-        .toBe(3);
+      for (const [section, expected] of [
+        ["models", ["Novita", "Z.AI"]],
+        ["media", ["fal", "Novita", "Z.AI"]],
+      ] as const) {
+        const headings = page.locator(
+          `[data-catalog-section="${section}"] .plugin-catalog-card h3`,
+        );
+        await expect
+          .poll(async () => (await headings.allTextContents()).toSorted())
+          .toEqual(expected.toSorted());
+      }
       if (captureUiProof) {
         const priorModels = (
           await gateway.getRequests("plugins.catalog.browse", { category: "models" })
@@ -527,7 +523,7 @@ suite.define(() => {
         await expectHeaderCopy(page, "plugins");
         // The Customize sidebar replaces the hub's tabs.
         expect(await page.getByRole("tab").count()).toBe(0);
-        const pluginInstallPresentation = await installButtonPresentation(page);
+        const pluginInstallPresentation = await catalogActionPresentation(page, "Install Matrix");
         const mobile = viewport.width <= 900;
         const customize = customizeSidebar(page, mobile);
 
@@ -535,7 +531,9 @@ suite.define(() => {
         await waitForControlUiRoute(page, { pathname: "/skills", routeId: "skills" });
         expectStableHeader(await headerGeometry(page), pluginsHeader);
         await expectHeaderCopy(page, "skills");
-        expect(await installButtonPresentation(page)).toEqual(pluginInstallPresentation);
+        expect(await catalogActionPresentation(page, "Add Calendar")).toEqual(
+          pluginInstallPresentation,
+        );
         await captureScreenshot(page, `${label}-02-skills.png`);
 
         await customize.open("Skill workshop");
@@ -648,6 +646,8 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "plugins");
         await expect.poll(() => page.locator("html").getAttribute("dir")).toBe(direction);
         const chips = page.locator(".plugin-catalog-chips");
+        // The loading strip also overflows. Scroll the resolved category row, not its skeleton.
+        await chips.getByRole("button", { name: "Research", exact: true }).waitFor();
         await expect
           .poll(() => chips.evaluate((element) => element.scrollWidth - element.clientWidth))
           .toBeGreaterThan(4);
