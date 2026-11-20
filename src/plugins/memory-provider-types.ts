@@ -29,7 +29,7 @@ export type MemoryCallerContext = {
 };
 
 /** A passive memory backend the selected slot owner can open. */
-export type MemoryBackendInfo = { id: string; name?: string };
+type MemoryBackendInfo = { id: string; name?: string };
 
 /**
  * Host capability passed only to the selected slot owner's `providerRuntime.open()`.
