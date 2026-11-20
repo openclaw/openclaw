@@ -1,0 +1,2 @@
+# Regression coverage for model-window prompt truncation and required typed caller fixtures.
+73
