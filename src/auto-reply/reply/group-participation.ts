@@ -113,7 +113,14 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
         assertCurrent,
       },
       async (limits, signal) => {
-        const historyBytes = decisionJsonLimits.maxBytes - Buffer.byteLength(fixedInput);
+        // Bound aggregate input by serialized UTF-8 bytes as well as estimated tokens:
+        // opaque replay data can exceed the provider's token cap under a prose estimate.
+        const inputBytes = Math.min(
+          decisionJsonLimits.maxBytes,
+          limits?.maxStateAndQuestionTokens ?? Infinity,
+          limits?.maxRequestTokens ?? Infinity,
+        );
+        const historyBytes = inputBytes - Buffer.byteLength(fixedInput);
         const historyTokens =
           Math.min(
             decisionJsonLimits.maxBytes / 4,
@@ -164,7 +171,10 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
         if (conversation === undefined) {
           return undefined;
         }
-        return { ...batch.state, conversation };
+        const state = { ...batch.state, conversation };
+        return Buffer.byteLength(JSON.stringify({ ...batch, state })) <= inputBytes
+          ? state
+          : undefined;
       },
     ),
   );
