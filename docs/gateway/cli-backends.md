@@ -637,7 +637,7 @@ A fresh CLI session receives the saved history unless the session already record
 
 - No account recorded yet: history replays, including turns written by other runtimes such as Gemini or Codex and turns from an unidentified login. The first identified account is recorded.
 - Same account as recorded: history replays.
-- A different or unidentified account after one was recorded: that turn runs without saved history, the session is marked mixed, and every later CLI turn in it runs without saved history, including a switch back to the original account. `/new` starts a new session id with no recorded account.
+- A different or unidentified account after one was recorded: that turn runs without saved history, the session is marked mixed, and every later CLI turn in it runs without saved history, including a switch back to the original account. `/new` starts a new session id with no recorded account. A fork copies its parent's history, so it keeps the parent's recorded account or mixed state.
 
 The account is checked once, when the turn is prepared. A token the CLI rotates during the turn applies to the next turn. A plan or token change for the same account does not change the account. Moving the same account between the native login and a forwarded credential changes it. When saved history is withheld, the transcript stays intact and Claude can still read it through `sessions_history` when tool policy allows.
 
