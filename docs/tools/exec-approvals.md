@@ -36,20 +36,20 @@ requires approval even when the caller requests `full` / `off`.
 
 ## Who can review session approvals
 
-The session creator and callers with `operator.admin` can review every approval
-raised in that session. Other people with approval scope can list or resolve only
-approvals raised by their own profile's turns, and only while they can read the
-session. A role's `sessions.others` setting (`view`, `suggest`, or `write`) does not
-grant access to another person's approvals.
+A noncreator collaborator whose resolved Gateway role has
+`sessions.others: "invited"` and who holds a session membership can list or resolve
+only approvals raised by their own profile's turns, while the session remains
+readable. This restriction does not apply to creators, administrators, role-wide
+`view`, `suggest`, or `write` teammates, or legacy device-based approvers. Existing
+approval scopes and reviewer/device bindings still govern every caller.
 
 The Gateway records the initiating profile from authenticated turn authority,
-not from tool arguments or an approval request payload. Older or unattributed
-approvals are visible only to the session creator or an administrator. This rule
-covers exec, plugin, and system-agent requests, generic approval lookup and
-history, session events and replay, and Web Push/iOS approval notifications.
-Server-authenticated channel approval routes retain their separate reviewer
-custody checks; a profile restriction does not give an agent permission to
-approve its own action.
+not tool arguments or an approval request payload. Older or unattributed
+approvals do not qualify as an invitee's own requests; their visibility to other
+callers is unchanged. The restriction covers exec, plugin, and system-agent
+requests, generic lookup and history, session events and replay, and approval
+notifications. Server-authenticated channel routes retain their separate
+reviewer custody checks; an invitation never lets an agent approve its own action.
 
 ## Where it applies
 

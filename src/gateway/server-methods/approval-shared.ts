@@ -179,6 +179,7 @@ function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
       approvalKind: params.approvalKind,
       excludeConnId: params.excludeConnId,
       record: params.record,
+      filter: (client) => isApprovalRecordVisibleToClient({ record: params.record, client }),
     }) ?? null
   );
 }
@@ -633,9 +634,11 @@ export async function handleApprovalResolve<
         !isApprovalRecordVisibleToClient({
           record: resolved.snapshot,
           client: params.client,
-          cfg: params.context.getRuntimeConfig(),
-          sessionAccess: retainedSessionAccess,
+          ...(params.authority.guard.family === "native-compatibility"
+            ? { cfg: params.context.getRuntimeConfig(), sessionAccess: retainedSessionAccess }
+            : {}),
         }) ||
+        !retainedSessionAccess.canAccessInvited(readApprovalRequestSource(resolved.snapshot)) ||
         (params.reviewer && !custody?.isCurrent(resolved.snapshot))
       ) {
         throw new Error("approval resolver authority is no longer active");

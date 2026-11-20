@@ -1,11 +1,16 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { addSessionMemberInWorker } from "../../config/sessions/session-sharing-store.async.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { listVisiblePendingApprovalRequests } from "./approval-record-lookup.js";
 import {
   bindApprovalHandlers,
@@ -25,20 +30,37 @@ import {
 } from "./approval.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
+import { systemAgentApprovalHandlers } from "./system-agent-approvals.js";
 import type { GatewayClient } from "./types.js";
 
-it("enforces durable creator/raiser ownership across generic lookup, resolution, history and each pending family", async () => {
+it("restricts invited members to their own approvals across generic lookup, resolution, history and pending families", async () => {
   await withOpenClawTestState(
     { scenario: "minimal", prepareProfileCatalog: true },
     async (state) => {
-      const cfg = { agents: { entries: { main: {} } } };
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "invited",
+            definitions: {
+              invited: {
+                agents: "*",
+                scopes: ["operator.read", "operator.write", "operator.approvals"],
+                sessions: { others: "invited" },
+              },
+              admin: { agents: "*", scopes: ["operator.admin"], sessions: { others: "write" } },
+            },
+          },
+        },
+      };
       setRuntimeConfigSnapshot(cfg);
       const profiles = Object.fromEntries(
-        ["creator", "raiser", "other"].map((name) => [
+        ["creator", "raiser", "other", "admin"].map((name) => [
           name,
           ensureProfileForEmail(`${name}@approval.test`).id,
         ]),
       );
+      setUserProfileRole(profiles.admin!, "admin");
       const catalog = await prepareUserProfileCatalog();
       const peer = (name: string) => {
         const transport = createClient({ deviceId: name })!;
@@ -64,6 +86,13 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
           createdActor: { type: "human", source: "profile", id: profiles.creator! },
         },
       );
+      for (const identityId of [profiles.raiser!, profiles.other!]) {
+        await addSessionMemberInWorker(
+          { agentId: "main", sessionKey: source },
+          { identityId, addedBy: profiles.creator! },
+        );
+      }
+      const reviewers = ["raiser", "other", "creator"];
       const databaseOptions = { env: state.env };
       const managers = createManagers(databaseOptions);
       const handlers = createHandlers(managers, databaseOptions, {
@@ -77,10 +106,12 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
       try {
         const exec = await registerExec(managers.exec, {
           id: "profile-exec",
+          reviewerDeviceIds: reviewers,
           requester: { profileId: profiles.raiser! },
         });
         const plugin = await registerPlugin(managers.plugin, {
           id: "plugin:profile",
+          reviewerDeviceIds: reviewers,
           profileId: profiles.raiser!,
         });
         const system = await registerSystemAgent(
@@ -88,7 +119,10 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
           "system-agent:profile",
           profiles.raiser!,
         );
-        const legacy = await registerExec(managers.exec, { id: "legacy-profile" });
+        const legacy = await registerExec(managers.exec, {
+          id: "legacy-profile",
+          reviewerDeviceIds: reviewers,
+        });
         for (const [kind, id] of [
           ["exec", exec.record.id],
           ["plugin", plugin.record.id],
@@ -111,19 +145,63 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
             ok: true,
           });
         }
+        const runtimeReaders = bindApprovalHandlers({
+          ...createExecApprovalHandlers(managers.exec),
+          ...createPluginApprovalHandlers(managers.plugin),
+          ...systemAgentApprovalHandlers,
+        });
+        for (const name of ["raiser", "other"] as const) {
+          const runtime = createSyntheticPluginRuntimeClient({
+            scopes: ["operator.approvals"],
+            operatorRoleActor: { kind: "operator", profileId: profiles[name]! },
+            operatorRunAuthority: createAdmittedRunOperatorAuthority({
+              profileId: profiles[name]!,
+              scopes: ["operator.approvals"],
+              assertCurrent() {},
+              readCurrentRoleFacts: () => ({
+                assignedRole: "invited",
+                policy: cfg.gateway!.roles!.definitions.invited,
+              }),
+            }),
+          });
+          const runtimeContext = { ...context, systemAgentApprovalManager: managers.systemAgent };
+          expect(runtime.authenticatedUserProfile).toBeUndefined();
+          for (const [kind, id] of [
+            ["exec", exec.record.id],
+            ["plugin", plugin.record.id],
+            ["openclaw", system.record.id],
+          ] as const) {
+            expect(
+              await runtimeReaders(`${kind}.approval.list`, {}, runtime, runtimeContext),
+            ).toMatchObject({
+              ok: true,
+              result: name === "raiser" ? [expect.objectContaining({ id })] : [],
+            });
+          }
+          expect(
+            await runtimeReaders(
+              "exec.approval.get",
+              { id: exec.record.id },
+              runtime,
+              runtimeContext,
+            ),
+          ).toMatchObject({ ok: name === "raiser" });
+        }
         for (const admin of [false, true]) {
           const reviewer = createSocketClient({
             deviceId: admin ? "cross-device-admin" : "cross-device-creator",
-            profileId: admin ? profiles.other : profiles.creator,
+            profileId: admin ? profiles.admin : profiles.creator,
             scopes: admin ? ["operator.admin"] : ["operator.approvals"],
           });
           prepareGatewayRecipientProfile(reviewer);
           const execReview = await registerExec(managers.exec, {
             id: `cross-device-exec-${admin}`,
+            reviewerDeviceIds: [admin ? "cross-device-admin" : "cross-device-creator"],
             requester: { profileId: profiles.raiser! },
           });
           const pluginReview = await registerPlugin(managers.plugin, {
             id: `plugin:cross-device-${admin}`,
+            reviewerDeviceIds: [admin ? "cross-device-admin" : "cross-device-creator"],
             profileId: profiles.raiser!,
           });
           const legacyHandlers = {
@@ -213,7 +291,7 @@ it("enforces durable creator/raiser ownership across generic lookup, resolution,
   );
 });
 
-it("denies legacy unprofiled approval readers while preserving admin and internal-runtime readers", async () => {
+it("preserves legacy unprofiled, admin and internal-runtime approval readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     const managers = createManagers({ env: state.env });
@@ -222,7 +300,7 @@ it("denies legacy unprofiled approval readers while preserving admin and interna
       ...createPluginApprovalHandlers(managers.plugin),
     };
     const readers = [
-      { client: createClient({ deviceId: "requester-device" }), allowed: false },
+      { client: createClient({ deviceId: "requester-device" }), allowed: true },
       { client: createClient({ scopes: ["operator.admin"] }), allowed: true },
       { client: createClient({ internal: true }), allowed: true },
     ];

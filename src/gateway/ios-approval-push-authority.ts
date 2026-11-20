@@ -53,7 +53,7 @@ export async function prepareIosApprovalPushAuthority(record: ExecApprovalRecord
     const profileVersion = readUserProfileVersion();
     const profiles = await readOpenClawIdUserProfiles([...accounts]);
     catalog = accounts.size ? await prepareUserProfileCatalog() : undefined;
-    if (source.sessionKey) {
+    if (source.sessionKey && accounts.size) {
       const cfg = getRuntimeConfig();
       const { agentId } = resolveSessionStoreIdentity({
         cfg,
@@ -156,19 +156,25 @@ export async function prepareIosApprovalPushAuthority(record: ExecApprovalRecord
                   },
                 };
                 const cfg = getRuntimeConfig();
-                const facts = session?.readCurrent(cfg);
+                const facts = principal ? session?.readCurrent(cfg) : undefined;
                 return isApprovalRecordVisibleToClient({
                   record,
                   client,
-                  cfg,
-                  prepared: {
-                    sharing: prepareProjectedSessionSharing({
-                      cfg,
-                      client,
-                      isMember: (_target, identity) => facts?.membership.has(identity) ?? false,
-                    }),
-                    target: () => facts?.target ?? null,
-                  },
+                  // Unbound devices retain their independently approved local visibility.
+                  ...(principal
+                    ? {
+                        cfg,
+                        prepared: {
+                          sharing: prepareProjectedSessionSharing({
+                            cfg,
+                            client,
+                            isMember: (_target, identity) =>
+                              facts?.membership.has(identity) ?? false,
+                          }),
+                          target: () => facts?.target ?? null,
+                        },
+                      }
+                    : {}),
                 });
               },
             }),

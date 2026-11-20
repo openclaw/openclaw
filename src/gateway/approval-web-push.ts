@@ -320,7 +320,6 @@ export function createApprovalWebPushDelivery(params: {
                     canAccessOperatorApproval({
                       client,
                       binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
-                      hasSessionAccess: true,
                     }) &&
                     canAccessApprovalSession({
                       cfg,

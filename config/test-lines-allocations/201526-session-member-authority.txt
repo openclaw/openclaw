@@ -1,16 +1,16 @@
-882
-# Issue #201526 part D: real-Gateway proof of creator/admin vs invited/team-writer
-# permission changes and per-turn approval audiences; shared lookup/resolve/history
-# and event/push boundaries for exec, plugin and system-agent approvals; authenticated
-# runtime requester provenance; SQLite runtime/doctor migration, rollback and actual
-# PostgreSQL v40->v41 upgrade preservation. Existing helpers and fixture updates keep
-# distinct security and storage owners covered without duplicating product boots.
-# CI follow-up: preserve custody/revocation tests with real requester profiles and
-# session provenance, prove filtered subscription replay, and align cumulative
-# migration/PostgreSQL fixtures with v41 without weakening catalog preservation.
-# Legacy-reader regression exercises actual exec/plugin list, lookup and wait RPCs
-# for device-matching/unbound records and preserves admin/internal-runtime readers;
-# the existing plugin wait fixture now uses an authenticated requesting profile.
-# Worker-commit regression covers cross-device creator/admin decisions through real
-# WebSocket request ownership. Existing plugin routing E2E uses authenticated profiles
-# and source sessions while retaining write-only callers and unauthorized-reviewer checks.
+1477
+# Issue #201526 part D: invitation-only permission ceilings and approval raiser
+# boundaries across real Gateway RPC, pending/terminal events and all approval kinds.
+# The role/membership compatibility matrix preserves main for creator/admin,
+# view/suggest/write teammates (including members), unprofiled paired devices,
+# nonadmin iOS push targets, sessionless node approvals, deleted-session history
+# and legacy owner sessions. Invitation scopes are tested independently of device
+# binding and transport; baseline nonadmin/device custody fixtures remain intact.
+# Separate storage-owner proofs cover authenticated runtime provenance, SQLite
+# runtime/doctor v40->v41 migration and rollback, and real PostgreSQL preservation.
+# Extra matrix coverage is requested explicitly for option B; it catches collateral
+# policy regressions that the narrower invitee red/green security tests cannot.
+# Includes red/green reviewer findings: delegated invitee readers without display
+# profile metadata and excluded-writer reset completion after adopted cleanup.
+# The restored device-ownership case lives in a coherent sibling test to satisfy
+# the line-cap ratchet; its imports/default config setup add 15 net test lines.

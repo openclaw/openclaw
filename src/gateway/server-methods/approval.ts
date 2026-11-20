@@ -388,7 +388,6 @@ export function createApprovalHandlers(
             client,
             allowApprovalRuntime: true,
             binding: { reviewerDeviceIds: record.reviewerDeviceIds },
-            hasSessionAccess: true,
           }) ||
           (approvalGuard.family === "native-compatibility" && !readCurrent()) ||
           (resolveParams?.reviewer && (!liveRecord || !custody?.isCurrent(liveRecord)))

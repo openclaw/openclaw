@@ -13,21 +13,6 @@ export function createClient(params: {
 }): GatewayClient {
   return {
     connId: params.connId,
-    ...(params.deviceId
-      ? {
-          authenticatedUserProfile: {
-            profileId: params.deviceId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 0,
-          },
-          preparedSessionProfile: {
-            profileId: params.deviceId,
-            role: null,
-            aliases: new Set([params.deviceId]),
-          },
-        }
-      : {}),
     connect: {
       client: { id: "approval-session-events", displayName: "Approval Session Events" },
       scopes: params.scopes,
@@ -43,7 +28,6 @@ export function createPendingRecord(
     audienceSessionKeys?: string[];
     sourceSessionKey?: string | null;
     reviewerDeviceIds?: string[];
-    requesterProfileId?: string;
     createdAtMs?: number;
     expiresAtMs?: number;
   } = {},
@@ -66,7 +50,6 @@ export function createPendingRecord(
       allowedDecisions: ["allow-once", "allow-always", "deny"],
     },
     requester: {
-      profileId: params.requesterProfileId ?? "reviewer-device",
       deviceId: "requester-device",
       clientId: "requester-client",
       deviceTokenAuth: true,

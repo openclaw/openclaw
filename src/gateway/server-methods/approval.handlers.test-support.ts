@@ -222,7 +222,14 @@ export function createClient(params: {
 
 export async function invoke(params: {
   handlers: ReturnType<typeof createApprovalHandlers>;
-  method: "approval.get" | "approval.history" | "approval.resolve";
+  method:
+    | "approval.get"
+    | "approval.history"
+    | "approval.resolve"
+    | "exec.approval.list"
+    | "exec.approval.get"
+    | "plugin.approval.list"
+    | "openclaw.approval.list";
   body: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   context?: GatewayRequestHandlerOptions["context"];

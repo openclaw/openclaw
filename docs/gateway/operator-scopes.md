@@ -38,7 +38,7 @@ require the `node` role.
 | `operator.cron`           | Manage owned automations in the Control UI; create conversation-owned automations through an authenticated agent turn. Included in `operator.write`; not global administration. |
 | `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals.                   |
 | `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                                              |
-| `operator.approvals`      | Approval APIs, subject to session creator and turn-requester restrictions.                                                                                                      |
+| `operator.approvals`      | Approval APIs, with an own-request restriction for invited session access.                                                                                                      |
 | `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                                               |
 | `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                                                 |
 | `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                                               |
@@ -411,13 +411,14 @@ administrative session access.
 
 Connection scopes and draft/incognito restrictions remain in force.
 
-Session write access does not grant permission to loosen someone else's session
-permission mode. Non-creators may only tighten it (`read-only` < `guarded` <
-`workspace` < `full`); clearing an explicit override requires the creator or an
-administrator. An unset default may only be changed to `read-only` by a
-non-creator because its effective policy may not match a named mode. Selecting
-`full` and changing `sandboxMode` still require `operator.admin`. See
-[Session permission modes](/gateway/permission-modes).
+A collaborator whose role has `sessions.others: "invited"` and who holds a
+session membership may only tighten that session's permission mode
+(`read-only` < `guarded` < `workspace` < `full`). They cannot clear an explicit
+override to Default; from an unset default, only `read-only` is provably tighter.
+This restriction does not apply to the creator, administrators, or teammates
+with role-wide `view`, `suggest`, or `write` access, even if they are also members.
+Existing scope checks still apply: `full` and `sandboxMode` changes require
+`operator.admin`. See [Session permission modes](/gateway/permission-modes).
 
 To enable invitation-only discovery, set the guest role's `sessions.others` to
 `"invited"` after upgrading. Existing role definitions keep their current behavior.
@@ -443,14 +444,18 @@ an older browser roster cannot restore agents excluded by the current role.
 
 ### Session approvals
 
-`operator.approvals` does not grant access to every approval in a readable
-session. A person who did not create the session can list, inspect, and resolve
-only approvals raised by their own profile's turns. The creator can review any
-approval in that session with the required scope; `operator.admin` retains
-administrative approval access. This applies to exec, plugin, and other pending
-approvals, including clients with `sessions.others: "view"`, `"suggest"`, or
-`"write"`. Approval events and notifications use the same audience restriction.
-Approvals without a recorded requester profile are creator/admin-only.
+When access comes from a session invitation (`sessions.others: "invited"` plus
+membership), a noncreator collaborator can list, inspect, and resolve only
+approvals raised by their own authenticated profile. The same restriction covers
+approval events and notifications. Unattributed approvals do not qualify as
+that invitee's own requests.
+
+This is an additional restriction, not an approval grant. Existing approval
+scopes and reviewer/device bindings remain required. Creators, administrators,
+role-wide teammates, and legacy device-based approvers keep their existing
+behavior; session membership alone does not activate the restriction. The
+resolved Gateway profile role determines invitation access, independently of
+sign-in transport.
 
 ### OpenClaw ID member roles
 

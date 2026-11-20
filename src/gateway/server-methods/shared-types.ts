@@ -504,6 +504,11 @@ export type GatewayRequestOptions = {
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
 export type SessionMutationAuthorization = {
+  /** Reuse the exact retained target's membership at synchronous mutation fences. */
+  readTargetSharing?: (target: {
+    sessionKey: string;
+    agentId?: string;
+  }) => import("../session-sharing-read.js").PreparedMutationSharing;
   /** Release the request's retained sharing facts after its final effect. */
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */

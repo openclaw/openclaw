@@ -50,7 +50,7 @@ async function startInvitedGuestGateway(
   const bob = ensureProfileForEmail("bob@committed-mention.example.test");
   const carol = ensureProfileForEmail("carol@committed-mention.example.test");
   setDisplayName(alice.id, "Alice");
-  setUserProfileRole(alice.id, "administrator");
+  setUserProfileRole(alice.id, options.approvalOwnership ? "guest" : "administrator");
   setDisplayName(bob.id, "Bob");
   setUserProfileRole(bob.id, "guest");
   setDisplayName(carol.id, "Carol");
@@ -123,7 +123,7 @@ async function startInvitedGuestGateway(
     identityScopes: {
       "bob@committed-mention.example.test": guestScopes,
       "carol@committed-mention.example.test": invitedScopes,
-      "alice@committed-mention.example.test": scopes,
+      "alice@committed-mention.example.test": options.approvalOwnership ? guestScopes : scopes,
       ...(options.approvalOwnership ? { [senderEmail]: scopes } : {}),
     },
   };

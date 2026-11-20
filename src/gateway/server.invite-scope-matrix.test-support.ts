@@ -210,7 +210,9 @@ export async function requestMatrixApproval(
   });
   const durable = await getOperatorApprovalDetailed({ id });
   expect(durable.outcome).toBe("found");
-  if (durable.outcome !== "found") throw new Error("approval registration did not persist");
+  if (durable.outcome !== "found") {
+    throw new Error("approval registration did not persist");
+  }
   const record: ExecApprovalRecord<unknown> = {
     id,
     request,

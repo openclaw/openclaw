@@ -3,26 +3,20 @@
 // Without turn-source fields: plugin.approval.request expires immediately with
 // {decision: null} because there is no approval client and no turn-source route.
 //
-// With a connected authorized approval-capable client: the approval stays alive and
+// With a connected approval-capable client: the approval stays alive and
 // returns {status: "accepted"} because it has a real delivery route.
 //
 // This test runs against a real gateway server with no Telegram required.
-import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
-import type { GatewayAuthConfig } from "../../config/types.gateway.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { prepareUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
-import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
+import { APPROVALS_SCOPE, WRITE_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "../test-helpers.listener.js";
@@ -44,39 +38,18 @@ const TEST_ENV_KEYS = [
   "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
 ];
-const CREATOR_EMAIL = "creator@approval-route.example.test";
-const OTHER_EMAIL = "other@approval-route.example.test";
-const ADMIN_EMAIL = "admin@approval-route.example.test";
-const ORIGIN = "https://control.example.test";
 
 describe("plugin.approval.request delivery routing (real gateway)", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string;
   let hookExecutionPath: string;
   let url: string;
-  let tlsFingerprint: string;
-  let releaseProfileCatalog: (() => void) | undefined;
+  let token: string;
   let server: Awaited<ReturnType<typeof startGatewayServer>>;
   let requester: Awaited<ReturnType<typeof connectGatewayClient>>;
   let toolCaller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let approvalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-
-  function connection(scopes: string[], email = CREATOR_EMAIL) {
-    return {
-      url,
-      tlsFingerprint,
-      origin: ORIGIN,
-      clientName: "openclaw-control-ui" as const,
-      mode: "webchat" as const,
-      scopes,
-      edgeAuthHeaders: {
-        "x-forwarded-user": email,
-        "x-forwarded-for": "203.0.113.50",
-        "x-forwarded-proto": "https",
-        "x-openclaw-scopes": scopes.join(","),
-      },
-    };
-  }
+  let connectApprovalClient: () => Promise<Awaited<ReturnType<typeof connectGatewayClient>>>;
 
   beforeEach(async () => {
     envSnapshot = captureEnv(TEST_ENV_KEYS);
@@ -97,53 +70,9 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     configureManualGatewayBackgroundEnv(tempHome);
     const configPath = path.join(stateDir, "openclaw.json");
     setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    releaseProfileCatalog = (await prepareUserProfileCatalogForTest()).release;
-    for (const email of [CREATOR_EMAIL, OTHER_EMAIL]) {
-      setUserProfileRole(ensureProfileForEmail(email).id, "member");
-    }
-    setUserProfileRole(ensureProfileForEmail(ADMIN_EMAIL).id, "administrator");
-    const memberScopes = [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE];
-    const auth = {
-      mode: "trusted-proxy",
-      // The hook's local approval-runtime bridge connects without browser proxy headers.
-      password: "approval-route-local-runtime-password",
-      trustedProxy: {
-        userHeader: "x-forwarded-user",
-        requiredHeaders: ["x-forwarded-proto", "x-openclaw-scopes"],
-        allowUsers: [CREATOR_EMAIL, OTHER_EMAIL, ADMIN_EMAIL],
-        allowLoopback: true,
-        deviceAutoApprove: { enabled: true, scopes: [ADMIN_SCOPE, ...memberScopes] },
-      },
-    } satisfies GatewayAuthConfig;
-    const certPath = path.join(tempHome, "cert.pem");
-    const keyPath = path.join(tempHome, "key.pem");
-    await fs.writeFile(certPath, TEST_TLS_CERT_PEM);
-    await fs.writeFile(keyPath, TEST_TLS_KEY_PEM);
-    tlsFingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
     await fs.writeFile(
       configPath,
       JSON.stringify({
-        gateway: {
-          auth,
-          tls: { enabled: true, autoGenerate: false, certPath, keyPath },
-          trustedProxies: ["127.0.0.1", "::1"],
-          controlUi: { allowedOrigins: [ORIGIN] },
-          roles: {
-            default: "member",
-            definitions: {
-              member: {
-                agents: ["main"],
-                scopes: memberScopes,
-                sessions: { others: "write" },
-              },
-              administrator: {
-                agents: "*",
-                scopes: [ADMIN_SCOPE],
-                sessions: { others: "write" },
-              },
-            },
-          },
-        },
         plugins: {
           enabled: true,
           allow: ["approval-route-probe"],
@@ -227,26 +156,39 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
 
     const claim = await acquireGatewayE2ePortBlock();
-    url = `wss://127.0.0.1:${claim.port}`;
+    token = "plugin-approval-turn-source-e2e-token";
+    url = `ws://127.0.0.1:${claim.port}`;
     setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
     server = await startClaimedGateway(claim, () =>
       startGatewayServer(claim.port, {
         bind: "loopback",
-        auth,
+        auth: { mode: "token", token },
         controlUiEnabled: false,
         sidecarStartup: "defer",
       }),
     );
     await server.startupSettled;
 
-    // Scope alone does not advertise an approval delivery route; the requester has no cap.
+    // No operator approval client; only a requester with write and approvals scopes.
+    // This is the state that triggers the no-route expiry in the unfixed code.
     requester = await connectGatewayClient({
-      ...connection([WRITE_SCOPE, APPROVALS_SCOPE]),
+      url,
+      token,
       clientDisplayName: "plugin-approval requester",
+      scopes: [WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 10_000,
       timeoutMs: 60_000,
     });
+    connectApprovalClient = () =>
+      connectGatewayClient({
+        url,
+        token,
+        clientDisplayName: "plugin approval client",
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+        timeoutMs: 60_000,
+      });
   });
 
   afterEach(async () => {
@@ -260,8 +202,6 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     }
     await disconnectGatewayClient(requester).catch(() => undefined);
     await server?.close();
-    releaseProfileCatalog?.();
-    releaseProfileCatalog = undefined;
     await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }).catch(() => undefined);
     envSnapshot.restore();
     clearRuntimeConfigSnapshot();
@@ -271,7 +211,8 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
 
   // The E2E setup retires active plugins after each `it`, so each test owns a fresh Gateway.
   it("expires with decision:null when no turn-source route and no approval client", async () => {
-    // Without turn-source fields or an authorized approval client, no delivery route exists.
+    // This is the bug: without turn-source fields, the gateway expires the record
+    // immediately (decision: null) because there is no delivery route.
     const result = await requester.request("plugin.approval.request", {
       pluginId: "test-plugin",
       title: "Confirm action",
@@ -285,13 +226,8 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     expect((result as { id?: string }).id).toMatch(/^plugin:/);
   });
 
-  it("returns accepted for a sessionless request when an administrator reviewer is connected", async () => {
-    approvalClient = await connectGatewayClient({
-      ...connection([ADMIN_SCOPE], ADMIN_EMAIL),
-      clientDisplayName: "sessionless administrator reviewer",
-      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-      timeoutMs: 60_000,
-    });
+  it("returns accepted when a real approval client is connected", async () => {
+    approvalClient = await connectApprovalClient();
 
     const result = await requester.request("plugin.approval.request", {
       pluginId: "test-plugin",
@@ -309,28 +245,25 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     });
   });
 
-  it("routes a plugin tool approval to its authenticated session creator", async () => {
+  it("routes a plugin tool approval only to the host-selected reviewer device", async () => {
     if (approvalClient) {
       await disconnectGatewayClient(approvalClient);
       approvalClient = undefined;
     }
     toolCaller = await connectGatewayClient({
-      ...connection([WRITE_SCOPE]),
+      url,
+      token,
       clientDisplayName: "write-only plugin tool caller",
+      scopes: [WRITE_SCOPE],
       timeoutMs: 60_000,
     });
-    await expect(toolCaller.request("plugin.approval.list", {})).rejects.toThrow(
-      "missing scope: operator.approvals",
-    );
-    const { key: sessionKey } = await toolCaller.request<{ key: string }>("sessions.create", {
-      agentId: "main",
-      visibility: "shared",
-    });
     const decided = createDeferredCore();
-    // The reviewer shares the caller's authenticated profile and host-selected device.
+    // The reviewer shares the helper's default test device identity with the tool caller.
     const reviewer = await connectGatewayClient({
-      ...connection([APPROVALS_SCOPE]),
+      url,
+      token,
       clientDisplayName: "same-device reviewer",
+      scopes: [APPROVALS_SCOPE],
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       onEvent: (event) => {
         if (event.event !== "plugin.approval.requested") {
@@ -349,7 +282,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       const result = await toolCaller.request("tools.invoke", {
         name: "approval_route_probe",
         agentId: "main",
-        sessionKey,
+        sessionKey: "main",
         args: {},
       });
       expect(result).toMatchObject({
@@ -362,11 +295,13 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
     }
 
     for (const deniedReviewer of [
-      { ...connection([APPROVALS_SCOPE], OTHER_EMAIL), deviceFamily: "other-device" },
-      connection([READ_SCOPE]),
+      { deviceFamily: "other-device", scopes: [APPROVALS_SCOPE] },
+      { scopes: ["operator.read"] },
     ]) {
       let receivedRequests = 0;
       const untrusted = await connectGatewayClient({
+        url,
+        token,
         clientDisplayName: "unmatched reviewer",
         ...deniedReviewer,
         caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
@@ -381,7 +316,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
         const result = await toolCaller.request("tools.invoke", {
           name: "approval_route_probe",
           agentId: "main",
-          sessionKey,
+          sessionKey: "main",
           args: {},
         });
         expect(result).toMatchObject({
@@ -397,23 +332,20 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
 
   it("honors a generic plugin hook approval from a write-only caller", async () => {
     const caller = await connectGatewayClient({
-      ...connection([WRITE_SCOPE]),
+      url,
+      token,
       clientDisplayName: "write-only hook caller",
+      scopes: [WRITE_SCOPE],
       requestTimeoutMs: 15_000,
       timeoutMs: 60_000,
-    });
-    await expect(caller.request("plugin.approval.list", {})).rejects.toThrow(
-      "missing scope: operator.approvals",
-    );
-    const { key: sessionKey } = await caller.request<{ key: string }>("sessions.create", {
-      agentId: "main",
-      visibility: "shared",
     });
     let decision: "allow-once" | "deny" = "allow-once";
     let decided = createDeferredCore();
     const reviewer = await connectGatewayClient({
-      ...connection([APPROVALS_SCOPE]),
+      url,
+      token,
       clientDisplayName: "same-device hook reviewer",
+      scopes: [APPROVALS_SCOPE],
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       onEvent: (event) => {
         const payload = event.payload as
@@ -436,13 +368,13 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       caller.request("tools.invoke", {
         name: "approval_hook_probe",
         agentId: "main",
-        sessionKey,
+        sessionKey: "main",
         args: {},
         confirm: true,
       });
     try {
       const allowed = await invoke();
-      expect(allowed, JSON.stringify(allowed)).toMatchObject({
+      expect(allowed).toMatchObject({
         ok: true,
         output: { content: [{ type: "text", text: "HOOK_EXECUTED" }] },
       });

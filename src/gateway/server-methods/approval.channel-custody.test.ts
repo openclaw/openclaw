@@ -30,12 +30,7 @@ import {
   tempDirs,
 } from "./approval.handlers.test-support.js";
 import { createApprovalHandlers } from "./approval.js";
-import {
-  createApprovalSessionFixture,
-  createClient as createProfileClient,
-  createContext,
-  deleteDurableApproval,
-} from "./approval.test-support.js";
+import { createContext, deleteDurableApproval } from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -152,8 +147,10 @@ describe("approval authority boundaries", () => {
         ...createClient({ deviceId: "reviewer" }),
         authenticatedUserProfile: gatewayProfile(profile.id),
       } as GatewayRequestHandlerOptions["client"];
-      const ownerClient = createClient({ deviceId: "reviewer", scopes: ["operator.admin"] });
-      ownerClient!.internal = { operatorRoleActor: { kind: "system" } };
+      const ownerClient = {
+        ...createClient({ deviceId: "reviewer" }),
+        internal: { operatorRoleActor: { kind: "system" } },
+      } as GatewayRequestHandlerOptions["client"];
       const get = (id: string, client?: GatewayRequestHandlerOptions["client"]) =>
         request("approval.get", { id }, client, context);
 
@@ -208,7 +205,7 @@ describe("approval authority boundaries", () => {
 
     const response = await get(
       id,
-      createClient({ deviceId: "reviewer-a", scopes: ["operator.admin"] }),
+      createClient({ deviceId: "reviewer-a" }),
       createContext("/operator/"),
     );
     expect(response.ok).toBe(true);
@@ -232,12 +229,7 @@ describe("approval authority boundaries", () => {
     expect(serialized).not.toContain("/private/workspace");
     expect(serialized).not.toContain("private-env-binding");
 
-    expectNotFound(
-      await get(
-        "exec:approval",
-        createClient({ deviceId: "reviewer-a", scopes: ["operator.admin"] }),
-      ),
-    );
+    expectNotFound(await get("exec:approval", createClient({ deviceId: "reviewer-a" })));
   });
 
   it("makes missing and unauthorized approval lookups indistinguishable", async () => {
@@ -257,40 +249,26 @@ describe("approval authority boundaries", () => {
     }
   });
 
-  it("requires requester profile authority rather than reviewer or requester device matches", async (test) => {
-    const { sessionKey } = await createApprovalSessionFixture(test);
+  it("enforces explicit reviewer bindings over requester ownership", async () => {
     const { managers, exec, get, resolve } = createFixture();
     const pending = await exec("reviewer-bound", {
-      request: { sessionKey },
-      requester: { profileId: "requester" },
       reviewerDeviceIds: ["reviewer-a"],
     });
 
-    for (const client of [
-      createClient({ deviceId: "reviewer-a" }),
-      createClient({ deviceId: "requester-device" }),
-      createProfileClient({ deviceId: "reviewer-a", profileId: "other" }),
-    ]) {
+    for (const deviceId of ["reviewer-b", "requester-device"]) {
+      const client = createClient({ deviceId });
       expectNotFound(await get(pending.record.id, client));
       expectNotFound(await resolve(pending.record.id, client));
     }
     expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
 
-    const winner = await resolve(
-      pending.record.id,
-      createProfileClient({ deviceId: "requester-new-device", profileId: "requester" }),
-    );
+    const winner = await resolve(pending.record.id, createClient({ deviceId: "reviewer-a" }));
     expect(winner.result).toMatchObject({
       applied: true,
       approval: { status: "denied", decision: "deny" },
     });
 
-    expectNotFound(
-      await get(
-        pending.record.id,
-        createProfileClient({ deviceId: "reviewer-a", profileId: "other" }),
-      ),
-    );
+    expectNotFound(await get(pending.record.id, createClient({ deviceId: "reviewer-b" })));
   });
 
   it("lets only the server-authenticated device-less runtime resolve", async () => {

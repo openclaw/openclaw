@@ -42,7 +42,7 @@ it("limits the new restrictions to invited members across real Gateway RPC roles
         visibility: "shared",
         permissionMode: "workspace",
       });
-      for (const actor of actors.filter((actor) => actor.member)) {
+      for (const actor of actors.filter((candidate) => candidate.member)) {
         await admin.request("session.members.add", {
           sessionKey: key,
           identityId: profiles.get(actor.name),
@@ -104,7 +104,9 @@ it("limits the new restrictions to invited members across real Gateway RPC roles
           canResolve && !restricted,
           () => resolve(client, other.id),
         );
-        if (!resolved) await resolve(admin, other.id);
+        if (!resolved) {
+          await resolve(admin, other.id);
+        }
         if (approves) {
           const own = await requestMatrixApproval(client, key);
           await matrix.check(actor.name, "own.list", true, true, () => listed(client, own.id));
@@ -119,7 +121,9 @@ it("limits the new restrictions to invited members across real Gateway RPC roles
             canResolve,
             () => resolve(client, own.id),
           );
-          if (!ownResolved) await resolve(admin, own.id);
+          if (!ownResolved) {
+            await resolve(admin, own.id);
+          }
         } else {
           // Missing approval scope is still authoritative, including for the actor's own ID.
           await matrix.check(actor.name, "own.request (scope control)", false, false, () =>
@@ -215,7 +219,9 @@ it("preserves non-ID owner, unprofiled-device, iOS, sessionless-node and deleted
           true,
           () => resolve(actor.client, other.id),
         );
-        if (!otherResolved) await resolve(admin, other.id);
+        if (!otherResolved) {
+          await resolve(admin, other.id);
+        }
         const own = await requestMatrixApproval(actor.client, key);
         await matrix.check(name, "own.list", true, true, () => listed(actor.client, own.id));
         using push = await prepareIosApprovalPushAuthority(own);
@@ -234,7 +240,9 @@ it("preserves non-ID owner, unprofiled-device, iOS, sessionless-node and deleted
         const ownResolved = await matrix.check(name, "own.resolve", true, true, () =>
           resolve(actor.client, own.id),
         );
-        if (!ownResolved) await resolve(admin, own.id);
+        if (!ownResolved) {
+          await resolve(admin, own.id);
+        }
       }
       const node = await requestMatrixApproval(owner.client, undefined, true);
       await matrix.check("sessionless-node", "own.list", true, true, () =>
@@ -250,7 +258,9 @@ it("preserves non-ID owner, unprofiled-device, iOS, sessionless-node and deleted
         true,
         () => owner.client.request("exec.approval.resolve", { id: node.id, decision: "deny" }),
       );
-      if (!nodeResolved) await resolve(admin, node.id);
+      if (!nodeResolved) {
+        await resolve(admin, node.id);
+      }
       const deleted = await requestMatrixApproval(owner.client, key);
       await resolve(admin, deleted.id);
       await admin.request("sessions.delete", { key });

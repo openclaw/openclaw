@@ -45,7 +45,6 @@ import { createChatAbortMarker } from "../server-chat-state.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { injectTimestamp } from "./agent-timestamp.js";
 import { waitForApprovalAccepted } from "./approval-request.test-support.js";
-import { createApprovalSessionFixture } from "./approval.test-support.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
 import {
@@ -1269,16 +1268,14 @@ describe("exec approval handlers", () => {
       trusted: false,
     },
     {
-      name: "allows the initiating profile to review a mobile-targeted runtime approval",
+      name: "allows the internal approval runtime to bind the initiating mobile approval reviewer device",
       trusted: true,
     },
   ])("$name", async ({ trusted }, testContext) => {
-    const { sessionKey } = await createApprovalSessionFixture(testContext);
     const requesterClient = createExecApprovalClient({
       connId: trusted ? "conn-gateway-runtime" : "conn-gateway-client",
       clientId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
       deviceId: "device-gateway-runtime",
-      profileId: trusted ? "mobile-reviewer" : "requester",
       scopes: ["operator.approvals"],
       approvalRuntime: trusted,
     });
@@ -1286,7 +1283,6 @@ describe("exec approval handlers", () => {
       connId: "conn-ios-reviewer",
       clientId: GATEWAY_CLIENT_IDS.IOS_APP,
       deviceId: "device-ios-reviewer",
-      profileId: "mobile-reviewer",
       scopes: ["operator.approvals"],
     });
 
@@ -1296,7 +1292,6 @@ describe("exec approval handlers", () => {
         client: requesterClient,
         request: {
           id: "approval-reviewer",
-          sessionKey,
           twoPhase: true,
           approvalReviewerDeviceIds: ["device-ios-reviewer"],
         },
@@ -1307,7 +1302,6 @@ describe("exec approval handlers", () => {
         expect(pending).toMatchObject({
           id,
           requestedByDeviceId: "device-gateway-runtime",
-          request: { sessionKey },
         });
         expect(pending!.resolvedAtMs).toBeUndefined();
         expect(pending!.approvalReviewerDeviceIds).toEqual(

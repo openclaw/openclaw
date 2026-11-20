@@ -6,7 +6,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
@@ -18,7 +17,6 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -42,10 +40,7 @@ import { createExecApprovalHandlers } from "./exec-approval.js";
 
 let sharedState: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
 beforeAll(async () => {
-  sharedState = await createOpenClawTestState({
-    label: "approval-request-custody",
-    prepareProfileCatalog: true,
-  });
+  sharedState = await createOpenClawTestState({ label: "approval-request-custody" });
 });
 beforeEach(() => sharedState?.applyEnv());
 afterEach(() => {
@@ -62,21 +57,6 @@ async function createFixture(
 ) {
   const databaseOptions = { env: state.env };
   openOpenClawStateDatabase(databaseOptions);
-  setRuntimeConfigSnapshot({});
-  const profile = ensureProfileForEmail("reviewer@example.test", databaseOptions);
-  const source = {
-    ...request,
-    sessionKey: request.sessionKey ?? "agent:main:approval-custody",
-    agentId: request.agentId ?? "main",
-  };
-  await upsertSessionEntryCore(
-    { agentId: source.agentId, sessionKey: source.sessionKey },
-    {
-      sessionId: id,
-      updatedAt: 1,
-      createdActor: { type: "human", source: "profile", id: profile.id },
-    },
-  );
   const runtimeEpoch = id.startsWith("request-custody-")
     ? "request-custody-test"
     : id.startsWith("worker-refusal-")
@@ -99,13 +79,10 @@ async function createFixture(
     pluginApprovalManager: plugin,
     databaseOptions,
   });
-  const record = exec.create({ command: "echo fixture", ...source }, 600_000, id);
-  record.requestedByProfileId = profile.id;
+  const record = exec.create({ command: "echo fixture", ...request }, 600_000, id);
   record.approvalReviewerDeviceIds = ["reviewer"];
   const { decision } = await exec.register(record, 600_000);
   const client = createClient({ deviceId: "reviewer" });
-  // Host-minted profile authority admits the source while retaining reviewer-device custody.
-  client.internal = { operatorRoleActor: { kind: "operator", profileId: profile.id } };
   let settled = false;
   void decision.then(() => {
     settled = true;
@@ -155,8 +132,16 @@ const unrelatedAgentConfig: OpenClawConfig = {
 };
 
 it("acknowledges committed exec approval before follow-up session changes", async () => {
-  const { exec, record, decision, client, read, drain } =
-    await createFixture("approval-committed-ack");
+  const state = expectDefined(sharedState, "shared approval test state");
+  const databaseOptions = { env: state.env };
+  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    persistence: { runtimeEpoch: "approval-committed-ack", databaseOptions },
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+  });
+  const record = exec.create({ command: "echo committed" }, 600_000, "approval-committed-ack");
+  record.approvalReviewerDeviceIds = ["reviewer"];
+  const { decision } = await exec.register(record, 600_000);
   const entered = createDeferred();
   const release = createDeferred();
   const handleResolved = vi.fn(async () => {
@@ -168,12 +153,12 @@ it("acknowledges committed exec approval before follow-up session changes", asyn
     handlers: createExecApprovalHandlers(exec, { iosPushDelivery: { handleResolved } }),
     method: "exec.approval.resolve",
     body: { id: record.id, decision: "allow-once" },
-    client,
+    client: createClient({ deviceId: "reviewer" }),
   });
   const resolution = invocation.invoke();
   try {
     await entered.promise;
-    expect(read()).toMatchObject({
+    expect(getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       status: "allowed",
       decision: "allow-once",
     });
@@ -189,7 +174,7 @@ it("acknowledges committed exec approval before follow-up session changes", asyn
   } finally {
     release.resolve();
     await Promise.allSettled([resolution]);
-    await drain();
+    await exec.drain();
   }
 });
 
@@ -437,8 +422,7 @@ it("keeps a legacy decision wait when an unrelated agent is added", async () => 
 });
 
 it("rechecks retained request authority after the real history read settles", async () => {
-  const options = { label: "approval-history-custody", prepareProfileCatalog: true };
-  await withOpenClawTestState(options, async (state) => {
+  await withOpenClawTestState({ label: "approval-history-custody" }, async (state) => {
     const { exec, invoke, record, decision, client, read, drain } = await createFixture(
       "history-custody",
       state,
@@ -475,8 +459,7 @@ it("rechecks retained request authority after the real history read settles", as
 });
 
 it("rejects a revoked lookup waiting for a committed decision without losing the winner", async () => {
-  const options = { label: "approval-reconciliation-custody", prepareProfileCatalog: true };
-  await withOpenClawTestState(options, async (state) => {
+  await withOpenClawTestState({ label: "approval-reconciliation-custody" }, async (state) => {
     const onLifecycle = vi.fn();
     const { exec, invoke, record, decision, read, drain } = await createFixture(
       "reconciliation-custody",

@@ -1,4 +1,8 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { addSessionMemberInWorker } from "../../config/sessions/session-sharing-store.async.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import { createApprovalSessionFixture } from "./approval.test-support.js";
 import { createExecApprovalHandlers } from "./exec-approval.js";
@@ -8,11 +12,29 @@ import {
   resolveExecApprovalForTest,
 } from "./exec-approval.test-support.js";
 
-it("lists and resolves only exec approvals raised by the caller's profile", async (testContext) => {
+it("lists and resolves only exec approvals raised by an invited caller's profile", async (testContext) => {
   const { sessionKey } = await createApprovalSessionFixture(testContext);
+  const cfg: OpenClawConfig = {
+    gateway: {
+      roles: {
+        default: "invited",
+        definitions: {
+          invited: { agents: "*", scopes: ["operator.approvals"], sessions: { others: "invited" } },
+        },
+      },
+    },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  for (const identityId of ["owner", "other"]) {
+    await addSessionMemberInWorker(
+      { agentId: "main", sessionKey },
+      { identityId, addedBy: "session-creator" },
+    );
+  }
   const manager = createTestApprovalManager(testContext);
   const handlers = createExecApprovalHandlers(manager);
   const context = {
+    getRuntimeConfig: () => cfg,
     broadcast: (_eventValue: string, _payload: unknown) => {},
   };
   const client = (name: string) =>
@@ -25,6 +47,16 @@ it("lists and resolves only exec approvals raised by the caller's profile", asyn
     });
   const ownerClient = client("owner");
   const otherClient = client("other");
+  for (const [name, reviewer] of [
+    ["owner", ownerClient],
+    ["other", otherClient],
+  ] as const) {
+    expectDefined(reviewer, "approval reviewer").preparedSessionProfile = {
+      profileId: name,
+      aliases: new Set([name]),
+      role: "invited",
+    };
+  }
 
   const register = async (name: string, profileId: string) => {
     const record = manager.create(
@@ -33,6 +65,7 @@ it("lists and resolves only exec approvals raised by the caller's profile", asyn
       `approval-abcd-${name}`,
     );
     record.requestedByProfileId = profileId;
+    record.approvalReviewerDeviceIds = ["device-owner", "device-other"];
     record.requestedByDeviceId = `device-${profileId}`;
     record.requestedByConnId = `conn-${profileId}`;
     record.requestedByClientId = `client-${profileId}`;
@@ -43,7 +76,7 @@ it("lists and resolves only exec approvals raised by the caller's profile", asyn
   const hidden = await register("hidden", "other");
 
   const listRespond = vi.fn();
-  await listExecApprovals({ handlers, respond: listRespond, client: ownerClient });
+  await listExecApprovals({ handlers, respond: listRespond, client: ownerClient, context });
   expect(listRespond.mock.calls[0]?.[0]).toBe(true);
   const approvals = listRespond.mock.calls[0]?.[1] as Array<Record<string, unknown>>;
   expect(approvals.map((entry) => entry.id)).toEqual(["approval-abcd-visible"]);

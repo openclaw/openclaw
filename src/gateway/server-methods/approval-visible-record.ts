@@ -92,13 +92,15 @@ export async function loadVisibleApproval(params: {
       requestedByProfileId?: string | null;
     },
     reviewerDeviceIds: () => readonly string[] | null | undefined,
+    invitationOnly = false,
   ) =>
-    sessionAccess.canAccess(source()) &&
+    (invitationOnly
+      ? sessionAccess.canAccessInvited(source())
+      : sessionAccess.canAccess(source())) &&
     canAccessOperatorApproval({
       client: params.client,
       allowApprovalRuntime: params.allowApprovalRuntime,
       binding: { reviewerDeviceIds: reviewerDeviceIds() },
-      hasSessionAccess: true,
     });
   if (
     liveRecord &&
@@ -118,6 +120,7 @@ export async function loadVisibleApproval(params: {
         !canAccess(
           () => readApprovalRequestSource(admittedRecord!),
           () => admittedRecord!.approvalReviewerDeviceIds,
+          true,
         ))
     ) {
       throw new Error("Approval lookup authority is no longer active");
@@ -229,6 +232,7 @@ export async function loadVisibleApproval(params: {
           !canAccess(
             () => readApprovalRequestSource(current),
             () => current.approvalReviewerDeviceIds,
+            true,
           )
         ) {
           return null;

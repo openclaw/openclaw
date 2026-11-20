@@ -569,15 +569,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
       return await originalRemoveIfLossless(this, id);
     });
   using _ = { [Symbol.dispose]: () => removalGate.resolve() };
-  expect(await mainSession({}, "operator.write")).toMatchObject({
-    ok: false,
-    error: {
-      code: "FORBIDDEN",
-      message: expect.stringContaining("Only the session creator or an admin can loosen"),
-    },
-  });
-  expect(fixture.readEntry()?.permissionMode).toBe("workspace");
-  const resetPromise = mainSession();
+  const resetPromise = mainSession({}, "operator.write");
   await removalStarted;
   let successorSettled = false;
   const successorPromise = createSession({
