@@ -56,13 +56,22 @@ export function prepareExecApprovalConsumption<TPayload>(params: {
       assertExecApprovalMutationPersistenceCurrent(persistence);
       const currentNowMs = Date.now();
       const currentGraceAnchorMs = params.resolvedGraceAnchorMs(currentNowMs);
+      const bindingCurrent = params.isBindingCurrent();
       if (
-        !params.isBindingCurrent() ||
+        !bindingCurrent ||
         params.record.consumedDecision !== undefined ||
         currentGraceAnchorMs === null ||
         currentNowMs - currentGraceAnchorMs >= EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS
       ) {
-        throw new ApprovalMutationRefusedError("approval consumption is no longer available");
+        const reason =
+          params.record.consumedDecision !== undefined
+            ? "This approval was already used."
+            : !bindingCurrent
+              ? "This approval was replaced or closed."
+              : "This approval has expired.";
+        throw new ApprovalMutationRefusedError(
+          `${reason} Start a new turn to request approval again.`,
+        );
       }
     },
     markCommitted: (record) => {

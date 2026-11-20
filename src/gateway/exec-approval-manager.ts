@@ -224,7 +224,11 @@ export class ExecApprovalManager<
                 localEntry.record.expiresAtMs > nowMs &&
                 localEntry.record.expiresAtMs <= Date.now())
             ) {
-              throw new ApprovalMutationRefusedError("approval record is no longer current");
+              throw new ApprovalMutationRefusedError(
+                this.pending.get(recordId) !== localEntry
+                  ? "This approval was replaced or closed. Start a new turn to request approval again."
+                  : "This approval has expired. Start a new turn to request approval again.",
+              );
             }
             assertExecApprovalStandingGrantCurrent(
               this.options,
