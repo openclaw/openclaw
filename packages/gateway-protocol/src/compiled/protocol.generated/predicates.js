@@ -741,7 +741,7 @@ var External = [
     /(^agentId$|^sessionKey$)/u,
     /(^runId$|^timeoutMs$)/u,
     /(^includeSessionPlacement$)/u,
-    /(^name$|^agentId$|^onboarding$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
+    /(^name$|^agentId$|^onboarding$|^locale$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
     /(^agentId$|^name$|^workspace$|^model$|^agentRuntime$|^emoji$|^avatar$)/u,
     /(^agentId$|^prompt$)/u,
     /\S/u,
@@ -4261,6 +4261,7 @@ var External = [
     check_6(value.name) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.onboarding === void 0 || !("onboarding" in value) || check_181(value.onboarding)) &&
+    (value.locale === void 0 || !("locale" in value) || check_331(value.locale)) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
       check_63(value.expectedOwnerId)) &&

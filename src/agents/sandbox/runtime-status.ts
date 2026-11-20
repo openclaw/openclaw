@@ -53,7 +53,7 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { shellEscapeBackslash as shellEscapeSingleArg } from "../../shared/shell-quote.js";
-import { resolveAgentConfig } from "../agent-scope-config.js";
+import { readAgentConfigEntry } from "../agent-scope-config.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { auditSandboxToolPolicyBlock, escapeControlCharsVisible } from "../tool-policy-audit.js";
 import { resolveSandboxRuntimeSettings } from "./config.js";
@@ -508,7 +508,7 @@ function resolveOwnedSandboxClassification(params: {
   const { cfg, sessionKey, agentId, classificationSessionKey, classificationAgentId } = params;
   const sandboxCfg = resolveSandboxRuntimeSettings(
     cfg?.agents?.defaults?.sandbox,
-    cfg ? resolveAgentConfig(cfg, classificationAgentId)?.sandbox : undefined,
+    cfg ? readAgentConfigEntry(cfg, classificationAgentId)?.sandbox : undefined,
   );
   const mainSessionKey =
     cfg?.session?.scope === "global"

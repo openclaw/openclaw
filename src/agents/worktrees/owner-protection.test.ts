@@ -9,8 +9,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessionReads from "../../config/sessions/session-accessor.entry-read-runtime.js";
+import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { ResolvedSessionEntryStoreTarget } from "../../config/sessions/session-accessor.types.js";
+import { createUserPendingInput } from "../../config/sessions/session-pending-input.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createWorkerSessionPlacementStore } from "../../gateway/worker-environments/placement-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -233,6 +235,43 @@ it("classifies a large census off thread and allows archived cleanup until a pla
   }
 });
 
+it("does not treat interrupted or cancelled history as queued work for a finished owner", async () => {
+  const stateDir = tempDirs.make("worktree-owner-terminal-history-");
+  readOwners.mockImplementation(readOwnersInWorker);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    const scope = { agentId: "main", sessionKey: key, sessionId: "finished-owner" };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    for (let index = 0; index < 7; index++) {
+      const receipt = await stageSessionPendingInput(
+        scope,
+        createUserPendingInput(`input-${index}`, "synthetic input", `user-${index}`),
+      );
+      expect(receipt).toBeDefined();
+      receipt!.finish(index === 6 ? "cancelled" : "interrupted", "failed");
+      await receipt!.settled?.();
+    }
+    try {
+      await replaceSessionEntry(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: Date.now(),
+        status: "failed",
+        archivedAt: 1,
+      });
+      await expectCleanupState("retired");
+      await replaceSessionEntry(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: Date.now(),
+        status: "done",
+      });
+      await expectCleanupState("idle");
+      mocks.isSessionControllerWorkActive.mockReturnValue(true);
+      await expectCleanupState("active");
+    } finally {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+  });
+});
+
 it("protects an archived owner when an in-process local turn starts after cleanup preparation", async () => {
   const store = placementStore("worktree-owner-local-");
   await mutateOwner(async () => {
@@ -344,6 +383,11 @@ it("classifies recent, idle, archived and missing owners through the async censu
   const entries = new Map<string, ResolvedSessionEntryStoreTarget>([
     ["live", target("live", { sessionId: "live", updatedAt: now - 1_000 })],
     ["idle", target("idle", { sessionId: "idle", updatedAt: now - IDLE_GC_MS - 1 })],
+    ["done", target("done", { sessionId: "done", updatedAt: now, status: "done" })],
+    [
+      "failed",
+      target("failed", { sessionId: "failed", updatedAt: now, status: "failed", archivedAt: now }),
+    ],
     ["archived", target("archived", { sessionId: "archived", updatedAt: now, archivedAt: now })],
     ["missing", { ...target("missing"), entry: undefined }],
   ]);
@@ -352,8 +396,10 @@ it("classifies recent, idle, archived and missing owners through the async censu
     Array.from(entries.keys(), (ownerId) => ({ ...cleanupRecord, ownerId })),
   );
   expect(
-    ["live", "idle", "archived", "missing"].map((id) => census.readOwnerState?.("session", id)),
-  ).toEqual(["active", "idle", "retired", "retired"]);
+    ["live", "idle", "done", "failed", "archived", "missing"].map((id) =>
+      census.readOwnerState?.("session", id),
+    ),
+  ).toEqual(["active", "idle", "idle", "retired", "retired", "retired"]);
   expect(census.readOwnerState?.("manual", "missing")).toBe("other");
 });
 
