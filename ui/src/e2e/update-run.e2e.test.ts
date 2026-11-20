@@ -24,7 +24,12 @@ suite.define(() => {
           phase: "finished",
           status: "failed",
           reason: "post-update-failed",
+          target: { kind: "git", channel: "dev", sha: "b".repeat(40) },
+          before: { version: "2026.11.5", buildId: "before-build" },
+          after: { version: "2026.11.5", buildId: "after-build", sha: "b".repeat(40) },
+          steps: [{ step: "verifying", status: "failed" }],
           verification: {
+            versionMatch: false,
             serviceRunning: true,
             runningVersion: "2026.11.5",
             runningBuildId: "before-build",
@@ -81,11 +86,20 @@ suite.define(() => {
         await release.waitFor({ state: "detached" });
         await historical.click();
         await page.waitForURL("**/settings/updates");
-        await page
-          .locator("openclaw-update-run-view")
-          .getByText(/Last update run failed/)
-          .first()
+        const report = page.locator('openclaw-update-run-view [data-run-status="failed"]');
+        await report
+          .getByRole("status")
+          .filter({ hasText: /Last update run failed/ })
           .waitFor();
+        await report
+          .getByText("The Gateway is now serving the update target.", { exact: true })
+          .waitFor();
+        const verification = report.getByRole("list", {
+          name: "Verification at the time of the update",
+        });
+        expect(
+          await verification.locator('[data-oracle="version"]').getAttribute("data-state"),
+        ).toBe("fail");
         expect(await page.getByRole("button", { name: "Retry update", exact: true }).count()).toBe(
           0,
         );
