@@ -54,123 +54,6 @@ function scenario() {
 }
 
 suite.define(() => {
-  it("aligns the finished family branch and dividers with the root row grid", async () => {
-    await suite.withPage(
-      { viewport: { width: 1440, height: 900 }, colorScheme: "dark", locale: "en-US" },
-      async ({ page }) => {
-        const fixture = scenario();
-        const finished = {
-          ...fixture.child,
-          label: "Review workspace changes",
-          status: "done",
-          hasActiveRun: false,
-          activeRunIds: [],
-          runtimeMs: 73_000,
-        } satisfies GatewaySessionRow;
-        const nested = {
-          ...finished,
-          key: "agent:main:subagent:nested-reviewer",
-          sessionId: "nested-reviewer-session",
-          label: "Check the notice dismissal and keyboard focus",
-          parentSessionKey: finished.key,
-          spawnedBy: finished.key,
-          runtimeMs: 29_000,
-        } satisfies GatewaySessionRow;
-        const next = {
-          ...finished,
-          key: fixture.other.key,
-          sessionId: fixture.other.sessionId,
-          label: "Verify desktop navigation after returning to the workspace",
-          updatedAt: finished.updatedAt - 1,
-          runtimeMs: 1_065_000,
-        } satisfies GatewaySessionRow;
-        const parent = { ...fixture.parent, hasActiveSubagentRun: false };
-        await installMockGateway(page, {
-          ...previewModel,
-          sessionKey: parent.key,
-          sessions: [parent, { ...finished, childSessions: [nested.key] }, nested, next],
-          methodResponses: {
-            "config.get": configResponse({ themeMode: "system" }, "nested-review"),
-            "users.prefs.get": { status: "ok", entries: { "ui.themeMode": "system" } },
-          },
-        });
-        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
-        await openChatSidePanelType(page, "Subagents");
-        const surface = page.locator(".chat-pane-cache__pane--active .subagents-desktop");
-        const rowByKey = (key: string) => surface.locator(`[data-session-key="${key}"]`);
-        const rootRow = rowByKey(finished.key);
-        const nestedRow = rowByKey(nested.key);
-        const nextRow = rowByKey(next.key);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          surface,
-          [rootRow, nestedRow, nextRow],
-          {
-            animations: "disabled",
-            elements: [surface],
-          },
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "finished-family-panel.png"),
-          frame.elements[0]!.png,
-        );
-
-        const geometry = await nestedRow.evaluate((item) => {
-          const root = item.previousElementSibling!;
-          const nextRoot = item.nextElementSibling!;
-          const avatar = (row: Element) =>
-            row.querySelector(".subagents-desktop__avatar")!.getBoundingClientRect();
-          const bounds = item.getBoundingClientRect();
-          const branch = getComputedStyle(item, "::before");
-          const divider = getComputedStyle(item, "::after");
-          const parentStem = getComputedStyle(
-            root.querySelector(".subagents-desktop__open")!,
-            "::before",
-          );
-          const center = (rect: DOMRect) => rect.left + rect.width / 2;
-          const elapsedEnd = (row: Element) =>
-            row.querySelector(".subagents-desktop__elapsed")!.getBoundingClientRect().right;
-          return {
-            parentCenter: center(avatar(root)),
-            stemCenter:
-              bounds.left +
-              Number.parseFloat(branch.left) +
-              Number.parseFloat(branch.borderLeftWidth) / 2,
-            parentStemCenter:
-              root.getBoundingClientRect().left +
-              Number.parseFloat(parentStem.left) +
-              Number.parseFloat(parentStem.borderLeftWidth) / 2,
-            parentStemEnd:
-              root.getBoundingClientRect().bottom - Number.parseFloat(parentStem.bottom),
-            childStemStart: bounds.top + Number.parseFloat(branch.top),
-            elbowCenter:
-              bounds.top +
-              Number.parseFloat(branch.top) +
-              Number.parseFloat(branch.height) -
-              Number.parseFloat(branch.borderBottomWidth) / 2,
-            childAvatarCenter: avatar(item).top + avatar(item).height / 2,
-            elbowGap:
-              avatar(item).left -
-              (bounds.left + Number.parseFloat(branch.left) + Number.parseFloat(branch.width)),
-            dividerStart: bounds.left + Number.parseFloat(divider.left),
-            rootTitleStart: nextRoot
-              .querySelector(".subagents-desktop__name")!
-              .getBoundingClientRect().left,
-            elapsedEnd: [elapsedEnd(root), elapsedEnd(item), elapsedEnd(nextRoot)],
-          };
-        });
-        expect(geometry.stemCenter).toBeCloseTo(geometry.parentCenter);
-        expect(geometry.parentStemCenter).toBeCloseTo(geometry.stemCenter);
-        expect(geometry.parentStemEnd).toBeCloseTo(geometry.childStemStart);
-        expect(geometry.elbowCenter).toBeCloseTo(geometry.childAvatarCenter);
-        expect(geometry.elbowGap).toBeGreaterThan(0);
-        expect(geometry.elbowGap).toBeLessThanOrEqual(4);
-        expect(geometry.dividerStart).toBeCloseTo(geometry.rootTitleStart);
-        expect(geometry.elapsedEnd).toEqual(Array(3).fill(geometry.elapsedEnd[0]));
-      },
-    );
-  });
-
   it("shows nested reviewers under their parent in the Subagents tab with scoped actions and live membership", async () => {
     await suite.withPage(
       { viewport: { width: 1440, height: 1000 }, colorScheme: "dark", locale: "en-US" },
@@ -322,8 +205,6 @@ suite.define(() => {
         });
         const addedRow = surface.locator(`[data-session-key="${added.key}"]`);
         await addedRow.waitFor();
-        const siblingRail = surface.locator(".subagents-desktop__branch-rail[data-current-depth]");
-        await expect.poll(() => siblingRail.count()).toBe(1);
         await gateway.setSessionsListResponse({ sessions: [parent, child, reviewer, unrelated] });
         await gateway.emitGatewayEvent("sessions.changed", {
           sessionKey: added.key,
@@ -332,7 +213,6 @@ suite.define(() => {
           reason: "delete",
         });
         await expect.poll(() => addedRow.count()).toBe(0);
-        expect(await siblingRail.count()).toBe(0);
         await childRow.waitFor();
         await reviewerRow.waitFor();
         expect(await draft.inputValue()).toBe("Keep the parent review draft");

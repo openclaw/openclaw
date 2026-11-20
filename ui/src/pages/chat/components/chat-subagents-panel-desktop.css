@@ -54,21 +54,18 @@
 }
 
 .subagents-desktop__row {
-  --subagent-inset: 8px;
-  --subagent-avatar-size: 25px;
-  --subagent-title-gap: 12px;
-  --subagent-indent: 24px;
-  --subagent-offset: calc(var(--subagent-depth) * var(--subagent-indent));
-  --subagent-stem: calc(var(--subagent-inset) + (var(--subagent-avatar-size) - 1px) / 2);
+  /* Rows step by 24px. The avatar centerline is 20px from the row edge:
+     8px inset plus 12px to the center of a 1px stroke on the 25px avatar. */
+  --tree-step: 24px;
+  --tree-offset: calc(var(--subagent-depth) * var(--tree-step));
   --subagent-divider: var(--border);
   position: relative;
   display: grid;
-  grid-template-columns: var(--subagent-avatar-size) minmax(0, 1fr) auto auto 24px;
+  grid-template-columns: 25px minmax(0, 1fr) auto auto 24px;
   align-items: center;
   min-width: 0;
-  margin-inline: calc(var(--subagent-offset) - var(--subagent-inset))
-    calc(-1 * var(--subagent-inset));
-  padding-inline: var(--subagent-inset);
+  margin-inline: calc(var(--tree-offset) - 8px) -8px;
+  padding-inline: 8px;
   border-radius: var(--radius-md);
 }
 
@@ -81,10 +78,10 @@
 }
 
 .subagents-desktop__row:not([data-depth="0"])::before {
-  inset-inline-start: calc(var(--subagent-stem) - var(--subagent-indent));
+  inset-inline-start: calc(20px - var(--tree-step));
   inset-block-start: 0;
   box-sizing: border-box;
-  inline-size: calc(var(--subagent-indent) - var(--subagent-avatar-size) / 2 - 2.5px);
+  inline-size: calc(var(--tree-step) - 15px);
   block-size: calc(50% + 0.5px);
   border-block-end: 1px solid var(--border);
   border-end-start-radius: 5px;
@@ -96,16 +93,13 @@
 }
 
 .subagents-desktop__row[data-has-children] > .subagents-desktop__open::before {
-  inset-inline-start: var(--subagent-stem);
-  inset-block: calc(50% + var(--subagent-avatar-size) / 2 + 2px) 0;
+  inset-inline-start: 20px;
+  inset-block: calc(50% + 14.5px) 0;
   content: "";
 }
 
 .subagents-desktop__branch-rail {
-  inset-inline-start: calc(
-    var(--subagent-stem) + (var(--subagent-rail-depth) - 1) * var(--subagent-indent) -
-      var(--subagent-offset)
-  );
+  inset-inline-start: calc(20px + (var(--subagent-rail-depth) - 1) * var(--tree-step) - var(--tree-offset));
   inset-block: 0;
 }
 
@@ -115,11 +109,8 @@
 
 .subagents-desktop__row:has(+ [data-depth="0"])::after {
   position: absolute;
-  inset-inline: calc(
-      var(--subagent-inset) + var(--subagent-avatar-size) + var(--subagent-title-gap) -
-        var(--subagent-offset)
-    )
-    var(--subagent-inset);
+  /* Keep the divider aligned with the root title (8px + 25px + 12px). */
+  inset-inline: calc(45px - var(--tree-offset)) 8px;
   inset-block-end: 0;
   height: 1px;
   background: var(--subagent-divider);
@@ -157,9 +148,9 @@
   position: relative;
   display: grid;
   place-items: center;
-  flex: 0 0 var(--subagent-avatar-size, 25px);
-  width: var(--subagent-avatar-size, 25px);
-  height: var(--subagent-avatar-size, 25px);
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
   border-radius: var(--radius-sm);
   background: hsl(var(--subagent-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
   color: hsl(var(--subagent-hue) var(--subagent-avatar-ink, 32% 65%));
@@ -199,20 +190,18 @@
 
 .subagents-desktop__identity {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 3px;
   min-width: 0;
   grid-column: 2;
   grid-row: 1;
-  margin-inline-start: var(--subagent-title-gap);
+  margin-inline-start: 12px;
 }
 
 .subagents-desktop__name {
   overflow: hidden;
   font-weight: 500;
   line-height: 18px;
-  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -225,7 +214,6 @@
 }
 
 .subagents-desktop__elapsed {
-  flex: none;
   grid-column: 3;
   grid-row: 1;
   margin-left: 12px;
@@ -233,7 +221,6 @@
 }
 
 .subagents-desktop__chevron {
-  flex: 0 0 12px;
   width: 12px;
   height: 12px;
   margin-right: 2px;
