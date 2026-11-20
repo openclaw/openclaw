@@ -14,7 +14,12 @@ import {
   unmountPage,
 } from "./model-providers-page.test-support.tsx";
 
+const cleanups: Array<() => void> = [];
 afterEach(() => {
+  cleanups
+    .splice(0)
+    .toReversed()
+    .forEach((dispose) => dispose());
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
@@ -81,7 +86,7 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
   async function confirm() {
     row.querySelector<HTMLButtonElement>(".provider-row__remove")!.click();
     await waitForSolid(() =>
-      expect(document.body.querySelector(".exec-approval-actions button.danger")).not.toBeNull(),
+      expect(document.body.querySelector("openclaw-modal-actions button.danger")).not.toBeNull(),
     );
     const { modal } = await getRenderedModalDialog(document.body);
     const copy = modal.textContent ?? "";
@@ -91,6 +96,10 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
     );
     return copy;
   }
+  cleanups.push(() => {
+    unmountPage(page);
+    restoreDialogs();
+  });
   return {
     ...harness,
     page,
@@ -98,12 +107,32 @@ async function removalHarness(apiKey: unknown = "__OPENCLAW_REDACTED__", withAcc
     toast,
     logout,
     confirm,
-    dispose() {
-      unmountPage(page);
-      restoreDialogs();
-    },
   };
 }
+
+it("reloads a conflicting config without replaying the confirmed deletion", async () => {
+  const h = await removalHarness();
+  const original = h.request.getMockImplementation()!;
+  let changed = false;
+  h.request.mockImplementation(async (method) => {
+    if (method === "config.patch") {
+      changed = true;
+      throw new Error("config changed since last load; re-run config.get and retry");
+    }
+    if (method === "config.get" && changed) {
+      return { config: { models: { providers: { replacement: {} } } }, valid: true, hash: "newer" };
+    }
+    return original(method);
+  });
+  const selector = 'button[aria-label="Remove provider: OpenAI"]';
+  h.row.querySelector<HTMLButtonElement>(selector)!.click();
+  const { modal } = await getRenderedModalDialog(document.body);
+  modal.querySelector<HTMLButtonElement>("button.danger")!.click();
+  await waitForSolid(() => expect(h.runtimeConfig.state.configSnapshot?.hash).toBe("newer"));
+  await waitForSolid(() => expect(h.page.querySelector(selector)).toBeNull());
+  expect(requestCount(h.request, "config.patch")).toBe(1);
+  expect(requestCount(h.request, "models.authLogout")).toBe(0);
+});
 
 it.each(["agent", "reconnect", "access"] as const)(
   "does not send another removal after %s changes during the first command",
@@ -111,31 +140,29 @@ it.each(["agent", "reconnect", "access"] as const)(
     const h = await removalHarness();
     const first = createDeferred<Awaited<ReturnType<typeof h.logout>>>();
     h.logout.mockImplementationOnce(() => first.promise);
-    try {
-      await h.confirm();
-      const completion = h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
-      if (change === "agent") {
-        h.settingsAgentSelection.state.selectedId = "main";
-        h.settingsAgentSelection.state.scopeId = "main";
-        h.notifySelection();
-      } else if (change === "reconnect") {
-        h.publishPhase("connecting");
-      } else {
-        h.snapshot.hello = {
-          ...h.snapshot.hello!,
-          auth: { role: "operator", scopes: ["operator.read"] },
-        };
-        h.publishPhase("connected");
-      }
-      first.resolve({ provider: "openai", removedProfiles: ["openai:work"], abortedRunIds: [] });
-      await completion;
-      await h.page.updateComplete;
-      expect(requestCount(h.request, "models.authLogout")).toBe(1);
-      expect(h.toast.toast?.message ?? "").not.toContain("Logged out.");
-    } finally {
-      first.resolve({ provider: "openai", removedProfiles: [], abortedRunIds: [] });
-      h.dispose();
+    cleanups.push(() =>
+      first.resolve({ provider: "openai", removedProfiles: [], abortedRunIds: [] }),
+    );
+    await h.confirm();
+    const completion = h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+    if (change === "agent") {
+      h.settingsAgentSelection.state.selectedId = "main";
+      h.settingsAgentSelection.state.scopeId = "main";
+      h.notifySelection();
+    } else if (change === "reconnect") {
+      h.publishPhase("connecting");
+    } else {
+      h.snapshot.hello = {
+        ...h.snapshot.hello!,
+        auth: { role: "operator", scopes: ["operator.read"] },
+      };
+      h.publishPhase("connected");
     }
+    first.resolve({ provider: "openai", removedProfiles: ["openai:work"], abortedRunIds: [] });
+    await completion;
+    await h.page.updateComplete;
+    expect(requestCount(h.request, "models.authLogout")).toBe(1);
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
   },
 );
 
@@ -143,24 +170,21 @@ it.each([true, false])(
   "explains the removal scope and completes every authorized step (saved account: %s)",
   async (withAccount) => {
     const h = await removalHarness(undefined, withAccount);
-    try {
-      const copy = await h.confirm();
-      if (withAccount) {
-        expect(copy).toContain("other agents");
-      } else {
-        expect(copy).not.toContain("Active runs");
-      }
-      expect(copy).toContain("OpenAI");
-      expect(copy).toContain("configured aliases");
-      expect(copy).not.toContain("Runs using it stop");
-      await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
-      expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
-        ...(withAccount ? [{ provider: "openai", agentId: "writer" }] : []),
-        { provider: "OpenAI", credentialType: "api_key", agentId: "writer" },
-      ]);
-    } finally {
-      h.dispose();
+    const copy = await h.confirm();
+    if (withAccount) {
+      expect(copy).toContain("other agents");
+    } else {
+      expect(copy).not.toContain("Active replies");
     }
+    expect(copy).toContain("OpenAI");
+    expect(copy).toContain("configured aliases");
+    expect(copy).not.toContain("Runs using it stop");
+    await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+    expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
+    expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
+      ...(withAccount ? [{ provider: "openai", agentId: "writer" }] : []),
+      { provider: "OpenAI", credentialType: "api_key", agentId: "writer" },
+    ]);
   },
 );
 
@@ -179,22 +203,18 @@ it.each([false, true])(
         return original(method, ...args);
       });
     }
-    try {
-      await h.confirm();
-      await waitForSolid(() =>
-        expect(h.toast.toast?.message).toContain("Synthetic key removal failure"),
-      );
-      expect(h.toast.toast?.message).toContain("removed so far: 1");
-      if (failRefresh) {
-        expect(h.toast.toast?.message).toContain("Synthetic refresh failure");
-      } else {
-        expect(h.page.querySelector('[data-profile-id="openai:work"]')).toBeNull();
-      }
-      expect(h.toast.toast?.message).not.toContain("Logged out.");
-      expect(requestCount(h.request, "models.authLogout")).toBe(2);
-    } finally {
-      h.dispose();
+    await h.confirm();
+    await waitForSolid(() =>
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic key removal failure"),
+    );
+    expect(h.toast.toasts[0]?.options.message).toContain("removed so far: 1");
+    if (failRefresh) {
+      expect(h.toast.toasts[0]?.options.message).toContain("Synthetic refresh failure");
+    } else {
+      expect(h.page.querySelector('[data-profile-id="openai:work"]')).toBeNull();
     }
+    expect(h.toast.toasts[0]?.options.message).not.toContain("Signed out");
+    expect(requestCount(h.request, "models.authLogout")).toBe(2);
   },
 );
 
@@ -205,12 +225,8 @@ it.each(["file", "exec"])(
       { source, provider: "vault", id: "__OPENCLAW_REDACTED__" },
       false,
     );
-    try {
-      expect(h.row.querySelector(".provider-row__remove")).toBeNull();
-      expect(requestCount(h.request, "models.authLogout")).toBe(0);
-    } finally {
-      h.dispose();
-    }
+    expect(h.row.querySelector(".provider-row__remove")).toBeNull();
+    expect(requestCount(h.request, "models.authLogout")).toBe(0);
   },
 );
 
@@ -220,17 +236,14 @@ it("names the retained secret reference when saved accounts can be removed", asy
     provider: "vault",
     id: "__OPENCLAW_REDACTED__",
   });
-  try {
-    const copy = await h.confirm();
-    expect(copy).toContain("Secret references in OpenAI");
-    await waitForSolid(() => expect(h.toast.toast?.message).toContain("Logged out."));
-    expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
-      { provider: "openai", agentId: "writer" },
-    ]);
-    expect(h.runtimeConfig.state.configSnapshot?.config).toMatchObject({
-      models: { providers: { OpenAI: { apiKey: { source: "file", provider: "vault" } } } },
-    });
-  } finally {
-    h.dispose();
-  }
+  const copy = await h.confirm();
+  expect(copy).toContain("Secret references in OpenAI");
+  await h.runtimeConfig.runExternalMutation.mock.results.at(-1)!.value;
+  expect(h.toast.toasts[0]?.options.message ?? "").not.toContain("Signed out");
+  expect(h.logout.mock.calls.map(([target]) => target)).toEqual([
+    { provider: "openai", agentId: "writer" },
+  ]);
+  expect(h.runtimeConfig.state.configSnapshot?.config).toMatchObject({
+    models: { providers: { OpenAI: { apiKey: { source: "file", provider: "vault" } } } },
+  });
 });

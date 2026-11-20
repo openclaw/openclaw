@@ -3,10 +3,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
+import { externalProviderPolicyRegistry } from "./provider-external-policy.test-support.js";
 
 const fixtureState = vi.hoisted(() => ({ pluginRoot: "" }));
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+const envSnapshot = captureEnv([
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+]);
 const emptyBundledPluginsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-empty-plugins-"));
 const externalPluginRoot = fs.mkdtempSync(
   path.join(os.tmpdir(), "openclaw-provider-policy-external-"),
@@ -30,18 +34,7 @@ process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
 vi.mock("./current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => ({
-    manifestRegistry: {
-      plugins: [
-        {
-          id: "fixture-provider",
-          origin: "external",
-          trustedOfficialInstall: true,
-          rootDir: fixtureState.pluginRoot,
-          providers: ["fixture-provider"],
-          cliBackends: [],
-        },
-      ],
-    },
+    manifestRegistry: externalProviderPolicyRegistry(fixtureState.pluginRoot),
   }),
 }));
 
@@ -49,16 +42,7 @@ const { isThinkingLevelSupported, listThinkingLevels, resolveThinkingDefaultForM
   await import("../auto-reply/thinking.js");
 
 afterAll(() => {
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
-  if (originalTrustBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
-  }
+  envSnapshot.restore();
   fs.rmSync(emptyBundledPluginsDir, { recursive: true, force: true });
   fs.rmSync(externalPluginRoot, { recursive: true, force: true });
 });

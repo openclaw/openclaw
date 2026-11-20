@@ -55,6 +55,7 @@ import {
 } from "./monitor/sanitize-outbound.js";
 import { withIMessageRemoteFile } from "./remote-file.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
+import { clearIMessageSendFailure, withIMessageSendFailureStatus } from "./send-status.js";
 import {
   bindIMessageCliSend,
   requestIMessageRpcSend,
@@ -62,6 +63,7 @@ import {
 } from "./send-transport.js";
 import {
   formatIMessageChatTarget,
+  iMessageTargetRpcParams,
   type IMessageService,
   normalizeIMessageHandle,
   parseIMessageTarget,
@@ -262,6 +264,18 @@ export async function sendMessageIMessage(
       cfg,
       accountId: opts.accountId,
     });
+  return await withIMessageSendFailureStatus(account.accountId, () =>
+    sendMessageIMessageForAccount(to, text, opts, cfg, account),
+  );
+}
+
+async function sendMessageIMessageForAccount(
+  to: string,
+  text: string,
+  opts: IMessageSendOpts,
+  cfg: OpenClawConfig,
+  account: ResolvedIMessageAccount,
+): Promise<IMessageSendResult> {
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
   const remoteHost = await resolveIMessageRemoteHost({
@@ -487,6 +501,9 @@ export async function sendMessageIMessage(
         allowedDecisions: opts.approvalPrompt.allowedDecisions,
       });
     }
+    if (messageId !== "unknown") {
+      clearIMessageSendFailure(account.accountId);
+    }
     const replyToId = isMessage ? effectiveReplyToId : resolvedReplyToId;
     const receiptMessageId = messageId.trim();
     const results: MessageReceiptSourceResult[] = normalizeIMessageMessageId(receiptMessageId)
@@ -699,6 +716,7 @@ export async function sendMessageIMessage(
     }
   }
   const params: Record<string, unknown> = {
+    ...iMessageTargetRpcParams(target),
     text: message,
     service: service || "auto",
     region,
@@ -712,16 +730,6 @@ export async function sendMessageIMessage(
   }
   if (filePath) {
     params.file = filePath;
-  }
-
-  if (target.kind === "chat_id") {
-    params.chat_id = target.chatId;
-  } else if (target.kind === "chat_guid") {
-    params.chat_guid = target.chatGuid;
-  } else if (target.kind === "chat_identifier") {
-    params.chat_identifier = target.chatIdentifier;
-  } else {
-    params.to = target.to;
   }
 
   opts.assertDirectAdapterHandoff?.();

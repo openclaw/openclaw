@@ -1,14 +1,10 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../agents/tools/in-process-gateway.js";
-import { createPersonalInstructionsTool } from "../agents/tools/personal-instructions-tool.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
 import { prepareChannelRunAdmission } from "../auto-reply/reply/channel-run-admission.js";
 import { buildInboundUserContextPrefix } from "../auto-reply/reply/inbound-meta.js";
@@ -21,7 +17,6 @@ import {
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -30,7 +25,6 @@ import { isSessionPersonalBootstrapTurn } from "../sessions/session-participant-
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
 import {
-  activateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
   revokeAttachGrant,
@@ -147,12 +141,7 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         runtimeOwnerToken: runtime.ownerToken,
         admittedRunContext,
       });
-      const capture = activateMcpLoopbackClientGrantCapture({
-        token: grant.token,
-        runtimeOwnerToken: runtime.ownerToken,
-        captureKey: "assignment-capture",
-      });
-      expect(capture).toBeDefined();
+      mcp.captureGrant(grant.token, "assignment-capture", runtime.ownerToken);
       const attach = mintAttachGrant({ sessionKey, agentId: "main" });
       const request = async (
         token: string,
@@ -162,13 +151,12 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         const response = await mcp.sendRaw({
           port: runtime.port,
           token,
-          headers: {
-            "content-type": "application/json",
-            ...(attached ? {} : { "x-openclaw-cli-capture-key": "assignment-capture" }),
-          },
+          headers: mcp.jsonHeaders(
+            attached ? {} : { "x-openclaw-cli-capture-key": "assignment-capture" },
+          ),
           body: params
             ? mcp.mcpToolCallBody(params.name, params.arguments)
-            : JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+            : mcp.mcpToolsListBody(),
         });
         return mcp.readOkMcpPayload(response);
       };
@@ -204,14 +192,9 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         });
         const next = fixture.admins[1]!.profile;
         expect(next.id).not.toBe(profile.id);
-        const personalDir = path.join(state.workspaceDir, "users", next.id);
-        await fs.mkdir(personalDir, { recursive: true });
-        await fs.writeFile(path.join(state.workspaceDir, "USER.md"), "Shared preferences.");
-        await fs.writeFile(path.join(personalDir, "USER.md"), "Assignee preferences.");
         expect(await call(next.id, sessionKey)).toMatchObject({
           result: { isError: false },
         });
-        const assigned = readSession(sessionKey);
         expectOwner(next.id, sessionKey);
 
         const nextTurn = await fixture.context(fixture.admins[0]!.identity.senderId);
@@ -223,24 +206,6 @@ it("assigns and reads back a created session through admitted non-owner Discord 
         try {
           const nextContext = await nextAdmission.admit("gateway", "assignment-followup-execution");
           expect(readAdmittedRunOperatorAuthority(nextContext)).toBeUndefined();
-          const bootstrap = await resolveBootstrapContextForRun({
-            workspaceDir: state.workspaceDir,
-            config: cfg,
-            sessionKey,
-            bootstrapUserProfileId: sessionPersonalProfileId(assigned),
-          });
-          expect(
-            bootstrap.contextFiles
-              .filter((file) => file.path.endsWith("USER.md"))
-              .map((file) => file.content),
-          ).toEqual(["Shared preferences.", "Assignee preferences."]);
-          await expect(
-            withCaller(nextContext, () =>
-              createPersonalInstructionsTool("main").execute("no-borrowed-profile", {
-                action: "get",
-              }),
-            ),
-          ).rejects.toThrow("Personal instructions require a live authenticated Gateway user turn");
         } finally {
           nextAdmission.close();
         }

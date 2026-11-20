@@ -16,14 +16,18 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { registerMemoryImportEnglish } from "../i18n/locales/en-memory-import.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import "../styles/onboarding-memory-import.css";
 import "./modal-dialog.tsx";
+import { Checkbox } from "./solid/checkbox.tsx";
+
+registerEnglishCatalog(registerMemoryImportEnglish);
 
 const ONBOARDING_MEMORY_IMPORT_KEY = "openclaw.onboarding.memory-import";
 type Props = { context?: ApplicationContext; active: boolean };
@@ -365,8 +369,7 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
         data-provider-id={providerProps.provider.providerId}
       >
         <label>
-          <input
-            type="checkbox"
+          <Checkbox
             checked={selection()[providerProps.provider.providerId] ?? false}
             disabled={applying() !== null || isDone()}
             onChange={(event) => {

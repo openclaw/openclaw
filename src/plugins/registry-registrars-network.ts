@@ -2,7 +2,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
@@ -105,8 +105,9 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
 }
 
 function adaptPluginGatewayMethodHandler(
-  handler: GatewayRequestHandler,
+  handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
   mayDispatch: boolean,
+  captureCurrent: () => (() => boolean) | undefined,
 ): GatewayRequestHandler {
   return async (opts) => {
     // Preserve the real context identity; these accessors expose no mutable state.
@@ -116,19 +117,24 @@ function adaptPluginGatewayMethodHandler(
       responded = true;
       opts.respond(ok, payload, error, meta);
     };
+    const ownerCurrent = captureCurrent();
+    const assertHandlerCurrent = () => {
+      opts.assertHandlerCurrent?.();
+      if (!ownerCurrent?.()) {
+        throw new Error("Plugin gateway method owner is no longer current");
+      }
+    };
     const scope = getPluginRuntimeGatewayRequestScope();
-    const invoke = () => handler({ ...opts, respond });
+    const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
-      const result = (
-        scope
-          ? await withPluginRuntimeGatewayRequestScope(
-              { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
-              invoke,
-            )
-          : await invoke()
-      ) as unknown;
+      const result = scope
+        ? await withPluginRuntimeGatewayRequestScope(
+            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+            invoke,
+          )
+        : await invoke();
       if (!responded && result !== undefined) {
         respond(true, result);
       }
@@ -162,7 +168,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
-    handler: GatewayRequestHandler,
+    handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1],
     opts?: {
       scope?: OperatorScope;
       profileAccess?: GatewayMethodProfileAccess;
@@ -183,6 +189,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const wrappedHandler = adaptPluginGatewayMethodHandler(
       handler,
       canDispatchGatewayMethods(record),
+      () =>
+        capturePluginLifecycleAuthority(getPluginRecordRegistry(registry, record), record, {
+          scopedRuntime: true,
+          admittedRuntime: true,
+        }),
     );
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);

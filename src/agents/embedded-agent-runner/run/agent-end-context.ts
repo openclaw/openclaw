@@ -1,12 +1,6 @@
-import type { runAgentEndSideEffects } from "../../harness/agent-end-side-effects.js";
-import { buildEmbeddedAgentHookContext } from "./agent-hook-context.js";
 import type { EmbeddedForegroundPromptContext } from "./params.js";
 import { projectEmbeddedMessageContext } from "./shared-run-context.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
-
-type AgentEndContext = Parameters<typeof runAgentEndSideEffects>[0]["ctx"] & {
-  foregroundPromptContext: EmbeddedForegroundPromptContext;
-};
 
 type EmbeddedForegroundPromptContextRun = Pick<
   EmbeddedRunAttemptParams,
@@ -83,30 +77,5 @@ export function buildEmbeddedForegroundPromptContext(
     ...(callerOrigin && callerOrigin.kind !== "unknown"
       ? { cronCreatorCallerOrigin: callerOrigin }
       : {}),
-  };
-}
-
-export function buildEmbeddedAgentEndContext(params: {
-  run: EmbeddedRunAttemptParams;
-  agentId: string;
-  agentDir: string;
-  trace: AgentEndContext["trace"];
-  skillWorkshopAvailable: boolean;
-  compacted: boolean;
-}): AgentEndContext {
-  const run = params.run;
-  return {
-    ...buildEmbeddedAgentHookContext(run, params.agentId, params.trace),
-    modelProviderId: run.provider,
-    modelId: run.modelId,
-    modelContextWindowTokens: run.contextTokenBudget ?? run.model.contextWindow,
-    foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-      { ...run, agentId: params.agentId },
-      params.agentDir,
-    ),
-    authProfileId: run.authProfileId,
-    skillWorkshopAvailable: params.skillWorkshopAvailable,
-    compacted: params.compacted,
-    ...(run.config ? { config: run.config } : {}),
   };
 }

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { devices, type Locator } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -109,7 +110,16 @@ suite.define(() => {
           updatedAt: 1,
         },
       });
+      const beforeAccountChange = await gateway.deferNext("users.self");
       await reconnectMockGateway(page, gateway);
+      await gateway.waitForRequest("users.self", { after: beforeAccountChange });
+      await gateway.resolveDeferred("users.self");
+      // Transport readiness precedes profile adoption, which retires the old account's launcher.
+      await expect
+        .poll(() =>
+          evaluateControlUiContext(page, (context) => context.gateway.snapshot.selfUser?.id),
+        )
+        .toBe("bob");
       await page.keyboard.press("ControlOrMeta+K");
       await input.waitFor({ state: "visible" });
       await expect.poll(() => input.inputValue()).toBe("");
@@ -322,10 +332,9 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.create")).toEqual([]);
           if (width === 390) {
             expect(await start.locator("kbd").count()).toBe(0);
-            const footer = surface.locator(":scope > .cmd-palette__footer");
-            expect(await footer.locator("kbd").count()).toBe(1);
-            expect(await footer.locator("kbd").textContent()).toMatch(/^(Enter|⏎)$/);
           }
+          // Leave the attachment hover target before testing the palette's Escape shortcut.
+          await page.mouse.move(0, 0);
           await input.press("Escape");
           await input.waitFor({ state: "hidden" });
           await page.keyboard.press("ControlOrMeta+K");

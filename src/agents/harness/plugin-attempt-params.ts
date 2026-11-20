@@ -24,6 +24,7 @@ export async function preparePluginHarnessParams(
   setInputAttachmentReadAllowed: (allowed: boolean) => void,
   hasRuntimePluginToolGrant: boolean,
   webSearchModel?: ModelRef | null,
+  setToolPolicyScope?: (scope: "conversation" | "turn" | undefined) => void,
 ): Promise<import("./types.js").AgentHarnessAttemptParamsV2> {
   const boundary = "plugin harness handoff";
   const resolvedApiKey = params.resolvedApiKey
@@ -62,9 +63,12 @@ export async function preparePluginHarnessParams(
     pluginHarnessToolPolicyRestricted: policies.toolPolicyRestricted,
     pluginHarnessToolPolicyScope: hasRuntimePluginToolGrant ? "turn" : policies.toolPolicyScope,
   };
+  // Consent means the user accepted that the native runtime runs unrestricted;
+  // native harnesses pick their own approval mode from permissionMode.
   const effectiveParams = nativePermissionsConsented
-    ? policyParams
+    ? { ...policyParams, permissionMode: "full" as const }
     : applyPluginHarnessDenyAllToolPolicy(policyParams, policies);
+  setToolPolicyScope?.(effectiveParams.pluginHarnessToolPolicyScope);
   setInputAttachmentReadAllowed(
     isRuntimeToolAllowed("read", effectiveParams.toolsAllow) &&
       isRuntimeToolAllowed("read", effectiveParams.toolExecutionAllow) &&

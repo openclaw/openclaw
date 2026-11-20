@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeMethodBinder } from "openclaw/plugin-sdk/lazy-runtime";
 import { verifyInstalledCuaDriverArtifacts } from "./driver-artifacts.js";
 
@@ -116,21 +117,15 @@ class DirectCuaDriverSession {
     if (this.disposed) {
       throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-computer is stopping");
     }
-    if (!this.startPromise) {
-      const start = this.session
-        .startSession({ session: this.publicSession }, asyncOptions(signal))
-        .then(() => {
-          this.started = true;
-        });
-      this.startPromise = start;
-      try {
-        await start;
-      } catch (error) {
+    this.startPromise ??= this.session
+      .startSession({ session: this.publicSession }, asyncOptions(signal))
+      .then(() => {
+        this.started = true;
+      })
+      .catch((error: unknown) => {
         this.startPromise = undefined;
         throw error;
-      }
-      return;
-    }
+      });
     await this.startPromise;
   }
 
@@ -248,12 +243,7 @@ class DirectCuaDriverSession {
       return;
     }
     this.disposed = true;
-    let failure: unknown;
-    try {
-      await this.startPromise;
-    } catch (error) {
-      failure = error;
-    }
+    let failure: unknown = await this.startPromise?.catch((error: unknown) => error);
     if (this.started) {
       try {
         await this.session.endSession({ session: this.publicSession });
@@ -335,6 +325,7 @@ class LazyCuaDriverSession implements CuaDriverSession {
         return this.runtime;
       })
       .catch((error: unknown) => {
+        materializeErrorStack(error);
         this.loadFailure = error;
         this.hasLoadFailure = true;
         throw error;
@@ -393,36 +384,34 @@ class LazyCuaDriverSession implements CuaDriverSession {
       }
     };
     assertActive();
-    if (!this.preparePromise) {
-      this.preparePromise = (async () => {
-        const runtime = await this.requireRuntime();
+    this.preparePromise ??= (async () => {
+      const runtime = await this.requireRuntime();
+      assertActive();
+      try {
+        // Check authority before dispatch, never replay the requested action.
+        await runtime.getSessionState(signal);
+      } catch (error) {
+        const sdk = this.loadedSdk;
+        if (!sdk || !isExpiredSessionError(sdk, error)) {
+          throw sdk ? driverToolError(sdk, error) : error;
+        }
         assertActive();
         try {
-          // Check authority before dispatch, never replay the requested action.
-          await runtime.getSessionState(signal);
-        } catch (error) {
-          const sdk = this.loadedSdk;
-          if (!sdk || !isExpiredSessionError(sdk, error)) {
-            throw sdk ? driverToolError(sdk, error) : error;
-          }
-          assertActive();
-          try {
-            await runtime.dispose();
-          } finally {
-            // Disposal is terminal even when native cleanup reports a failure.
-            this.runtime = undefined;
-            this.generation = randomUUID();
-          }
-          assertActive();
-          this.runtime = new DirectCuaDriverSession(sdk);
-          await this.runtime.getSessionState(signal).catch((replacementError: unknown) => {
-            throw driverToolError(sdk, replacementError);
-          });
+          await runtime.dispose();
+        } finally {
+          // Disposal is terminal even when native cleanup reports a failure.
+          this.runtime = undefined;
+          this.generation = randomUUID();
         }
-      })().finally(() => {
-        this.preparePromise = undefined;
-      });
-    }
+        assertActive();
+        this.runtime = new DirectCuaDriverSession(sdk);
+        await this.runtime.getSessionState(signal).catch((replacementError: unknown) => {
+          throw driverToolError(sdk, replacementError);
+        });
+      }
+    })().finally(() => {
+      this.preparePromise = undefined;
+    });
     await this.preparePromise;
     assertActive();
   }

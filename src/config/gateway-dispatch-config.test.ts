@@ -23,7 +23,7 @@ vi.mock("../infra/shell-env.js", () => shellEnvMocks);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
-  shellEnvMocks.loadShellEnvFallback.mockReset().mockReturnValue({ ok: true, applied: [] });
+  shellEnvMocks.loadShellEnvFallback.mockReset().mockReturnValue([]);
   shellEnvMocks.resolveShellEnvFallbackTimeoutMs.mockReset().mockReturnValue(50);
   shellEnvMocks.shouldDeferShellEnvFallback.mockReset().mockReturnValue(false);
   shellEnvMocks.shouldEnableShellEnvFallback.mockReset().mockReturnValue(false);
@@ -71,6 +71,16 @@ it("reads only gateway dispatch fields from JSON5 config with includes and env v
   });
   expect((config as { models?: unknown }).models).toBeUndefined();
   expect(shellEnvMocks.loadShellEnvFallback).not.toHaveBeenCalled();
+});
+
+it("keeps the database engine config that store-backed credentials read", () => {
+  const database = {
+    postgres: { connection: { source: "file", provider: "pgdsn", id: "value" } },
+    families: { state: { engine: "postgres" } },
+  };
+  const configPath = configFile({ gateway: { port: 18888 }, database });
+
+  expect(readGatewayDispatchConfig({ configPath, env: {} }).database).toEqual(database);
 });
 
 it("still reports broken includes in discarded config branches", () => {
@@ -125,11 +135,10 @@ it("loads only gateway credential shell env keys on explicit fallback", async ()
   const env: NodeJS.ProcessEnv = { OPENCLAW_CONFIG_PATH: configPath };
   shellEnvMocks.loadShellEnvFallback.mockImplementation(({ env: targetEnv }) => {
     targetEnv.OPENCLAW_GATEWAY_TOKEN = "shell-token";
-    return { ok: true, applied: ["OPENCLAW_GATEWAY_TOKEN"] };
+    return ["OPENCLAW_GATEWAY_TOKEN"];
   });
   const config = await readGatewayDispatchConfigWithShellEnvFallback({ env });
   expect(shellEnvMocks.loadShellEnvFallback).toHaveBeenCalledWith({
-    enabled: true,
     env,
     expectedKeys: ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"],
     timeoutMs: 123,

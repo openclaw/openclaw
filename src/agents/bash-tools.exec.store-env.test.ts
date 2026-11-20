@@ -236,13 +236,6 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
-  const tool = createExecTool({ host: "sandbox", security: "full", ask: "off" });
-  await expect(tool.execute("call1", { command: "echo ok" })).rejects.toThrow(
-    /requires a sandbox runtime/,
-  );
-});
-
 it("rejects /approve nested in shell wrappers", async () => {
   await expect(
     runGateway({

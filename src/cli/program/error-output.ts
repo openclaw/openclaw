@@ -4,7 +4,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { levenshteinDistance } from "../../shared/levenshtein-distance.js";
 import { getCommandPathWithRootOptions } from "../argv.js";
 import { formatCliCommand } from "../command-format.js";
-import { ExpectedCliError } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { getCoreCliCommandNamesCore } from "./core-command-descriptors.js";
 import { getSubCliCommandMetadata } from "./subcli-command-metadata.js";
 
@@ -114,18 +114,19 @@ function formatCliUnknownCommandOutput(
 export function createCliParseError(
   raw: string,
   options: FormatCliParseErrorOptions = {},
-  errorOptions: { humanOutputWritten?: boolean } = {},
 ): ExpectedCliError {
   const message = stripCommanderErrorPrefix(raw);
   const unknownCommand = message.match(/^unknown command ['"`](.+?)['"`]/i);
   if (unknownCommand) {
-    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, errorOptions);
+    return createCliUnknownCommandError(unknownCommand[1] ?? "", options, {
+      humanOutputWritten: true,
+    });
   }
   const humanOutput = formatCliParseErrorOutput(raw, options);
   return new ExpectedCliError({
     message,
     humanOutput,
-    humanOutputWritten: errorOptions.humanOutputWritten,
+    humanOutputWritten: true,
     machineOutput: formatCliMachineOutput(humanOutput),
   });
 }

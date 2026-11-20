@@ -100,12 +100,22 @@ export async function deferBackgroundCompactionCleanup(params: {
   let outcome: "aborted" | "completed" | "deadline" = "deadline";
   let cleanupError: Error | undefined;
   try {
-    outcome = await awaitDeferredCleanupBeforeDeadline({
-      abortSignal: params.abortSignal,
-      awaitSessionIdle: params.awaitSessionIdle,
-      bridge: params.bridge,
-      timeoutMs: params.timeoutMs,
-    });
+    const { abortSignal, awaitSessionIdle, bridge, timeoutMs } = params;
+    if (abortSignal?.aborted) {
+      outcome = "aborted";
+    } else {
+      const completion = (async () => {
+        if (awaitSessionIdle) {
+          await bridge.awaitSessionIdle();
+        }
+        await bridge.awaitCompactionCompletion();
+        return "completed" as const;
+      })();
+      outcome = await raceWithTimeout(completion, timeoutMs, () => "deadline" as const, {
+        signal: abortSignal,
+        onAbort: () => "aborted" as const,
+      });
+    }
   } catch {
     // A failed wait follows the same bounded cancellation path as its deadline.
   } finally {
@@ -160,25 +170,4 @@ async function cancelBackgroundCompactionBeforeTeardown(session: SessionLike): P
     Promise.resolve().then(() => cancelBackgroundCompaction()),
     BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
   ).catch(() => undefined);
-}
-async function awaitDeferredCleanupBeforeDeadline(params: {
-  abortSignal: AbortSignal | undefined;
-  awaitSessionIdle: boolean;
-  bridge: ReturnType<typeof attachEventBridge>;
-  timeoutMs: number;
-}): Promise<"aborted" | "completed" | "deadline"> {
-  if (params.abortSignal?.aborted) {
-    return "aborted";
-  }
-  const completion = (async () => {
-    if (params.awaitSessionIdle) {
-      await params.bridge.awaitSessionIdle();
-    }
-    await params.bridge.awaitCompactionCompletion();
-    return "completed" as const;
-  })();
-  return await raceWithTimeout(completion, params.timeoutMs, () => "deadline" as const, {
-    signal: params.abortSignal,
-    onAbort: () => "aborted" as const,
-  });
 }

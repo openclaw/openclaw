@@ -4,8 +4,11 @@ import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
 import { parseOffsetlessIsoDateTimeInTimeZone } from "../../../../src/infra/format-time/parse-offsetless-zoned-datetime.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { parseCronDurationMs } from "./decimal.ts";
 import type { CronFormState } from "./types.ts";
+
+registerCronEnglish();
 
 export function parseCronScheduleAt(input: string): string | undefined {
   const parsed = parseOffsetlessIsoDateTimeInTimeZone(

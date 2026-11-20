@@ -96,8 +96,6 @@ async function resolveAuthorizedSmsTurn(params: {
   messageSid: string;
   commandRequested?: boolean;
   isTextCommand?: boolean;
-  receivedAt?: number;
-  turnAdoptionLifecycle?: { onAdopted: () => void | Promise<void> };
 }) {
   const mocks = createAuthorizedRuntime();
   if (params.commandRequested !== undefined) {
@@ -115,12 +113,7 @@ async function resolveAuthorizedSmsTurn(params: {
     accountSid: "AC123",
     media: [],
   };
-  await dispatch(mocks.runtime, msg, {
-    receivedAt: params.receivedAt ?? 1_700_000_000_123,
-    ...(params.turnAdoptionLifecycle
-      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
-      : {}),
-  });
+  await dispatch(mocks.runtime, msg);
   const runParams = expectDefined(mocks.run.mock.calls[0]?.[0], "SMS inbound run parameters");
   const turn = await runParams.adapter.resolveTurn(runParams.adapter.ingest(msg));
   return { ...mocks, runParams, turn };
@@ -167,12 +160,11 @@ function expectCleanedMedia() {
 
 describe("dispatchSmsInboundEvent", () => {
   beforeEach(() => {
-    unlinkIfExistsMock.mockClear();
+    unlinkIfExistsMock.mockReset().mockResolvedValue(undefined);
   });
 
   it("creates and sends a pairing challenge for first-time SMS senders", async () => {
-    const { runtime, readAllowFromStore, run, saveRemoteMedia, upsertPairingRequest } =
-      createRuntime();
+    const { runtime, run, saveRemoteMedia, upsertPairingRequest } = createRuntime();
 
     await dispatch(
       runtime,
@@ -180,86 +172,16 @@ describe("dispatchSmsInboundEvent", () => {
       { account: createAccount(), receivedAt: 1_700_000_000_000 },
     );
 
-    expect(readAllowFromStore).toHaveBeenCalledWith({ channel: "sms", accountId: "default" });
     expect(upsertPairingRequest).toHaveBeenCalledWith({
       channel: "sms",
       accountId: "default",
       id: "+15551234567",
-      meta: undefined,
     });
     expect(sendSmsViaTwilio).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ to: "+15551234567", text: expect.stringContaining("PAIR123") }),
     );
     expect(saveRemoteMedia).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
-  });
-
-  it("uses the canonical routed session key for authorized SMS turns", async () => {
-    const turnAdoptionLifecycle = { onAdopted: vi.fn(async () => undefined) };
-    const { resolveAgentRoute, runParams, buildContext, turn } = await resolveAuthorizedSmsTurn({
-      body: "hello",
-      messageSid: "SM-inbound",
-      receivedAt: 1_700_000_000_123,
-      turnAdoptionLifecycle,
-    });
-
-    expect(runParams.turnAdoptionLifecycle).toBe(turnAdoptionLifecycle);
-    expect(resolveAgentRoute).toHaveBeenCalledWith(
-      expect.objectContaining({ peer: { kind: "direct", id: SMS_FROM } }),
-    );
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timestamp: 1_700_000_000_123,
-        from: `sms:${SMS_FROM}`,
-        sender: expect.objectContaining({ id: SMS_FROM }),
-        conversation: expect.objectContaining({ id: SMS_FROM }),
-        reply: { to: `sms:${SMS_FROM}` },
-        route: expect.objectContaining({
-          routeSessionKey: SMS_SESSION_KEY,
-          dispatchSessionKey: SMS_SESSION_KEY,
-        }),
-      }),
-    );
-    expect(turn.route.sessionKey).toBe(SMS_SESSION_KEY);
-  });
-
-  it("downloads authorized MMS media with Twilio auth and exposes media facts", async () => {
-    const mocks = createAuthorizedRuntime();
-    mocks.buildContext.mockReturnValue({ SessionKey: SMS_SESSION_KEY });
-    const msg = createMmsMessage("MM-inbound");
-
-    await dispatch(mocks.runtime, msg);
-
-    expect(mocks.saveRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: msg.media[0]?.url,
-        maxBytes: 5 * 1024 * 1024,
-        ssrfPolicy: { hostnameAllowlist: ["api.twilio.com"] },
-        timeoutMs: 60_000,
-        retry: { attempts: 2, minDelayMs: 500, maxDelayMs: 2_000, jitter: 0.2 },
-        requestInit: {
-          headers: {
-            authorization: `Basic ${Buffer.from("AC123:secret").toString("base64")}`,
-          },
-          signal: expect.any(AbortSignal),
-        },
-      }),
-    );
-    expectCleanedMedia();
-    const runParams = expectDefined(mocks.run.mock.calls[0]?.[0], "SMS inbound run parameters");
-    await runParams.adapter.resolveTurn(runParams.adapter.ingest(msg));
-    expect(mocks.buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ bodyForAgent: "" }),
-        media: [
-          expect.objectContaining({
-            path: "/tmp/mms-1.jpg",
-            contentType: "image/jpeg",
-            messageId: "MM-inbound",
-          }),
-        ],
-      }),
-    );
   });
 
   it("cleans downloaded MMS files when sender access is revoked before dispatch", async () => {
@@ -281,95 +203,111 @@ describe("dispatchSmsInboundEvent", () => {
     expectCleanedMedia();
   });
 
-  it("retains deferred MMS files until the turn is abandoned", async () => {
+  it.each([
+    "abandoned",
+    "adopted",
+    "before adoption",
+    "after deferral",
+    "queue-cap-old",
+    "queue-cap-new",
+    "legacy abandonment",
+  ] as const)("settles downloaded MMS files when %s", async (phase) => {
     const mocks = createAuthorizedRuntime();
     const events: string[] = [];
+    const failure = new Error("durable adoption failed");
+    const original = lifecycle();
+    const dropReason = phase === "queue-cap-old" || phase === "queue-cap-new" ? phase : undefined;
+    let wrapped: SmsTurnAdoptionLifecycle | undefined;
+    if (phase === "after deferral") {
+      original.onAdopted = vi.fn(async () => {
+        throw failure;
+      });
+    }
+    original.onAbandoned = vi.fn(() => {
+      events.push("abandon");
+    });
+    original.onDropped = vi.fn(async (reason) => {
+      events.push(reason);
+    });
+    if (phase === "legacy abandonment") {
+      original.onDropped = undefined;
+    }
     unlinkIfExistsMock.mockImplementationOnce(async () => {
       events.push("cleanup");
     });
-    const originalLifecycle: SmsTurnAdoptionLifecycle = {
-      ...lifecycle(),
-      onAbandoned: vi.fn(() => {
-        events.push("abandon");
-      }),
-    };
-    let wrappedLifecycle: SmsTurnAdoptionLifecycle | undefined;
-    mocks.run.mockImplementationOnce(async (runParams) => {
-      wrappedLifecycle = runParams.turnAdoptionLifecycle;
-      wrappedLifecycle?.onDeferred?.();
+    const msg = createMmsMessage("MM-lifecycle");
+    mocks.run.mockImplementationOnce(async ({ turnAdoptionLifecycle, adapter }) => {
+      wrapped = turnAdoptionLifecycle;
+      if (phase === "legacy abandonment") {
+        expect(wrapped?.onDropped).toBeUndefined();
+        wrapped?.onDeferred?.();
+        return;
+      }
+      if (phase === "before adoption") {
+        throw failure;
+      }
+      if (phase !== "adopted" && phase !== "queue-cap-new") {
+        wrapped?.onDeferred?.();
+      } else if (phase === "adopted") {
+        await adapter.resolveTurn(adapter.ingest(msg));
+        expect(mocks.buildContext.mock.calls[0]?.[0]).toMatchObject({
+          message: { bodyForAgent: "" },
+          media: [{ path: "/tmp/mms-1.jpg", contentType: "image/jpeg", messageId: msg.messageSid }],
+        });
+      }
+      if (phase === "queue-cap-new") {
+        await wrapped?.onDropped?.(phase);
+      } else if (phase !== "abandoned" && phase !== "queue-cap-old") {
+        await wrapped?.onAdopted();
+      }
     });
-
-    await dispatch(mocks.runtime, createMmsMessage("MM-deferred"), {
-      turnAdoptionLifecycle: originalLifecycle,
+    const pending = dispatch(mocks.runtime, msg, {
+      turnAdoptionLifecycle: original,
     });
-
-    expect(originalLifecycle.onDeferred).toHaveBeenCalledOnce();
-    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
-    await wrappedLifecycle?.onAbandoned?.();
-    await vi.waitFor(() => expect(originalLifecycle.onAbandoned).toHaveBeenCalledOnce());
-    expectCleanedMedia();
-    expect(events).toEqual(["cleanup", "abandon"]);
-  });
-
-  it("retains MMS files after successful turn adoption", async () => {
-    const mocks = createAuthorizedRuntime();
-    const originalLifecycle = lifecycle();
-    mocks.run.mockImplementationOnce(async (runParams) => {
-      await runParams.turnAdoptionLifecycle?.onAdopted();
-    });
-
-    await dispatch(mocks.runtime, createMmsMessage("MM-adopted"), {
-      turnAdoptionLifecycle: originalLifecycle,
-    });
-
-    expect(originalLifecycle.onAdopted).toHaveBeenCalledOnce();
-    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["before adoption", "after deferral"])(
-    "cleans MMS files on failure %s",
-    async (phase) => {
-      const mocks = createAuthorizedRuntime();
-      const adoptionError = new Error("durable adoption failed");
-      const originalLifecycle: SmsTurnAdoptionLifecycle = {
-        ...lifecycle(),
-        onAdopted: vi.fn(async () => {
-          throw adoptionError;
-        }),
-      };
-      mocks.run.mockImplementationOnce(async (runParams) => {
-        if (phase === "before adoption") {
-          throw adoptionError;
-        }
-        runParams.turnAdoptionLifecycle?.onDeferred?.();
-        await runParams.turnAdoptionLifecycle?.onAdopted();
-      });
-
-      await expect(
-        dispatch(mocks.runtime, createMmsMessage("MM-adoption-failed"), {
-          turnAdoptionLifecycle: originalLifecycle,
-        }),
-      ).rejects.toBe(adoptionError);
-
+    if (phase === "before adoption" || phase === "after deferral") {
+      await expect(pending).rejects.toBe(failure);
       expectCleanedMedia();
-    },
-  );
+      return;
+    }
+    await pending;
+    if (dropReason) {
+      if (dropReason === "queue-cap-old") {
+        expect(unlinkIfExistsMock).not.toHaveBeenCalled();
+        await wrapped?.onDropped?.(dropReason);
+      }
+      expectCleanedMedia();
+      expect(original.onDropped).toHaveBeenCalledExactlyOnceWith(dropReason);
+      expect(original.onAbandoned).not.toHaveBeenCalled();
+      expect(events).toEqual(["cleanup", dropReason]);
+      return;
+    }
+    expect(unlinkIfExistsMock).not.toHaveBeenCalled();
+    if (phase === "adopted") {
+      expect(original.onAdopted).toHaveBeenCalledOnce();
+    } else {
+      expect(original.onDeferred).toHaveBeenCalledOnce();
+      await wrapped?.onAbandoned?.();
+      await vi.waitFor(() => expect(original.onAbandoned).toHaveBeenCalledOnce());
+      expectCleanedMedia();
+      expect(events).toEqual(["cleanup", "abandon"]);
+    }
+  });
 
   it.each<[string, string, boolean]>([
     ["/status", "SM-command", true],
     ["please inspect /tmp/foo", "SM-inline-token", false],
   ])("authorizes %s with the correct command kind", async (body, messageSid, isTextCommand) => {
-    const { shouldComputeCommandAuthorized, isControlCommandMessage, buildContext } =
-      await resolveAuthorizedSmsTurn({ body, messageSid, commandRequested: true, isTextCommand });
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith(body, {});
-    expect(isControlCommandMessage).toHaveBeenCalledWith(body, {});
-    expect(buildContext).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({ rawBody: body, commandBody: body }),
-        access: { commands: { authorized: true } },
-        command: isTextCommand ? { kind: "text-slash", body, authorized: true } : undefined,
-        extra: expect.objectContaining({ MessageSid: messageSid, SenderE164: SMS_FROM }),
-      }),
-    );
+    const { buildContext } = await resolveAuthorizedSmsTurn({
+      body,
+      messageSid,
+      commandRequested: true,
+      isTextCommand,
+    });
+    expect(buildContext.mock.calls[0]?.[0]).toMatchObject({
+      message: { rawBody: body, commandBody: body },
+      access: { commands: { authorized: true } },
+      command: isTextCommand ? { kind: "text-slash", body, authorized: true } : undefined,
+      extra: { MessageSid: messageSid, SenderE164: SMS_FROM },
+    });
   });
 });

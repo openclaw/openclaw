@@ -12,6 +12,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
@@ -25,9 +26,16 @@ import {
   createRuntimeConfigCapability,
   type RuntimeConfigCapability,
 } from "../../lib/config/runtime-config-capability.ts";
-import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
-import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
-import { peekModelCatalog } from "../../lib/model-catalog-store.ts";
+import {
+  invalidateModelAuthStatusRequests,
+  modelAuthEventInvalidates,
+} from "../../lib/model-auth-request-state.ts";
+import {
+  beginModelCatalogRead,
+  modelCatalogEventInvalidation,
+  publishModelCatalogResult,
+} from "../../lib/model-catalog-cache.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
@@ -69,9 +77,9 @@ export type ModelProvidersPageTestElement = Pick<
 
 const modelPickerLabels = {
   primary: "Model",
-  utility: "Utility Model",
-  fallback: "Fallback Model",
-  decision: "Decision Model",
+  utility: "Utility model",
+  fallback: "Fallback model",
+  decision: "Decision model",
 };
 
 export function modelPicker(
@@ -85,31 +93,11 @@ export function modelPicker(
   return picker!;
 }
 
-export function chatModelPickers(page: Pick<ParentNode, "querySelector">): SelectPicker[] {
-  return (["primary", "utility", "fallback"] as const).map((role) => modelPicker(page, role));
-}
-
-export async function retryCatalog(page: ModelProvidersPageTestElement): Promise<void> {
-  await page.updateComplete;
-  const retry = page.querySelector<HTMLButtonElement>(".model-providers__catalog-progress button");
-  expect(retry?.textContent?.trim()).toBe("Retry");
-  retry!.click();
-  await page.updateComplete;
-}
-
 export async function drainPageUpdates(page: ModelProvidersPageTestElement): Promise<void> {
   // Drain every promise continuation before checking that a retired result stayed absent.
   await setImmediate();
   await page.updateComplete;
   await updatePickers(page.renderRoot);
-}
-
-export function displayedCatalog(page: ModelProvidersPageTestElement) {
-  return peekModelCatalog(
-    page.context.gateway.snapshot.client!,
-    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "" },
-    { allowStale: true },
-  );
 }
 
 export function publishCatalog(
@@ -199,7 +187,7 @@ export async function saveKey(page: ModelProvidersPageTestElement, value: string
   page.view.props.onOpenKeyEditor("openai");
   page.view.props.onKeyDraftChange(value);
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!.click();
 }
 
 export async function openApiKeyProvider(page: ModelProvidersPageTestElement, provider: string) {
@@ -211,7 +199,8 @@ export async function openApiKeyProvider(page: ModelProvidersPageTestElement, pr
   expect(choice).not.toBeNull();
   choice!.click();
   await page.updateComplete;
-  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")!.click();
+  // A provider with only a key opens its form directly, without the method step.
+  page.querySelector<HTMLButtonElement>("[data-models-login-api-key]")?.click();
   await page.updateComplete;
 }
 
@@ -244,6 +233,8 @@ export function createHarness(initialScopeId: string) {
       }
       case "models.list":
         return { models: [] };
+      case "models.probe":
+        return { provider: "fixture", status: "ok", results: [] };
       case "config.get":
         return {
           config: { agents: { defaults: { thinkingDefault: "low", fastModeDefault: "auto" } } },
@@ -259,11 +250,9 @@ export function createHarness(initialScopeId: string) {
         return {};
     }
   });
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok",
       protocol: 3,
@@ -292,9 +281,7 @@ export function createHarness(initialScopeId: string) {
     },
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const gatewaySource = createApplicationGateway(snapshot);
   const metadata = createGatewayMetadataObserver(
     (current) => current === gatewaySource.gateway.snapshot,
@@ -360,15 +347,7 @@ export function createHarness(initialScopeId: string) {
     gateway: gatewaySource.gateway,
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
+        agentsList: agentRoster({ main: "Main", writer: "Writer" }, "main", "project"),
         agentsLoading: false,
         agentsError: null as string | null,
       },
@@ -401,12 +380,12 @@ export function createHarness(initialScopeId: string) {
     },
     publishEvent: (event: GatewayEventFrame) => {
       // The app invalidates shared facts before delivering publication events to pages.
-      if (
-        snapshot.client &&
-        (event.event === "config.changed" || event.event === "chat.metadata.changed")
-      ) {
+      if (snapshot.client && modelAuthEventInvalidates(event)) {
         invalidateModelAuthStatusRequests(snapshot.client);
-        invalidateChatMetadataStore(snapshot.client);
+      }
+      const invalidation = modelCatalogEventInvalidation(event);
+      if (snapshot.client && invalidation) {
+        invalidateChatMetadataStore(snapshot.client, undefined, undefined, invalidation);
       }
       if (event.event === "config.changed" && !runtimeConfig.state.configFormDirty) {
         void runtimeConfig.refresh();

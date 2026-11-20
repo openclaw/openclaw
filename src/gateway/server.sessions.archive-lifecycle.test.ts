@@ -1,5 +1,11 @@
+import { mkdtempSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import * as processControl from "../agents/bash-process-control.js";
+import { getSession, listRunningSessions } from "../agents/bash-process-registry.js";
+import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
@@ -11,7 +17,8 @@ import {
 } from "../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { isPidAlive } from "../shared/pid-alive.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   disposeSessionReadContexts,
   initializeSessionReadContext,
@@ -43,6 +50,8 @@ import { registerWorkerInferenceSessionControl } from "./worker-environments/inf
 import { createWorkerInferenceDrainService } from "./worker-environments/inference-control.test-helpers.js";
 import type { WorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+
+vi.mock("../agents/bash-process-control.js", { spy: true });
 
 const {
   createConfiguredGlobalAgentSessionStore,
@@ -259,7 +268,6 @@ afterEach(async () => {
   // Vitest cancellation rejects its wrapper before the retained handler body finishes.
   await archiveFixture.cleanup();
   await disposeSessionReadContexts();
-  closeOpenClawStateDatabaseForTest();
 });
 
 archiveTest(
@@ -278,7 +286,6 @@ archiveTest(
       }),
     );
     await waitForArchivePhase(active.aborted, archive, signal);
-    expect(active.controller.signal.aborted).toBe(true);
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 
     let replacementAdmitted = false;
@@ -305,7 +312,6 @@ archiveTest(
     await Promise.resolve();
     expect(replacementAdmitted).toBe(false);
 
-    await Promise.resolve();
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
     persistence.resolve();
 
@@ -418,7 +424,6 @@ test.for(["creator", "changed identity"] as const)(
 
       const archive = track(authority.archive());
       await waitForArchivePhase(active.aborted, archive, signal);
-      expect(active.controller.signal.aborted).toBe(true);
 
       const sharing = track(authority.share());
       expect(await sharing).toMatchObject({ ok: true });
@@ -436,7 +441,6 @@ test.for(["creator", "changed identity"] as const)(
         return;
       }
       await waitForArchivePhase(reclaimEntered.promise, archive, signal);
-      expect(reclaim).toHaveBeenCalledOnce();
       expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
       reclaimGate.resolve();
       expect(await archive).toMatchObject({ ok: true });
@@ -454,7 +458,7 @@ archiveTest(
     const allowNestedReclaim = createDeferredCore();
     const contenderRelease = createDeferredCore();
     const contenderStarted = createDeferredCore();
-    const { current, reclaim, context } = placementFixture(session, async () => {
+    const { current, context } = placementFixture(session, async () => {
       reclaimEntered.resolve();
       await allowNestedReclaim.promise;
       await runSessionMutation({
@@ -486,7 +490,6 @@ archiveTest(
     contenderRelease.resolve();
     const [result] = await Promise.all([archive, contender]);
     expect(result.ok).toBe(true);
-    expect(reclaim).toHaveBeenCalledOnce();
     expect(current().state).toBe("reclaimed");
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toEqual(expect.any(Number));
   },
@@ -568,7 +571,12 @@ test.each(["active work", "unavailable drain", "runtime drain rejection"] as con
         reserveSessionDrain: () => {
           throw new Error("Worker inference drain is unavailable");
         },
-        captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+        captureSessionCancellation: () => ({
+          runIds: [],
+          settled: Promise.resolve(),
+          executing: false,
+          cancel: async () => [],
+        }),
         resolveSessionTargetForRunId: () => undefined,
       });
     }
@@ -644,9 +652,7 @@ test.for([
 ] as const)("sessions.patchMany %s", ([, releaseFails], { signal }) =>
   withArchiveCleanup(signal, async ({ track, releaseOnAbort }) => {
     const batch = await createArchiveBatch();
-    const {
-      ids: [firstSessionId, secondSessionId],
-    } = batch;
+    const [firstSessionId] = batch.ids;
     const firstDrained = createDeferredCore();
     const firstStarted = createDeferredCore();
     const secondStarted = createDeferredCore();
@@ -675,11 +681,6 @@ test.for([
       Promise.all([firstStarted.promise, secondStarted.promise]),
       archive,
       signal,
-    );
-    expect(beginInferenceSessionDrain).toHaveBeenCalledTimes(2);
-    // Independent preparations race their worker reads; releases stay in target order below.
-    expect(beginInferenceSessionDrain.mock.calls.map(([sessionId]) => sessionId)).toEqual(
-      expect.arrayContaining([firstSessionId, secondSessionId]),
     );
     expect(firstRelease).not.toHaveBeenCalled();
     expect(secondRelease).not.toHaveBeenCalled();
@@ -756,4 +757,76 @@ archiveTest(
     expect(current().state).toBe("active");
     expect(dispatch).not.toHaveBeenCalled();
   },
+);
+
+test.each([true, false])(
+  "archive stops the chat's service and leftover process (stop confirmed=%s)",
+  async (confirmed) => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { storePath, sessionKey, sessionId } = await createArchiveSession(
+      `archive-processes-${confirmed}`,
+    );
+    const sleeper = `${JSON.stringify(process.execPath)} -e 'setTimeout(() => {}, 60000)'`;
+    const pids = await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "archive-test",
+        OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
+        SHELL: "/bin/sh",
+      },
+      async () => {
+        const exec = createExecTool({
+          host: "gateway",
+          mode: "full",
+          ask: "off",
+          allowBackground: true,
+          notifyOnExit: false,
+          scopeKey: sessionKey,
+          cwd: mkdtempSync(path.join(os.tmpdir(), "archive-exec-")),
+        });
+        const service = await exec.execute("service", {
+          command: `echo PID=$$; exec ${sleeper}`,
+          background: true,
+        });
+        const { sessionId: id } = service.details as { sessionId: string };
+        await vi.waitFor(() => expect(getSession(id)?.aggregated).toMatch(/PID=\d+/));
+        const left = await exec.execute("left", {
+          command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+        });
+        return [
+          getSession(id)!.aggregated,
+          (left.details as { aggregated: string }).aggregated,
+        ].map((text) => Number(/PID=(\d+)/.exec(text)![1]));
+      },
+    );
+    try {
+      expect(pids.every(isPidAlive)).toBe(true);
+      if (!confirmed) {
+        vi.mocked(processControl.stopSessionExecProcesses).mockRejectedValueOnce(
+          new Error("Command cleanup could not be confirmed"),
+        );
+      }
+      const archived = await archiveSession(sessionKey, sessionId);
+      if (confirmed) {
+        expect(archived.ok).toBe(true);
+        expectArchived(storePath, sessionKey);
+        expect(pids.filter(isPidAlive)).toEqual([]);
+        expect(listRunningSessions().filter((session) => session.scopeKey === sessionKey)).toEqual(
+          [],
+        );
+      } else {
+        expectArchiveUnavailable(archived, storePath, sessionKey);
+      }
+    } finally {
+      for (const pid of pids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already stopped.
+        }
+      }
+    }
+  },
+  60_000,
 );

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { emitJsonOrText } from "./output.js";
 
@@ -10,12 +11,25 @@ export function runCapabilityCommand<T>(
   run: () => T | Promise<T>,
 ): Promise<void> {
   return runCommandWithRuntime(defaultRuntime, async () => {
-    emitJsonOrText(
-      defaultRuntime,
-      Boolean(json),
-      await run(),
-      format ?? ((value) => JSON.stringify(value, null, 2)),
-    );
+    const signal = getAsyncWorkSignal();
+    try {
+      const result = await run();
+      // The root command signal owner records the exit status after cleanup.
+      signal?.throwIfAborted();
+      emitJsonOrText(
+        defaultRuntime,
+        Boolean(json),
+        result,
+        format ?? ((value) => JSON.stringify(value, null, 2)),
+      );
+    } catch (error) {
+      // An accepted interrupt owns the exit status: publish no failure for work the
+      // signal stopped.
+      if (signal?.aborted) {
+        return;
+      }
+      throw error;
+    }
   });
 }
 

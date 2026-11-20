@@ -28,7 +28,6 @@ type DiagnosticRecoveryTool = DiagnosticRecoveryMarker & {
 type DiagnosticRecoveryModelCall = DiagnosticRecoveryMarker & {
   sessionKey?: string;
   requestTimeoutMs?: number;
-  deadlineAtMs?: number;
 };
 
 export type DiagnosticRecoveryActivity = {

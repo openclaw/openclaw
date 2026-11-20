@@ -1,14 +1,19 @@
-import type { Page } from "playwright";
+import { writeFile } from "node:fs/promises";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
+  holdModuleResponse,
 } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat loading deadlines" });
@@ -35,7 +40,62 @@ async function startPending(page: Page, options: Parameters<typeof installMockGa
 const catalogMethods = [...defaultControlUiFeatureMethods, "sessions.catalog.list"];
 const sidebarErrors = ".callout.danger, .sidebar-session-catalog-error";
 
+const proofDir = createControlUiE2eArtifactDir("chat-loading-history");
+async function capture(page: Page, name: string, content: Locator) {
+  const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
+    animations: "disabled",
+  });
+  await writeFile(`${proofDir}/${name}.png`, frame.png);
+}
+
 suite.define(() => {
+  it.each([false, true])(
+    "shows message placeholders only for saved history (hasMessages: %s)",
+    async (hasMessages) => {
+      const key = "agent:main:main";
+      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          sessionKey: key,
+          sessions: [{ key, kind: "direct", sessionId: "history-session", hasMessages }],
+          historyMessages: hasMessages
+            ? [{ role: "assistant", content: "Saved conversation" }]
+            : [],
+          heldMethods: ["chat.startup"],
+        });
+        const boot = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/main.ts"),
+        );
+        try {
+          await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "commit" });
+          await boot.request;
+          const shell = page.locator("#openclaw-boot-shell");
+          await shell.locator(".loading-skeleton__composer").waitFor();
+          await capture(page, `plain-history-${hasMessages}-boot`, shell);
+          expect(await shell.locator(".loading-skeleton__message:visible").count()).toBe(0);
+        } finally {
+          boot.release();
+        }
+        await gateway.waitForRequest("sessions.messages.subscribe", { match: { key } });
+        const pane = page.locator(".chat-pane-cache__pane--visible");
+        await pane.locator(".chat-thread").waitFor();
+        await capture(page, `plain-history-${hasMessages}-pending`, pane);
+        expect(
+          await pane
+            .locator(
+              ".chat-thread .chat-conversation-loading, .chat-thread .loading-skeleton, .chat-thread openclaw-panel-loading-skeleton",
+            )
+            .count(),
+        ).toBe(hasMessages ? 1 : 0);
+        expect(await pane.getByText("Saved conversation", { exact: true }).count()).toBe(0);
+        await gateway.resolveDeferred("chat.startup");
+        if (hasMessages) {
+          await pane.getByText("Saved conversation", { exact: true }).waitFor();
+        }
+      });
+    },
+  );
+
   it("automatically loads the route and sidebar after prolonged agent startup", async () => {
     await withPage(async (page) => {
       const { gateway, startup, sidebar } = await startPending(page, {
@@ -54,7 +114,7 @@ suite.define(() => {
       expect(await startup.textContent()).toContain("Starting up");
       expect(await startup.textContent()).toContain("This view will load automatically.");
       expect(await startup.getByRole("button").count()).toBe(0);
-      expect(await page.getByText("Panel failed to load", { exact: true }).count()).toBe(0);
+      expect(await page.getByText("Couldn’t load this panel.", { exact: true }).count()).toBe(0);
       expect(await sidebar.locator(sidebarErrors).count()).toBe(0);
       expect(await page.locator("body").textContent()).not.toContain("openclaw doctor --fix");
 
@@ -98,7 +158,7 @@ suite.define(() => {
       await pauseVirtualClock(page);
       await page.clock.runFor(150_000);
 
-      await page.getByText("Panel failed to load", { exact: true }).waitFor();
+      await page.getByText("Couldn’t load this panel.", { exact: true }).waitFor();
       expect(await startup.count()).toBe(0);
       expect(await page.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(true);
       await sidebar.locator(sidebarErrors).filter({ hasText: diagnostic }).first().waitFor();
@@ -129,6 +189,7 @@ suite.define(() => {
       const diagnostic =
         "Agent main has not completed startup inspection and preparation. Run Doctor if inspection cannot complete.";
       const gateway = await installMockGateway(page, {
+        subscriptionInitialHistory: false,
         awaitInitialRoster: false,
         sessionKey: "agent:main:main",
         methodResponses: {
@@ -180,6 +241,7 @@ suite.define(() => {
           });
         }
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: method !== "chat.startup",
           sessionKey: "agent:main:main",
           heldMethods: [method],
           historyMessages: [{ role: "assistant", content: readyText }],
@@ -202,15 +264,25 @@ suite.define(() => {
         }
         await composer.fill(draft);
         await pauseVirtualClock(page);
-        await page.clock.runFor(60_001);
+        if (method === "chat.startup") {
+          // Preserve the first timeout and automatic retry before the shared deadline.
+          await page.clock.fastForward(30_001);
+          await page.clock.runFor(501);
+          await gateway.waitForRequest(method, { after: 1 });
+          await page.clock.fastForward(30_001);
+        } else {
+          await page.clock.fastForward(60_001);
+        }
+        await page.clock.runFor(100);
 
         expect(await gateway.getSocketCount()).toBe(1);
         expect(await composer.inputValue()).toBe(draft);
         if (method === "chat.startup") {
-          expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
+          const errorText = await page.locator(".chat-history-error").textContent();
+          expect(errorText).toContain("Couldn’t load the conversation in time. Try again.");
           expect(await retry.isEnabled()).toBe(true);
           expect(
-            await page.getByRole("button", { name: "Loading chat", exact: true }).count(),
+            await page.getByRole("button", { name: "Loading conversation…", exact: true }).count(),
           ).toBe(0);
           const send = page.locator(".chat-send-btn--send");
           expect(await send.isEnabled()).toBe(true);
@@ -277,6 +349,7 @@ suite.define(() => {
         const diagnostic = "⚠️ ✉️ Message failed: delivery unavailable near 🧭";
         const renderedDiagnostic = "Message failed: delivery unavailable near 🧭";
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
           // Account recovery can replace startup with a scoped history request.
           heldMethods: ["chat.startup", "chat.history", "chat.send"],
@@ -296,7 +369,7 @@ suite.define(() => {
         const composer = page.locator(".agent-chat__input textarea");
         const sendButton = page.getByRole("button", { name: "Send message" });
         const alert = page.getByRole("alert").filter({ hasText: renderedDiagnostic });
-        const stop = page.getByRole("button", { name: "Stop generating" });
+        const stop = page.getByRole("button", { name: "Stop", exact: true });
         const details = alert.getByLabel("Error details", { exact: true });
         await composer.fill("Try again");
         expect(await sendButton.isEnabled()).toBe(true);
@@ -326,7 +399,6 @@ suite.define(() => {
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
-            .locator("summary strong")
             .getByText("Couldn't finish this reply. Check the conversation before trying again.")
             .waitFor();
           expect(await alert.locator("details").getAttribute("open")).toBeNull();

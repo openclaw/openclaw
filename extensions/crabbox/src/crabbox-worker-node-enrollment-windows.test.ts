@@ -10,17 +10,24 @@ const home = String.raw`C:\Users\Administrator`;
 const programFiles = String.raw`C:\Program Files`;
 const node = path.win32.join(programFiles, "nodejs", "node.exe");
 const leaseId = "cbx_windows_replay_fixture";
-const stateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
-const runtimeDir = path.win32.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
-const cli = path.win32.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+const defaultStateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
+const defaultRuntimeDir = path.win32.join(
+  home,
+  ".openclaw-worker",
+  "node-runtimes",
+  "a".repeat(64),
+);
+const defaultCli = path.win32.join(defaultRuntimeDir, "node_modules", "openclaw", "openclaw.mjs");
 const launcher = path.win32.join(programFiles, "Crabbox/bin/Start-CrabboxDetachedProcess.ps1");
 const startTime = "2026-09-09T12:00:00.1234567Z";
 const session = { sessionId: 2, userSid: "S-1-5-21-1001" };
-const stateFile = (name: string) => path.win32.join(stateDir, name);
 const replayError =
   "Cloud worker node is running a different bootstrap artifact or invocation; release and reprovision the worker";
 
 type ReplayOptions = {
+  shortState?: boolean;
+  home?: string;
+  leaseId?: string;
   interrupted?: "dangling-runtime" | "receipt-only";
   desktop?: boolean;
   currentSession?: { sessionId: number; userSid: string };
@@ -34,24 +41,27 @@ type ReplayOptions = {
 };
 
 async function replay(options: ReplayOptions = {}) {
+  const workerHome = options.home ?? home;
+  const workerLeaseId = options.leaseId ?? leaseId;
+  const runtimeDir = path.win32.join(
+    workerHome,
+    ".openclaw-worker",
+    "node-runtimes",
+    "a".repeat(64),
+  );
+  const cli = path.win32.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  const legacyStateDir = path.win32.join(workerHome, ".openclaw", "cloud-workers", workerLeaseId);
+  let stateDir = legacyStateDir;
+  const stateFile = (name: string) => path.win32.join(stateDir, name);
   const interruptedPath = options.interrupted
     ? stateFile(options.interrupted === "receipt-only" ? "node-launch.json" : "runtime")
     : undefined;
   const identity = { pid: 123, startTime, ...(options.desktop ? session : {}) };
-  const files = new Map([
-    [
-      path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
-    ],
-    [stateFile("node.pid"), "123\n"],
-    [
-      stateFile("node-launch.json"),
-      options.recordOutput ??
-        JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord }),
-    ],
-  ]);
+  let launchRecord =
+    options.recordOutput ??
+    JSON.stringify({ ...identity, runtimeDir, stateDir, cli, ...options.launchRecord });
   const setup = createCrabboxNodeEnrollmentSetup({
-    leaseId,
+    leaseId: workerLeaseId,
     desktop: options.desktop,
     target: "windows/normal",
     enrollment: {
@@ -74,7 +84,13 @@ async function replay(options: ReplayOptions = {}) {
     exitCode: 0,
   };
   const fs = {
-    mkdirSync: vi.fn(),
+    mkdirSync: vi.fn((directory: string) => {
+      if (!options.shortState || directory === stateDir) {
+        return;
+      }
+      stateDir = directory;
+      launchRecord = JSON.stringify({ ...identity, runtimeDir, stateDir, cli });
+    }),
     chmodSync: vi.fn(),
     mkdtempSync: () => path.win32.join(home, "desktop-probe"),
     writeFileSync: vi.fn(),
@@ -83,6 +99,7 @@ async function replay(options: ReplayOptions = {}) {
     symlinkSync: vi.fn(),
     rmSync: vi.fn(),
     existsSync: (file: string) =>
+      (file === legacyStateDir && !options.shortState) ||
       (file === stateFile("node.pid") && !options.interrupted) ||
       file === runtimeDir ||
       (file === launcher && !options.missingLauncher),
@@ -96,11 +113,16 @@ async function replay(options: ReplayOptions = {}) {
       throw Object.assign(new Error("Missing runtime pointer"), { code: "ENOENT" });
     },
     readFileSync: (file: string) => {
-      const content = files.get(file);
-      if (content === undefined) {
-        throw new Error(`Unexpected file read: ${file}`);
+      if (file === path.win32.join(runtimeDir, "node_modules", "openclaw", "package.json")) {
+        return JSON.stringify({ name: "openclaw", version: "2026.8.1" });
       }
-      return content;
+      if (file === stateFile("node.pid")) {
+        return "123\n";
+      }
+      if (file === stateFile("node-launch.json")) {
+        return launchRecord;
+      }
+      throw new Error(`Unexpected file read: ${file}`);
     },
     realpathSync: (file: string) =>
       options.canonicalizePaths
@@ -113,6 +135,12 @@ async function replay(options: ReplayOptions = {}) {
   const spawnSync = vi.fn((binary: string, args: string[], opts: { env: NodeJS.ProcessEnv }) => {
     if (binary === node && args[0] === cli) {
       return { status: 0, stdout: args[1] === "--version" ? "OpenClaw 2026.8.1" : "" };
+    }
+    if (options.shortState && args.at(-1)?.includes("icacls.exe")) {
+      expect(args.at(-1)).toContain(stateDir);
+      expect(args.at(-1)).toContain("/inheritance:r");
+      expect(opts.env).not.toHaveProperty("CRABBOX_WORKER_SETUP_CODE");
+      return { status: 0, stdout: "" };
     }
     if (options.desktop && args.includes("-File")) {
       expect(processFixture.env).not.toHaveProperty("CRABBOX_WORKER_BOOTSTRAP_TOKEN");
@@ -149,10 +177,11 @@ async function replay(options: ReplayOptions = {}) {
     "node:fs": fs,
     "node:path": path.win32,
     "node:os": {
-      homedir: () => (options.canonicalizePaths ? home.toLowerCase() : home),
+      homedir: () => (options.canonicalizePaths ? workerHome.toLowerCase() : workerHome),
       tmpdir: () => path.win32.join(home, "Temp"),
     },
     "node:child_process": { spawn, spawnSync },
+    "node:perf_hooks": { performance: { now: () => 0 } },
   };
   await runInNewContext(script, {
     Buffer,
@@ -170,10 +199,36 @@ async function replay(options: ReplayOptions = {}) {
     expect(fs.symlinkSync).not.toHaveBeenCalled();
     expect(processFixture.kill).not.toHaveBeenCalled();
   }
-  return { code: processFixture.exitCode, output: output.join("\n"), spawnSync, fs };
+  return { code: processFixture.exitCode, output: output.join("\n"), spawnSync, fs, stateDir };
 }
 
 describe("native Windows node enrollment replay", () => {
+  it("keeps new workspace paths short with maximal IDs and preserves lease and account isolation", async () => {
+    const workerHome = String.raw`D:\Users\crabbox.${"x".repeat(200)}`;
+    const workerLeaseId = `cbx_${"f".repeat(128)}`;
+    const results = await Promise.all([
+      replay({ shortState: true, home: workerHome, leaseId: workerLeaseId }),
+      replay({ shortState: true, home: workerHome, leaseId: `${workerLeaseId.slice(0, -1)}e` }),
+      replay({ shortState: true, home: `${workerHome}y`, leaseId: workerLeaseId }),
+    ]);
+    for (const result of results) {
+      expect(result, result.output).toMatchObject({ code: 0 });
+      // Node-host adds the generated Gateway namespace, environment/session hashes and generation.
+      const workspaceDir = path.win32.join(
+        result.stateDir,
+        "node-host",
+        `gateway-${"f".repeat(32)}`,
+        "workspaces",
+        "f".repeat(16),
+        "f".repeat(32),
+        String(Number.MAX_SAFE_INTEGER),
+      );
+      expect(workspaceDir.length).toBeLessThan(180);
+      expect(result.stateDir).toMatch(/^D:\\ocw\\[a-f0-9]{32}$/u);
+    }
+    expect(new Set(results.map((result) => result.stateDir)).size).toBe(3);
+  });
+
   it("reuses canonical drive-letter paths without launching a second process", async () => {
     const result = await replay({
       canonicalizePaths: true,
@@ -182,10 +237,10 @@ describe("native Windows node enrollment replay", () => {
     expect(result).toMatchObject({
       code: 0,
       output:
-        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
+        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
     expect(result.spawnSync).toHaveBeenCalledOnce();
-    expect(result.fs.mkdirSync).toHaveBeenCalledWith(stateDir, { recursive: true });
+    expect(result.fs.mkdirSync).toHaveBeenCalledWith(defaultStateDir, { recursive: true });
   });
 
   it.each<[string, ReplayOptions]>([
@@ -202,7 +257,7 @@ describe("native Windows node enrollment replay", () => {
     ["title without invocation", { processEntry: { commandLine: "openclaw-connect" } }],
     [
       "CLI path in a later argument",
-      { processEntry: { commandLine: `"${node}" other-script.cjs "${cli}"` } },
+      { processEntry: { commandLine: `"${node}" other-script.cjs "${defaultCli}"` } },
     ],
     ["unavailable CIM probe", { probeFailure: true }],
     ["malformed CIM probe", { processOutput: "invalid JSON" }],

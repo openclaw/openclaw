@@ -15,10 +15,7 @@ describe("listInworldVoices timeout", () => {
 
   it("aborts a hanging voice list request within the configured timeout", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    let notifyFetchStarted!: () => void;
-    const fetchStarted = new Promise<void>((resolve) => {
-      notifyFetchStarted = resolve;
-    });
+    const { promise: fetchStarted, resolve: notifyFetchStarted } = Promise.withResolvers<void>();
     let rejectFetch: ((error: Error) => void) | undefined;
     const fetchMock = vi.fn(
       (_input: RequestInfo | URL, init?: RequestInit) =>

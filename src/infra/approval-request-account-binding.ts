@@ -25,11 +25,16 @@ export type ApprovalRequestLike = Pick<
   "id" | "request" | "createdAtMs" | "expiresAtMs"
 >;
 
-function resolveApprovalForwardTargets(params: {
+type ApprovalRequestParams = {
   cfg: OpenClawConfig;
   request: ApprovalRequestLike;
-  channel?: string | null;
-}) {
+};
+
+function resolveApprovalForwardTargets(
+  params: ApprovalRequestParams & {
+    channel?: string | null;
+  },
+) {
   const forwarding =
     resolveApprovalRequestKind(params.request) === "exec"
       ? params.cfg.approvals?.exec
@@ -52,21 +57,19 @@ function resolveApprovalForwardTargets(params: {
   );
 }
 
-function resolveApprovalForwardAccountIds(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel?: string | null;
-  defaultAccountId?: string | null;
-}): string[] {
+function resolveApprovalForwardAccountIds(
+  params: ApprovalRequestParams & {
+    channel?: string | null;
+    defaultAccountId?: string | null;
+  },
+): string[] {
   return resolveApprovalForwardTargets(params).flatMap((target) => {
     const accountId = normalizeOptionalAccountId(target.accountId ?? params.defaultAccountId);
     return accountId ? [accountId] : [];
   });
 }
 
-type ApprovalRequestSessionParams = {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
+type ApprovalRequestSessionParams = ApprovalRequestParams & {
   sessionDelivery?: ApprovalRequestSessionDelivery | null;
 };
 
@@ -75,12 +78,20 @@ export type ApprovalRequestSessionDelivery = Pick<
   "sessionId" | "updatedAt" | "delivery"
 >;
 
+function approvalRequestSessionDelivery(
+  entry: ApprovalRequestSessionDelivery | null | undefined,
+): ApprovalRequestSessionDelivery | null {
+  return entry
+    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
+    : null;
+}
+
 /** Classifies whether native delivery has named channel-account owners. */
-export async function classifyApprovalRequestChannelRouteAsync(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-  channel: string;
-}): Promise<ApprovalRequestChannelRouteClass> {
+export async function classifyApprovalRequestChannelRouteAsync(
+  params: ApprovalRequestParams & {
+    channel: string;
+  },
+): Promise<ApprovalRequestChannelRouteClass> {
   const expectedChannel = normalizeMessageChannel(params.channel);
   if (!expectedChannel) {
     return "unbound";
@@ -95,10 +106,9 @@ export async function classifyApprovalRequestChannelRouteAsync(params: {
 }
 
 /** Compatibility reader retained only by the deprecated synchronous Plugin SDK. */
-function resolveLegacyApprovalRequestSessionDelivery(params: {
-  cfg: OpenClawConfig;
-  request: ApprovalRequestLike;
-}): Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery"> | null {
+function resolveLegacyApprovalRequestSessionDelivery(
+  params: ApprovalRequestParams,
+): Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery"> | null {
   const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
   if (!sessionKey) {
     return null;
@@ -115,19 +125,14 @@ function resolveLegacyApprovalRequestSessionDelivery(params: {
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,
   });
-  if (!entry) {
-    return null;
-  }
-  return { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery };
+  return approvalRequestSessionDelivery(entry);
 }
 
 function resolvePersistedApprovalRequestSessionBinding(
@@ -145,9 +150,7 @@ function resolvePersistedApprovalRequestSessionBinding(
 
 // A missing binding can match any account; a conflicting channel cannot.
 function resolveApprovalRequestAccountBinding(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
+  params: ApprovalRequestParams & {
     channel?: string | null;
   },
   sessionDelivery: ApprovalRequestSessionDelivery | null,
@@ -176,9 +179,7 @@ function resolveApprovalRequestAccountBinding(
 
 /** Resolves the account id an approval request belongs to for an optional channel filter. */
 function resolveApprovalRequestAccountIdFromDelivery(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
+  params: ApprovalRequestParams & {
     channel?: string | null;
   },
   sessionDelivery: ApprovalRequestSessionDelivery | null,
@@ -188,9 +189,7 @@ function resolveApprovalRequestAccountIdFromDelivery(
 
 /** Resolves an approval request account only when the request can be routed to a channel. */
 function resolveApprovalRequestChannelAccountIdFromDelivery(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
+  params: ApprovalRequestParams & {
     channel: string;
   },
   sessionDelivery: ApprovalRequestSessionDelivery | null,
@@ -212,9 +211,7 @@ function resolveApprovalRequestChannelAccountIdFromDelivery(
 
 /** Checks whether a channel/account pair is eligible to handle an approval request. */
 export function doesApprovalRequestMatchChannelAccountFromDelivery(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
+  params: ApprovalRequestParams & {
     channel: string;
     accountId?: string | null;
   },
@@ -235,9 +232,7 @@ export function doesApprovalRequestMatchChannelAccountFromDelivery(
 
 /** Selects the one channel account that owns a native approval request. */
 export function doesApprovalRequestSelectChannelAccountFromDelivery(
-  params: {
-    cfg: OpenClawConfig;
-    request: ApprovalRequestLike;
+  params: ApprovalRequestParams & {
     channel: string;
     accountId?: string | null;
     defaultAccountId: string;
@@ -298,9 +293,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
       memory.binding?.actor.target.sessionKey === sessionKey
         ? memory.binding.actor.snapshot(memory.authority)?.entry
         : memory.owner?.readSession(sessionKey, memory.authority)?.entry;
-    return entry
-      ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-      : null;
+    return approvalRequestSessionDelivery(entry);
   }
   const entry = await readSessionEntryReadOnlyInWorker({
     agentId,
@@ -309,9 +302,7 @@ export async function resolveApprovalRequestSessionDeliveryAsync(
     projection: "list",
     hydrateSkillPromptRefs: false,
   });
-  return entry
-    ? { sessionId: entry.sessionId, updatedAt: entry.updatedAt, delivery: entry.delivery }
-    : null;
+  return approvalRequestSessionDelivery(entry);
 }
 
 function warnLegacyApprovalRouting(name: string): void {

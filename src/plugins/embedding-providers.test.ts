@@ -74,15 +74,17 @@ it("uses builder ownership without displacing another plugin's adapter", () => {
 });
 
 // /status and the boot warning must agree on registered providers.
-it("unions registry embedding providers with the global registry", () => {
-  const adapter = createAdapter("global-embed");
+it("unions registered embedding provider ids and aliases for startup diagnostics", () => {
+  const adapter = { ...createAdapter("global-embed"), aliases: ["global-alias"] };
   registerEmbeddingProvider(adapter, { ownerPluginId: "p" });
   const ids = collectRegisteredEmbeddingProviderIds({
-    embeddingProviders: [{ provider: { id: "gen-embed" } }],
+    embeddingProviders: [{ provider: { id: "gen-embed", aliases: ["gen-alias"] } }],
   } as never);
 
   expect(getRegisteredEmbeddingProvider("global-embed")).toEqual({ adapter, ownerPluginId: "p" });
-  expect(ids).toEqual(new Set(["gen-embed", "global-embed", ...registeredIds()]));
+  expect(ids).toEqual(
+    new Set(["gen-embed", "gen-alias", "global-embed", "global-alias", ...registeredIds()]),
+  );
 });
 
 it("returns only the global registry ids when the runtime registry omits embedding providers", () => {

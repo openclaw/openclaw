@@ -286,10 +286,13 @@ suite.define(() => {
   });
 
   it("requests the default session diff once across subsequent pane renders", async () => {
-    const { page, gateway } = await openDiff({
-      "sessions.files.list": emptyWorkspace(),
-      "sessions.diff": SESSION_DIFF_RESPONSE,
-    });
+    const { page, gateway } = await openDiff(
+      {
+        "sessions.files.list": emptyWorkspace(),
+        "sessions.diff": SESSION_DIFF_RESPONSE,
+      },
+      { extraMethods: ["sessions.companion.state"] },
+    );
 
     await openChatSidePanelType(page, "Files");
     await openChatSidePanelType(page, "Review");
@@ -397,7 +400,7 @@ suite.define(() => {
 
     await expect
       .poll(() => page.locator(".session-diff .session-diff__note").textContent())
-      .toContain("not a git checkout");
+      .toContain("isn’t a Git checkout");
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
   });
@@ -461,10 +464,10 @@ suite.define(() => {
       .poll(() => panelSurface.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(480);
     const scopeControl = panel.getByRole("button", { name: "Choose change scope", exact: true });
-    await expect.poll(() => scopeControl.textContent()).toBe("All Changes");
+    await expect.poll(() => scopeControl.textContent()).toBe("All changes");
     await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Sync Locally", exact: true }).click();
-    const sync = page.getByRole("menu", { name: "Sync Locally", exact: true });
+    await page.getByRole("menuitem", { name: "Sync locally", exact: true }).click();
+    const sync = page.getByRole("menu", { name: "Sync locally", exact: true });
     await sync.getByText("/tmp/checkout", { exact: true }).waitFor();
     await sync.getByText("feature/panel", { exact: true }).waitFor();
     await page.keyboard.press("Escape");
@@ -490,13 +493,17 @@ suite.define(() => {
     await firstRowText(".chat-diff__row--skip").toContain("29 unmodified lines");
     await firstRowText(".chat-diff__row--add").toContain("replacement line");
     await text(modified, ".chat-diff__row--add .tok-keyword").toBe("const");
-    expect(
-      await modified
-        .locator(".chat-diff__row--add .tok-keyword")
-        .evaluate(
-          (token) => getComputedStyle(token).color !== getComputedStyle(token.parentElement!).color,
-        ),
-    ).toBe(true);
+    // Highlighting can replace spans between Playwright's lookup and evaluation.
+    await expect
+      .poll(() =>
+        modified.locator(".chat-diff__row--add .tok-keyword").evaluateAll(([token]) => {
+          const parent = token?.parentElement;
+          return token?.isConnected && parent
+            ? getComputedStyle(token).color !== getComputedStyle(parent).color
+            : false;
+        }),
+      )
+      .toBe(true);
     if (captureProof) {
       await panelSurface.screenshot({ path: path.join(artifactDir, "unified-light.png") });
     }
@@ -677,7 +684,7 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     await activateChatHeaderPanelAction(page, "Show session changes");
-    await text(page, ".session-diff .session-diff__note").toContain("not a git checkout");
+    await text(page, ".session-diff .session-diff__note").toContain("isn’t a Git checkout");
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
 
     await gateway.setMethodResponse("sessions.diff", {

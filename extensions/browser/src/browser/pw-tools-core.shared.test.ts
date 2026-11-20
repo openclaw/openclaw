@@ -30,6 +30,21 @@ describe("Playwright action diagnostics", () => {
       terminal: "element is not stable",
       expected: /not stable/,
     },
+    {
+      headline: "fill: Error: Malformed value",
+      terminal: "",
+      expected: /value format/,
+    },
+    {
+      headline: "fill: Timeout 700ms exceeded.",
+      terminal: "element is not editable",
+      expected: /not editable/,
+    },
+    {
+      headline: "click: Timeout 700ms exceeded.",
+      terminal: "element is not enabled",
+      expected: /not enabled/,
+    },
   ])("preserves $expected after verbose progress logging", ({ headline, terminal, expected }) => {
     const original = new Error(
       `${headline}\nCall log:\n` +

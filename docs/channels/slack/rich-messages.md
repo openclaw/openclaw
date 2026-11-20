@@ -10,6 +10,12 @@ sidebarTitle: "Charts, tables, and approvals"
 
 The Block Kit surfaces OpenClaw renders natively in Slack.
 
+When a reply includes both authored text and presentation blocks, OpenClaw
+avoids repeating text already represented by the rendered blocks. Authored
+Markdown uses the selected Slack account's formatting settings. Code whitespace
+and literal text remain distinct from styled text. Edits use the same comparison
+and preserve complete text when a presentation must fall back to one message.
+
 ## Native charts
 
 Slack's public [`data_visualization` Block Kit block](https://docs.slack.dev/reference/block-kit/blocks/data-visualization-block/)

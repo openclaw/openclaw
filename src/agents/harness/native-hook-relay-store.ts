@@ -78,11 +78,10 @@ export async function deleteNativeHookRelayBridgeRecordIfOwned(params: {
 export async function pruneNativeHookRelayBridgeRecords(params: {
   currentPid: number;
   isPidDead: (pid: number) => boolean | Promise<boolean>;
-  nowMs?: number;
   stateDbPath?: string;
 }): Promise<NativeHookRelayBridgePruneResult[]> {
   const context = captureOpenClawStateWorkerContext({ path: params.stateDbPath });
-  const nowMs = params.nowMs ?? Date.now();
+  const nowMs = Date.now();
   const { currentPid, isPidDead } = params;
   return runOpenClawStateWorkerOperation(context, async (scope) => {
     const records = await scope.execute({

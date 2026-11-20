@@ -1,9 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import type { IconName } from "../../../components/solid/icon.tsx";
-import type { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import type { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
+import type { PresentationBinding } from "../../../lib/presentation.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import type { MobileSheetScrollFades } from "../chat-mobile-scroll-fades.ts";
@@ -13,11 +13,13 @@ import type {
 } from "../chat-pane-embedded-types.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { SidebarDock, SidebarLayout, SidebarSlotId } from "../sidebar-layout.ts";
+import type { SidebarPanelHost } from "./chat-sidebar-panel-host.ts";
 
 export type SidebarPanelDefinition = {
   slot: SidebarSlotId;
   label: string;
   icon: IconName;
+  iconSvg?: string;
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
   unavailableReason?: string;
@@ -25,7 +27,6 @@ export type SidebarPanelDefinition = {
   /** Explicit host for caller-owned panel content. */
   panelHost?: SidebarPanelHost;
   view?: SidebarPanelData;
-  loadState?: Parameters<typeof LazyViewError>[0] | null;
   loading: Parameters<typeof PanelLoadingSkeleton>[0];
   headerActionView?: SidebarPanelDefinitionParams;
   headerLink?: { href: string; label: string };
@@ -56,6 +57,7 @@ export type SidebarRegionCallbacks = {
 };
 
 export type RegionProps = {
+  visualPresentation?: PresentationBinding;
   elements: {
     readonly shell: HTMLElement;
     readonly header: HTMLElement;
@@ -79,13 +81,9 @@ export type RegionProps = {
   sideFocusManaged?: boolean;
   sideFocusOrigin?: () => HTMLElement | null;
   availableWidth: number;
+  /** A lazy recipient has mounted; the pane can deliver its queued commands. */
+  onPanelReady?: () => void;
 };
-export type SidebarPanelHost = HTMLElement & {
-  readonly updateComplete?: Promise<unknown>;
-  handleToggleRequest?: (event: Event) => void;
-  activateTerminalHost?: () => void;
-};
-export type SidebarPanelHostRegistration = (element: SidebarPanelHost) => () => void;
 export type RegionMethods = {
   readMobileChromeHeight(): number;
   readPanelHost: (slot: SidebarSlotId) => SidebarPanelHost | null;
@@ -97,6 +95,8 @@ export type RegionMethods = {
 export type RegionElement = SolidBridgeElement<RegionProps, RegionMethods>;
 
 export type SidebarRegionParams = {
+  visualPresentation?: PresentationBinding;
+  onPanelReady?: RegionProps["onPanelReady"];
   onRegionElementRef?: (element: HTMLElement) => void | (() => void);
   onHeaderElementRef?: (element: HTMLElement) => void | (() => void);
   onRegionViewRef?: (
@@ -127,5 +127,4 @@ export type SidebarRegionParams = {
 export type SidebarRegionViewProps = SidebarRegionParams & {
   panelIdPrefix: string;
   panelDefinitions: SidebarPanelDefinition[];
-  regionError: Parameters<typeof LazyViewError>[0] | null | undefined;
 };

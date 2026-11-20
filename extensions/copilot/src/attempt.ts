@@ -34,7 +34,6 @@ export async function runCopilotAttempt(
         externalAbort: true,
         messagesSnapshot: messages,
         promptError: undefined,
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -49,7 +48,6 @@ export async function runCopilotAttempt(
       createResult(input, {
         messagesSnapshot: messages,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -64,7 +62,6 @@ export async function runCopilotAttempt(
           "settled_finalization_session_unavailable",
           "[copilot-attempt] settled tool finalization requires the existing Copilot SDK session",
         ),
-        sdkSessionId: undefined,
       }),
     );
   }

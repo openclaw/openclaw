@@ -1,6 +1,6 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { createSignal } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -10,6 +10,8 @@ import {
 } from "../../app/gateway-observers.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -21,11 +23,12 @@ export type CronTestPage = HTMLElement & {
   context: ApplicationContext;
   routeSearch: string;
   cron: ReturnType<CronPageState["cron"]>;
-  cronModelSuggestions: string[];
+  /** Qualified refs of the manually selectable models the editor's catalog offers. */
+  cronCatalogModels: string[];
   deliveryDirectory: CronPageState["deliveryDirectory"];
   patchForm: CronPageState["actions"]["onFormChange"];
   closePanel: CronPageState["actions"]["onClosePanel"];
-  submitForm: (runNow?: boolean) => void;
+  submitForm: () => void;
   selectJob: CronPageState["actions"]["onSelectJob"];
   removeJob: CronPageState["actions"]["onRemove"];
   settle: () => Promise<void>;
@@ -44,17 +47,11 @@ type TestGateway = ApplicationContext["gateway"] & {
 
 export function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   invalidateChatMetadataStore(client);
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
@@ -113,6 +110,11 @@ export function createContext(
   selectedId: string | null = scopeId,
 ): ApplicationContext {
   const subscribe = () => () => undefined;
+  const channels = {
+    state: { channelsSnapshot: null },
+    refresh: vi.fn(async () => undefined),
+    subscribe,
+  };
   let selectionState = { selectedId, scopeId };
   let intentRevision = 0;
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
@@ -132,13 +134,7 @@ export function createContext(
       ensureList: vi.fn(async () => undefined),
       subscribe,
     },
-    channels: {
-      state: {
-        channelsSnapshot: null,
-      },
-      refresh: vi.fn(async () => undefined),
-      subscribe,
-    },
+    acquireChannels: () => channels,
     runtimeConfig: {
       state: { configSnapshot: null },
       subscribe,
@@ -170,6 +166,7 @@ export function createContext(
       },
     },
     navigate: vi.fn(),
+    replace: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }
@@ -213,13 +210,17 @@ export function createPage(
       state.setRouteSearch(value);
     },
   });
-  Object.defineProperty(page, "cronModelSuggestions", { get: () => state.cronModelSuggestions() });
+  Object.defineProperty(page, "cronCatalogModels", {
+    get: () =>
+      (state.cronModelCatalog()?.models ?? [])
+        .filter((entry) => entry.manualSelectionAllowed !== false)
+        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
+  });
   Object.defineProperty(page, "cron", { get: () => state.cron() });
   Object.defineProperty(page, "deliveryDirectory", { get: () => state.deliveryDirectory });
   page.patchForm = state.actions.onFormChange;
   page.closePanel = state.actions.onClosePanel;
-  page.submitForm = (runNow = false) =>
-    runNow ? state.actions.onSubmitRunNow() : state.actions.onSubmit();
+  page.submitForm = state.actions.onSubmit;
   page.selectJob = state.actions.onSelectJob;
   page.removeJob = state.actions.onRemove;
   page.refreshView = () => state.publish();
@@ -227,6 +228,10 @@ export function createPage(
   page.settle = async () => {
     await Promise.resolve();
     flush();
+    if (options.render === true) {
+      await vi.dynamicImportSettled();
+      flush();
+    }
   };
   page.remove = () => {
     mounted.unmount();
@@ -234,6 +239,28 @@ export function createPage(
   };
   flush();
   return page;
+}
+
+/** The page's copy of an automation once its list read has landed. */
+export async function heldJob(page: CronTestPage, id: string): Promise<CronJob> {
+  await waitForSolid(() => expect(page.cron.cronJobs.some((job) => job.id === id)).toBe(true));
+  return page.cron.cronJobs.find((job) => job.id === id)!;
+}
+
+/** Opens a held automation, as choosing it in the Automations sidebar does. */
+export async function openJob(page: CronTestPage, id: string): Promise<void> {
+  page.selectJob(await heldJob(page, id));
+  await page.settle();
+}
+
+/** Opens a held automation and its settings, as Edit on the automation's prompt does. */
+export async function editJob(page: CronTestPage, id: string): Promise<void> {
+  await openJob(page, id);
+  await waitForSolid(() =>
+    expect(page.querySelector('[data-test-id="cron-edit"]')).toBeInstanceOf(HTMLButtonElement),
+  );
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
+  await page.settle();
 }
 
 export function cronListResponse(jobs: CronJob[]): CronJobsListResult {

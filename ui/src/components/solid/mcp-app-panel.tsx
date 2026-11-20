@@ -6,11 +6,9 @@ import {
   createOptimistic,
   Errored,
   latest,
-  lazy,
   Loading,
   onSettled,
   Show,
-  untrack,
 } from "solid-js";
 import type {
   McpAppSettings,
@@ -25,14 +23,11 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { McpAppOpenDetail, McpAppPanelRetirement } from "../mcp-app-launch.ts";
 import { McpAppRetirement } from "../mcp-app-retirement.tsx";
+import { McpAppView } from "../mcp-app-view-lazy.ts";
 import { McpAppSettingsForm } from "./mcp-app-settings.tsx";
 import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
-
-const McpAppView = lazy(() => import("../mcp-app-view.tsx"), {
-  export: "McpAppView",
-});
 
 type McpAppPanelProps = { launch?: McpAppOpenDetail; observeRetirement: McpAppPanelRetirement };
 
@@ -376,22 +371,25 @@ export function McpAppPanel(props: McpAppPanelProps) {
             <McpAppRetirement identity={viewId()} roots={() => [host]}>
               {(id) => {
                 // Retiring App content keeps its original target until unmount is acknowledged.
-                const initial = untrack(() => ({ launch: launch(), identity: launchIdentity() }));
-                const viewLaunch = createMemo<McpAppOpenDetail>((previous) => {
+                const viewLaunch = createMemo<{
+                  launch: McpAppOpenDetail;
+                  identity: string;
+                }>((previous) => {
                   const current = launch();
-                  return launchIdentity() === initial.identity &&
-                    current.owner === initial.launch.owner
-                    ? current
-                    : (previous ?? initial.launch);
+                  const identity = launchIdentity();
+                  return !previous ||
+                    (identity === previous.identity && current.owner === previous.launch.owner)
+                    ? { launch: current, identity }
+                    : previous;
                 });
                 return id ? (
                   <Loading>
                     <McpAppView
-                      sessionKey={viewLaunch().sessionKey}
-                      agentId={viewLaunch().agentId ?? ""}
+                      sessionKey={viewLaunch().launch.sessionKey}
+                      agentId={viewLaunch().launch.agentId ?? ""}
                       viewId={id}
-                      title={viewLaunch().entrypoint.title}
-                      deepLink={viewLaunch().deepLink}
+                      title={viewLaunch().launch.entrypoint.title}
+                      deepLink={viewLaunch().launch.deepLink}
                       onRelaunch={() => void open()}
                       relaunching={busy()}
                     />

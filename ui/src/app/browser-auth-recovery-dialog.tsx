@@ -1,5 +1,8 @@
 import { createMemo, Errored, isPending, latest, Loading, Show } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerConnectionRecoveryEnglish } from "../i18n/locales/en-connection-recovery.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerConnectionRecoveryEnglish);
 
 type ProbeResult = "unavailable" | "sign-in" | undefined;
 

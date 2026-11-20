@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { assertSqliteSchemaContains as assertSchema } from "../../infra/sqlite-schema-contract.test-support.js";
@@ -137,6 +142,58 @@ it("writes shared reactions through their database owner", async () => {
   expect(read()[reaction.messageId]).toEqual([summary("👍")]);
 });
 
+it("keeps native reaction grants free of synchronous filesystem lookups", async () => {
+  await react();
+  const stat = vi.spyOn(fs, "statSync");
+  const realpath = vi.spyOn(fs.realpathSync, "native");
+  const create = admission.createSqliteWorkerOperationAdmission;
+  let lookups = 0;
+  let grants = 0;
+  syncBuiltinESMExports();
+  vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+    (callback, attachment) =>
+      create((request, grant) => {
+        const before = stat.mock.calls.length + realpath.mock.calls.length;
+        const outcome = callback(request, grant);
+        if (request.stage === "transaction" || request.stage === "commit") {
+          grants++;
+          lookups += stat.mock.calls.length + realpath.mock.calls.length - before;
+        }
+        return outcome;
+      }, attachment),
+  );
+  try {
+    expect(await react({ emoji: "✅" })).toMatchObject({ changed: true });
+    expect(grants).toBeGreaterThan(0);
+    expect(lookups).toBe(0);
+  } finally {
+    stat.mockRestore();
+    realpath.mockRestore();
+    syncBuiltinESMExports();
+  }
+});
+
+it("adds a reaction with one combined quota and current-message read", () => {
+  write((database) => {
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["admission"],
+      (sql) =>
+        /^select/i.test(sql) && /\b(?:session_reactions|transcript_event_identities)\b/i.test(sql)
+          ? "admission"
+          : null,
+    );
+    try {
+      expect(setSessionReactionInDatabase(database, scope.sessionKey, reaction)).toEqual(
+        result([summary("👍")]),
+      );
+      expect(counter.counts.admission).toBe(2);
+    } finally {
+      counter.restore();
+    }
+  });
+});
+
 it("rolls back a reaction when the caller's authority expires at commit admission", async () => {
   let current = true;
   probe.admission(admission, (request, grant, callback) => {
@@ -258,6 +315,7 @@ it.each(["reaction removal", "replacement", "suffix", "incremental suffix"] as c
     expect(await set()).toEqual({ ...atLimit, changed: false });
     const nextReaction = { messageId: "retained", emoji: "👀" };
     await expect(set(nextReaction)).rejects.toThrow(SessionReactionLimitError);
+    await expect(set({ messageId: "missing" })).rejects.toThrow(SessionReactionLimitError);
 
     const retained = events.slice(0, 2);
     if (mutation === "reaction removal") {

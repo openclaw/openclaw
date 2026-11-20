@@ -17,12 +17,20 @@ function selectProfile(env: NodeJS.ProcessEnv, profile = "work") {
   applyCliProfileEnv({ profile, env, homedir: () => "/home/peter" });
 }
 
-function expectServiceSelectors(env: NodeJS.ProcessEnv, selectors: (string | undefined)[]) {
-  expect([
-    env.OPENCLAW_LAUNCHD_LABEL,
-    env.OPENCLAW_SYSTEMD_UNIT,
-    env.OPENCLAW_WINDOWS_TASK_NAME,
-  ]).toEqual(selectors);
+const selectorKeys = [
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+];
+const gatewaySelectors = ["ai.openclaw.main", "openclaw-gateway-main", "OpenClaw Gateway (main)"];
+const nodeSelectors = ["ai.openclaw.node", "openclaw-node.service", "OpenClaw Node"];
+
+function serviceEnv(selectors: string[], kind?: string, port?: string) {
+  return inheritedEnv("main", {
+    ...Object.fromEntries(selectorKeys.map((key, i) => [key, selectors[i]])),
+    ...(kind ? { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: kind } : {}),
+    ...(port ? { OPENCLAW_GATEWAY_PORT: port } : {}),
+  });
 }
 
 describe("parseCliProfileArgs", () => {
@@ -41,6 +49,36 @@ describe("parseCliProfileArgs", () => {
       });
     },
   );
+
+  it.each<[string, string | null]>([
+    ["pair work:ABCD-EFGH", "work"],
+    ["pair --yes work:abcdefgh", "work"],
+    ["--profile work pair work:ABCD-EFGH", "work"],
+    ["pair -- work:ABCD-EFGH", "work"],
+    ["pair --timeout 5000 work:ABCD-EFGH", "work"],
+    ["pair ABCD-EFGH", null],
+    ["status work:ABCD-EFGH", null],
+    // The CLI inside the container receives the code and routes it there.
+    ["--container demo pair work:ABCD-EFGH", null],
+  ])("routes a pairing code to the profile it names: %s", (args, profile) => {
+    expect(parseCliProfileArgs(argv(args))).toMatchObject({ ok: true, profile });
+  });
+
+  it("leaves a pairing code to the container a caller already selected", () => {
+    expect(parseCliProfileArgs(argv("pair work:ABCD-EFGH"), "demo")).toMatchObject({
+      ok: true,
+      profile: null,
+    });
+  });
+
+  it.each([
+    "pair ../x:ABCD-EFGH",
+    "pair :ABCD-EFGH",
+    "--profile home pair work:ABCD-EFGH",
+    "--profile home pair -- work:ABCD-EFGH",
+  ])("rejects a pairing code whose profile is invalid or contradicts --profile: %s", (args) => {
+    expect(parseCliProfileArgs(argv(args)).ok).toBe(false);
+  });
 
   it.each(["--profile", "--dev --profile work status", "--profile work --dev status"])(
     "rejects invalid profile options: %s",
@@ -79,48 +117,31 @@ describe("applyCliProfileEnv", () => {
     expect(env).toEqual(expected);
   });
 
-  it("replaces the complete service selector bundle: named service to dev", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_GATEWAY_PORT: "18789",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-main.service",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "gateway",
-    });
-    selectProfile(env, "dev");
-    expect(env).toMatchObject({
-      OPENCLAW_PROFILE: "dev",
-      OPENCLAW_STATE_DIR: "/home/peter/.openclaw-dev",
-      OPENCLAW_GATEWAY_PORT: "19001",
-    });
-    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-    expectServiceSelectors(env, [undefined, undefined, undefined]);
-  });
-
-  it("preserves node service selectors when selecting a CLI profile", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_GATEWAY_PORT: "19999",
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.node",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-node.service",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      OPENCLAW_SERVICE_MARKER: "openclaw",
-      OPENCLAW_SERVICE_KIND: "node",
-    });
-
-    selectProfile(env);
-    expect(env.OPENCLAW_GATEWAY_PORT).toBe("19999");
-    expectServiceSelectors(env, ["ai.openclaw.node", "openclaw-node.service", "OpenClaw Node"]);
-  });
-
-  it("drops inherited canonical service identities when switching profiles", () => {
-    const env = inheritedEnv("main", {
-      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.main",
-      OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-main",
-      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (main)",
-    });
-    selectProfile(env);
-    expectServiceSelectors(env, [undefined, undefined, undefined]);
+  it.each([
+    ["gateway", "dev", "19001", undefined],
+    ["node", "work", "19999", nodeSelectors],
+    [undefined, "work", undefined, undefined],
+  ] as const)("isolates profiles from %s service selectors", (kind, profile, port, selectors) => {
+    const env = serviceEnv(
+      kind === "node" ? nodeSelectors : gatewaySelectors,
+      kind,
+      kind === "node" ? "19999" : kind === "gateway" ? "18789" : undefined,
+    );
+    if (kind === "gateway") {
+      env.OPENCLAW_SYSTEMD_UNIT += ".service";
+    }
+    selectProfile(env, profile);
+    expect(selectorKeys.map((key) => env[key])).toEqual(
+      selectors ?? [undefined, undefined, undefined],
+    );
+    expect(env.OPENCLAW_GATEWAY_PORT).toBe(port);
+    if (kind === "gateway") {
+      expect(env).toMatchObject({
+        OPENCLAW_PROFILE: "dev",
+        OPENCLAW_STATE_DIR: "/home/peter/.openclaw-dev",
+      });
+      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    }
   });
 });
 
@@ -135,6 +156,12 @@ describe("formatCliCommand", () => {
       "openclaw --profile jbopenclaw doctor --fix",
     ],
     ["openclaw gateway status --deep", { OPENCLAW_CONTAINER_HINT: "demo; rm -rf /" }],
+    ["npx openclaw@2026.10.1 gateway status", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["openclaw@2026.10.1 doctor --fix", { OPENCLAW_PROFILE: "work" }],
+    ["openclaw-2026.10.1 status", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["openclaw-update --help", { OPENCLAW_PROFILE: "work" }],
+    ["bunx openclaw@latest doctor", { OPENCLAW_CONTAINER_HINT: "demo" }],
+    ["pnpm openclaw@latest doctor", { OPENCLAW_PROFILE: "work" }],
     [
       "pnpm openclaw plugins update telegram",
       { OPENCLAW_CONTAINER_HINT: "demo", OPENCLAW_PROFILE: "work" },

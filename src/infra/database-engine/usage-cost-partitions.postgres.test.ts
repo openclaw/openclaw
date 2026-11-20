@@ -107,22 +107,19 @@ it.skipIf(!connection)(
           );
           assert(facts, "Expected the admitted PostgreSQL usage owner");
           const namespace = `"${facts.namespace.replaceAll('"', '""')}"`;
-          const stored = async () =>
-            (
-              await databaseClient.query<{
-                scope: string;
-                key: string;
-                value_json: string;
-                blob: string | null;
-                updated_at: string;
-              }>(
-                `SELECT scope, key, value_json, encode(blob, 'hex') AS blob,
+          const stored = async () => {
+            const { rows } = await databaseClient.query<
+              [scope: string, key: string, json: string, blob: string | null, updatedAt: string]
+            >({
+              rowMode: "array",
+              text: `SELECT scope, key, value_json, encode(blob, 'hex') AS blob,
                         updated_at::text AS updated_at
                  FROM ${namespace}.cache_entries
                  WHERE scope = ANY($1::text[]) ORDER BY scope, key`,
-                [[USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE]],
-              )
-            ).rows;
+              values: [[USAGE_COST_ROLLUP_SCOPE, USAGE_COST_PARTITION_SCOPE]],
+            });
+            return rows;
+          };
           const retained = await stored();
           const ids = ['batch-"雪-a', 'batch-"雪-b', "batch-append"];
           await using owner = await acquireUsageLock(agentId);
@@ -166,26 +163,20 @@ it.skipIf(!connection)(
           expect(await owner.writeRollup(update)).toBe(true);
           const rows = await stored();
           const expected = ids.flatMap((id, index) => [
-            {
-              scope: USAGE_COST_ROLLUP_SCOPE,
-              key: id,
-              value_json: `{"totalTokens":${20 + index}}`,
-              blob: "11",
-              updated_at: "2",
-            },
-            {
-              scope: USAGE_COST_PARTITION_SCOPE,
-              key: usageCostPartitionKey(id, index < 2 ? "2026-03-01" : "2026-02-01"),
-              value_json: `{"tokens":${10 + index}}`,
-              blob: "22",
-              updated_at: "2",
-            },
+            [USAGE_COST_ROLLUP_SCOPE, id, `{"totalTokens":${20 + index}}`, "11", "2"],
+            [
+              USAGE_COST_PARTITION_SCOPE,
+              usageCostPartitionKey(id, index < 2 ? "2026-03-01" : "2026-02-01"),
+              `{"tokens":${10 + index}}`,
+              "22",
+              "2",
+            ],
           ]);
-          const unrelated = before.filter((row) =>
-            row.scope === USAGE_COST_ROLLUP_SCOPE
-              ? row.key === "batch-unrelated"
-              : row.key === usageCostPartitionKey("batch-unrelated", "2026-01-01") ||
-                row.key === usageCostPartitionKey("batch-unrelated", "2026-02-01"),
+          const unrelated = before.filter(([scope, key]) =>
+            scope === USAGE_COST_ROLLUP_SCOPE
+              ? key === "batch-unrelated"
+              : key === usageCostPartitionKey("batch-unrelated", "2026-01-01") ||
+                key === usageCostPartitionKey("batch-unrelated", "2026-02-01"),
           );
           expect(rows).toHaveLength(retained.length + 9);
           expect(rows).toEqual(expect.arrayContaining([...retained, ...expected, ...unrelated]));

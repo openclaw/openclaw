@@ -1,9 +1,34 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 const scripts = join(process.cwd(), "scripts");
+
+export function createCapturedHashProbe(root: string, write = false) {
+  const scratch = join(root, ".local/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const git = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const probe = join(root, ".local/git-probe");
+  const calls = join(root, ".local/hash-probe-calls");
+  const args = ["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"];
+  writeFileSync(
+    probe,
+    `#!/usr/bin/env python3
+import os,sys,subprocess
+args=sys.argv[1:]
+if args == ${JSON.stringify(args)}:
+ captured=sys.stdin.buffer.read()
+ with open(${JSON.stringify(calls)},'a') as record: record.write(str(len(captured))+'\\n')
+ if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
+ if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
+ sys.exit(subprocess.run([${JSON.stringify(git)},*args],input=captured).returncode)
+os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
+`,
+  );
+  chmodSync(probe, 0o700);
+  return { scratch, calls, env: { TMPDIR: scratch, OPENCLAW_PR_GIT: probe } };
+}
 
 export function reviewWithFinding(head: string, area: string, id = "I1") {
   const review = validReview(head);

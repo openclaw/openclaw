@@ -27,7 +27,9 @@ type ChannelIngressAdmissionOptions<TRaw, TBody, TStoredPayload, TMetadata> = Pi
   | "onDurableAdmission"
   | "onAdmissionFailure"
   | "reuseAdmissionFactsForFreshClaims"
+  | "prepareAdmission"
 > & {
+  signal: AbortSignal;
   inspect: (
     raw: TRaw,
   ) => ChannelIngressMonitorFacts | null | Promise<ChannelIngressMonitorFacts | null>;
@@ -48,6 +50,7 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
       facts: ChannelIngressMonitorFacts;
       payload: TStoredPayload;
       index: number;
+      assertCurrent?: () => void;
     }> = [];
     const results: ChannelIngressMonitorAdmissionResult<Awaited<ReturnType<Queue["enqueue"]>>>[] =
       [];
@@ -59,12 +62,35 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
           results.push({ kind: "ignored" });
           continue;
         }
-        const body = options.payload.serialize(raw, { facts, receivedAt });
+        const transformed = await options.prepareAdmission?.(raw, {
+          facts,
+          receivedAt,
+          signal: options.signal,
+        });
+        const preparedRaw = transformed ? transformed.raw : raw;
+        if (transformed) {
+          const currentFacts = await options.inspect(preparedRaw);
+          transformed.assertCurrent();
+          if (
+            !currentFacts ||
+            currentFacts.eventId !== facts.eventId ||
+            currentFacts.laneKey !== facts.laneKey
+          ) {
+            throw new Error("Channel ingress transform changed event identity or lane");
+          }
+        }
+        const body = options.payload.serialize(preparedRaw, { facts, receivedAt });
         const payload =
           options.payload.storage === "raw-event"
             ? ({ version: options.payload.version, rawEvent: body } as TStoredPayload) // SAFETY: raw-event codecs use this envelope.
             : options.payload.encode({ version: options.payload.version, body });
-        prepared.push({ raw, facts, payload, index: results.length });
+        prepared.push({
+          raw: preparedRaw,
+          facts,
+          payload,
+          index: results.length,
+          assertCurrent: transformed?.assertCurrent,
+        });
         results.push({ kind: "ignored" });
       } catch (error) {
         await options.onAdmissionFailure?.(raw, error);
@@ -77,13 +103,16 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     let admissionQueue: Queue;
     let queueResults: Array<Awaited<ReturnType<Queue["enqueue"]>>> | undefined;
     let releaseDispatch: (() => void) | undefined;
+    const hasPolicy = prepared.some((entry) => entry.assertCurrent !== undefined);
+    const assertCurrent = () => prepared.forEach((entry) => entry.assertCurrent?.());
     try {
       admissionQueue = options.getQueue();
       await options.pruneBeforeAdmission();
+      assertCurrent();
       const enqueueBatch = admissionQueue.enqueueBatch?.bind(admissionQueue);
       const enqueueAndClaim = admissionQueue.enqueueAndClaim?.bind(admissionQueue);
       const idleDrain =
-        prepared.length === 1 && enqueueAndClaim ? options.getIdleDrain() : undefined;
+        !hasPolicy && prepared.length === 1 && enqueueAndClaim ? options.getIdleDrain() : undefined;
       const ownerId = idleDrain?.idleOwnerId();
       if (idleDrain && ownerId && enqueueAndClaim) {
         const { facts, payload } = prepared[0]!;
@@ -127,6 +156,24 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
             options.scheduleDrainIdleWake(idleDrain);
           };
         }
+      } else if (hasPolicy && prepared.length > 1) {
+        const enqueueAuthorized = admissionQueue.enqueueBatchAuthorized?.bind(admissionQueue);
+        if (!enqueueAuthorized) {
+          throw new Error("Channel ingress policy requires an authorized batch queue");
+        }
+        queueResults = await appendIngressWithRetry(
+          () =>
+            enqueueAuthorized(
+              prepared.map(({ facts, payload }) => ({
+                id: facts.eventId,
+                payload,
+                receivedAt,
+                laneKey: facts.laneKey,
+              })),
+              { assertCurrent },
+            ),
+          options.appendRetryDelaysMs,
+        );
       } else if (prepared.length > 1 && enqueueBatch) {
         queueResults = await appendIngressWithRetry(
           () =>
@@ -150,16 +197,25 @@ export function createChannelIngressAdmission<TRaw, TBody, TStoredPayload, TMeta
     for (const [index, { raw, facts, payload, index: resultIndex }] of prepared.entries()) {
       try {
         // Shipped plugin-supplied queues may implement only individual admission.
+        const enqueue = () => {
+          if (hasPolicy) {
+            if (!admissionQueue.enqueueAuthorized) {
+              throw new Error("Channel ingress policy requires an authorized queue");
+            }
+            return admissionQueue.enqueueAuthorized(facts.eventId, payload, {
+              receivedAt,
+              laneKey: facts.laneKey,
+              assertCurrent,
+            });
+          }
+          return admissionQueue.enqueue(facts.eventId, payload, {
+            receivedAt,
+            laneKey: facts.laneKey,
+          });
+        };
         const queueResult = queueResults
           ? queueResults[index]!
-          : await appendIngressWithRetry(
-              () =>
-                admissionQueue.enqueue(facts.eventId, payload, {
-                  receivedAt,
-                  laneKey: facts.laneKey,
-                }),
-              options.appendRetryDelaysMs,
-            );
+          : await appendIngressWithRetry(enqueue, options.appendRetryDelaysMs);
         admitOptions.onDurablyAdmitted(Boolean(releaseDispatch));
         results[resultIndex] = { kind: "durable", queueResult };
         await options.onDurableAdmission?.(raw, {

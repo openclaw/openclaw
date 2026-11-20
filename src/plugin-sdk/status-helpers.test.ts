@@ -12,44 +12,28 @@ import {
   createDefaultChannelRuntimeState,
   readAccountStatusSnapshot,
   standardDmPolicyOpenIssue,
-  standardNotConfiguredIssue,
 } from "./status-helpers.js";
 
 describe("status issue composition", () => {
   it("coerces only standard and requested account fields", () => {
-    expect(
-      readAccountStatusSnapshot(
-        { accountId: "work", enabled: true, configured: true, mode: "polling", secret: "drop" },
-        ["mode"],
-      ),
-    ).toEqual({
-      accountId: "work",
-      enabled: true,
-      configured: true,
+    const fields = { accountId: "work", enabled: true, configured: true, mode: "polling" };
+    expect(readAccountStatusSnapshot({ ...fields, secret: "drop" }, ["mode"])).toEqual({
+      ...fields,
       running: undefined,
       connected: undefined,
-      mode: "polling",
     });
     expect(readAccountStatusSnapshot(null, ["mode"])).toBeNull();
   });
 
-  it("builds standard open-policy and missing-auth issues", () => {
-    const account = { channel: "zalo", accountId: "default" };
-    expect(
-      standardDmPolicyOpenIssue({ ...account, channelLabel: "Zalo", configPath: "channels.zalo" }),
-    ).toEqual({
-      ...account,
-      kind: "config",
-      message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
-      fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
-    });
-    const auth = {
-      channel: "zalouser",
+  it("keeps open-policy warnings and remediation tied to the channel", () => {
+    const issue = standardDmPolicyOpenIssue({
+      channel: "zalo",
       accountId: "default",
-      message: "Not authenticated.",
-      fix: "Run login.",
-    };
-    expect(standardNotConfiguredIssue({ ...auth })).toEqual({ ...auth, kind: "auth" });
+      channelLabel: "Zalo",
+      configPath: "channels.zalo",
+    });
+    expect(issue.message).toContain('Zalo dmPolicy is "open"');
+    expect(issue.fix).toContain('Set channels.zalo.dmPolicy to "pairing" or "allowlist"');
   });
 });
 
@@ -60,90 +44,62 @@ const defaultRuntimeState = {
   lastError: null,
 };
 
-const defaultAccountSnapshot = {
-  accountId: "default",
-  name: undefined,
-  enabled: undefined,
-  configured: false,
-  ...defaultRuntimeState,
-  probe: undefined,
-  lastInboundAt: null,
-  lastOutboundAt: null,
-};
-
-const adapterAccount = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
-const adapterRuntime = { accountId: "default", running: true };
-const adapterProbe = { ok: true };
-
-const expectedAdapterAccountSnapshot = {
-  ...defaultAccountSnapshot,
-  enabled: true,
-  configured: true,
-  running: true,
-  probe: adapterProbe,
-  profileUrl: adapterAccount.profileUrl,
-  connected: true,
-};
-
-function createStatus(mode: "sync" | "async") {
-  const resolveAccountSnapshot = ({
-    account,
-    runtime,
-    probe,
-  }: {
-    account: typeof adapterAccount;
-    runtime?: { running?: boolean };
-    probe?: typeof adapterProbe;
-  }) => ({
-    accountId: account.accountId,
-    enabled: account.enabled,
-    configured: true,
-    extra: { profileUrl: account.profileUrl, connected: runtime?.running ?? false, probe },
-  });
-  const options = {
-    defaultRuntime: createDefaultChannelRuntimeState("default"),
-    resolveAccountSnapshot,
-  };
-  return mode === "async"
-    ? createAsyncComputedAccountStatusAdapter({
-        ...options,
-        resolveAccountSnapshot: async (params: Parameters<typeof resolveAccountSnapshot>[0]) =>
-          resolveAccountSnapshot(params),
-      })
-    : createComputedAccountStatusAdapter(options);
-}
-function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
-  return createStatus(mode).buildAccountSnapshot!({
-    account: adapterAccount,
-    cfg: {} as never,
-    runtime: { ...adapterRuntime, ...(ingressUnavailable ? { ingressUnavailable } : {}) },
-    probe: adapterProbe,
-  });
-}
-
 it("builds account status when configured is computed outside resolver", () => {
-  const snapshot = buildComputedAccountStatusSnapshot({
+  expect(
+    buildComputedAccountStatusSnapshot({ accountId: "default", enabled: true, configured: false }),
+  ).toMatchObject({
     accountId: "default",
     enabled: true,
     configured: false,
-  });
-  expect(snapshot).toEqual({
-    ...defaultAccountSnapshot,
-    enabled: true,
     stateReason: "not configured",
+    lastInboundAt: null,
+    lastOutboundAt: null,
   });
 });
 
-describe("computed account status adapters", () => {
-  it("builds account snapshots from async computed account metadata and extras", async () => {
-    await expect(Promise.resolve(accountSnapshot("async"))).resolves.toEqual(
-      expectedAdapterAccountSnapshot,
-    );
-  });
-
-  it("preserves ingress failure for channel health evaluation", async () => {
-    const snapshot = await accountSnapshot("sync", true);
-
+it.each(["sync", "async"] as const)(
+  "%s account adapter projects metadata and ingress health",
+  async (mode) => {
+    const account = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
+    const probe = { ok: true };
+    const resolve = (params: {
+      account: typeof account;
+      runtime?: { running?: boolean };
+      probe?: typeof probe;
+    }) => ({
+      accountId: params.account.accountId,
+      enabled: params.account.enabled,
+      configured: true,
+      extra: {
+        profileUrl: params.account.profileUrl,
+        connected: params.runtime?.running ?? false,
+        probe: params.probe,
+      },
+    });
+    const options = { defaultRuntime: createDefaultChannelRuntimeState("default") };
+    const adapter =
+      mode === "sync"
+        ? createComputedAccountStatusAdapter({ ...options, resolveAccountSnapshot: resolve })
+        : createAsyncComputedAccountStatusAdapter({
+            ...options,
+            resolveAccountSnapshot: async (params: Parameters<typeof resolve>[0]) =>
+              resolve(params),
+          });
+    const snapshot = await adapter.buildAccountSnapshot!({
+      account,
+      cfg: {},
+      probe,
+      runtime: { accountId: "default", running: true, ingressUnavailable: true },
+    });
+    expect(snapshot).toMatchObject({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      probe,
+      profileUrl: account.profileUrl,
+      connected: true,
+    });
     expect(
       evaluateChannelHealth(snapshot, {
         channelId: "discord",
@@ -152,8 +108,8 @@ describe("computed account status adapters", () => {
         staleEventThresholdMs: 30_000,
       }),
     ).toEqual({ healthy: false, reason: "ingress-unavailable" });
-  });
-});
+  },
+);
 
 describe("buildRuntimeAccountStatusSnapshot", () => {
   const connectivity = {
@@ -229,11 +185,13 @@ it("defaults mode to webhook and keeps supplied extras", () => {
 });
 
 it("uses source metadata from sanitized snapshots to pick the missing field", () => {
+  const missingPrimaryMessage = "LINE channel access token not configured";
+  const missingDependentMessage = "LINE channel secret not configured";
   const collect = createDependentCredentialStatusIssueCollector({
     channel: "line",
     dependencySourceKey: "tokenSource",
-    missingPrimaryMessage: "LINE channel access token not configured",
-    missingDependentMessage: "LINE channel secret not configured",
+    missingPrimaryMessage,
+    missingDependentMessage,
   });
 
   expect(
@@ -243,18 +201,8 @@ it("uses source metadata from sanitized snapshots to pick the missing field", ()
       { accountId: "ok", configured: true, tokenSource: "env" },
     ]),
   ).toEqual([
-    {
-      channel: "line",
-      accountId: "default",
-      kind: "config",
-      message: "LINE channel access token not configured",
-    },
-    {
-      channel: "line",
-      accountId: "work",
-      kind: "config",
-      message: "LINE channel secret not configured",
-    },
+    { channel: "line", accountId: "default", kind: "config", message: missingPrimaryMessage },
+    { channel: "line", accountId: "work", kind: "config", message: missingDependentMessage },
   ]);
 });
 

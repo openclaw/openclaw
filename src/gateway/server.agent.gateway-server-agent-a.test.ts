@@ -1,10 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { resetPreparedModelCatalogStateForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { listSessionPendingInputs } from "../config/sessions/session-accessor.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
+import { getPairedDevice } from "../infra/device-pairing.js";
 import * as mediaStore from "../media/store.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as sessionLifecycle from "../sessions/session-controller.lifecycle.js";
@@ -12,6 +14,7 @@ import {
   observeGatewayRunExecution,
   waitForAgentCommandCall,
 } from "./agent-command.test-helpers.js";
+import { openTrackedWs, pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
@@ -19,6 +22,7 @@ import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
 import {
   agentCommandMock,
+  connectReq,
   installGatewayTestHooks,
   rpcReq,
   testState,
@@ -93,22 +97,13 @@ async function setGatewayModelCatalogForTest(
     { refreshPreparedModelRuntimeSnapshots },
     { clearRuntimeConfigSnapshot, getRuntimeConfig, writeConfigFile },
   ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
-  await writeConfigFile({
-    models: {
-      providers: {
-        "ollama-cloud": {
-          baseUrl: "https://ollama-cloud.example.test/v1",
-          models: models.map((model) => ({
-            ...model,
-            reasoning: false,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 128_000,
-            maxTokens: 8_192,
-          })),
-        },
-      },
-    },
-  });
+  await writeConfigFile(
+    configFor("ollama-cloud", "https://ollama-cloud.example.test/v1", {
+      models: models.map((model) =>
+        modelDefinition(model.id, { ...model, reasoning: false, contextWindow: 128_000 }),
+      ),
+    }),
+  );
   clearRuntimeConfigSnapshot();
   await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
@@ -192,6 +187,7 @@ describe("gateway server agent", () => {
             ? {
                 [sessionKey]: {
                   sessionId: "expired-predecessor",
+                  lifecycleRevision: "expired-lifecycle",
                   updatedAt: expiredAt,
                   sessionStartedAt: expiredAt,
                   lastInteractionAt: expiredAt,
@@ -227,7 +223,9 @@ describe("gateway server agent", () => {
           expect(stored.entry?.sessionId).toBe(boundSessionId);
         }
         if (kind === "expired") {
-          expect(boundSessionId).not.toBe("expired-predecessor");
+          expect(boundSessionId).toBe("expired-predecessor");
+          expect(stored.entry?.lifecycleRevision).toEqual(expect.any(String));
+          expect(stored.entry?.lifecycleRevision).not.toBe("expired-lifecycle");
         } else if (kind === "requested") {
           expect(boundSessionId).toBe("requested-session");
         }
@@ -401,4 +399,73 @@ describe("gateway server agent", () => {
     expect(res.error?.message).not.toMatch(/^Error:/u);
     await expectNoNewInboundMedia(inboundBefore);
   });
+
+  test.each([
+    ["gateway-client", "backend"],
+    ["cli", "cli"],
+  ] as const)(
+    "remote write-scoped %s/%s device cannot hide its prompt from the transcript",
+    async (clientId, mode) => {
+      const { readConfigFileSnapshot, writeConfigFile } = await import("../config/io.js");
+      const previousConfig = (await readConfigFileSnapshot()).sourceConfig;
+      await writeConfigFile({
+        ...previousConfig,
+        gateway: { ...previousConfig.gateway, trustedProxies: ["127.0.0.1"] },
+      });
+      try {
+        await setTestSessionStore({ main: sessionEntry(`remote-write-${mode}-session`) });
+        const device = await pairDeviceIdentity({
+          name: `remote-write-${mode}`,
+          role: "operator",
+          scopes: ["operator.write"],
+          clientId,
+          clientMode: mode,
+          platform: "test",
+        });
+        const deviceToken = (await getPairedDevice(device.identity.deviceId))?.tokens?.operator
+          ?.token;
+        expect(deviceToken).toBeTypeOf("string");
+        const ws = await openTrackedWs(gatewaySuite.port, {
+          "x-forwarded-for": "203.0.113.50",
+          "x-forwarded-proto": "https",
+        });
+        try {
+          const hello = await connectReq(ws, {
+            skipDefaultAuth: true,
+            client: { id: clientId, version: "1.0.0", platform: "test", mode },
+            deviceIdentityPath: device.identityPath,
+            deviceToken,
+            scopes: ["operator.write"],
+          });
+          expect(hello.ok, JSON.stringify(hello)).toBe(true);
+          const hidden = await rpcReq(ws, "agent", {
+            message: "steer without a transcript row",
+            sessionKey: "main",
+            idempotencyKey: `remote-write-hidden-${mode}`,
+            suppressPromptPersistence: true,
+          });
+          expect(hidden).toMatchObject({
+            ok: false,
+            error: {
+              message: "internal session-effect controls are reserved for backend callers.",
+            },
+          });
+          // The declared mode alone still admits ordinary turns.
+          const visibleRunId = `remote-write-visible-${mode}`;
+          const visible = await rpcReq(ws, "agent", {
+            message: "an ordinary turn",
+            sessionKey: "main",
+            idempotencyKey: visibleRunId,
+          });
+          expect(visible.ok, JSON.stringify(visible)).toBe(true);
+          await waitForAgentCommandCall(visibleRunId);
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        } finally {
+          ws.close();
+        }
+      } finally {
+        await writeConfigFile(previousConfig);
+      }
+    },
+  );
 });

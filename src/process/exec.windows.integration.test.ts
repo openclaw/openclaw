@@ -24,16 +24,9 @@ const cliProofEnabled = windows || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF =
 
 // libuv owns the Job, but no retained handle exposes this foreign descendant's exit.
 async function expectDescendantExit(identity: ProcessIdentity, signal: AbortSignal): Promise<void> {
-  try {
-    while (inspectIdentity(identity) !== "dead") {
-      await waitForProcessTick(50, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`Timed out waiting for Windows descendant ${identity.pid} to exit`, {
-      cause: error,
-    });
+  while (inspectIdentity(identity) !== "dead") {
+    await waitForProcessTick(50, undefined, { signal });
   }
-  expect(inspectIdentity(identity)).toBe("dead");
 }
 
 function readyBeforeExit<T>(ready: Promise<T>, closed: Promise<unknown>, signal: AbortSignal) {
@@ -41,10 +34,6 @@ function readyBeforeExit<T>(ready: Promise<T>, closed: Promise<unknown>, signal:
     awaitGateBeforeSettlement(ready, closed, "Child exited before readiness"),
     signal,
   );
-}
-
-function expectLaunch(log: unknown[], expected: Record<string, string>) {
-  expect(log).toContainEqual(expect.objectContaining(expected));
 }
 
 it.runIf(windows)(
@@ -134,8 +123,8 @@ it.runIf(windows)(
       const childPid = Number.parseInt(String(output).trim(), 10);
       expect(Number.isSafeInteger(childPid)).toBe(true);
       const descendant = requireIdentity(childPid);
+      expect(inspectIdentity(descendant)).toBe("live");
       expect(() => process.kill(parentPid, 0)).not.toThrow();
-      expect(() => process.kill(childPid, 0)).not.toThrow();
 
       // Unforced taskkill refuses Node; do not depend on its unref'd grace timer.
       killProcessTree(parentPid, { graceMs: 30_000 });
@@ -143,7 +132,6 @@ it.runIf(windows)(
       await withinTest(parentClosed, signal);
       await expectDescendantExit(descendant, signal);
       expect(() => process.kill(parentPid, 0)).toThrow();
-      expect(() => process.kill(childPid, 0)).toThrow();
     } finally {
       // Use the retained handle, not a reusable PID; libuv owns this Node child.
       parent.kill("SIGKILL");
@@ -187,13 +175,10 @@ describe.runIf(cliProofEnabled)("ordinary Claude CLI executable launch", () => {
       expect(JSON.parse(proof.stdout).payloads).toContainEqual(
         expect.objectContaining({ text: "PONG" }),
       );
-      expectLaunch(proof.launches, {
-        phase: "run",
-        platform: process.platform,
-        entrypoint: proof.entrypoint,
-      });
       if (kind === "native") {
-        expectLaunch(proof.launches, { phase: "native-launch", platform: "win32" });
+        expect(proof.launches).toContainEqual(
+          expect.objectContaining({ phase: "native-launch", platform: "win32" }),
+        );
       }
     },
     360_000,

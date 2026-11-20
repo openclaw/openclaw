@@ -106,9 +106,7 @@ export function createSessionRowTopology(owner: {
                 prepareSessionRowScopes(
                   nextConfig,
                   owner.byAgent.keys(),
-                  new Map(
-                    [...storeRead.sources].map(([locator, source]) => [source.filename, locator]),
-                  ),
+                  new Map(Array.from(storeRead.sources, ([key, { filename }]) => [filename, key])),
                   scopes,
                 ),
               );

@@ -117,24 +117,68 @@ describe("audit-extra async code safety", () => {
     );
   }
 
-  it("reports detailed code-safety issues for both plugins and skills", async () => {
-    vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
-      const isPlugin = dirPath.includes(`${path.sep}evil-plugin`);
-      const file = isPlugin
-        ? path.join(dirPath, ".hidden", "index.js")
-        : path.join(dirPath, "runner.js");
-      return unsafeScan(file);
-    });
-    const [pluginFindings, skillFindings] = await scanSharedFixture(true);
+  it.each([
+    { severity: "critical", critical: 1, warn: 0, truncated: false },
+    { severity: "warn", critical: 0, warn: 1, truncated: false },
+    { severity: "critical", critical: 1, warn: 1, truncated: true },
+  ] as const)(
+    "reports $severity code-safety issues (truncated=$truncated)",
+    async ({ severity, critical, warn, truncated }) => {
+      vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockImplementation(async (dirPath) => {
+        const isPlugin = dirPath.includes(`${path.sep}evil-plugin`);
+        const file = isPlugin
+          ? path.join(dirPath, ".hidden", "index.js")
+          : path.join(dirPath, "runner.js");
+        return {
+          ...unsafeScan(file),
+          critical,
+          warn,
+          truncated,
+          findings: [
+            ...(critical ? unsafeScan(file).findings : []),
+            ...(warn
+              ? [
+                  {
+                    ruleId: "warning-pattern",
+                    severity: "warn" as const,
+                    file,
+                    line: 2,
+                    message: "warning pattern",
+                    evidence: "warning",
+                  },
+                ]
+              : []),
+          ],
+        };
+      });
+      const [pluginFindings, skillFindings] = await scanSharedFixture(true);
 
-    const pluginFinding = requireFinding(pluginFindings, "plugins.code_safety", "critical");
-    expect(pluginFinding.detail).toContain("dangerous-exec");
-    expect(pluginFinding.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
+      const pluginFinding = requireFinding(pluginFindings, "plugins.code_safety", severity);
+      expect(pluginFinding.detail).toContain(critical ? "dangerous-exec" : "warning-pattern");
+      expect(pluginFinding.detail).toMatch(/\.hidden[\\/]+index\.js:\d+/);
 
-    const skillFinding = requireFinding(skillFindings, "skills.code_safety", "critical");
-    expect(skillFinding.detail).toContain("dangerous-exec");
-    expect(skillFinding.detail).toMatch(/runner\.js:\d+/);
-  });
+      const skillFinding = requireFinding(skillFindings, "skills.code_safety", severity);
+      expect(skillFinding.detail).toContain(critical ? "dangerous-exec" : "warning-pattern");
+      expect(skillFinding.detail).toMatch(/runner\.js:\d+/);
+      if (critical && warn) {
+        expect(pluginFinding.detail).not.toContain("warning-pattern");
+        expect(skillFinding.detail).not.toContain("warning-pattern");
+      }
+      if (truncated) {
+        for (const [kind, findings] of [
+          ["plugins", pluginFindings],
+          ["skills", skillFindings],
+        ] as const) {
+          const incomplete = findings.findIndex(
+            (finding) => finding.checkId === `${kind}.code_safety.scan_truncated`,
+          );
+          const result = findings.findIndex((finding) => finding.checkId === `${kind}.code_safety`);
+          expect(incomplete).toBeGreaterThanOrEqual(0);
+          expect(incomplete).toBeLessThan(result);
+        }
+      }
+    },
+  );
 
   it("reports incomplete plugin and skill scans without alleging unsafe code", async () => {
     vi.spyOn(skillScanner, "scanDirectoryWithSummary").mockResolvedValue({

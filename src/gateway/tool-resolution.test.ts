@@ -22,14 +22,25 @@ import {
   registerComputerUseProvider,
   type ComputerUseProvider,
 } from "../plugins/computer-use-registration.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { OpenClawPluginNodeHostCommand } from "../plugins/types.node-host.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createChannelTestPluginBase,
+  createDirectOutboundTestAdapter,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { computerCapabilities } from "./desktop/computer.test-support.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import { registerGatewayToolFinalEffectTests } from "./tool-resolution.effects.test-support.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
 async function resolveTools(
@@ -218,13 +229,30 @@ it("retains a computer execution across MCP catalog rebuilds and releases it wit
 });
 
 it("adds the message tool for Telegram room delivery", async () => {
-  const result = await resolveTools({
-    cfg: { tools: { profile: "minimal" } },
-    sessionKey: "agent:main:telegram:group:-100123",
-    messageProvider: "telegram",
-    inboundEventKind: "room_event",
-  });
-  expect(toolNames(result)).toContain("message");
+  const registry = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "telegram",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "telegram" }),
+          outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+        },
+      },
+    ]),
+  );
+  try {
+    const result = await resolveTools({
+      cfg: { tools: { profile: "minimal" } },
+      sessionKey: "agent:main:telegram:group:-100123",
+      messageProvider: "telegram",
+      inboundEventKind: "room_event",
+    });
+    expect(toolNames(result)).toContain("message");
+  } finally {
+    restoreActivePluginRegistrySnapshot(registry);
+  }
 });
 
 it("rejects collector mode after gateway policy removes its reader", async () => {
@@ -297,7 +325,7 @@ it.each(["worker", "main"])(
     expect(result.agentId).toBe("main");
     expect(result.tools.find((tool) => tool.name === "gateway")?.parameters).toHaveProperty(
       "properties.action.enum",
-      ["update.run"],
+      ["update.run", "restart", "update.cleanup"],
     );
   },
 );
@@ -365,3 +393,5 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
   expect(names).not.toContain("sessions_list");
   expect(names).toContain("sessions_history");
 });
+
+registerGatewayToolFinalEffectTests();

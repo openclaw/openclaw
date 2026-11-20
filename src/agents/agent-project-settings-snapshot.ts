@@ -126,9 +126,8 @@ export function buildEmbeddedAgentSettingsSnapshot(params: {
       : params.policy === "sanitize"
         ? sanitizeAgentSettingsSnapshot(params.projectSettings)
         : params.projectSettings;
-  const withPluginSettings = applyMergePatch(
-    params.globalSettings,
-    sanitizeAgentSettingsSnapshot(params.pluginSettings ?? {}),
+  return applyMergePatch(
+    applyMergePatch(params.globalSettings, params.pluginSettings ?? {}),
+    effectiveProjectSettings,
   ) as AgentSettingsSnapshot;
-  return applyMergePatch(withPluginSettings, effectiveProjectSettings) as AgentSettingsSnapshot;
 }

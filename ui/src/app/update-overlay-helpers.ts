@@ -1,9 +1,10 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
 import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
 } from "../../../src/infra/update-run-record.js";
-import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
@@ -175,7 +176,7 @@ function lastLogLine(tail: string | null | undefined): string | null {
     .map((line) => line.trim())
     .filter(Boolean);
   const last = lines.at(-1);
-  return last ? last.slice(0, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
+  return last ? truncateUtf16Safe(last, MAX_UPDATE_FAILURE_CAUSE_CHARS) : null;
 }
 
 export type UpdateRunResponse = {
@@ -355,7 +356,9 @@ export function resolveUpdateStatusBanner(params: {
     // which step owned it.
     text: cause
       ? `${t("updates.failedAtStep", { step: cause.step, cause: cause.detail })} ${guidance}`
-      : t("updates.status", { status, reason, guidance }),
+      : status === "error"
+        ? t("updates.error", { error: `${reason}. ${guidance}` })
+        : t("updates.status", { status, reason, guidance }),
   };
 }
 

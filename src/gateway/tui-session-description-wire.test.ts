@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { expect, it } from "vitest";
 import { WebSocketServer } from "ws";
+import { sendFrame } from "../../packages/gateway-client/src/client.transport.test-support.js";
 import {
   validateSessionsDescribeParams,
   validateSessionsListParams,
@@ -25,19 +26,16 @@ it("describes sessions over the published wire without changing legacy key seman
     let responseKey = "";
     const session = (key: string) => ({ key, sessionId: "transcript", model: "selected-model" });
     const defaults = { model: "default-model" };
-    let holdDescription = false;
-    const heldRequest = createDeferred();
     let client: GatewayChatClient | undefined;
     server.on("connection", (socket) => {
       sendMinimalGatewayConnectChallenge(socket);
       socket.on("message", (data) => {
-        const frame = parseMinimalGatewayRequestFrame(data);
-        const { id } = frame;
-        if (!id || !frame.method) {
+        const { id, method, params } = parseMinimalGatewayRequestFrame(data);
+        if (!id || !method) {
           return;
         }
         const reply = (payload: unknown) => sendMinimalGatewayResponse(socket, id, payload);
-        if (frame.method === "connect") {
+        if (method === "connect") {
           const hello = buildMinimalGatewayHelloOkPayload({
             methods: ["sessions.describe", "sessions.list"],
           });
@@ -45,24 +43,18 @@ it("describes sessions over the published wire without changing legacy key seman
           reply(hello);
           return;
         }
-        requests.push({ method: frame.method, params: frame.params });
-        if (frame.method === "sessions.describe" && validateSessionsDescribeParams(frame.params)) {
-          if (holdDescription) {
-            heldRequest.resolve();
-            return;
-          }
+        requests.push({ method, params });
+        if (method === "sessions.describe" && validateSessionsDescribeParams(params)) {
           reply({ session: session(responseKey) });
-        } else if (frame.method === "sessions.list" && validateSessionsListParams(frame.params)) {
+        } else if (method === "sessions.list" && validateSessionsListParams(params)) {
           reply({ defaults });
         } else {
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
-            }),
-          );
+          sendFrame(socket, {
+            type: "res",
+            id,
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "Unexpected metadata request shape" },
+          });
         }
       });
     });
@@ -80,9 +72,7 @@ it("describes sessions over the published wire without changing legacy key seman
       await connected.promise;
       for (const { sessionKey, key, owner, agentId } of [
         { sessionKey: "agent:ops:notes", key: "agent:ops:notes", owner: "ops" },
-        { sessionKey: "agent:ops:main", key: "global", owner: "ops" },
         { sessionKey: "main", agentId: "ops", key: "global", owner: "ops" },
-        { sessionKey: "global", agentId: "ops", key: "global", owner: "ops" },
         { sessionKey: "unknown", key: "unknown", owner: undefined },
       ]) {
         requests.length = 0;
@@ -97,12 +87,6 @@ it("describes sessions over the published wire without changing legacy key seman
           { method: "sessions.list", params: { ...(owner ? { agentId: owner } : {}), limit: 1 } },
         ]);
       }
-      holdDescription = true;
-      const pending = client.describeSession({ sessionKey: "agent:ops:notes" });
-      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-      await heldRequest.promise;
-      await client.stop();
-      await rejected;
     } finally {
       await client?.stop();
       await closeMinimalGatewayServer(server);

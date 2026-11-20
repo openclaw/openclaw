@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -25,9 +26,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-function coldFixture(perWorktreeConfig = true) {
+function coldFixture(perWorktreeConfig = true, partialCloneFilter?: string) {
   const f = createMainRefreshFixture(tempDirs.make("openclaw-pr-provision-"), {
     perWorktreeConfig,
+    partialCloneFilter,
     precreateWorktree: false,
   });
   f.env.OPENCLAW_STATE_DIR = join(f.root, "state");
@@ -65,6 +67,31 @@ function nextPr(f: ReturnType<typeof coldFixture>, pr: number) {
 }
 
 describePosix("native PR source provisioning", () => {
+  it("hydrates a cold native PR checkout with 20,000 unrelated config entries", () => {
+    const f = coldFixture(true, "blob:none");
+    f.git(f.origin, "update-ref", "refs/heads/main", f.movedMain);
+    const blob = f.git(f.origin, "rev-parse", `${f.movedMain}:src/subject.ts`);
+    expect(
+      f.git(f.canonical, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)"),
+    ).not.toContain(blob);
+    appendFileSync(
+      join(f.canonical, ".git", "config"),
+      Array.from(
+        { length: 20_000 },
+        (_, index) =>
+          `[branch "session-${index}-task-owned-workspace-checkout"]\n\tremote = origin\n`,
+      ).join(""),
+    );
+    const result = f.run("review-init");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("PR source checkout: Git checkout.");
+    expect(f.git(f.worktree, "rev-parse", "HEAD")).toBe(f.movedMain);
+    expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
+      "export const subject = 'main moved';\n",
+    );
+    expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
+  });
+
   it("keeps disabled-acceleration seed, private checkpoint, and cleanup custody", () => {
     const f = coldFixture(false);
     writeFileSync(f.env.OPENCLAW_CONFIG_PATH!, '{"worktreeAcceleration":false}\n');
@@ -89,8 +116,8 @@ describePosix("native PR source provisioning", () => {
 import { registerHooks } from "node:module";
 if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
   registerHooks({ load(url, context, nextLoad) {
-    if (url.endsWith("/src/config/config.ts")) {
-      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    if (url.endsWith("/src/config/config.ts") || url.endsWith("/src/agents/worktrees/checkout.ts")) {
+      throw new Error("Native Git provisioning must not load the acceleration implementation.");
     }
     return nextLoad(url, context);
   } });
@@ -253,19 +280,20 @@ printf '${edit}\\n' > src/subject.ts
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
     const f = coldFixture(false);
-    const monitor = join(f.root, "fsmonitor");
+    const monitor = join(f.root, "fsmonitor's hook");
+    const monitorCommand = `'${monitor.replace(/'/gu, `'\\''`)}'`;
     const receipt = join(f.root, "fsmonitor.txt");
     // Git treats a nonzero monitor exit as a request for an ordinary scan.
     // This records invocation without faking a clean index or monitor token.
     writeFileSync(monitor, `#!/bin/sh\nprintf '%s\\n' "$PWD" >> "${receipt}"\nexit 1\n`);
     chmodSync(monitor, 0o755);
-    f.git(f.canonical, "config", "core.fsmonitor", monitor);
+    f.git(f.canonical, "config", "core.fsmonitor", monitorCommand);
     const result = f.run("review-init");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("PR source checkout: Git checkout.");
     expect(readFileSync(receipt, "utf8").trim().split("\n")).toContain(f.worktree);
     expectSeed(f);
-    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitor);
+    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitorCommand);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
   });
 
@@ -331,7 +359,7 @@ ${changeLock}
 
       const result = f.run("review-init");
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("PR operation lock changed or is unreadable");
+      expect(result.stderr).toContain("PR operation lock check failed (status=1, signal=null)");
       expectSeed(f);
       expect(readFileSync(join(f.worktree, "src", "subject.ts"), "utf8")).toBe(
         "hook-owned state after lock loss\n",

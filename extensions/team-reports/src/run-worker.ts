@@ -22,7 +22,7 @@ export class TeamReportsRunner {
   }
 
   async run(params: ReportRunRequest): Promise<Record<string, SourceStatus>> {
-    const deadline = Date.now() + REPORT_RUN_TIMEOUT_MS;
+    const deadline = performance.now() + REPORT_RUN_TIMEOUT_MS;
     try {
       return await this.pool.run(
         {
@@ -63,7 +63,7 @@ export class TeamReportsRunner {
                 };
               }
               signal.throwIfAborted();
-              return { input: response, timeoutMs: Math.max(1, deadline - Date.now()) };
+              return { input: response, timeoutMs: Math.max(1, deadline - performance.now()) };
             })();
             this.requests.add(pending);
             void pending.finally(() => this.requests.delete(pending)).catch(() => {});

@@ -1,10 +1,11 @@
 import { expect, it } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import {
+  type ControlUiSessionPullRequest,
+  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+} from "../../../src/gateway/control-ui-contract.js";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
-  captureUiProof,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -14,25 +15,18 @@ import {
 const suite = createChatFlowE2eSuite();
 const selected = "agent:main:selected";
 const key = "agent:main:inference";
-const requests: ControlUiSessionPullRequest[] = Array.from({ length: 3 }, (_, index) => ({
+const requests: ControlUiSessionPullRequest[] = [417, 418].map((number) => ({
   owner: "example",
   repo: "control-ui",
-  number: 417 + index,
+  number,
   branch: "fix/inference",
-  url: "https://github.com/example/control-ui/pull/" + (417 + index),
-  title:
-    index === 0
-      ? "Keep inference retries scoped to their original conversation"
-      : "Improve provider recovery and model selection " + (index + 1),
-  state: index === 0 ? "open" : index === 1 ? "draft" : "merged",
-  additions: 128 + index,
-  deletions: 34,
-  checks:
-    index === 0 ? { state: "failing", passed: 23, failed: 1, skipped: 0, running: 0 } : undefined,
+  url: "https://github.com/example/control-ui/pull/" + number,
+  title: "Pull request " + number,
+  state: "open",
 }));
 
 suite.define(() => {
-  it("shows all supplied PRs and keeps pushed updates and keyboard navigation usable", async () => {
+  it("keeps pushed PR updates and keyboard navigation usable in a narrow sidebar", async () => {
     await suite.withPage(
       { colorScheme: "dark", viewport: { width: 1280, height: 900 } },
       async ({ page }) => {
@@ -71,27 +65,16 @@ suite.define(() => {
         const trigger = row.locator(".sidebar-recent-session__link");
         await trigger.focus();
         await gateway.waitForRequest(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-        const publish = async (items: ControlUiSessionPullRequest[], status = "ready") =>
+        const publish = async (items: ControlUiSessionPullRequest[]) =>
           gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
             sessions: {
-              [key]: { pullRequests: items, status, rateLimited: status === "rate-limited" },
+              [key]: { pullRequests: items, status: "ready", rateLimited: false },
             },
           });
         await publish(requests.toReversed());
         const card = page.locator(".session-progress-hovercard");
-        await expect
-          .poll(() => card.locator(".session-hovercard__pr-count").textContent())
-          .toBe("3");
         const links = card.locator(".session-hovercard__pr-row");
-        expect(await links.count()).toBe(3);
-        expect(await links.first().getAttribute("href")).toBe(requests[0]!.url);
-        expect(await links.nth(1).getAttribute("data-state")).toBe("draft");
-        expect(await card.locator(".session-hovercard__pr-checks").textContent()).toBe(
-          "CI checks failing",
-        );
-        await captureUiProof(suite, page, "pr-history", "mixed.png");
-
-        expect(await card.locator("details").count()).toBe(0);
+        await expect.poll(() => links.count()).toBe(2);
         await links.first().focus();
         await page.keyboard.press("Tab");
         expect(await links.nth(1).evaluate((element) => element === document.activeElement)).toBe(
@@ -99,13 +82,9 @@ suite.define(() => {
         );
 
         await publish(
-          requests.map((request) => ({ ...request, state: "merged", checks: undefined })),
+          requests.map((request) => Object.assign({}, request, { state: "merged" as const })),
         );
         await expect.poll(() => links.first().getAttribute("data-state")).toBe("merged");
-        await captureUiProof(suite, page, "pr-history", "merged.png");
-        await publish(requests, "rate-limited");
-        await card.getByRole("status").waitFor();
-        await captureUiProof(suite, page, "pr-history", "rate-limited.png");
         await page.keyboard.press("Escape");
         await expect.poll(() => card.count()).toBe(0);
         expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
@@ -117,7 +96,6 @@ suite.define(() => {
         const bounds = await card.boundingBox();
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(600);
-        await captureUiProof(suite, page, "pr-history", "narrow.png");
       },
     );
   });

@@ -1,11 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
-import { createPluginRecord } from "../../plugins/loader-records.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { startComputerHostProcess, type ComputerHostProcess } from "./computer-process.js";
 import { ComputerHostFinalizationError } from "./computer-protocol.js";
+import { createComputerRegistry } from "./computer-registry.test-support.js";
 import { createGatewayComputerService, type GatewayComputerService } from "./computer-service.js";
 import { computerCapabilities, observeSettlement, whileHeld } from "./computer.test-support.js";
 import type { HostDesktopService } from "./host-source.js";
@@ -48,16 +46,6 @@ function createFixture() {
     desktop: { host: { enabled: true, managed: true } },
     plugins: { entries: { fixture: { enabled: true } } },
   };
-  const registry = createEmptyPluginRegistry();
-  registry.plugins.push(
-    createPluginRecord({
-      id: "fixture",
-      source: "fixture",
-      origin: "bundled",
-      enabled: true,
-      configSchema: false,
-    }),
-  );
   const snapshot = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify(screenshot));
   const act = vi.fn(async (_paramsJSON?: string | null) => JSON.stringify({ ok: true }));
   const physicalClose = vi.fn(async (_reason: string) => {});
@@ -73,16 +61,7 @@ function createFixture() {
       label: "Fixture computer",
       generation: `generation-${generation}`,
     });
-  registerComputerUseProvider(
-    {
-      registerNodeHostCommand: (command) =>
-        registry.nodeHostCommands.push({
-          pluginId: "fixture",
-          pluginName: "Fixture",
-          command,
-          source: "fixture",
-        }),
-    },
+  const registry = createComputerRegistry(
     {
       id: "fixture",
       label: "Fixture computer",
@@ -90,12 +69,10 @@ function createFixture() {
       isAvailable: () => true,
       openExecution,
     },
+    { pluginName: "Fixture" },
   );
   const leases: Array<
-    Omit<DesktopComputerLease, "release"> & {
-      valid: boolean;
-      release: ReturnType<typeof vi.fn<() => void>>;
-    }
+    DesktopComputerLease & { valid: boolean; release: ReturnType<typeof vi.fn<() => void>> }
   > = [];
   const stops: Array<() => Promise<void>> = [];
   const desktop: HostDesktopService = {
@@ -124,6 +101,8 @@ function createFixture() {
       return lease;
     },
   };
+  const command = (name: string) =>
+    registry.nodeHostCommands.find((entry) => entry.command.command === name)!.command;
   const children: ComputerHostProcess[] = [];
   startHost.mockImplementation((options) => {
     options.assertCurrent();
@@ -134,17 +113,14 @@ function createFixture() {
       isCurrent: () => active,
       invoke: async (request) => {
         request.assertCurrent();
-        const command = registry.nodeHostCommands.find(
-          (entry) => entry.command.command === request.command,
-        )!.command;
-        return JSON.parse(await command.handle(JSON.stringify(request.params)));
+        return JSON.parse(await command(request.command).handle(JSON.stringify(request.params)));
       },
       close: vi.fn(async (execution?: { executionId: string; reason: string }) => {
         active = false;
         if (execution) {
-          await registry.nodeHostCommands
-            .find((entry) => entry.command.command === "computer.act")!
-            .command.handle(JSON.stringify({ ...execution, action: "__close_execution" }));
+          await command("computer.act").handle(
+            JSON.stringify({ ...execution, action: "__close_execution" }),
+          );
         }
         await registry.nodeHostCommands
           .find((entry) => entry.command.onDisconnect)
@@ -444,9 +420,7 @@ describe("Gateway computer service", () => {
       error: expect.stringContaining("reloading"),
     });
     await expect(f.invoke({ idempotencyKey: "during-reload" })).rejects.toThrow("closed");
-    await expectCleanupHeld(cleanup, reload.drain(), () => {
-      expect(f.leases[0]!.release).not.toHaveBeenCalled();
-    });
+    await expectCleanupHeld(cleanup, reload.drain(), () => f.calls({ release: 0 }));
     f.calls({ release: 1 });
     if (outcome === "commit") {
       f.config.plugins!.entries!.fixture!.enabled = false;
@@ -482,12 +456,10 @@ describe("Gateway computer service", () => {
 
   it("discovers its managed computer without pairing and binds native executions to the requesting owner", async () => {
     expect(await f.service.status()).toMatchObject({ configured: true, available: true });
-    expect(startComputerHostProcess).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: f.leases[0]!.env,
-        pluginIds: ["fixture"],
-      }),
-    );
+    expect(startHost.mock.calls[0]![0]).toMatchObject({
+      env: f.leases[0]!.env,
+      pluginIds: ["fixture"],
+    });
     await expect(f.invoke()).resolves.toEqual(screenshot);
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
@@ -543,9 +515,7 @@ describe("Gateway computer service", () => {
     await expectCleanupHeld(
       closed,
       f.service.close(),
-      () => {
-        expect(f.leases[0]!.release).not.toHaveBeenCalled();
-      },
+      () => f.calls({ release: 0 }),
       delayed.close,
     );
     expect(await discovering).toMatchObject({ available: false });

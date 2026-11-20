@@ -20,6 +20,7 @@ import {
 import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { retirePublishedMemoryEmbeddingCacheRows } from "./manager-embedding-cache-retire.js";
 import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
@@ -181,6 +182,17 @@ export function bindPostgresMemoryPublication(
       );
     }
   };
+  const writeChangedIndex = (run: () => boolean): MemoryPublicationResult<boolean> =>
+    write(
+      () => {
+        const changed = run();
+        if (changed) {
+          advanceMemoryIndexRevision(db);
+        }
+        return changed;
+      },
+      { publishFacts: true },
+    );
   const ensureSpool = () => {
     if (created) {
       return;
@@ -289,28 +301,22 @@ export function bindPostgresMemoryPublication(
     typeof bindSqliteWorkerDatabase<MemoryPublicationOperations>
   >[1]["execute"] = (command) => {
     if (command.type === "database.reset") {
-      return write(
-        () => {
-          const query =
-            getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
-          let changed = false;
-          // Admitted facts include optional vector projections; generated text columns
-          // disappear with their source rows while the index definitions stay admitted.
-          for (const table of MEMORY_INDEX_DERIVED_TABLES) {
-            if (table === MEMORY_INDEX_STATE_TABLE || !tableExists(db, table)) {
-              continue;
-            }
-            const result = executeSqliteQuerySync(db, query.deleteFrom(table));
-            changed ||= (result.numAffectedRows ?? 0n) > 0n;
+      return writeChangedIndex(() => {
+        const query =
+          getNodeSqliteKysely<Record<(typeof MEMORY_INDEX_DERIVED_TABLES)[number], unknown>>(db);
+        let changed = false;
+        // Admitted facts include optional vector projections; generated text columns
+        // disappear with their source rows while the index definitions stay admitted.
+        for (const table of MEMORY_INDEX_DERIVED_TABLES) {
+          if (table === MEMORY_INDEX_STATE_TABLE || !tableExists(db, table)) {
+            continue;
           }
-          cacheSize = { size: 0, exact: true };
-          if (changed) {
-            advanceMemoryIndexRevision(db);
-          }
-          return changed;
-        },
-        { publishFacts: true },
-      );
+          const result = executeSqliteQuerySync(db, query.deleteFrom(table));
+          changed ||= (result.numAffectedRows ?? 0n) > 0n;
+        }
+        cacheSize = { size: 0, exact: true };
+        return changed;
+      });
     }
     if (stageId && !stages.has(stageId) && command.type !== "database.stage.start") {
       throw new Error("Memory reindex connection was lost; retry the full reindex.");
@@ -403,27 +409,31 @@ export function bindPostgresMemoryPublication(
             );
           }
           db.exec("DELETE FROM memory_index_chunks; DELETE FROM memory_index_sources");
-          const rows = records("reindex");
-          let next = rows.next();
-          while (!next.done) {
-            if (typeof next.value.header !== "string") {
-              throw new Error("Memory reindex source header is missing");
-            }
-            // SAFETY: Only stageSource writes headers into the reindex lane.
-            const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
-            checkSource(source);
-            next = rows.next();
-            function* fragments() {
-              while (!next.done && next.value.header === null) {
-                yield next.value;
-                next = rows.next();
+          function* sources() {
+            const rows = records("reindex");
+            let next = rows.next();
+            while (!next.done) {
+              if (typeof next.value.header !== "string") {
+                throw new Error("Memory reindex source header is missing");
               }
+              // SAFETY: Only stageSource writes headers into the reindex lane.
+              const source = JSON.parse(next.value.header) as MemorySourceIndexHeader;
+              checkSource(source);
+              next = rows.next();
+              function* fragments() {
+                while (!next.done && next.value.header === null) {
+                  yield next.value;
+                  next = rows.next();
+                }
+              }
+              // The kernel consumes each source before requesting the next header.
+              yield { header: source, rows: decode<MemorySourceIndexRow>(fragments()) };
             }
-            new MemorySourceIndexKernel(db, {
-              vector: { enabled: true, available: true },
-              fts: { enabled: true, available: true },
-            }).replaceRows(source, decode<MemorySourceIndexRow>(fragments()));
           }
+          new MemorySourceIndexKernel(db, {
+            vector: { enabled: true, available: true },
+            fts: { enabled: true, available: true },
+          }).replaceGroup(sources());
           writeMemoryIndexMetadata(db, metadata);
           if (command.input.vectorIndexComplete) {
             markMemoryVectorIndexClean(db);
@@ -501,34 +511,13 @@ export function bindPostgresMemoryPublication(
         { publishFacts: true },
       );
     }
-    if (command.type === "source.refresh") {
+    if (command.type === "source.refresh" || command.type === "source.delete") {
       return rebuilding
         ? { ok: true, value: false }
-        : write(
-            () => {
-              const changed = refreshMemorySessionSourceState(db, command.input);
-              if (changed) {
-                advanceMemoryIndexRevision(db);
-              }
-              return changed;
-            },
-            { publishFacts: true },
-          );
-    }
-    if (command.type === "source.delete") {
-      return rebuilding
-        ? { ok: true, value: false }
-        : write(
-            () => {
-              const changed = new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(
-                command.input,
-              );
-              if (changed) {
-                advanceMemoryIndexRevision(db);
-              }
-              return changed;
-            },
-            { publishFacts: true },
+        : writeChangedIndex(() =>
+            command.type === "source.refresh"
+              ? refreshMemorySessionSourceState(db, command.input)
+              : new MemorySourceIndexKernel(db, command.input.state).deleteIfCurrent(command.input),
           );
     }
     if (command.type === "cache.clear") {
@@ -540,10 +529,23 @@ export function bindPostgresMemoryPublication(
         return true;
       });
     }
+    if (command.type === "cache.retire") {
+      return write(() => {
+        const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+        if (cacheSize !== undefined) {
+          cacheSize = { ...cacheSize, size: cacheSize.size - page.removed };
+        }
+        return page.next ?? null;
+      });
+    }
     if (command.type === "cache.prune") {
       return write(() => {
         const size = readCacheSize();
         if (size.size <= command.input.maxEntries) {
+          if (command.input.recount) {
+            cacheSize = { size: countMemoryEmbeddingCache(db), exact: true };
+            return cacheSize.size > command.input.maxEntries;
+          }
           return false;
         }
         cacheSize = pruneMemoryEmbeddingCache(
@@ -602,20 +604,23 @@ export function bindPostgresMemoryPublication(
             : command.type === "source.replace.inline"
               ? [command.input]
               : [{ header: header as MemorySourceIndexHeader, fragments: undefined }]; // SAFETY: Paired source stage.start header.
-        for (const source of sources) {
-          if (!source.header) {
-            throw new Error("Memory source staging was not started");
-          }
-          if (rebuilding) {
-            stageSource(source.header, source.fragments);
-          } else {
-            checkSource(source.header);
-            new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-              source.header,
-              decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
-            );
+        function* replacements() {
+          for (const source of sources) {
+            if (!source.header) {
+              throw new Error("Memory source staging was not started");
+            }
+            if (rebuilding) {
+              stageSource(source.header, source.fragments);
+            } else {
+              checkSource(source.header);
+              yield {
+                header: source.header,
+                rows: decode<MemorySourceIndexRow>(source.fragments ?? records("source")),
+              };
+            }
           }
         }
+        new MemorySourceIndexKernel(db, command.input.state).replaceGroup(replacements());
         if (!rebuilding) {
           advanceMemoryIndexRevision(db);
         }

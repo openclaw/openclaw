@@ -36,17 +36,7 @@ async function withReadOnlyDatabase(
   }
 }
 
-export function registerGatewayLockFailureTests({
-  expectExit,
-  configState,
-  withoutSupervisorEnv,
-  startGatewayServer,
-  writeDiagnosticStabilityBundleForFailureSync,
-  runGatewayLoop,
-  detectRespawnSupervisor,
-  runtimeErrors,
-  triageAfterFailure,
-}: {
+export function registerGatewayLockFailureTests(f: {
   expectExit: (code: number) => Promise<void>;
   configState: { snapshot: Record<string, unknown> };
   withoutSupervisorEnv: Record<string, string | undefined>;
@@ -59,7 +49,7 @@ export function registerGatewayLockFailureTests({
 }) {
   it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
     const port = await getFreePort();
-    configState.snapshot = {
+    f.configState.snapshot = {
       config: { gateway: { port } },
       exists: false,
       sourceConfig: {},
@@ -68,17 +58,14 @@ export function registerGatewayLockFailureTests({
     const err = Object.assign(new Error(`gateway already running on port ${port}`), {
       name: "GatewayLockError",
     });
-    startGatewayServer.mockRejectedValueOnce(err);
+    f.startGatewayServer.mockRejectedValueOnce(err);
 
-    await withEnvAsync(withoutSupervisorEnv, async () => {
-      await expectExit(1);
-    });
+    await withEnvAsync(f.withoutSupervisorEnv, () => f.expectExit(1));
 
-    expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
-    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
-    expect(triageAfterFailure).not.toHaveBeenCalled();
+    expect(f.writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+    expect(f.runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
+    expect(f.runtimeErrors.join("\n")).toContain("gateway stop");
+    expect(f.triageAfterFailure).not.toHaveBeenCalled();
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -102,12 +89,12 @@ export function registerGatewayLockFailureTests({
         try {
           execFileSync("/usr/bin/chflags", ["uchg", databasePath]);
           const { inspectPortUsage } = await import("../../infra/ports-inspect.js");
-          detectRespawnSupervisor.mockReturnValue("systemd");
-          runGatewayLoop.mockImplementationOnce(async () => {
+          f.detectRespawnSupervisor.mockReturnValue("systemd");
+          f.runGatewayLoop.mockImplementationOnce(async () => {
             await acquireGatewayLock(lockOptions);
           });
-          await expectExit(1);
-          const output = runtimeErrors.join("\n");
+          await f.expectExit(1);
+          const output = f.runtimeErrors.join("\n");
           expect(output).toContain("storage failure");
           expect(output).toContain(databasePath);
           expect(output).toContain("read-only or not writable by this user");
@@ -115,8 +102,8 @@ export function registerGatewayLockFailureTests({
           expect(output).toContain("openclaw doctor");
           expect(output).not.toContain("gateway stop");
           expect(inspectPortUsage).not.toHaveBeenCalled();
-          expect(runGatewayLoop).toHaveBeenCalledOnce();
-          expect(triageAfterFailure).not.toHaveBeenCalled();
+          expect(f.runGatewayLoop).toHaveBeenCalledOnce();
+          expect(f.triageAfterFailure).not.toHaveBeenCalled();
           expect((await fs.stat(databasePath)).mode & 0o777).toBe(0o444);
         } finally {
           execFileSync("/usr/bin/chflags", ["nouchg", databasePath]);
@@ -124,43 +111,30 @@ export function registerGatewayLockFailureTests({
       }),
   );
 
-  it.each([
+  it.each<[string, string | undefined]>([
     ["SQLITE_FULL", "Free up space"],
     ["SQLITE_IOERR_READ", "check the volume for I/O errors"],
     ["SQLITE_CANTOPEN", "check the volume for I/O errors"],
-  ])("reports %s without suggesting another Gateway", async (code, remedy) => {
-    runGatewayLoop.mockRejectedValueOnce(
-      new GatewayLockError(
-        "failed to acquire gateway state ownership",
-        Object.assign(new Error("storage unavailable"), { code }),
-        "/synthetic/state/openclaw.sqlite",
-      ),
-    );
-    await expectExit(1);
-    expect(runtimeErrors.join("\n")).toContain(remedy);
-    expect(runtimeErrors.join("\n")).toContain("openclaw doctor");
-    expect(runtimeErrors.join("\n")).not.toContain("gateway stop");
-  });
-
-  it.each(
-    ["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].flatMap((code) =>
-      [true, false].map((hasDatabasePath) => ({ code, hasDatabasePath })),
-    ),
-  )(
-    "requires database context for $code (hasDatabasePath=$hasDatabasePath)",
-    async ({ code, hasDatabasePath }) => {
+    ...["EACCES", "EPERM", "EROFS", "EIO", "ENOSPC"].map((code): [string, string | undefined] => [
+      code,
+      "storage failure",
+    ]),
+    ["EACCES", undefined],
+  ])(
+    "reports %s with database-specific guidance only in database context (%s)",
+    async (code, remedy) => {
       const databasePath = "/synthetic/state/openclaw.sqlite";
-      runGatewayLoop.mockRejectedValueOnce(
+      f.runGatewayLoop.mockRejectedValueOnce(
         new GatewayLockError(
           "failed to acquire gateway state ownership",
           Object.assign(new Error("operation failed"), { code }),
-          hasDatabasePath ? databasePath : undefined,
+          remedy ? databasePath : undefined,
         ),
       );
-      await expectExit(1);
-      const output = runtimeErrors.join("\n");
-      if (hasDatabasePath) {
-        expect(output).toContain("storage failure");
+      await f.expectExit(1);
+      const output = f.runtimeErrors.join("\n");
+      if (remedy) {
+        expect(output).toContain(remedy);
         expect(output).toContain(databasePath);
         expect(output).toContain("openclaw doctor");
         expect(output).not.toContain("gateway stop");

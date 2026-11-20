@@ -5,7 +5,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../agents/workspace-bootstrap-read.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
+import {
+  appendPostCompactionRefreshPrompt,
+  readPostCompactionContext,
+} from "./post-compaction-context.js";
 
 describe("readPostCompactionContext", () => {
   let tmpDir = "";
@@ -76,10 +80,6 @@ describe("readPostCompactionContext", () => {
         } else {
           expect(result).toBeNull();
         }
-        expect(readFile).toHaveBeenCalledWith({
-          filePath: "AGENTS.md",
-          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        });
         release();
         expect(await readRules()).toBeNull();
         expect(readFile).toHaveBeenCalledTimes(1);
@@ -88,6 +88,26 @@ describe("readPostCompactionContext", () => {
       }
     },
   );
+
+  it("preserves existing prompt bytes when appending post-compaction context", async () => {
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), "## Session Startup\nRead files.");
+    const followupRun = createTestFollowupRun({
+      workspaceDir: tmpDir,
+      extraSystemPrompt: "### Delivery Format\nSynthetic contract.\n",
+    });
+
+    await appendPostCompactionRefreshPrompt({
+      cfg: {
+        agents: { defaults: { compaction: { postCompactionSections: ["Session Startup"] } } },
+      },
+      followupRun,
+    });
+
+    expect(followupRun.run.extraSystemPrompt).toMatch(
+      /^### Delivery Format\nSynthetic contract\.\n\n\n/,
+    );
+    expect(followupRun.run.extraSystemPrompt).toContain("Read files.");
+  });
 
   it("keeps truncated post-compaction context UTF-16 safe", async () => {
     const prefix = "A".repeat(159);
@@ -107,37 +127,38 @@ describe("readPostCompactionContext", () => {
     expect(result?.length).toBeLessThan(1_200);
   });
 
-  it("skips sections inside code blocks", async () => {
-    const result = await readRules(
+  it.each<[string, string, RegExp, RegExp, Parameters<typeof readRules>[1]]>([
+    [
+      "ignores headings in fences",
       "```markdown\n## Session Startup\ninside a code block\n```\n## Red Lines\nReal red lines here\n## Other",
-    );
-    expect(result).toContain("Real red lines here");
-    expect(result).not.toContain("inside a code block");
-  });
-
-  it("keeps a nested backtick block inside a four-backtick fence in the selected section", async () => {
-    const content =
-      "## Session Startup\n\n````markdown\n```bash\n# setup\n```\n# Example heading\n````\n\nAfter fence.\n\n# Appendix\n\nAppendix body.\n";
-    const result = await readRules(content);
-    expect(result).toContain("# setup\n```\n# Example heading\n````\n\nAfter fence.");
-    expect(result).not.toContain("Appendix body.");
-  });
-
-  it("ends a selected section at an H1 so a later section fits the budget", async () => {
-    const content = `## Session Startup\n\nRead files.\n\n# Appendix\n\n${"A".repeat(3000)}\n\n## Red Lines\n\nNever do X.\n`;
-    const result = await readRules(content, { maxChars: 200 });
-    expect(result).toContain("Read files.");
-    expect(result).toContain("Never do X.");
-    expect(result).not.toContain("Appendix");
-    expect(result).not.toContain("[truncated]");
-  });
-
-  it("uses custom section names from config instead of defaults", async () => {
-    const result = await readRules(
+      /Real red lines here/,
+      /inside a code block/,
+      {},
+    ],
+    [
+      "preserves nested fences",
+      "## Session Startup\n\n````markdown\n```bash\n# setup\n```\n# Example heading\n````\n\nAfter fence.\n\n# Appendix\n\nAppendix body.\n",
+      /# setup\n```\n# Example heading\n````\n\nAfter fence\./,
+      /Appendix body\./,
+      {},
+    ],
+    [
+      "ends at H1 before budgeting later sections",
+      `## Session Startup\n\nRead files.\n\n# Appendix\n\n${"A".repeat(3000)}\n\n## Red Lines\n\nNever do X.\n`,
+      /Read files\.[\s\S]*Never do X\./,
+      /Appendix|\[truncated\]/,
+      { maxChars: 200 },
+    ],
+    [
+      "uses configured sections",
       "## Session Startup\nDo startup\n## Critical Rules\nMy custom rules\n## Red Lines\nDefault section",
+      /Critical Rules\nMy custom rules/,
+      /Do startup|Default section|Session Startup/,
       { sections: ["Critical Rules"] },
-    );
-    expect(result).toContain("Critical Rules\nMy custom rules");
-    expect(result).not.toMatch(/Do startup|Default section|Session Startup/);
+    ],
+  ])("%s", async (_name, content, included, excluded, options) => {
+    const result = await readRules(content, options);
+    expect(result).toMatch(included);
+    expect(result).not.toMatch(excluded);
   });
 });

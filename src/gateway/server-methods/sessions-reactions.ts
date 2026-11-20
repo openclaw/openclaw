@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
-  errorShape,
   isReactionEmoji,
   validateSessionReactionsListParams,
   validateSessionReactionsSetParams,
@@ -35,6 +34,7 @@ import {
   readSessionConversationBindingAsync,
 } from "../session-transcript-readers.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
+import { respondError } from "./response.js";
 import { withSessionReactionAccess } from "./sessions-reactions-access.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
@@ -114,19 +114,15 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
         async ({ target, assertCurrent }) => {
           const actor = gatewayClientSessionCreator(client);
           if (!actor) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "identified reaction author required"),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              "identified reaction author required",
             );
             return;
           }
           if (!isReactionEmoji(params.emoji)) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.INVALID_REQUEST, "one emoji grapheme is required"),
-            );
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "one emoji grapheme is required");
             return;
           }
           const scope = reactionScope(target);
@@ -148,7 +144,7 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
           );
           assertCurrent();
           if (!message || (message.role !== "user" && message.role !== "assistant")) {
-            respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown message"));
+            respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown message");
             return;
           }
           let write: SessionReactionWrite;
@@ -169,17 +165,14 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
             });
             assertCurrent();
           } catch (error) {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                error instanceof SessionReactionLimitError
-                  ? "reaction limit reached"
-                  : error instanceof SessionReactionMessageMissingError
-                    ? "unknown message"
-                    : formatErrorMessage(error),
-              ),
+            respondError(
+              respond,
+              ErrorCodes.INVALID_REQUEST,
+              error instanceof SessionReactionLimitError
+                ? "reaction limit reached"
+                : error instanceof SessionReactionMessageMissingError
+                  ? "unknown message"
+                  : formatErrorMessage(error),
             );
             return;
           }

@@ -7,26 +7,21 @@ import {
 
 function responseProbe(headers: Headers, readsBody = false) {
   const state = { readStarted: false, canceled: false };
-  const cancel = async () => {
-    state.canceled = true;
-  };
-  const response = {
-    headers,
-    body: {
-      cancel,
-      getReader: () => ({
-        async read() {
-          state.readStarted = true;
-          return readsBody
-            ? { done: false, value: new Uint8Array(17) }
-            : new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-        },
-        cancel,
-        releaseLock() {},
-      }),
+  const body = new ReadableStream(
+    {
+      pull(controller) {
+        state.readStarted = true;
+        if (readsBody) {
+          controller.enqueue(new Uint8Array(17));
+        }
+      },
+      cancel() {
+        state.canceled = true;
+      },
     },
-  } as unknown as Response;
-  return { response, state };
+    { highWaterMark: 0 },
+  );
+  return { response: new Response(body, { headers }), state };
 }
 
 describe("scripts bounded response reader", () => {
@@ -56,24 +51,14 @@ describe("scripts bounded response reader", () => {
   });
 
   it("keeps timeout rejection ahead of cancel-unblocked stream reads", async () => {
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream({
-        pull() {
-          return new Promise(() => {});
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-    );
+    const { response, state } = responseProbe(new Headers());
 
     await expect(
       readBoundedResponseText(response, "probe", 1024, {
         timeoutPromise: Promise.reject(new Error("timeout")),
       }),
     ).rejects.toThrow("timeout");
-    expect(canceled).toBe(true);
+    expect(state.canceled).toBe(true);
   });
 
   it("preserves opt-in ETOOBIG errors for E2E callers", async () => {

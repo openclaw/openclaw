@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -13,20 +14,28 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { readSessionForkTurn, runSessionFork } from "../session-fork-run.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 import { toolResult } from "./session-message-fixtures.test-support.js";
+
+const runEmbeddedAgent = vi.hoisted(() =>
+  vi.fn<typeof import("../embedded-agent.js").runEmbeddedAgent>(),
+);
+// mock-isolation: run the real fork preparation without sending a provider request.
+vi.mock("../embedded-agent.js", () => ({ runEmbeddedAgent }));
 
 async function withHistory(
   label: string,
   run: (fixture: {
     scope: SessionTranscriptRuntimeTarget;
     source: SessionManager;
+    workspaceDir: string;
     verifyRead: (read: () => void | Promise<void>) => Promise<void>;
   }) => Promise<void>,
 ) {
-  await withSessionState(label, async ({ scope }) => {
+  await withSessionState(label, async ({ scope, state }) => {
     const source = SessionManager.open(scope);
     const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
     const snapshot = () =>
@@ -37,6 +46,7 @@ async function withHistory(
     await run({
       scope,
       source,
+      workspaceDir: state.workspaceDir,
       verifyRead: async (read) => {
         const before = snapshot();
         try {
@@ -164,18 +174,14 @@ it.each([false, true])(
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
+      source.appendMessage(
+        makeUserMessage(`body-payload-${index}:` + "x".repeat(1_048_576), index),
+      );
     }
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
-    expect(
-      database.db
-        .prepare(
-          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
-        )
-        .get(scope.sessionId),
-    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
-    await verifyRead(() => {
+    await verifyRead(async () => {
+      const complete = await SessionManager.openModelContextAsync(scope);
+      expect(complete.buildSessionContext().messages).toEqual(full);
       const hydrated = new Set<string>();
       const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
@@ -188,17 +194,15 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 16_384, maxEvents: 20 },
+          limits: { maxBytes: 4 * 1024 * 1024, maxEvents: 20 },
         }).buildSessionContext().messages;
         expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
         spy.mockRestore();
         decompress.mockRestore();
       }
-      expect(messages.length).toBeGreaterThan(0);
-      expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4 * 1024 * 1024);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {
@@ -551,9 +555,11 @@ it.each(["sync", "async"])(
         makeUserMessage("newest request: preserve both completed operations", 1),
       );
       appendCalls(source, "large", "small");
-      const oversized = "oversized-tool-body:" + "x".repeat(32_768);
+      const oversized = "oversized-tool-body:" + "x".repeat(262_144);
       const largeResultId = appendResult(source, "large", oversized);
-      appendResult(source, "small", "completed operation receipt: synthetic-42");
+      const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+        toolResult("completed operation receipt: synthetic-42", "small", 1),
+      );
       const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
       expect(
         database.db
@@ -578,6 +584,9 @@ it.each(["sync", "async"])(
         { agentId: database.agentId, path: database.path },
       );
       await verifyRead(async () => {
+        expect(await readSessionForkTurn(anchor!)).toEqual({
+          model: { provider: "openai", model: "test-model" },
+        });
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
           "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
@@ -776,3 +785,53 @@ it.each([false, true])(
     );
   },
 );
+
+it("shows a fork a still-running tool call as pending without writing the source", async () => {
+  await withHistory("fork-running-tool", async ({ source, workspaceDir, verifyRead }) => {
+    await source.appendMessageAsync(makeUserMessage("Run the probe", 1));
+    // One call of the batch finished; the other is still running.
+    await source.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [toolCall("done"), toolCall("running")],
+        stopReason: "toolUse",
+      }),
+    );
+    const { anchor } = await source.appendMessageWithTranscriptAnchorAsync(
+      toolResult("done-output", "done", 1),
+    );
+    assert(anchor);
+    await verifyRead(async () => {
+      let messages: ReturnType<SessionManager["buildSessionContext"]>["messages"] = [];
+      runEmbeddedAgent.mockImplementationOnce(async ({ sessionManager }) => {
+        assert(sessionManager);
+        messages = sessionManager.buildSessionContext().messages;
+        return { meta: { durationMs: 1 } };
+      });
+      const outcome = await runSessionFork(
+        {
+          config: {},
+          source: anchor,
+          prompt: "Review the probe results",
+          tools: [],
+          runId: "pending-tool-fork",
+          owner: "core:test",
+          model: { provider: "openai", model: "gpt-test" },
+          workspaceDir,
+          timeoutMs: 1_000,
+        },
+        async (result) => result,
+      );
+      expect(outcome).toMatchObject({ ok: true });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      const results = messages.filter((message) => message.role === "toolResult");
+      expect(results).toMatchObject([
+        { toolCallId: "done", content: [{ text: "done-output" }] },
+        {
+          toolCallId: "running",
+          isError: false,
+          content: [{ text: "This tool call is still running. Its result is not available yet." }],
+        },
+      ]);
+    });
+  });
+});

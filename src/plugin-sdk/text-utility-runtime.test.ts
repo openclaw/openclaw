@@ -14,37 +14,34 @@ describe("escapeHtml", () => {
 });
 
 describe("runChannelProbe", () => {
-  it("adds elapsed time to successful results", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
-
+  it.each([false, true])("times probes across wall steps (explicit=%s)", async (explicit) => {
+    const epoch = 1_700_000_000_000;
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(epoch)
+      .mockReturnValue(epoch + (explicit ? -60_000 : 60_000));
+    vi.spyOn(performance, "now")
+      .mockReturnValueOnce(100)
+      .mockReturnValue(explicit ? 120 : 145);
     await expect(
       runChannelProbe(
         undefined,
-        async ({ startedAt }) => ({ ok: startedAt === 100 }),
+        async ({ startedAt, elapsedMs }) => ({
+          ok: startedAt === epoch,
+          ...(explicit ? { elapsedMs: elapsedMs() } : {}),
+        }),
         (error) => ({ ok: false, error: String(error) }),
       ),
-    ).resolves.toEqual({ ok: true, elapsedMs: 45 });
-  });
-
-  it("preserves an explicit timing snapshot", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(120);
-
-    await expect(
-      runChannelProbe(
-        undefined,
-        async ({ elapsedMs }) => ({ ok: true, elapsedMs: elapsedMs() }),
-        (error) => ({ ok: false, error: String(error) }),
-      ),
-    ).resolves.toEqual({ ok: true, elapsedMs: 20 });
+    ).resolves.toEqual({ ok: true, elapsedMs: explicit ? 20 : 45 });
   });
 
   it("applies the timeout before shaping the error result", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const resultPromise = runChannelProbe(
       50,
       async () => await new Promise<never>(() => {}),
       (error) => ({ ok: false, error: String(error) }),
     );
+    vi.setSystemTime(Date.now() - 60_000);
 
     await vi.advanceTimersByTimeAsync(50);
 

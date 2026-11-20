@@ -174,7 +174,7 @@ it("fetches a retained history reference without crossing conversation or pendin
       }),
       "pending input receipt",
     );
-    pending.finish("cancelled");
+    pending.finish("cancelled", "failed");
     await pending.settled?.();
     const context = await createHistoryReadContext();
     const request = historyRpc(context, scope.sessionKey);

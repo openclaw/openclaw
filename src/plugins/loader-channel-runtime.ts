@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import { mergeChannelPlugins } from "../channels/plugins/merge-plugin-section.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeRootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { NormalizedPluginsConfig } from "./config-state.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
-  mergeSetupRuntimeChannelPlugin,
   resolveBundledRuntimeChannelRegistration,
   resolveSetupChannelRegistration,
 } from "./loader-channel-setup.js";
@@ -180,9 +180,10 @@ export function loadSetupRuntimeChannelCandidate(params: {
         );
         return true;
       }
-      mergedSetupPlugin = mergeSetupRuntimeChannelPlugin(
+      mergedSetupPlugin = mergeChannelPlugins(
         runtimePluginRegistration.plugin,
         setupRegistration.plugin,
+        "merge",
       );
     }
   }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
+import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
@@ -10,21 +11,27 @@ import {
   hasDeferredUpdateModelRetirement,
   recordUpdateModelRetirement,
 } from "../../infra/update-deferred-model-retirement.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
   getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
+import * as rollbackModule from "./update-command-rollback.js";
 import * as sourceRuntime from "./update-command-runtime.js";
+import { GatewayRestartHealthError } from "./update-command-service-command.js";
 import type * as revalidation from "./update-command-service-revalidation.js";
 import type * as service from "./update-command-service.js";
+import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
@@ -68,6 +75,7 @@ type FixtureMocks = {
   readServiceState: Mock;
   revalidateService: Mock<typeof revalidation.revalidateManagedGatewayServiceAfterUpdate>;
 };
+type PostUpdateFixture<M> = { tempDirs: { make(prefix: string): string }; mocks: M };
 const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
 
 export function recordVerifiedGatewayRun(
@@ -173,7 +181,48 @@ export async function finishSuccessfulPackageSwitch(
   vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockImplementation(async (root, inspection) =>
     packageInstall && root === installRoot ? "package" : resolveInstallKind(root, inspection),
   );
-  await finishUpdate(input, options);
+  const suppliedRun = input.opts.run;
+  if (suppliedRun) {
+    input.result.runId ??= suppliedRun.runId;
+  }
+  // Explicit missing/stale authority controls retain their original admission failure.
+  if (
+    suppliedRun?.executorFence ||
+    (suppliedRun && loadUpdateRecovery(suppliedRun.runId, { env: suppliedRun.env }))
+  ) {
+    await finishUpdate(input, options);
+    return;
+  }
+  const env = input.ownedManagedUpdateEnv ?? suppliedRun?.env ?? { ...process.env };
+  const run: NonNullable<FinishUpdateParams["opts"]["run"]> = suppliedRun ?? {
+    runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+    env,
+  };
+  input.result.runId ??= run.runId;
+  await withUpdateCommandTerminalResult((registerRun) => {
+    registerRun(run);
+    return withUpdateCommandExecutor(run.runId, async (executor) => {
+      run.executorFence = await executor.enter(input.root);
+      await finishUpdate({ ...input, opts: { ...input.opts, run } }, options);
+    });
+  }, input.opts);
+}
+
+/** Inspect the inner failure under its live owner before checking outer settlement. */
+export async function runFinalizationFailureWithNativeExecutor(
+  root: string,
+  run: NonNullable<FinishUpdateParams["opts"]["run"]>,
+  inspectSubject: () => Promise<unknown>,
+): Promise<unknown> {
+  let verified = false;
+  const failure = await withUpdateCommandExecutor(run.runId, async (executor) => {
+    run.executorFence = await executor.enter(root);
+    const subjectFailure = await inspectSubject();
+    verified = true;
+    throw subjectFailure;
+  }).catch((error: unknown) => error);
+  expect(verified).toBe(true);
+  return failure;
 }
 
 export const programArguments = ["/usr/bin/node", "/tmp/openclaw-update/dist/index.js", "gateway"];
@@ -211,10 +260,7 @@ export const successfulPluginUpdate = createPostCorePluginUpdateResult({
 export function registerForegroundFinalizationTests({
   tempDirs,
   mocks,
-}: {
-  tempDirs: { make(prefix: string): string };
-  mocks: Omit<FixtureMocks, "readServiceState" | "revalidateService">;
-}): void {
+}: PostUpdateFixture<Omit<FixtureMocks, "readServiceState" | "revalidateService">>): void {
   it.each([
     ...(["noop", "runtime", "plugins", "park-failed"] as const).flatMap((outcome) =>
       [false, true].map((candidateRuntime) => ({ outcome, candidateRuntime })),
@@ -329,10 +375,7 @@ export function registerForegroundFinalizationTests({
 export function registerManagedInstallEnvironmentTest({
   tempDirs,
   mocks,
-}: {
-  tempDirs: { make(prefix: string): string };
-  mocks: Pick<FixtureMocks, "readServiceState" | "restartService">;
-}): void {
+}: PostUpdateFixture<Pick<FixtureMocks, "readServiceState" | "restartService">>): void {
   it("removes operator overrides and process identity from the managed install environment", async () => {
     const packageRoot = tempDirs.make("openclaw-post-update-package-");
     await fs.writeFile(
@@ -540,6 +583,90 @@ export function registerServiceInstallationConvergenceTests(
         }
       } finally {
         identity.restore();
+      }
+    },
+  );
+}
+
+export function registerVerifiedActivationFailureTests({
+  tempDirs,
+  mocks,
+}: PostUpdateFixture<Pick<FixtureMocks, "restartService" | "printResult">>) {
+  it.each([
+    "restart-health",
+    "reported-failure",
+    "authority",
+    "unknown",
+    "data-at-risk",
+    "health-with-authority",
+    "admission-unavailable",
+  ] as const)(
+    "classifies post-activation failures without granting authority (%s)",
+    async (outcome) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-verified-target-") };
+      const run = createUpdateRun({ trigger: "cli" }, { env });
+      const rollback = vi.spyOn(rollbackModule, "rollbackFailedUpdate");
+      mocks.restartService.mockImplementationOnce(async ({ onVerified }) => {
+        onVerified?.(Date.now());
+        if (outcome === "data-at-risk") {
+          throw new DoctorMaintenanceRefusalError("Incomplete migration", {
+            kind: "data-at-risk",
+            reason: "incomplete-migration",
+          });
+        }
+        if (outcome === "reported-failure") {
+          return "restart-health-failed";
+        }
+        if (outcome === "authority") {
+          throw new GatewayServiceAuthorityError(new Error("Service authority revoked"));
+        }
+        if (outcome === "admission-unavailable") {
+          throw new DoctorMaintenanceRefusalError("Admission unavailable", {
+            kind: "deferred",
+            reason: "admission-unavailable",
+          });
+        }
+        if (outcome === "health-with-authority") {
+          throw new GatewayRestartHealthError("Health reporting failed", {
+            cause: new GatewayServiceAuthorityError(new Error("Service authority revoked")),
+          });
+        }
+        if (outcome === "unknown") {
+          throw new Error("Unknown post-activation failure");
+        }
+        throw new GatewayRestartHealthError("post-activation receipt unavailable");
+      });
+      const finishing = finishSuccessfulPackageSwitch({
+        run: { runId: run.runId, env },
+        restartEnvironment: process.env,
+      });
+      if (outcome !== "restart-health" && outcome !== "reported-failure") {
+        await expect(finishing).rejects.toMatchObject({
+          result: {
+            status: "error",
+            ...(outcome === "data-at-risk"
+              ? { recovery: { dataAtRisk: "incomplete-migration" } }
+              : {}),
+          },
+        });
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("failed");
+      } else {
+        await expect(finishing).resolves.toBeUndefined();
+        expect(rollback).not.toHaveBeenCalled();
+        expect(getUpdateRun(run.runId, { env })?.status).toBe("succeeded");
+        const result = mocks.printResult.mock.lastCall?.[0];
+        expect(result.status).toBe("ok");
+        expect(
+          result.steps.find((step: { name: string }) => step.name === "post-update maintenance")
+            ?.advisory,
+        ).toMatchObject({
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining(
+            outcome === "restart-health"
+              ? "post-activation receipt unavailable"
+              : "restart-unhealthy",
+          ),
+        });
       }
     },
   );

@@ -194,7 +194,6 @@ export function createCodexNativeHookRelay(params: {
   attemptTimeoutMs: number;
   startupTimeoutMs: number;
   turnStartTimeoutMs: number;
-  loopDetectionPreToolUseRelay: boolean;
   signal: AbortSignal;
   hostCapabilities: EmbeddedRunAttemptParams["hostCapabilities"];
   nativeProcessAuthority?: {
@@ -251,6 +250,7 @@ export function createCodexNativeHookRelay(params: {
   let remoteCleanup: Promise<void> | undefined;
   const relay = registerNativeHookRelayForBundledRuntime({
     provider: "codex",
+    requireForegroundTurn: true,
     relayId: buildCodexNativeHookRelayId({
       agentId: params.agentId,
       sessionId: params.sessionId,
@@ -271,7 +271,6 @@ export function createCodexNativeHookRelay(params: {
     ...(params.requester ? { requester: params.requester } : {}),
     ...(params.approvalContext ? { approvalContext: params.approvalContext } : {}),
     allowedEvents: params.events,
-    preToolUseLoopDetection: params.loopDetectionPreToolUseRelay,
     ttlMs: resolveCodexNativeHookRelayTtlMs({
       explicitTtlMs: params.options?.ttlMs,
       attemptTimeoutMs: params.attemptTimeoutMs,

@@ -17,19 +17,18 @@ import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const model: Model<"openai-responses"> = {
+const model: Model<"openai-responses"> = makeProviderModelFixture({
   id: "gpt-5",
   name: "Loopback fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 1024,
-};
+});
 const usage = {
   input_tokens: 500,
   output_tokens: 9,

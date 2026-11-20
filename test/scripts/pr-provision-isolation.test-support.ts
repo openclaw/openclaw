@@ -81,8 +81,9 @@ function assertPrivateState(location) {
   const scopedBackup = location.startsWith(stateDatabase + '.pre-startup-migration-') &&
     /^[a-f0-9-]+\\.scoped\\.bak$/.test(location.slice((stateDatabase + '.pre-startup-migration-').length));
   const staged = path.relative(snapshotCache, location).split(path.sep);
-  const snapshot = staged.length >= 3 && /^openclaw(?:-\\d+)?$/.test(staged[0]) &&
-    staged.slice(1, -1).every(name => /^openclaw-sqlite-readonly-v2-[A-Za-z0-9]{6}$/.test(name)) &&
+  const snapshot = staged.length >= 4 && /^openclaw(?:-\\d+)?$/.test(staged[0]) &&
+    /^sqlite-[a-f0-9]{24}$/.test(staged[1]) &&
+    staged.slice(2, -1).every(name => /^openclaw-sqlite-readonly-v2-[A-Za-z0-9]{6}$/.test(name)) &&
     ['owner.sqlite', 'database.sqlite', 'database.sqlite.partial'].includes(staged.at(-1));
   assert(location === stateDatabase || location === clientDatabase || scopedBackup || snapshot,
     'Unexpected provisioning SQLite store: ' + location);
@@ -143,6 +144,10 @@ syncBuiltinESMExports();
 if (provisioner) {
   assert.equal(fs.realpathSync(process.argv[2]), repository);
   await importSource('scripts/tsx.mjs');
+  // Exercise process-global startup diagnostics before explicit storage bindings.
+  const { getLogger, flushLogger } = await importSource('src/logging/logger.ts');
+  getLogger().info('Provisioner isolation fixture');
+  await flushLogger();
   const { resolveManagedUpdateLeaseDatabasePath, createManagedHandoffLeaseStore } =
     await importSource('src/infra/update-managed-service-handoff-lease.ts');
   assert.equal(resolveManagedUpdateLeaseDatabasePath(), binding.databasePath, 'Missing private provisioner handoff binding');

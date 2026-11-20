@@ -45,6 +45,8 @@ it.each(["model", "thinking"] as const)(
     await sessions.refresh({ agentId: "main", force: true });
     const pane = mount(initial.key);
     await refreshPane(pane);
+    // Finish the independent child query before counting the setting's roster reconciliation.
+    await vi.waitFor(() => expect(pane.swarm.hydrator?.hydrated).toBe(true));
     await sessions.refresh({ agentId: "main", limit: 7, force: true });
     const previousReads = list.mock.calls.length;
 

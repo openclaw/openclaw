@@ -8,6 +8,8 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
   createGatewaySchedulerClock,
@@ -35,8 +37,7 @@ type FixtureHandlers = Omit<CronExitWatcherHandlers, "fireOnExit"> & {
 
 function createWatcherFixture(
   params: Omit<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger"> &
-    Partial<Pick<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger">> &
-    NonNullable<Parameters<typeof createCronExitWatchers>[2]>,
+    Partial<Pick<FixtureHandlers, "reserveExit" | "fireOnExit" | "logger">>,
 ) {
   const {
     reserveExit = vi.fn(async () => {}),
@@ -63,7 +64,6 @@ function createWatcherFixture(
   const watchers = createCronExitWatchers(
     handlers({ ...params, reserveExit, fireOnExit, logger }),
     scheduler,
-    params,
   );
   return {
     ...watchers,
@@ -113,6 +113,7 @@ async function finish(run: FakeRun | undefined, cancelled = false) {
 }
 
 describe("createCronExitWatchers", () => {
+  const createBroker = useSpawnBrokerTestFixture(afterEach);
   beforeEach(() => {
     clock = createGatewaySchedulerClock();
     scheduler = createTestGatewayScheduler(clock.clock);
@@ -169,6 +170,8 @@ describe("createCronExitWatchers", () => {
   });
 
   it("fires a historical owner's job after the creating request closes", async () => {
+    const broker = await createBroker();
+    const retainedBroker: boolean[] = [];
     const { supervisor, runs } = makeFakeSupervisor();
     const creatorContext = new AsyncLocalStorage<string>();
     const creatorWork = new AsyncWorkScope();
@@ -179,6 +182,7 @@ describe("createCronExitWatchers", () => {
     const spawn = expectDefined(supervisor.spawn.getMockImplementation(), "supervisor spawn");
     supervisor.spawn.mockImplementationOnce(async (input) => {
       observedContexts.push(creatorContext.getStore());
+      retainedBroker.push(getSpawnBroker() === broker);
       return await spawn(input);
     });
     const order: string[] = [];
@@ -194,12 +198,14 @@ describe("createCronExitWatchers", () => {
         order.push("fire");
       });
     });
-    const w = createWatcherFixture({
-      getDefaultAgentId: () => "research",
-      getProcessSupervisor: () => supervisor as never,
-      reserveExit,
-      fireOnExit,
-    });
+    const w = runWithSpawnBroker(broker, () =>
+      createWatcherFixture({
+        getDefaultAgentId: () => "research",
+        getProcessSupervisor: () => supervisor as never,
+        reserveExit,
+        fireOnExit,
+      }),
+    );
 
     inCreator(() => w.reconcile([{ ...onExitJob("job-a"), agentId: "ops" }]));
     await creatorWork.drain();
@@ -218,6 +224,7 @@ describe("createCronExitWatchers", () => {
     expect(reserveExit).toHaveBeenCalledWith(expect.objectContaining({ id: "job-a" }));
     expect(order).toEqual(["persist", "fire"]);
     expect(observedContexts).toEqual([undefined, undefined, undefined]);
+    expect(retainedBroker).toEqual([true]);
     await expect(inCreator(() => trackAsyncWork(() => undefined))).rejects.toThrow(
       "Async work scope is closed",
     );
@@ -368,7 +375,6 @@ describe("createCronExitWatchers", () => {
     const newUpdateWatcherState = vi.fn(async () => {});
     const { supervisor, runs, watchers, reserveExit, fireOnExit } = setup({
       updateWatcherState: oldUpdateWatcherState,
-      retryBackoffMs: [1_000],
     });
 
     await reconcile(watchers);
@@ -398,7 +404,7 @@ describe("createCronExitWatchers", () => {
     expect(newUpdateWatcherState).toHaveBeenCalledOnce();
     expect(oldUpdateWatcherState).toHaveBeenCalledOnce();
     await watchers.cancelAll();
-    await clock.advanceBy(1_000);
+    await clock.advanceBy(5_000);
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
   });
 
@@ -414,7 +420,6 @@ describe("createCronExitWatchers", () => {
         }
       }),
       logger: { ...noopLogger, warn: () => firstRetryScheduled.resolve() },
-      retryBackoffMs: [1_000],
     });
     supervisor.spawn.mockRejectedValue(new Error("spawn failed"));
     watchers.reconcile([onExitJob("job-a")]);
@@ -461,7 +466,6 @@ describe("createCronExitWatchers", () => {
         ...noopLogger,
         warn: () => (restarting ? replacementRetryScheduled : firstRetryScheduled).resolve(),
       },
-      retryBackoffMs: [1_000],
     });
     supervisor.spawn
       .mockRejectedValueOnce(new Error("initial spawn failed"))
@@ -655,7 +659,7 @@ describe("createCronExitWatchers", () => {
       const startError = new Error("command startup failed");
       const cleanupError = new Error("native cleanup identity lost");
       const { watchers, fireOnExit, ...fake } = setup(
-        { logger: { ...noopLogger, warn: () => published.resolve() }, retryBackoffMs: [1_000] },
+        { logger: { ...noopLogger, warn: () => published.resolve() } },
         {
           cleanup: () => {
             cleanupEntered.resolve();

@@ -28,16 +28,6 @@ type PreparedRunPayload = {
   };
 };
 
-type SystemRunApprovalRequestContext = {
-  plan: SystemRunApprovalPlan | null;
-  commandArgv: string[] | undefined;
-  commandText: string;
-  commandPreview: string | null;
-  cwd: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
-};
-
 type SystemRunApprovalRuntimeContext =
   | {
       ok: true;
@@ -114,7 +104,7 @@ export function resolveSystemRunApprovalRequestContext(params: {
   cwd?: unknown;
   agentId?: unknown;
   sessionKey?: unknown;
-}): SystemRunApprovalRequestContext {
+}) {
   const host = normalizeNonEmptyString(params.host) ?? "";
   const normalizedPlan =
     host === "node" ? normalizeSystemRunApprovalPlan(params.systemRunPlan) : null;

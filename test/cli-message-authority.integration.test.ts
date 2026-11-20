@@ -589,15 +589,17 @@ describe("CLI message authority integration", () => {
           }),
     });
     const grant = mintMcpLoopbackClientGrant({
-      context: buildCliMcpGrantContext({
-        run,
-        config: cfg,
-        requireExplicitMessageTarget: Boolean(scheduledPolicy),
-        agentId: "main",
-        modelProvider: "anthropic",
-        modelId: "test-model",
+      context: {
+        ...buildCliMcpGrantContext({
+          run,
+          config: cfg,
+          requireExplicitMessageTarget: Boolean(scheduledPolicy),
+          agentId: "main",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+        }),
         toolsAllow: ["message"],
-      }),
+      },
       runtimeOwnerToken: runtime.ownerToken,
       admittedRunContext: admitted,
       messageActionTurnCapability: options.bindCapability === false ? undefined : capability,
@@ -987,7 +989,7 @@ describe("CLI message authority integration", () => {
 
         const result = await pending;
         if (revoke === "source") {
-          expectDenied(result, /agent runtime authority is no longer active/);
+          expectDenied(result, /authority is no longer active/);
         } else {
           expectSuccess(result);
         }

@@ -102,6 +102,13 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): BrowserToolOp
   const mediaChannel = ctx.deliveryContext?.channel ?? ctx.messageChannel;
   const mediaChatType = deriveChatTypeFromSessionKey(ctx.sessionKey);
   return {
+    ...(ctx.browser?.allowLocalLoopback ? { allowLocalLoopback: true } : {}),
+    ...(ctx.browser?.assertLocalLoopbackCurrent
+      ? { assertLocalLoopbackCurrent: ctx.browser.assertLocalLoopbackCurrent }
+      : {}),
+    ...(ctx.assertInvocationCurrent
+      ? { assertInvocationCurrent: ctx.assertInvocationCurrent }
+      : {}),
     ...(ctx.browser?.sandboxBridgeUrl ? { sandboxBridgeUrl: ctx.browser.sandboxBridgeUrl } : {}),
     ...(ctx.browser?.allowHostControl !== undefined
       ? { allowHostControl: ctx.browser.allowHostControl }
@@ -432,16 +439,20 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       onWarn: (message) => logger.warn(message),
     });
   });
-  configureSystemProfileImportStateStore(
+  const releaseImportStateStore = configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
       namespace: "browser.system-profile-import",
       maxEntries: 1,
     }),
   );
+  api.lifecycle.onDispose?.(releaseImportStateStore);
   api.registerTool(
     (ctx: OpenClawPluginToolContext) => {
       const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
-      return createLazyBrowserTool(createBrowserToolOptions(ctx), config);
+      return createLazyBrowserTool(
+        { ...createBrowserToolOptions(ctx), decisions: api.runtime.decisions },
+        config,
+      );
     },
     { name: "browser", workspaceAccess: false },
   );

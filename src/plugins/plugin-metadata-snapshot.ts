@@ -6,7 +6,7 @@ import {
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
-import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot, isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import { prepareBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import {
   getCurrentPluginMetadataSnapshot,
@@ -245,8 +245,15 @@ function buildPluginMetadataManifestFacts(
   manifestRegistry: PluginManifestRegistry,
   index: InstalledPluginIndex,
 ) {
+  const cache = getPluginCache().metadata.snapshotManifestFacts;
+  const key = resolveInstalledManifestRegistryIndexFingerprint(index);
+  let entries = cache.get(manifestRegistry);
+  const cached = entries?.get(key);
+  if (cached) {
+    return cached;
+  }
   const plugins = manifestRegistry.plugins;
-  return {
+  const facts = {
     manifestRegistry,
     plugins,
     diagnostics: manifestRegistry.diagnostics,
@@ -254,6 +261,12 @@ function buildPluginMetadataManifestFacts(
     owners: buildPluginMetadataOwnerMaps(manifestRegistry, index),
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
   };
+  if (!entries) {
+    cache.set(manifestRegistry, (entries = new Map()));
+  }
+  entries.set(key, facts);
+  pruneMapToMaxSize(entries, MAX_CACHED_PLUGIN_METADATA_SNAPSHOTS);
+  return facts;
 }
 
 export function listPluginOriginsFromMetadataSnapshot(
@@ -627,9 +640,11 @@ export function buildPluginMetadataSnapshot(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env">,
 ): Omit<PluginMetadataSnapshot, "normalizePluginId"> {
   const startedAt = performance.now();
-  const index = structuredClone(input.index);
+  const cloneIndex = (index: InstalledPluginIndex) =>
+    isDeeplyFrozenPlainData(index) ? index : structuredClone(index);
+  const index = cloneIndex(input.index);
   const registryIndex =
-    input.registryIndex === input.index ? index : structuredClone(input.registryIndex);
+    input.registryIndex === input.index ? index : cloneIndex(input.registryIndex);
   const manifestFacts = buildPluginMetadataManifestFacts(input.manifestRegistry, index);
   const ownerMapsMs = performance.now() - startedAt;
   return {

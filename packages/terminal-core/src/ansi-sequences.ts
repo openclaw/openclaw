@@ -5,6 +5,8 @@ export const ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN =
   "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 
 const ansiOscAtIndexRegex = new RegExp(ANSI_OSC_PATTERN, "y");
+// eslint-disable-next-line no-control-regex -- ANSI introducers delimit visible text runs.
+const ansiIntroducerRegex = /[\u001b\u009b\u009d]/g;
 
 type AnsiSegment =
   | { controls: string[]; kind: "ansi"; value: string }
@@ -21,8 +23,6 @@ type AnsiCsiScan = {
   ended: boolean;
   value: string;
 };
-
-type AnsiStripState = "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat";
 
 function isCompatPrefixCode(code: number): boolean {
   return (
@@ -65,7 +65,7 @@ function isCompatFinalCode(code: number): boolean {
  * or accumulate outside the caller's output limits.
  */
 export class AnsiSequenceStripper {
-  private state: AnsiStripState = "text";
+  private state: "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat" = "text";
   private csiCompatPrefixOnly = false;
   private compatParameterDigits: number | undefined;
   private csi: string | undefined;
@@ -118,8 +118,10 @@ export class AnsiSequenceStripper {
       }
 
       if (this.state === "text") {
-        output.push(input.charAt(index));
-        index += 1;
+        ansiIntroducerRegex.lastIndex = index;
+        const end = ansiIntroducerRegex.exec(input)?.index ?? input.length;
+        output.push(input.slice(index, end));
+        index = end;
         continue;
       }
 

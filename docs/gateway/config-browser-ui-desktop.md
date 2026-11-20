@@ -145,7 +145,7 @@ For the full key index and the other top-level config domains, see [Configuratio
     prefs: {
       theme: "claw", // claw | knot | dash | absolutely | tide | beacon | phosphor | crt | manuscript | rose | miami | custom
       themeMode: "system", // light | dark | system
-      locale: "en",
+      locale: "en", // Control UI language; omit to follow the browser language
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
@@ -170,6 +170,9 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
   explicitly read-only connection keeps edits in that browser without attempting
   a config write. Offline edits remain queued for a later writable connection and
   continue as browser-local preferences while reconnected read-only.
+  `locale` is the Control UI language, edited in Settings → Appearance → Language;
+  leave it unset to follow the browser or system language. It does not set the
+  assistant's timezone (`agents.defaults.userTimezone`).
   `chatPersistCommentary` defaults to `true`. Setting it to `false` keeps live
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel

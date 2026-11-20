@@ -226,7 +226,9 @@ export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): Stream
       anthropic &&
       isKimiCodeEnabledOnlyModelId(model.id) &&
       (!requestedLevel || requestedLevel === "off")
-        ? "low"
+        ? k3
+          ? "high"
+          : "low"
         : requestedLevel;
     const thinkingConfig = resolveKimiThinkingConfig(configured, thinkingLevel);
     const enabledLevel =

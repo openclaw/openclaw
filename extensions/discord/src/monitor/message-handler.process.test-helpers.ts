@@ -1,7 +1,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, vi } from "vitest";
 import { firstMockArg } from "../test-support/mock-calls.js";
-export { firstMockArg, firstMockCall } from "../test-support/mock-calls.js";
+export { firstMockArg } from "../test-support/mock-calls.js";
 import {
   createAutomaticSourceDeliveryContext,
   createBaseContext,

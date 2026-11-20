@@ -2,6 +2,10 @@
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sanitizeEnvVars } from "../agents/sandbox/sanitize-env-vars.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginConfigState from "../plugins/config-state.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -53,11 +57,10 @@ const pluginRegistryMocks = vi.hoisted(() => {
 
 function setupPlugin(
   id: string,
-  origin: PluginManifestRecord["origin"],
-  provider: MockSetupProvider,
-  extra: Omit<MockManifestPlugin, "id" | "origin" | "setup"> = {},
+  provider: Omit<MockSetupProvider, "id"> & { id?: string },
+  extra: Partial<Omit<MockManifestPlugin, "id" | "setup">> = {},
 ): MockManifestPlugin {
-  return { id, origin, ...extra, setup: { providers: [provider] } };
+  return { id, origin: "global", ...extra, setup: { providers: [{ id, ...provider }] } };
 }
 
 function metadataSnapshot(...plugins: MockManifestPlugin[]) {
@@ -86,8 +89,7 @@ function metadataSnapshot(...plugins: MockManifestPlugin[]) {
   };
 }
 
-const LOAD_PATH_PROVIDER_PLUGIN = setupPlugin("load-path-provider", "global", {
-  id: "load-path-provider",
+const LOAD_PATH_PROVIDER_PLUGIN = setupPlugin("load-path-provider", {
   envVars: ["LOAD_PATH_PROVIDER_API_KEY"],
 });
 
@@ -98,13 +100,20 @@ function useInstalledPlugins(...plugins: MockManifestPlugin[]): void {
   });
 }
 
-function useInstalledSetupPlugin(
+function useInstalledSetupPlugin(...params: Parameters<typeof setupPlugin>): void {
+  useInstalledPlugins(setupPlugin(...params));
+}
+
+const localEvidence = (credentialMarker: string, fileEnvVar: string): MockAuthEvidence[] => [
+  { type: "local-file-with-env", credentialMarker, fileEnvVar },
+];
+
+function usagePlugin(
   id: string,
-  origin: PluginManifestRecord["origin"],
-  provider: MockSetupProvider,
-  extra?: Omit<MockManifestPlugin, "id" | "origin" | "setup">,
-): void {
-  useInstalledPlugins(setupPlugin(id, origin, provider, extra));
+  envVar: string,
+  origin: MockManifestPlugin["origin"],
+): MockManifestPlugin {
+  return { id, origin, providerUsageAuthEnvVars: { [id]: [envVar] } };
 }
 
 const cloudCredential = {
@@ -128,13 +137,10 @@ function cloudEvidence(
     },
   ];
 }
-const workspaceEvidence: MockAuthEvidence[] = [
-  {
-    type: "local-file-with-env",
-    fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-    credentialMarker: "workspace-cloud-local-credentials",
-  },
-];
+const workspaceEvidence = localEvidence(
+  "workspace-cloud-local-credentials",
+  "WORKSPACE_CLOUD_CREDENTIALS",
+);
 
 function mockExistingPaths(...paths: string[]) {
   return vi
@@ -175,12 +181,8 @@ describe("provider env vars dynamic manifest metadata", () => {
 
   it("scrubs provider usage credentials without making them inference auth candidates", () => {
     useInstalledPlugins({
-      id: "provider-billing",
-      origin: "global",
+      ...usagePlugin("provider-billing", "PROVIDER_BILLING_CREDENTIAL", "global"),
       providers: ["provider-billing"],
-      providerUsageAuthEnvVars: {
-        "provider-billing": ["PROVIDER_BILLING_CREDENTIAL"],
-      },
     });
 
     expect(listKnownProviderAuthEnvVarNamesCore()).toContain("PROVIDER_BILLING_CREDENTIAL");
@@ -199,20 +201,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     const configuredSnapshot = {
       workspaceDir: "/workspace",
       ...metadataSnapshot(
-        {
-          id: "configured-billing",
-          origin: "workspace",
-          providerUsageAuthEnvVars: {
-            "configured-billing": ["CONFIGURED_BILLING_CREDENTIAL"],
-          },
-        },
-        {
-          id: "disabled-workspace",
-          origin: "workspace",
-          providerUsageAuthEnvVars: {
-            "disabled-workspace": ["PATH"],
-          },
-        },
+        usagePlugin("configured-billing", "CONFIGURED_BILLING_CREDENTIAL", "workspace"),
+        usagePlugin("disabled-workspace", "PATH", "workspace"),
       ),
       owners: buildPluginMetadataProviderFacts([]),
     };
@@ -238,8 +228,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("expands provider-owned directory variables in manifest credential evidence", () => {
-    useInstalledSetupPlugin("external-cloud", "global", {
-      id: "external-cloud",
+    useInstalledSetupPlugin("external-cloud", {
       authEvidence: cloudEvidence(
         ["${EXTERNAL_CLOUD_CONFIG}/application_default_credentials.json"],
         {
@@ -265,8 +254,7 @@ describe("provider env vars dynamic manifest metadata", () => {
   });
 
   it("rejects stale home evidence when an explicit provider directory has no credentials", () => {
-    useInstalledSetupPlugin("external-cloud", "global", {
-      id: "external-cloud",
+    useInstalledSetupPlugin("external-cloud", {
       authEvidence: cloudEvidence(),
     });
     const evidence = resolveProviderAuthLookupMaps().authEvidenceMap["external-cloud"];
@@ -352,13 +340,26 @@ describe("provider env vars dynamic manifest metadata", () => {
     expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(
       resolveProviderAuthLookupMaps({ config: mutable }),
     );
+
+    // The live runtime snapshot is mutable, but each publication advances its revision key.
+    try {
+      setRuntimeConfigSnapshot(mutable);
+      const published = resolveProviderAuthLookupMaps({ config: mutable });
+      expect(resolveProviderAuthLookupMaps({ config: mutable })).toBe(published);
+      mutable.plugins = { allow: ["edited-in-place"] };
+      setRuntimeConfigSnapshot(mutable);
+      expect(resolveProviderAuthLookupMaps({ config: mutable })).not.toBe(published);
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.each([false, true])("requires workspace trust for auth evidence (trusted: %s)", (trusted) => {
-    useInstalledSetupPlugin("workspace-cloud", "workspace", {
-      id: "workspace-cloud",
-      authEvidence: workspaceEvidence,
-    });
+    useInstalledSetupPlugin(
+      "workspace-cloud",
+      { authEvidence: workspaceEvidence },
+      { origin: "workspace" },
+    );
 
     expect(
       resolveProviderAuthLookupMaps({
@@ -391,9 +392,8 @@ describe("provider env vars dynamic manifest metadata", () => {
     (engine) => {
       useInstalledSetupPlugin(
         "workspace-engine",
-        "workspace",
         { id: "whisperx", envVars: [engine ? "WHISPERX_API_KEY" : "AWS_SECRET_ACCESS_KEY"] },
-        engine ? { kind: "context-engine" } : {},
+        { origin: "workspace", ...(engine ? { kind: "context-engine" } : {}) },
       );
 
       expect(
@@ -406,23 +406,16 @@ describe("provider env vars dynamic manifest metadata", () => {
   );
 
   it("resolves auth maps with policy work bounded to contributing plugins", () => {
-    const fireworksEvidence: MockAuthEvidence[] = [
-      {
-        type: "local-file-with-env",
-        fileEnvVar: "FIREWORKS_CREDENTIALS",
-        credentialMarker: "fireworks-local-credentials",
-      },
-    ];
+    const fireworksEvidence = localEvidence("fireworks-local-credentials", "FIREWORKS_CREDENTIALS");
     useInstalledPlugins(
       setupPlugin(
         "external-fireworks",
-        "global",
         {
           id: "fireworks",
           envVars: ["FIREWORKS_ALT_API_KEY"],
           authEvidence: fireworksEvidence,
         },
-        { providerAuthAliases: { "fireworks-plan": "fireworks" } },
+        { origin: "global", providerAuthAliases: { "fireworks-plan": "fireworks" } },
       ),
       {
         id: "legacy-setup-owner",
@@ -463,7 +456,6 @@ describe("provider env vars dynamic manifest metadata", () => {
   it("updates runtime auth evidence and fallback refs without dropping disabled credential hints", () => {
     const plugin = setupPlugin(
       "disabled-setup-owner",
-      "global",
       {
         id: "disabled-cloud",
         envVars: ["DISABLED_CLOUD_API_KEY"],

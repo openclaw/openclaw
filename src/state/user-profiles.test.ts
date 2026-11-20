@@ -65,6 +65,20 @@ function duringWriterAdmission(run: () => void) {
 }
 
 describe("user profiles", () => {
+  it("reads legacy nonmember profiles without an identity table", () => {
+    const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+    try {
+      db.exec(`CREATE TABLE user_profiles (
+        id TEXT PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT,
+        avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER, updated_at INTEGER
+      ); INSERT INTO user_profiles (id, created_at, updated_at) VALUES ('legacy', 1, 1);`);
+      expect(readDisplays(db)).toMatchObject([["legacy", { id: "legacy" }]]);
+      expect(readDisplays(db)[0]?.[1]).not.toHaveProperty("hasOpenClawIdIdentity");
+    } finally {
+      db.close();
+    }
+  });
+
   it.each([false, true])(
     "display lookup leaves absent storage absent (database exists: %s)",
     (exists) => {
@@ -91,17 +105,6 @@ describe("user profiles", () => {
     expect(ensure()).toEqual(competing);
     expect(competing).toBeDefined();
     expect(readSnapshot(options).profiles).toHaveLength(2);
-  });
-
-  it("preserves a custom name saved while waiting to adopt a provider name", () => {
-    const profile = ensureProvider("racing@github");
-    duringWriterAdmission(() => {
-      setDisplayName(profile.id, "User Chosen", options);
-    });
-    expect(ensureProvider("racing@github", "Provider Name")).toMatchObject({
-      id: profile.id,
-      displayName: "User Chosen",
-    });
   });
 
   it("publishes a normalized provider subject only once", () => {
@@ -272,7 +275,7 @@ describe("user profiles", () => {
     },
   );
 
-  it("adopts a Tailscale name into a blank slot and preserves later custom edits", () => {
+  it("adopts a Tailscale name into a blank slot and preserves racing and later custom edits", () => {
     const profile = ensureProvider("ada@github", "Ada Provider");
     setDisplayName(profile.id, " \t ", options);
     const version = readUserProfileVersion();
@@ -280,11 +283,17 @@ describe("user profiles", () => {
       displayName: "Ada Adopted",
     });
     expect(readUserProfileVersion()).toBe(version + 1);
-    setDisplayName(profile.id, "User Chosen", options);
+    setDisplayName(profile.id, "", options);
+    duringWriterAdmission(() => {
+      setDisplayName(profile.id, "User Chosen", options);
+    });
     expect(ensureProvider("ada@github", "Provider Changed")).toMatchObject({
+      id: profile.id,
       displayName: "User Chosen",
     });
-    expect(readUserProfileVersion()).toBe(version + 2);
+    expect(readUserProfileVersion()).toBe(version + 3);
+    expect(ensureProvider("ada@github", "Provider Changed").displayName).toBe("User Chosen");
+    expect(readUserProfileVersion()).toBe(version + 3);
   });
 
   it("updates all profiles whose aliases change", () => {
@@ -308,18 +317,6 @@ describe("user profiles", () => {
         emails: ["source-alias@example.com"],
       }),
     );
-  });
-
-  it("keeps the avatar empty after a wrong-type fetch", async () => {
-    const initial = ensureProvider("avatar-failure@github", "Still Authenticated");
-    const fetchImpl = vi.fn(
-      async () => new Response("not an image", { headers: { "content-type": "text/plain" } }),
-    );
-    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
-    const profile = await adoptAvatar(initial.id, avatarUrl, options);
-    expect(fetchImpl).toHaveBeenCalled();
-    expect(profile).toMatchObject({ displayName: "Still Authenticated", avatarMime: null });
-    expect(avatar(profile.id)).toBeUndefined();
   });
 
   it("preserves a user avatar written while provider bytes are in flight", async () => {
@@ -386,9 +383,10 @@ describe("user profiles", () => {
 });
 
 describe("avatar database lifetime", () => {
-  it.each([false, true])(
-    "keeps avatar adoption on its original database after handle replacement (fetched=%s)",
-    async (fetched) => {
+  it.each(["unavailable", "wrong type", "image"])(
+    "keeps %s avatar adoption on its original database after handle replacement",
+    async (responseKind) => {
+      const fetched = responseKind === "image";
       const originalDirectory = tempDirs.make("openclaw-avatar-original-");
       const otherDirectory = tempDirs.make("openclaw-avatar-other-");
       const env = { OPENCLAW_STATE_DIR: originalDirectory };
@@ -412,7 +410,11 @@ describe("avatar database lifetime", () => {
         const other = ensureProfileForEmail("other@example.test", sourceOptions);
         const bytes = avatarPng();
         response.resolve(
-          fetched ? avatarResponse(bytes) : new Response("unavailable", { status: 503 }),
+          fetched
+            ? avatarResponse(bytes)
+            : responseKind === "wrong type"
+              ? new Response("not an image", { headers: { "content-type": "text/plain" } })
+              : new Response("unavailable", { status: 503 }),
         );
 
         await expect(pending).resolves.toMatchObject({

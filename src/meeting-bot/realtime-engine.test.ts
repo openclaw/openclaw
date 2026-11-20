@@ -5,11 +5,9 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RealtimeVoiceAgentConsultToolPolicy } from "../talk/agent-consult-tool.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-contexts.js";
 import { REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ } from "../talk/provider-types.js";
-import type {
-  RealtimeVoiceBridge,
-  RealtimeVoiceBridgeCreateRequest,
-} from "../talk/provider-types.js";
+import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import {
   startMeetingRealtimeEngine,
@@ -44,6 +42,7 @@ afterEach(async () => {
     }
   } finally {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   }
 });
 
@@ -225,6 +224,7 @@ async function createEngineFixture(
     async overflowOutput() {
       this.sendOutputAudio(Buffer.alloc(48_000, 1), "response-1");
       await this.expectWrite(1);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 5_000);
       this.sendOutputAudio(Buffer.alloc(48_000, 2), "response-1");
       this.sendOutputAudio(Buffer.from([3]), "response-1");
       await vi.waitFor(() => expect(handleBargeIn).toHaveBeenCalledOnce());
@@ -337,13 +337,10 @@ describe("meeting realtime engine output ownership", () => {
   });
 
   it("resets provider continuity without replaying old output or tool work", async () => {
-    let releaseTool: (() => void) | undefined;
-    const toolGate = new Promise<void>((resolve) => {
-      releaseTool = resolve;
-    });
+    const toolGate = createDeferredCore();
     const fixture = await createEngineFixture({
       handleToolCall: async ({ session, event, onTalkEvent }) => {
-        await toolGate;
+        await toolGate.promise;
         await session.submitToolResult(event.callId, { text: "stale result" });
         onTalkEvent({
           type: "tool.result",
@@ -379,7 +376,7 @@ describe("meeting realtime engine output ownership", () => {
         .recentTalkEvents.filter((event) => event.type === "turn.cancelled"),
     ).toHaveLength(1);
 
-    releaseTool?.();
+    toolGate.resolve();
     await Promise.resolve();
     await Promise.resolve();
     expect(fixture.submitToolResult).not.toHaveBeenCalled();
@@ -434,10 +431,10 @@ describe("meeting realtime engine output ownership", () => {
       }
       fixture.callbacks.onAudio(fresh);
 
-      await fixture.expectWrite(1);
-      expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
+      await fixture.expectWrite(1, fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.clearOutput).toHaveBeenCalledOnce();
+      expect(fixture.handle.getHealth().clearCount).toBe(1);
       expect(fixture.beginOutput).toHaveBeenCalledOnce();
       expect(fixture.beginOutput).toHaveBeenCalledAfter(fixture.clearOutput);
       fixture.releaseWrite(0);
@@ -474,7 +471,7 @@ describe("meeting realtime engine output ownership", () => {
   it("bounds queued bytes and rejects stale output through response.done", async () => {
     const fixture = await createEngineFixture();
     const first = Buffer.alloc(48_000, 1);
-    const queued = Buffer.alloc(48_000, 2);
+    const queued = Buffer.alloc(48_000 * 119, 2);
     const overflow = Buffer.from([3]);
     const late = Buffer.from([4]);
     const fresh = Buffer.from([5]);
@@ -537,6 +534,7 @@ describe("meeting realtime engine output ownership", () => {
 
     fixture.callbacks.onAudio(active);
     await fixture.expectWrite(1);
+    vi.spyOn(performance, "now").mockReturnValue(performance.now() + 5_000);
     fixture.callbacks.onAudio(queued);
     fixture.callbacks.onAudio(Buffer.from([5]));
     await vi.waitFor(() => expect(fixture.handleBargeIn).toHaveBeenCalledOnce());
@@ -551,11 +549,30 @@ describe("meeting realtime engine output ownership", () => {
     fixture.releaseWrite(1);
   });
 
+  it("plays a long reply that streams ahead of playback", async () => {
+    const fixture = await createEngineFixture();
+    const first = Buffer.alloc(48_000, 1);
+    const rest = Array.from({ length: 9 }, (_, index) => Buffer.alloc(48_000, index + 2));
+    fixture.sendOutputAudio(first, "response-1");
+    await fixture.expectWrite(1);
+    for (const chunk of rest) {
+      fixture.sendOutputAudio(chunk, "response-1");
+    }
+    await setImmediate();
+    expect(fixture.clearOutput).not.toHaveBeenCalled();
+    expect(fixture.handleBargeIn).not.toHaveBeenCalled();
+    for (const [index, chunk] of rest.entries()) {
+      fixture.releaseWrite(index);
+      await fixture.expectWrite(index + 2, chunk);
+    }
+    fixture.releaseWrite(rest.length);
+  });
+
   it("bounds queued tiny-frame ownership", async () => {
     const fixture = await createEngineFixture();
     fixture.sendOutputAudio(Buffer.from([0]), "response-1");
     await fixture.expectWrite(1);
-    for (let index = 1; index < 257; index += 1) {
+    for (let index = 1; index < 6_001; index += 1) {
       fixture.sendOutputAudio(Buffer.from([index]), "response-1");
     }
 
@@ -608,25 +625,30 @@ function createLiveFixture(
 }
 
 describe("meeting native continuous voice", () => {
-  it("keeps isolated input open during playback and ignores idle transport silence", async () => {
-    vi.useFakeTimers();
-    const fixture = await createLiveFixture();
-    const silence = Buffer.alloc(960);
-    const speech = Buffer.alloc(960, 1);
-    fixture.callbacks.onAudio(silence);
-    expect(fixture.handle.getHealth().audioOutputActive).toBe(false);
-    fixture.callbacks.onAudio(speech);
-    await vi.advanceTimersByTimeAsync(0);
-    fixture.input(speech);
-    expect(fixture.bridge.sendAudio).toHaveBeenCalledWith(speech);
-    expect(fixture.handle.getHealth().suppressedInputBytes).toBe(0);
-    await vi.advanceTimersByTimeAsync(21);
-    fixture.callbacks.onAudio(silence);
-    expect(fixture.transport.writeOutput).toHaveBeenCalledExactlyOnceWith(speech);
-    expect(fixture.handle.getHealth().audioOutputActive).toBe(false);
-    expect(fixture.transport.startBargeInMonitor).not.toHaveBeenCalled();
-    expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
-  });
+  it.each([60_000, -60_000])(
+    "keeps native playback active across a %i ms wall-clock change",
+    async (shiftMs) => {
+      vi.useFakeTimers();
+      const fixture = await createLiveFixture();
+      const silence = Buffer.alloc(960);
+      const speech = Buffer.alloc(960, 1);
+      fixture.callbacks.onAudio(silence);
+      expect(fixture.handle.getHealth().audioOutputActive).toBe(false);
+      fixture.callbacks.onAudio(speech);
+      await vi.advanceTimersByTimeAsync(0);
+      fixture.input(speech);
+      expect(fixture.bridge.sendAudio).toHaveBeenCalledWith(speech);
+      expect(fixture.handle.getHealth().suppressedInputBytes).toBe(0);
+      vi.setSystemTime(Date.now() + shiftMs);
+      expect(fixture.handle.getHealth().audioOutputActive).toBe(true);
+      await vi.advanceTimersByTimeAsync(21);
+      fixture.callbacks.onAudio(silence);
+      expect(fixture.transport.writeOutput).toHaveBeenCalledExactlyOnceWith(speech);
+      expect(fixture.handle.getHealth().audioOutputActive).toBe(false);
+      expect(fixture.transport.startBargeInMonitor).not.toHaveBeenCalled();
+      expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves pauses behind audible audio already accepted by the native sink", async () => {
     vi.useFakeTimers();
@@ -644,24 +666,49 @@ describe("meeting native continuous voice", () => {
     );
   });
 
-  it("recovers local backpressure without waiting for a provider cancellation", async () => {
+  it.each([60_000, -60_000])(
+    "recovers native backpressure after elapsed time across a %i ms wall-clock change",
+    async (shiftMs) => {
+      vi.useFakeTimers();
+      const pending = createDeferredCore();
+      const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
+      fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.setSystemTime(Date.now() + shiftMs);
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
+      fixture.callbacks.onAudio(Buffer.alloc(960, 3));
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fixture.transport.clearOutput).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
+      const fresh = Buffer.alloc(960, 4);
+      fixture.callbacks.onAudio(fresh);
+      pending.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fixture.transport.writeOutput).toHaveBeenCalledTimes(2);
+      expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
+      expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("recovers stuck playback after the provider has finished sending", async () => {
     vi.useFakeTimers();
     const pending = createDeferredCore();
     const fixture = await createLiveFixture({ cleanup: () => pending.resolve() });
     fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
-    fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
-    await vi.advanceTimersByTimeAsync(0);
-    fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
-    fixture.callbacks.onAudio(Buffer.alloc(960, 3));
-    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 1; index <= 3; index += 1) {
+      fixture.callbacks.onAudio(Buffer.alloc(48_000, index));
+    }
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(fixture.transport.clearOutput).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(fixture.transport.clearOutput).toHaveBeenCalledOnce();
     const fresh = Buffer.alloc(960, 4);
     fixture.callbacks.onAudio(fresh);
     pending.resolve();
     await vi.advanceTimersByTimeAsync(0);
-    expect(fixture.transport.writeOutput).toHaveBeenCalledTimes(2);
     expect(fixture.transport.writeOutput).toHaveBeenLastCalledWith(fresh);
-    expect(fixture.bridge.handleBargeIn).not.toHaveBeenCalled();
   });
 
   it("refuses mixed loopback input before connecting native voice", async () => {

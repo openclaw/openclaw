@@ -61,14 +61,7 @@ export function createPublicationTestFixture() {
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
   });
-  afterEach(async () => {
-    try {
-      await fixture.lifetime.cleanup();
-    } finally {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-    }
-  });
+  afterEach(async () => fixture.cleanup());
   return {
     ...fixture,
     get root() {

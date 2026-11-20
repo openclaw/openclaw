@@ -4,8 +4,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { runBtwSideQuestion } from "../../agents/btw.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
-import { expectObjectFields, mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
+import { mockFirstObjectArg } from "../../test-utils/mock-call-assertions.js";
 import { resolveAgentDirMock } from "./commands-agent-scope.test-support.js";
+import { buildCommandContextForTest } from "./commands-context.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -51,8 +52,7 @@ describe("handleBtwCommand", () => {
   });
 
   it("ignores /btw when text commands are disabled", async () => {
-    const result = await handleBtwCommand(buildParams(), false);
-    expect(result).toBeNull();
+    expect(await handleBtwCommand(buildParams(), false)).toBeNull();
     expect(runBtwSideQuestionMock).not.toHaveBeenCalled();
   });
 
@@ -77,8 +77,7 @@ describe("handleBtwCommand", () => {
   });
 
   it("forwards current undescribed images", async () => {
-    const params = buildParams("/btw describe this");
-    params.sessionEntry = session();
+    const params = activeParams("/btw describe this");
     const dir = tempDirs.make("openclaw-btw-images-");
     const data =
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
@@ -97,6 +96,7 @@ describe("handleBtwCommand", () => {
     params.typing = typing;
     params.command.senderId = "sender-1";
     params.command.senderIsOwner = true;
+    params.command.to = "slash:transport";
     params.ctx.AccountId = "account-1";
     params.ctx.RuntimePolicySessionKey = "agent:main:runtime-policy";
     params.ctx.GroupChannel = "#ops";
@@ -109,7 +109,6 @@ describe("handleBtwCommand", () => {
     params.ctx.OriginatingTo = "source-target";
     params.ctx.NativeChannelId = "native:source";
     params.ctx.ChatType = "channel";
-    params.command.to = "slash:transport";
     params.sessionEntry = {
       ...session(),
       groupId: "group-1",
@@ -126,7 +125,7 @@ describe("handleBtwCommand", () => {
       });
       return { text: "nothing important" };
     });
-    const result = await run(params);
+    expectReply(await run(params), "nothing important", "what changed?");
     const args = runnerArgs();
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(args).toMatchObject({
@@ -165,7 +164,6 @@ describe("handleBtwCommand", () => {
       requesterSenderId: "sender-1",
       toolContext: { currentChannelProvider: "whatsapp" },
     });
-    expectReply(result, "nothing important", "what changed?");
   });
 
   it("does not mint current-turn context for Gateway chat with an explicit origin", async () => {
@@ -188,28 +186,35 @@ describe("handleBtwCommand", () => {
       "agent:worker-1:whatsapp:direct:12345": session("target-session"),
     };
     runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
-    const result = await run(params);
-    expectObjectFields(runnerArgs().sessionEntry, { sessionId: "target-session" });
-    expectReply(result, "target context", "what changed?");
+    expectReply(await run(params), "target context", "what changed?");
+    expect(runnerArgs().sessionEntry).toMatchObject({ sessionId: "target-session" });
   });
 
-  it.each([
-    [
-      "/btw why does this fail?\nError: ENOSPC\n  at write",
-      "why does this fail?\nError: ENOSPC\n  at write",
-    ],
-    ["/btw\nwhy does this fail?", "why does this fail?"],
-    ["/side first\n\nsecond", "first\n\nsecond"],
-  ])(
-    "passes every line of a multi-line side question to the runner: %s",
-    async (body, question) => {
-      runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
-      const params = activeParams(body);
+  it("passes every line of a multi-line side question to the runner", async () => {
+    const question = "why does this fail?\nError: ENOSPC\n  at write";
+    runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
+    expectReply(await run(activeParams(`/btw\n${question}`)), "answer", question);
+    expect(runnerArgs().question).toBe(question);
+  });
 
-      const result = await run(params);
+  it("passes every line of a side question asked in a group", async () => {
+    runBtwSideQuestionMock.mockResolvedValue({ text: "answer" });
+    const body = "@openclaw /btw why does this fail?\n\nError: ENOSPC\n    at write (app.js:3:5)";
+    const params = activeParams(body);
+    params.cfg = { ...params.cfg, messages: { groupChat: { mentionPatterns: ["@openclaw"] } } };
+    params.isGroup = true;
+    params.command = buildCommandContextForTest({
+      ctx: params.ctx,
+      cfg: params.cfg,
+      isGroup: true,
+      triggerBodyNormalized: body,
+      commandAuthorized: true,
+    });
 
-      expect(runnerArgs().question).toBe(question);
-      expectReply(result, "answer", question);
-    },
-  );
+    await run(params);
+
+    expect(runnerArgs().question).toBe(
+      "why does this fail?\n\nError: ENOSPC\n    at write (app.js:3:5)",
+    );
+  });
 });

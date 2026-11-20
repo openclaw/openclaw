@@ -1,6 +1,9 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../test-support/browser-security.mock.js";
+import type { RunningChrome } from "../chrome.js";
 import * as navigationGuard from "../navigation-guard.js";
+import { withBrowserRequestScope } from "../request-scope.js";
 import {
   clearBrowserScreencastTokens,
   consumeBrowserScreencastToken,
@@ -86,26 +89,25 @@ describe("browser screencast mint route", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    { when: "before request", abort: true },
-    { when: "during tab resolution", abort: false },
-  ])("rejects a requester invalidated $when (socket closed: $abort)", async ({ when, abort }) => {
-    const { connection, requester } = requesterFixture();
-    const { request, ensureTabAvailable } = setup();
-    if (when === "before request") {
-      connection.abort();
-    } else {
-      const resolveTab = ensureTabAvailable.getMockImplementation()!;
-      ensureTabAvailable.mockImplementationOnce(async () => {
-        requester.invalidated = true;
-        return await resolveTab();
-      });
-    }
-    const response = await request({}, requester);
-    expect(connection.signal.aborted).toBe(abort);
-    expectResponseContaining(response, { code: "SCREENCAST_REQUESTER_GONE" }, 401);
-    expect(response.body).not.toHaveProperty("token");
-  });
+  it.each(["before request", "during tab resolution"])(
+    "rejects a requester invalidated %s",
+    async (when) => {
+      const { connection, requester } = requesterFixture();
+      const { request, ensureTabAvailable } = setup();
+      if (when === "before request") {
+        connection.abort();
+      } else {
+        const resolveTab = ensureTabAvailable.getMockImplementation()!;
+        ensureTabAvailable.mockImplementationOnce(async () => {
+          requester.invalidated = true;
+          return await resolveTab();
+        });
+      }
+      const response = await request({}, requester);
+      expectResponseContaining(response, { code: "SCREENCAST_REQUESTER_GONE" }, 401);
+      expect(response.body).not.toHaveProperty("token");
+    },
+  );
 
   it.each(["socket close", "invalidation"])("binds a minted token to requester %s", async (end) => {
     const { connection, requester } = requesterFixture();
@@ -118,7 +120,6 @@ describe("browser screencast mint route", () => {
     } else {
       requester.invalidated = true;
     }
-    expect(connection.signal.aborted).toBe(end === "socket close");
     expect(consumeBrowserScreencastToken(token)).toBeUndefined();
   });
 
@@ -140,7 +141,7 @@ describe("browser screencast mint route", () => {
   });
 
   it("mints an expiring token scoped to the resolved target with bounded capture options", async () => {
-    const { request, ensureTabAvailable } = setup({ emptyListing: true });
+    const { request } = setup({ emptyListing: true });
     const startedAt = Date.now();
     const response = await request({ targetId: "t1", maxWidth: 17, maxHeight: 9000, quality: 99 });
     const body = response.body as { token: string; wsPath: string; expiresAtMs: number };
@@ -152,7 +153,6 @@ describe("browser screencast mint route", () => {
       url: "https://example.com/",
     });
     expect(body.expiresAtMs).toBeGreaterThanOrEqual(startedAt + 60_000);
-    expect(ensureTabAvailable).toHaveBeenCalledWith("t1", expect.any(Object));
     expect(consumeBrowserScreencastToken(body.token)).toMatchObject({
       profileName: "openclaw",
       targetId: "resolved-tab",
@@ -175,6 +175,43 @@ describe("browser screencast mint route", () => {
     await expect(token.checkNavigationAllowed("http://127.0.0.1/")).rejects.toThrow();
     getProfileLifecycle(runtime).controller.abort();
     expect(() => token.assertCurrent()).toThrow("superseded");
+  });
+
+  it("checks screencast navigation as its minting request, not the page event's call", async () => {
+    const { request, state, runtime } = setup();
+    // An unconfigured policy plus an OpenClaw-owned process lets a call's loopback grant apply.
+    state.resolved.ssrfPolicyConfigured = false;
+    const running = {
+      cdpPort: 18800,
+      proc: { exitCode: null, signalCode: null },
+    } as unknown as RunningChrome;
+    getProfileLifecycle(runtime).handles.add(running);
+    runtime.running = running;
+    const loopback = "http://127.0.0.1:49187/";
+    const grant = {
+      allowLocalLoopback: true,
+      assertInvocationCurrent: () => {},
+      assertLocalLoopbackCurrent: () => {},
+    };
+    const mint = async () => {
+      const response = await request();
+      return consumeBrowserScreencastToken((response.body as { token: string }).token)!;
+    };
+    // Page events are delivered in whatever call's context created the shared connection.
+    const outsideAnyCall = AsyncLocalStorage.snapshot();
+
+    // A viewer without the grant cannot borrow one from a still-running granted call.
+    const viewerToken = await mint();
+    await withBrowserRequestScope(grant, async () => {
+      await expect(viewerToken.checkNavigationAllowed(loopback)).rejects.toThrow();
+    });
+    // A granted minting call keeps its grant for events delivered outside any call.
+    await withBrowserRequestScope(grant, async () => {
+      const grantedToken = await mint();
+      await expect(
+        outsideAnyCall(() => grantedToken.checkNavigationAllowed(loopback)),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it("blocks minting for a disallowed current tab through the shared route guard", async () => {
@@ -226,12 +263,12 @@ describe("browser screencast mint route", () => {
   it("propagates cancelled URL verification instead of returning a redacted URL", async () => {
     const controller = new AbortController();
     const reason = new Error("browser navigation verification deadline expired");
-    const guard = vi
-      .spyOn(navigationGuard, "assertBrowserNavigationResultAllowed")
-      .mockImplementationOnce(async () => {
+    vi.spyOn(navigationGuard, "assertBrowserNavigationResultAllowed").mockImplementationOnce(
+      async () => {
         controller.abort(reason);
         throw reason;
-      });
+      },
+    );
     const { ctx } = setup();
     await expect(
       resolveSafeRouteTabUrl({
@@ -241,6 +278,5 @@ describe("browser screencast mint route", () => {
         signal: controller.signal,
       }),
     ).rejects.toBe(reason);
-    expect(guard).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
   });
 });

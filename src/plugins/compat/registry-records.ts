@@ -33,6 +33,14 @@ function defineCompatRecords<const Code extends string>(
   return records;
 }
 
+function sdkCompatRecord<const Code extends string>(
+  code: Code,
+  record: Omit<PluginCompatRecord<Code>, "code" | "owner" | "status"> &
+    Partial<Pick<PluginCompatRecord<Code>, "status">>,
+): PluginCompatRecord<Code> {
+  return { code, status: "deprecated", owner: "sdk", ...record };
+}
+
 export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
@@ -41,10 +49,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   ...BINDING_PERSISTENCE_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   CRON_STORE_PATH_COMPAT_RECORD,
-  {
-    code: "mention-inbox-sync-persistence",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("mention-inbox-sync-persistence", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
     removalGate: "stable-deprecation-period",
@@ -61,11 +66,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotations, explicit migration-directed rejection, and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
     ],
-  },
-  {
-    code: "model-account-connect-sync-persistence",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("model-account-connect-sync-persistence", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
     removeAfter: "2026-12-31",
@@ -85,13 +87,10 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotations and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
     ],
-  },
+  }),
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
-  {
-    code: "skill-command-discovery-sync",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("skill-command-discovery-sync", {
     deprecated: "2026-10-11",
     warningStarts: "2026-10-11",
     removeAfter: "2026-12-31",
@@ -106,13 +105,10 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotations and one runtime warning per plugin and capability family",
     ],
-  },
+  }),
   ...SQLITE_RUNTIME_COMPAT_RECORDS,
   NATIVE_EXEC_APPROVAL_COMPAT_RECORD,
-  {
-    code: "tts-preferences-sync-resolution",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("tts-preferences-sync-resolution", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
     removeAfter: "2026-12-31",
@@ -127,12 +123,9 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "Bounded DEP_PLUGIN_SDK warning for legacy path resolution and unprepared synchronous hint calls; prepared hints remain silent",
     ],
-  },
+  }),
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
-  {
-    code: "watched-sessions-sync-harness-context",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("watched-sessions-sync-harness-context", {
     deprecated: "2026-10-03",
     warningStarts: "2026-10-03",
     removeAfter: "2026-12-31",
@@ -143,7 +136,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotation and migration documentation; bounded capability-family warnings on legacy preparation",
     ],
-  },
+  }),
   WEB_SEARCH_PROVIDER_LIST_COMPAT_RECORD,
   PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
@@ -168,10 +161,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   SESSION_TRANSCRIPT_VIEW_COMPAT_RECORD,
   PLUGIN_SDK_PRIVATE_RUNTIME_EXPORT_COMPAT_RECORD,
   CHANNEL_PREPARED_TOOL_POLICY_COMPAT_RECORD,
-  {
-    code: "plugin-sdk-session-header-link",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("plugin-sdk-session-header-link", {
     deprecated: "2026-10-12",
     warningStarts: "2026-10-12",
     removeAfter: "2027-01-12",
@@ -180,11 +170,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     docsPath: "/plugins/sdk-migration/compatibility-policy#session-header-link-helper",
     surfaces: ["openclaw/plugin-sdk/control-ui.createSessionHeaderLink"],
     diagnostics: ["TypeScript @deprecated annotation and shipped Plugin SDK surface check"],
-  },
-  {
-    code: "gateway-placement-sync-results",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("gateway-placement-sync-results", {
     deprecated: "2026-10-02",
     warningStarts: "2026-10-02",
     removalGate: "stable-deprecation-period",
@@ -208,7 +195,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotations and migration documentation; placement reads, retirement, and restart clearing warn once per plugin and capability family on legacy use, while GitHub orphan deferral shares the github-publication family warning",
     ],
-  },
+  }),
   ...MEMORY_SESSION_COMPAT_RECORDS,
   {
     code: "channel-webhook-listener-config-inputs",
@@ -268,10 +255,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
   ...BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   ...DEPRECATION_MARKING_COMPAT_RECORDS,
   MEDIA_LEGACY_PROJECTION_COMPAT_RECORD,
-  {
-    code: "node-workspace-sync-acquisition",
-    status: "deprecated",
-    owner: "sdk",
+  sdkCompatRecord("node-workspace-sync-acquisition", {
     deprecated: "2026-09-15",
     warningStarts: "2026-09-15",
     removeAfter: "2026-12-31",
@@ -282,11 +266,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     diagnostics: [
       "TypeScript @deprecated annotation and bounded capability-family warning on legacy workspace acquisition",
     ],
-  },
-  {
-    code: "plugin-state-sync-keyed-store",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("plugin-state-sync-keyed-store", {
     deprecated: "2026-09-11",
     warningStarts: "2026-09-11",
     removeAfter: "2026-12-31",
@@ -315,11 +296,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "TypeScript @deprecated annotations and state-store migration documentation",
       "plugin compatibility inventory; legacy writer migrations use the shared once-per-plugin-and-capability-family warning policy",
     ],
-  },
-  {
-    code: "memory-read-result-statusless-success",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("memory-read-result-statusless-success", {
     deprecated: "2026-08-19",
     warningStarts: "2026-08-19",
     removalGate: "stable-deprecation-period",
@@ -327,21 +305,17 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     docsPath: "/plugins/sdk-migration#memory-read-missing-results",
     surfaces: ["statusless external memory manager read results"],
     diagnostics: ["host memory-manager acquisition adapter"],
-  },
-  {
-    code: "context-engine-legacy-host-param-default",
+  }),
+  sdkCompatRecord("context-engine-legacy-host-param-default", {
     status: "removed",
-    owner: "sdk",
     replacement:
       "`ContextEngineInfo.acceptedHostParams` for restricted projection; omitted declarations receive full host params",
     docsPath: "/concepts/context-engine#the-contextengine-interface",
     surfaces: ["ContextEngineInfo.acceptedHostParams and undeclared-engine default projection"],
     diagnostics: ["plugin compatibility registry and context engine guide"],
-  },
-  {
-    code: "removed-global-api-provider-publication",
+  }),
+  sdkCompatRecord("removed-global-api-provider-publication", {
     status: "removed",
-    owner: "sdk",
     replacement:
       "provider plugins via `api.registerProvider(...)`; host/runtime code registers against its lifecycle-owned `ApiRegistry`",
     docsPath: "/plugins/sdk-migration#process-global-api-provider-publication",
@@ -350,20 +324,16 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "openclaw/plugin-sdk/llm unregisterApiProviders",
     ],
     diagnostics: ["plugin SDK compatibility registry and migration guide"],
-  },
-  {
-    code: "legacy-deactivate-hook-alias",
+  }),
+  sdkCompatRecord("legacy-deactivate-hook-alias", {
     status: "removed",
-    owner: "sdk",
     replacement: "`gateway_stop` hook",
     docsPath: "/plugins/sdk-migration#deactivate-hook-alias",
     surfaces: ['api.on("deactivate", ...)', "plugin typed hook registration"],
     diagnostics: ["plugin compatibility registry and migration guide"],
-  },
-  {
-    code: "legacy-subagent-spawning-hook",
+  }),
+  sdkCompatRecord("legacy-subagent-spawning-hook", {
     status: "removed",
-    owner: "sdk",
     replacement:
       "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
     docsPath: "/plugins/hooks#upcoming-deprecations",
@@ -374,11 +344,9 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "SubagentLifecycleHookRunner.runSubagentSpawning",
     ],
     diagnostics: ["plugin compatibility registry and migration guide"],
-  },
-  {
-    code: "removed-skill-proposal-hooks",
+  }),
+  sdkCompatRecord("removed-skill-proposal-hooks", {
     status: "removed",
-    owner: "sdk",
     // Removal landed 2026-10-08 (#161057); the prior day was the final compatibility day.
     removeAfter: "2026-10-07",
     docsPath: "/plugins/sdk-migration/removed-surfaces#skill-workshop-proposal-hooks",
@@ -396,20 +364,16 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "PluginHookSkillChangedEvent.proposal",
     ],
     diagnostics: ["plugin compatibility registry and migration guide"],
-  },
-  {
-    code: "hook-only-plugin-shape",
+  }),
+  sdkCompatRecord("hook-only-plugin-shape", {
     status: "active",
-    owner: "sdk",
     replacement: "explicit capability registration",
     docsPath: "/plugins/sdk-migration",
     surfaces: ["plugin shape inspection", "plugins inspect", "status diagnostics"],
     diagnostics: ["plugin compatibility notice"],
-  },
-  {
-    code: "deprecated-memory-embedding-provider-api",
+  }),
+  sdkCompatRecord("deprecated-memory-embedding-provider-api", {
     status: "removed",
-    owner: "sdk",
     replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
     docsPath: "/plugins/sdk-migration#memory-embedding-provider-api",
     surfaces: [
@@ -419,11 +383,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "plugin compatibility registry and migration guide",
     ],
     diagnostics: ["plugin compatibility registry and migration guide"],
-  },
-  {
-    code: "plugin-sdk-session-agent-resolution-aliases",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("plugin-sdk-session-agent-resolution-aliases", {
     deprecated: "2026-08-29",
     warningStarts: "2026-08-29",
     removeAfter: "2026-11-29",
@@ -438,11 +399,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "openclaw/plugin-sdk/memory-host-core session-agent resolver alias",
     ],
     diagnostics: ["TypeScript deprecated SDK alias annotations", "plugin compatibility registry"],
-  },
-  {
-    code: "agent-harness-credential-prompt-string-argument",
-    status: "deprecated",
-    owner: "sdk",
+  }),
+  sdkCompatRecord("agent-harness-credential-prompt-string-argument", {
     deprecated: "2026-09-09",
     warningStarts: "2026-09-09",
     removeAfter: "2026-11-30",
@@ -452,11 +410,9 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "openclaw/plugin-sdk/agent-harness-runtime buildCredentialSafetyPrompt string argument",
     ],
     diagnostics: ["JSDoc parameter deprecation", "plugin compatibility registry"],
-  },
-  {
-    code: "removed-session-transcript-file-api",
+  }),
+  sdkCompatRecord("removed-session-transcript-file-api", {
     status: "removed",
-    owner: "sdk",
     replacement:
       "session identity (`sessionKey`/`sessionId`), `SessionTranscriptUpdate.target`, and Gateway/runtime session helpers",
     docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
@@ -472,7 +428,7 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "plugins inspect compatibility notices",
     ],
     diagnostics: ["plugin compatibility notice"],
-  },
+  }),
   {
     code: "hook.before_tool_call.terminal-block-approval",
     status: "active",
@@ -537,10 +493,8 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
     ],
     diagnostics: ["plugin compatibility registry and compatibility guide"],
   },
-  {
-    code: "sdk-untrusted-context-identifier-aliases",
+  sdkCompatRecord("sdk-untrusted-context-identifier-aliases", {
     status: "removal-pending",
-    owner: "sdk",
     deprecated: "2026-07-22",
     warningStarts: "2026-07-22",
     removeAfter: "2026-09-08",
@@ -554,11 +508,9 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "openclaw/plugin-sdk security-runtime buildUntrustedChannelMetadata",
     ],
     diagnostics: ["TypeScript deprecated SDK alias annotations"],
-  },
-  {
-    code: "channel-explicit-target-parser",
+  }),
+  sdkCompatRecord("channel-explicit-target-parser", {
     status: "removed",
-    owner: "sdk",
     replacement:
       "`messaging.targetResolver` for target normalization and `messaging.resolveOutboundSessionRoute` for session/thread identity",
     docsPath: "/plugins/sdk-migration",
@@ -569,16 +521,14 @@ export const PLUGIN_COMPAT_RECORDS = defineCompatRecords([
       "openclaw/plugin-sdk/channel-route resolveChannelRouteTargetWithParser",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
-  },
-  {
-    code: "channel-messaging-targets-subpath",
+  }),
+  sdkCompatRecord("channel-messaging-targets-subpath", {
     status: "removed",
-    owner: "sdk",
     replacement: "`openclaw/plugin-sdk/channel-targets`",
     docsPath: "/plugins/sdk-migration",
     surfaces: ["openclaw/plugin-sdk/messaging-targets"],
     diagnostics: ["plugin SDK compatibility warning"],
-  },
+  }),
   {
     code: "bundled-plugin-allowlist",
     status: "active",

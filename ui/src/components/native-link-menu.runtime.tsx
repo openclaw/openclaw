@@ -1,6 +1,7 @@
 import { createMemo, createUniqueId } from "solid-js";
+import { registerNativeLinkMenuEnglish } from "../i18n/locales/en-native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { showToast } from "../lib/toast.ts";
@@ -11,6 +12,8 @@ import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "./solid/menu.tsx";
 import { resolveTransientContainer } from "./transient-container.ts";
 import "./native-link-menu.css";
+
+registerEnglishCatalog(registerNativeLinkMenuEnglish);
 
 type NativeLinkMenuAction = "inline" | "external" | "copy";
 type Props = {
@@ -142,7 +145,10 @@ export function mountNativeLinkMenu(options: {
   menu.onAction = (action) => {
     if (action === "copy") {
       void copyToClipboard(options.url.href).then((copied) => {
-        showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
+        showToast({
+          severity: copied ? "success" : "error",
+          message: t(copied ? "common.copied" : "common.copyFailed"),
+        });
       });
     } else if (action === "inline") {
       options.openInline();

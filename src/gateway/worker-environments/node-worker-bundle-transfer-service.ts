@@ -13,6 +13,7 @@ export function createNodeWorkerBundleTransferService() {
       gatewayNamespace: string;
       artifact: WorkerBundleArtifact;
       bundlePrewarm?: 1;
+      prefetch?: 1;
       isAuthorized: () => boolean;
       signal?: AbortSignal;
       onProgress?: (servedBytes: number) => void;
@@ -31,6 +32,7 @@ export function createNodeWorkerBundleTransferService() {
         input: {
           gatewayNamespace: params.gatewayNamespace,
           ...(params.bundlePrewarm ? { bundlePrewarm: params.bundlePrewarm } : {}),
+          ...(params.prefetch ? { prefetch: params.prefetch } : {}),
           build: {
             bundleHash: params.artifact.bundleHash,
             openclawVersion: params.artifact.openclawVersion,

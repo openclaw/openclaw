@@ -19,7 +19,9 @@ import {
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as requestOk,
 } from "../server.sessions.create.projects.test-support.js";
 import { sessionTitleRequests } from "../session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
@@ -34,11 +36,6 @@ const execFileAsync = promisify(execFile);
 const git = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args]);
 const readSession = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
-async function requestOk<T>(...args: Parameters<typeof directSessionReq<T>>) {
-  const response = await directSessionReq<T>(...args);
-  expect(response.ok, JSON.stringify(response.error)).toBe(true);
-  return response.payload!;
-}
 const createRun = (
   params: Record<string, unknown>,
   options: Parameters<typeof directSessionReq<{ key: string; runId: string }>>[2],
@@ -56,6 +53,41 @@ const sendRun = (
 ) => requestOk("chat.send", { agentId: "main", sessionKey, message, idempotencyKey }, options);
 const gitUrl = "https://github.com/openclaw/openclaw.git";
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+
+test.each([undefined, false])(
+  "sessions.create isolates a cloned project when worktree is %s",
+  async (worktree) => {
+    const { root, storePath } = await workspaceFixture("shared-clone");
+    const projectRoot = await initializeRepository(root, "project");
+    const project = await registerClonedProjectRegistry({
+      path: projectRoot,
+      name: "Shared clone",
+      originUrl: gitUrl,
+    });
+    const key = "agent:main:dashboard:shared-clone";
+    try {
+      await requestOk(
+        "sessions.create",
+        { agentId: "main", key, projectId: project.id, worktree },
+        controlUiClient,
+      );
+      const entry = readSession(storePath, key);
+      expect(entry?.worktree?.id).toBeDefined();
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
+      expect(owned).toBeDefined();
+      expect(entry?.spawnedCwd).toBe(owned?.path);
+      expect(entry?.sessionRoot).toBe(owned?.path);
+      expect(entry?.spawnedCwd).not.toBe(projectRoot);
+      await fs.mkdir(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build"), { recursive: true });
+      await fs.writeFile(path.join(entry!.spawnedCwd!, ".openclaw/tmp/build/output"), "scratch");
+      await expect(fs.stat(path.join(projectRoot, ".openclaw/tmp"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      await removeOwnedSessionWorktree(key);
+    }
+  },
+);
 
 async function workspaceFixture(name: string) {
   const root = tempDirs.make(`openclaw-session-${name}-`);
@@ -87,14 +119,7 @@ async function cleanupRun(
   sessionKey: string,
 ) {
   await settleWorkspaceRuns(context, storePath, sessionKey, true);
-  const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-  if (owned) {
-    await managedWorktrees.remove({
-      id: owned.id,
-      reason: "test-cleanup",
-      allowSnapshotLoss: true,
-    });
-  }
+  await removeOwnedSessionWorktree(sessionKey);
 }
 
 vi.mock("../../projects/project-clone.js", async (importOriginal) => {
@@ -314,11 +339,7 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     // Automatic naming is independent of the failed worktree run's settlement.
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
-    expect(failed).toEqual({
-      ...beforeTitle,
-      displayName: expect.stringMatching(/^[a-z]+-[a-z]+$/),
-      updatedAt: expect.any(Number),
-    });
+    expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",

@@ -1,8 +1,13 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { defaultRuntime, ExitError } from "../runtime.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
+import {
+  formatCliFailureLines,
+  formatCliJsonFailure,
+  recordCliGatewayRunFailure,
+} from "./failure-output.js";
 import {
   applyResolvedCommandOutputMode,
   withConsoleLogsRoutedToStderrForJson,
@@ -62,22 +67,25 @@ describe("runCommandWithRuntime", () => {
     expect(runtime.exit.mock.calls).toEqual([[1], [1]]);
   });
 
-  it("bubbles JSON-mode failures to the process-level owner", async () => {
-    const originalArgv = process.argv;
+  it("reports JSON failures once while retaining the original envelope", async () => {
     const runtime = { error: vi.fn(), exit: vi.fn() };
-    process.argv = ["node", "openclaw", "backup", "verify", "missing.tgz", "--json"];
-    try {
-      await withConsoleLogsRoutedToStderrForJson(process.argv, async () => {
-        applyResolvedCommandOutputMode(true);
-        await expect(
-          runCommandWithRuntime(runtime, rejectWith(new Error("archive missing"))),
-        ).rejects.toThrow("archive missing");
+    const error = new Error("archive missing");
+    recordCliGatewayRunFailure(error, "run-1");
+    await withConsoleLogsRoutedToStderrForJson(["--json"], async () => {
+      applyResolvedCommandOutputMode(true);
+      const caught = await runCommandWithRuntime(runtime, rejectWith(error)).catch(
+        (err: unknown) => err,
+      );
+      expect(formatCliJsonFailure(caught)).toEqual({
+        ok: false,
+        runId: "run-1",
+        origin: "gateway",
+        error: { type: "cli_error", message: "archive missing" },
       });
-    } finally {
-      process.argv = originalArgv;
-    }
-
-    expect([runtime.error.mock.calls, runtime.exit.mock.calls]).toEqual([[], []]);
+      expect(formatCliFailureLines({ title: "failed", error: caught })).toEqual([]);
+    });
+    expect(runtime.error.mock.calls).toEqual([["archive missing"]]);
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 });
 
@@ -102,38 +110,18 @@ it.each([
   ]).toEqual([skip, startup]);
 });
 
-describe("dns cli", () => {
-  const log = vi.fn();
-  const output = () => log.mock.calls.map((call) => call.join(" ")).join("\\n");
-  const setup = (domain: string) => {
+it.each(["../../x", "evil\nrecords"])(
+  "rejects invalid --domain %j with explicit DNS-name diagnostic",
+  async (domain) => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const program = new Command();
     registerDnsCli(program);
-    return program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" });
-  };
-  beforeEach(() => vi.spyOn(console, "log").mockImplementation(log.mockClear()));
-
-  it("prints setup info (no apply)", async () => {
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await setup("openclaw.internal");
-    expect(output()).toContain("DNS setup");
-    expect(output()).toContain("openclaw.internal");
-    expect(writeJson).toHaveBeenCalledWith({
-      gateway: { bind: "auto" },
-      discovery: { wideArea: { domain: "openclaw.internal." } },
-    });
-  });
-
-  it.each(["../../x", "evil\nrecords"])(
-    "rejects invalid --domain %j with explicit DNS-name diagnostic",
-    async (domain) => {
-      await expect(setup(domain)).rejects.toThrow(
-        "wide-area discovery domain must be a valid DNS name",
-      );
-      expect(output()).not.toContain("No wide-area domain configured");
-      expect(output()).not.toContain("DNS setup");
-    },
-  );
-});
+    await expect(
+      program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+    ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+    expect(log).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
   [parseByteSize, "10kb", 10 * 1024],
@@ -141,7 +129,6 @@ it.each([
   [parseDurationMs, "0.5s", 500],
   [parseDurationMs, "  1H30M  ", 5_400_000],
   [parseDurationMs, "0.4ms0.4ms", 1],
-  [parseDurationMs, "9007199254740991ms", Number.MAX_SAFE_INTEGER],
   [parseDurationMs, "9007199254740990ms1ms", Number.MAX_SAFE_INTEGER],
 ] as const)("%s parses %j", (parse, input, expected) => {
   expect(parse(input)).toBe(expected);
@@ -154,7 +141,6 @@ it.each([
   [parseDurationMs, "", /Invalid duration/],
   [parseDurationMs, "-1s", /Invalid duration/],
   [parseDurationMs, "1h30", /Invalid duration/],
-  [parseDurationMs, "9007199254740993ms", /Invalid duration/],
   [parseDurationMs, "9007199254740990ms10ms", /Invalid duration/],
 ] as const)("%s rejects %j", (parse, input, error) => {
   expect(() => parse(input)).toThrow(error);

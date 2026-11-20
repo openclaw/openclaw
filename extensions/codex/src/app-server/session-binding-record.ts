@@ -53,6 +53,10 @@ export type CodexBindingStateStore = Omit<
 > &
   Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "lookup"> & {
     prepareRead: Parameters<typeof prepareCurrentCodexAppServerBindingRead>[0]["prepareRead"];
+    prepareGuard(
+      key: string,
+      assertValueCurrent: (value: StoredCodexAppServerBinding | undefined) => void,
+    ): Promise<{ assertCurrent: () => void; release: () => void } | undefined>;
     asyncReads: Pick<
       PluginStateKeyedStore<StoredCodexAppServerBinding, 2>,
       "lookup" | "lookupMany" | "entries"
@@ -172,6 +176,25 @@ function decodeCurrentCodexAppServerBinding(
   return stored?.state === "active" && ownsStoredSessionGeneration(identity, stored)
     ? stored.binding
     : undefined;
+}
+
+/** Metadata writes may preserve this owner; raw replacement and unknown settlement still fence it. */
+export function prepareCodexNativeSubagentBindingGuard(
+  state: Pick<CodexBindingStateStore, "prepareGuard">,
+  identity: CodexAppServerBindingIdentity,
+  owner: CodexNativeSubagentHistoryOwner,
+) {
+  const key = bindingStoreKey(identity);
+  return state.prepareGuard(key, (raw) => {
+    const binding = decodeCurrentCodexAppServerBinding(key, raw, identity);
+    if (
+      !binding ||
+      (identity.kind === "session" && owner.sessionId !== identity.sessionId) ||
+      !matchesCodexNativeSubagentSubmissionBinding(binding, owner)
+    ) {
+      throw new Error("Native subagent binding is no longer current.");
+    }
+  });
 }
 
 /** Acquire fresh rows off-thread; decode lazily to preserve caller failure ordering. */

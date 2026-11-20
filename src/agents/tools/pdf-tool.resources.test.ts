@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -9,6 +8,7 @@ import * as llmStream from "../../llm/stream.js";
 import type { Model } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import * as webMedia from "../../media/web-media.js";
+import { writeFixtureJson } from "../../plugins/loader-fixture-builders.test-support.js";
 import { loadPluginRegistryHandle } from "../../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -17,6 +17,10 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../../plugins/loader.test-fixtures.js";
+import {
+  cleanupNativeFixture,
+  nativeFixtureEnv,
+} from "../../plugins/native-resource.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
@@ -149,14 +153,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 }};`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      providers: [id],
-      configSchema: { type: "object", properties: {}, additionalProperties: false },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    providers: [id],
+    configSchema: { type: "object", properties: {}, additionalProperties: false },
+  });
   const config: OpenClawConfig = {
     agents: { defaults: { pdfModel: { primary: `${id}/pdf-model` } } },
     models: {
@@ -189,46 +190,34 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     parent,
     async run(test: () => Promise<void>) {
       try {
-        await withEnvAsync(
-          {
-            OPENCLAW_HOME: dir,
-            OPENCLAW_STATE_DIR: path.join(dir, "state"),
-            OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-          },
-          async () => {
-            useNoBundledPlugins();
-            stubPdfInput("Synthetic PDF text");
-            lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
-              {
-                config,
-                agentId: "main",
-                agentDir,
-                workspaceDir: dir,
-                loadRuntimePlugins: true,
-                skipCredentials: true,
-                runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
-              },
-              { catalogMode: "static" },
-            );
-            try {
-              await test();
-            } finally {
-              state.finish.resolve();
-              state.finishCleanup.resolve();
-              await outcome;
-              await parent.drain();
-              await lease[Symbol.asyncDispose]();
-              await closePreparedModelRuntimeSnapshots();
-            }
-          },
-        );
-      } finally {
-        for (const connection of connections) {
-          if (connection.database.isOpen) {
-            connection.database.close();
+        await withEnvAsync(nativeFixtureEnv(dir, path.join(dir, "state")), async () => {
+          useNoBundledPlugins();
+          stubPdfInput("Synthetic PDF text");
+          lease = await preparedRuntime.acquireReadOnlyPreparedModelRuntime(
+            {
+              config,
+              agentId: "main",
+              agentDir,
+              workspaceDir: dir,
+              loadRuntimePlugins: true,
+              skipCredentials: true,
+              runtimePluginSelections: [{ provider: id, modelId: "pdf-model" }],
+            },
+            { catalogMode: "static" },
+          );
+          try {
+            await test();
+          } finally {
+            state.finish.resolve();
+            state.finishCleanup.resolve();
+            await outcome;
+            await parent.drain();
+            await lease[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
           }
-        }
-        Reflect.deleteProperty(globalThis, stateKey);
+        });
+      } finally {
+        cleanupNativeFixture(stateKey, connections);
       }
     },
     get lease() {

@@ -12,6 +12,10 @@ import type {
   GatewayWsPresenceMode,
   GatewayWsSessionEventAttribution,
 } from "../../infra/diagnostic-rpc-types.js";
+import {
+  hasGatewayWsMetricsListeners,
+  publishGatewayWsMetrics,
+} from "../../infra/gateway-ws-metrics.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { GATEWAY_EVENTS } from "../events.js";
@@ -49,13 +53,7 @@ function formatSocketEndpoint(
   return address.includes(":") ? `[${address}]:${port}` : `${address}:${port}`;
 }
 
-export function resolveSocketAddress(socket: WebSocket): {
-  remoteAddr?: string;
-  remotePort?: number;
-  localAddr?: string;
-  localPort?: number;
-  endpoint?: string;
-} {
+export function resolveSocketAddress(socket: WebSocket) {
   const rawSocket = (socket as WebSocket & { _socket?: Socket })["_socket"];
   const remoteAddr = rawSocket?.remoteAddress;
   const remotePort = rawSocket?.remotePort;
@@ -87,14 +85,9 @@ export function isWsPayloadLimitError(err: unknown): boolean {
 const gatewayEventNames = new Set(GATEWAY_EVENTS);
 type EventTraffic = Extract<DiagnosticEventInput, { type: "gateway.ws.event" }>;
 type EventCounter = {
-  event: string;
-  count: number;
-  bytes: number;
-  wireBytes: number | undefined;
+  traffic: EventTraffic;
   buckets: Float64Array;
   pending: boolean;
-  sessionEvent?: GatewayWsSessionEventAttribution;
-  presenceMode?: GatewayWsPresenceMode;
 };
 // Event names and session reasons are bounded by their protocol/attribution owners.
 const eventCounters = new Map<
@@ -109,28 +102,33 @@ const FRAME_BYTE_LABELS = FRAME_BYTE_BOUNDS.map((bound) =>
 
 function flushEventCounters() {
   for (const counter of pendingCounters) {
-    let frameBytes: EventTraffic["frameBytes"];
-    if (counter.count > 0) {
-      frameBytes = {};
-      let cumulative = 0;
-      for (let i = 0; i < FRAME_BYTE_LABELS.length; i++) {
-        cumulative += counter.buckets[i]!;
-        frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
+    const { traffic } = counter;
+    publishGatewayWsMetrics(
+      traffic.event,
+      traffic.count,
+      traffic.bytes,
+      traffic.wireBytes,
+      counter.buckets,
+      FRAME_BYTE_LABELS,
+      traffic.sessionEvent,
+      traffic.presenceMode,
+    );
+    if (hasInternalDiagnosticEventInterest("gateway.ws.event", true)) {
+      if (traffic.count > 0) {
+        const frameBytes: NonNullable<EventTraffic["frameBytes"]> = {};
+        let cumulative = traffic.count;
+        // Start with the largest index so V8 never grows a mostly empty elements array.
+        for (let i = FRAME_BYTE_LABELS.length - 1; i >= 0; i--) {
+          frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
+          cumulative -= counter.buckets[i]!;
+        }
+        // Explicit subscribers retain detached snapshots; exporters borrow the counters above.
+        traffic.frameBytes = Object.freeze(frameBytes);
       }
+      emitTrustedDiagnosticEvent(traffic);
     }
-    // The dispatcher queues these events: publish a snapshot, never the reusable counters.
-    emitTrustedDiagnosticEvent({
-      type: "gateway.ws.event",
-      event: counter.event,
-      count: counter.count,
-      bytes: counter.bytes,
-      ...(counter.wireBytes !== undefined ? { wireBytes: counter.wireBytes } : {}),
-      ...(counter.sessionEvent ? { sessionEvent: counter.sessionEvent } : {}),
-      ...(counter.presenceMode ? { presenceMode: counter.presenceMode } : {}),
-      ...(frameBytes ? { frameBytes } : {}),
-    });
-    counter.count = counter.bytes = 0;
-    counter.wireBytes = undefined;
+    traffic.count = traffic.bytes = 0;
+    traffic.wireBytes = traffic.frameBytes = undefined;
     counter.buckets.fill(0);
     counter.pending = false;
   }
@@ -146,7 +144,8 @@ export function recordGatewayWsEvent(
 ): boolean {
   if (
     !areDiagnosticsEnabledForProcess() ||
-    !hasInternalDiagnosticEventInterest("gateway.ws.event", true)
+    (!hasGatewayWsMetricsListeners() &&
+      !hasInternalDiagnosticEventInterest("gateway.ws.event", true))
   ) {
     return false;
   }
@@ -163,10 +162,14 @@ export function recordGatewayWsEvent(
   let counter = deliveries.get(delivery);
   if (!counter) {
     counter = {
-      event: name,
-      count: 0,
-      bytes: 0,
-      wireBytes: undefined,
+      traffic: {
+        type: "gateway.ws.event",
+        event: name,
+        count: 0,
+        bytes: 0,
+        sessionEvent: sessionEvent && Object.freeze({ ...sessionEvent }),
+        presenceMode,
+      },
       buckets: new Float64Array(FRAME_BYTE_BOUNDS.length),
       pending: false,
     };
@@ -177,15 +180,13 @@ export function recordGatewayWsEvent(
       runInDetachedAsyncContext(() => setImmediate(flushEventCounters).unref());
     }
     counter.pending = true;
-    counter.sessionEvent = sessionEvent;
-    counter.presenceMode = presenceMode;
     pendingCounters.push(counter);
   }
-  counter.bytes += bytes;
+  counter.traffic.bytes += bytes;
   if (wireBytes !== undefined) {
-    counter.wireBytes = (counter.wireBytes ?? 0) + wireBytes;
+    counter.traffic.wireBytes = (counter.traffic.wireBytes ?? 0) + wireBytes;
   } else {
-    counter.count++;
+    counter.traffic.count++;
     // Count one exclusive bucket; cumulative exporter buckets are built only at flush.
     for (let i = 0; i < FRAME_BYTE_BOUNDS.length; i++) {
       if (bytes <= FRAME_BYTE_BOUNDS[i]!) {

@@ -120,6 +120,35 @@ describe("MediaStreamHandler security hardening", () => {
     });
   });
 
+  it("admits string start fields before asking the stream acceptance policy", async () => {
+    const shouldAcceptStream = vi.fn(() => false);
+    const handler = createHandler({ shouldAcceptStream });
+    await withConnection(handler, async (ws) => {
+      try {
+        for (const frame of [
+          { event: "start", streamSid: 42, start: { callSid: "CA-admission" } },
+          { event: "start", streamSid: "MZ-admission", start: { callSid: 42 } },
+          {
+            event: "start",
+            streamSid: "MZ-admission",
+            start: { callSid: "CA-admission", customParameters: { token: 42 } },
+          },
+        ]) {
+          ws.send(JSON.stringify(frame));
+        }
+        sendStart(ws, "MZ-admission", "CA-admission", { token: "synthetic-stream-token" });
+        await waitForClose(ws);
+        expect(shouldAcceptStream).toHaveBeenCalledExactlyOnceWith({
+          callId: "CA-admission",
+          streamSid: "MZ-admission",
+          token: "synthetic-stream-token",
+        });
+      } finally {
+        ws.terminate();
+      }
+    });
+  });
+
   it("rejects start frames when no stream acceptance validator is configured", async () => {
     const createSession = vi.fn(() => createStubSession());
     const handler = createHandler({
@@ -610,6 +639,7 @@ describe("MediaStreamHandler security hardening", () => {
     });
   });
   it("drops malformed media frames while keeping the stream usable", async () => {
+    const errors = captureConsole("error");
     const sentAudio: Buffer[] = [];
     const session: RealtimeTranscriptionSession = {
       ...createStubSession(),
@@ -617,19 +647,26 @@ describe("MediaStreamHandler security hardening", () => {
     };
     const handler = createAcceptedHandler(session);
     await withConnection(handler, async (ws) => {
-      sendStart(ws, "MZ-base64", "CA-base64");
-      for (const payload of ["!!!not-valid-base64!!!", "   \t\n  "]) {
-        sendMedia(ws, payload);
+      try {
+        sendStart(ws, "MZ-base64", "CA-base64");
+        for (const payload of [42, true, {}, [], null]) {
+          ws.send(JSON.stringify({ event: "media", media: { payload } }));
+        }
+        ws.send(JSON.stringify({ event: "mark", mark: { name: 42 } }));
+        for (const payload of ["!!!not-valid-base64!!!", "   \t\n  "]) {
+          sendMedia(ws, payload);
+        }
+        sendMedia(ws, "-_8");
+        sendMedia(ws, Buffer.from("valid").toString("base64"));
+
+        await vi.waitFor(() =>
+          expect(sentAudio).toEqual([Buffer.from([0xfb, 0xff]), Buffer.from("valid")]),
+        );
+        expect(ws.readyState).toBe(WebSocket.OPEN);
+        expect(errors).not.toHaveBeenCalled();
+      } finally {
+        ws.terminate();
       }
-      sendMedia(ws, "-_8");
-      sendMedia(ws, Buffer.from("valid").toString("base64"));
-
-      await vi.waitFor(() =>
-        expect(sentAudio).toEqual([Buffer.from([0xfb, 0xff]), Buffer.from("valid")]),
-      );
-      expect(ws.readyState).toBe(WebSocket.OPEN);
-
-      await closeWs(ws);
     });
   });
 });

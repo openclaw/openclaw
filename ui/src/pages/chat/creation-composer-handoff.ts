@@ -133,14 +133,8 @@ async function performCreatedComposerAdmission(
       ),
     );
     stagedTransfers.set(transfer, { owner, host });
-  } else if (stagedOwner.host !== host) {
-    for (const input of transfer.inputs) {
-      const retained = owner.locate(stagedOwner.host, input.id);
-      if (retained && !retained.durable) {
-        owner.keep(host, retained.scope, retained.item, true);
-        owner.change(stagedOwner.host, input.id);
-      }
-    }
+  } else {
+    // The outbox owns volatile custody; a remount only changes the transfer host.
     stagedOwner.host = host;
   }
   const staged = transfer.inputs.flatMap((input) => {

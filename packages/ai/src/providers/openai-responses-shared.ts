@@ -16,7 +16,10 @@ import {
   type OpenAIResponsesRequestParams,
 } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
-import { createResponsesStreamWithRecovery } from "../transports/openai-responses-replay-internal.js";
+import {
+  createResponsesStreamWithRecovery,
+  createResponsesItemConflictRecovery,
+} from "../transports/openai-responses-replay-internal.js";
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
@@ -27,6 +30,7 @@ import {
 } from "../transports/openai-transport-params.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
+  awaitProviderLifecycleCallback,
   failTransportStream,
   finalizeTransportStream,
   withProviderResponseHook,
@@ -50,56 +54,12 @@ import { resolveOpenAIResponsesTextFormat } from "./openai-response-format.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { clampMaxTokensToModel } from "./simple-options.js";
 
-type OpenAIResponsesStreamOptions = Pick<
-  ResponsesStreamOptions,
-  "serviceTier" | "applyServiceTierPricing"
->;
-
 export { convertResponsesToolPayload };
 
 type ResponsesRequestOptions = {
   signal?: AbortSignal;
   timeout?: number;
   maxRetries?: number;
-};
-
-type ResponsesStreamRequest = {
-  withResponse(): Promise<{
-    data: AsyncIterable<ResponseStreamEvent>;
-    response: Response;
-  }>;
-};
-
-type ResponsesStreamClient = {
-  responses: {
-    create(
-      params: ResponseCreateParamsStreaming,
-      options: ResponsesRequestOptions,
-    ): ResponsesStreamRequest;
-  };
-};
-
-type ResponsesLifecycleStreamOptions = Pick<
-  StreamOptions,
-  "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"
-> &
-  Pick<
-    BaseOpenAIStreamOptions,
-    | "authProfileId"
-    | "onCompactionRejected"
-    | "openclawCodeModeToolSurface"
-    | "openclawCodeModeAllowedHostedToolTypes"
-  > &
-  FirstStreamEventInternalOptions;
-
-type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
-
-type ResponsesCommonParamsOptions = Pick<
-  StreamOptions,
-  "maxTokens" | "temperature" | "responseFormat" | "onPayload"
-> & {
-  reasoningEffort?: OpenAIRequestReasoningEffort;
-  reasoningSummary?: ResponsesReasoningSummary;
 };
 
 export {
@@ -117,6 +77,13 @@ export function applyResponsesServiceTierPricing(
     multiplier = 0.5;
   } else if (serviceTier === "priority") {
     multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
+  } else if (
+    serviceTier === "ultrafast" &&
+    /^(?:openai\/)?gpt-6\.2-(?:astra|sol)(?:-\d{4}-\d{2}-\d{2})?$/.test(model.id)
+  ) {
+    // GPT-6.2 launch pricing: 3x through February 28, then 6x March 1 Pacific.
+    // https://developers.openai.com/api/docs/models/gpt-6.2-sol (2026-11-17)
+    multiplier = Date.now() < Date.parse("2027-03-01T08:00:00Z") ? 3 : 6;
   }
   if (multiplier === 1) {
     return;
@@ -135,7 +102,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
     Pick<OpenAIResponsesRequestParams, "prompt_cache_options">,
   model: Model<TApi>,
   context: Context,
-  options?: ResponsesCommonParamsOptions,
+  options?: Pick<StreamOptions, "maxTokens" | "temperature" | "responseFormat" | "onPayload"> & {
+    reasoningEffort?: OpenAIRequestReasoningEffort;
+    reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  },
   config?: { setDefaultReasoningOff?: boolean },
 ): void {
   if (options?.maxTokens) {
@@ -190,30 +160,58 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 }
 
+type ResponsesClient = {
+  responses: {
+    create(
+      params: ResponseCreateParamsStreaming,
+      options: ResponsesRequestOptions,
+    ): {
+      withResponse(): Promise<{
+        data: AsyncIterable<ResponseStreamEvent>;
+        response: Response;
+      }>;
+    };
+  };
+};
+
 export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
   output: AssistantMessage;
   context?: Pick<Context, "tools">;
-  options?: ResponsesLifecycleStreamOptions;
+  options?: Pick<StreamOptions, "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"> &
+    Pick<
+      BaseOpenAIStreamOptions,
+      | "authProfileId"
+      | "onCompactionRejected"
+      | "openclawCodeModeToolSurface"
+      | "openclawCodeModeAllowedHostedToolTypes"
+    > &
+    FirstStreamEventInternalOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
-  createClient: (model: Model<TApi>) => ResponsesStreamClient;
+  createClient: (model: Model<TApi>) => ResponsesClient | Promise<ResponsesClient>;
   buildParams: (
     model: Model<TApi>,
     replayMode: OpenAIResponsesReplayMode,
   ) => OpenAIResponsesRequestParams;
-  processStreamOptions?: OpenAIResponsesStreamOptions;
+  processStreamOptions?: Pick<ResponsesStreamOptions, "serviceTier" | "applyServiceTierPricing">;
 }): Promise<void> {
   const { stream, output, options } = params;
 
   let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
+  let itemRecovery: ReturnType<typeof createResponsesItemConflictRecovery> | undefined;
   try {
     const model = params.resolveRequestModel?.(params.model) ?? params.model;
-    const client = params.createClient(model);
+    itemRecovery = createResponsesItemConflictRecovery(output, model, options);
+    const recovery = itemRecovery;
+    const client = await params.createClient(model);
     const encodeBody = prepareModelRequestBody(options);
     const buildRequest = async (replayMode: OpenAIResponsesReplayMode) => {
       let request = params.buildParams(model, replayMode);
-      const nextRequest = await options?.onPayload?.(request, model);
+      const nextRequest = await awaitProviderLifecycleCallback(
+        options?.onPayload ? () => options.onPayload?.(request, model) : undefined,
+        options?.signal,
+      );
       if (nextRequest !== undefined) {
         request = nextRequest as OpenAIResponsesRequestParams;
       }
@@ -249,6 +247,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       model,
       encodeBody,
       buildFullHistoryRequest: () => buildRequest("full-history"),
+      buildItemConflictRequest: () => recovery.retry(buildRequest),
       onCompactionRejected: (checkpoint) =>
         suppressOpenAIResponsesCompaction(output, model, options, checkpoint),
       canRetryStream: () => output.content.length === 0,
@@ -298,7 +297,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
-        authProfileId: options?.authProfileId,
       }),
     });
 
@@ -314,6 +312,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     }
     finalizeTransportStream({ stream, output, signal: options?.signal });
   } catch (error) {
+    itemRecovery?.reject(error);
     const response = error instanceof ResponsesStreamFailure ? error.response : error;
     const rawError = isRecord(response) && isRecord(response.error) ? response.error : response;
     if (
@@ -337,6 +336,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       error,
     });
   } finally {
+    itemRecovery?.finish();
     firstEventAbort?.dispose();
   }
 }

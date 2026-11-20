@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   openOpenClawAgentDatabase,
@@ -116,10 +117,7 @@ describe("SQLite transcript history events", () => {
 
     await persist([message("after-empty", null, "user", "new")]);
     const delta = readTranscriptDisplayDelta(scope, { cursor: empty.deltaCursor });
-    expect(delta.kind).toBe("page");
-    if (delta.kind !== "page") {
-      throw new Error("missing appended history delta");
-    }
+    assert(delta.kind === "page", "missing appended history delta");
     expect(delta.events.map(historyEventId)).toContain("after-empty");
     expectEmptyDelta(delta.cursor, "after-empty");
 
@@ -208,11 +206,7 @@ describe("SQLite transcript history events", () => {
       );
       const raw = readTranscriptRawDelta(scope);
       const delta = readTranscriptDisplayDelta(scope);
-      expect(raw.kind).toBe("page");
-      expect(delta.kind).toBe("page");
-      if (raw.kind !== "page" || delta.kind !== "page") {
-        throw new Error("missing transcript page");
-      }
+      assert(raw.kind === "page" && delta.kind === "page", "missing transcript page");
       const rawSeq = new Map(raw.events.map((row) => [historyEventId(row), row.seq]));
       const history = readSessionTranscriptHistoryEvents(scope);
       expectEvents(history, ["exec", "notice", "wait", "first", "later"], [1, 2, 3, 4, 5]);
@@ -251,10 +245,7 @@ describe("SQLite transcript history events", () => {
       expect(delta.serializedBytes).toBe(raw.serializedBytes);
       expect(delta.events.map(({ event, seq }) => ({ event, seq }))).toEqual(raw.events);
       const blocked = readTranscriptDisplayDelta(scope, { maxBytes: 1 });
-      expect(blocked.kind).toBe("page");
-      if (blocked.kind !== "page") {
-        throw new Error("missing byte-blocked transcript page");
-      }
+      assert(blocked.kind === "page", "missing byte-blocked transcript page");
       expect(blocked).toMatchObject({
         activeLeafEntryId: "later",
         events: [],
@@ -524,29 +515,19 @@ describe("SQLite transcript history events", () => {
     expect(firstWindow).toMatchObject({ found: true, totalMessages: 4 });
     const firstIds = ["before-user", "before-assistant", "before-tool", "first-reset"];
     expectEvents(firstWindow.events, firstIds);
-    for (const [messageId, maxMessages, ids, seqs, offset, hasOverreadContext] of [
-      ["before-user", 1, ["before-user"], [1], 3, false],
-      [
-        "before-assistant",
-        2,
-        ["before-user", "before-assistant", "before-tool"],
-        [1, 2, 3],
-        1,
-        true,
-      ],
-      [
-        "before-tool",
-        3,
-        ["before-user", "before-assistant", "before-tool", "first-reset"],
-        [1, 2, 3, 4],
-        0,
-        true,
-      ],
-      ["first-reset", 1, ["before-tool", "first-reset"], [3, 4], 0, true],
+    for (const [messageId, maxMessages, seqs, offset, hasOverreadContext] of [
+      ["before-user", 1, [1], 3, false],
+      ["before-assistant", 2, [1, 2, 3], 1, true],
+      ["before-tool", 3, [1, 2, 3, 4], 0, true],
+      ["first-reset", 1, [3, 4], 0, true],
     ] as const) {
       const page = readSessionTranscriptHistoryAnchorPage(scope, { messageId, maxMessages });
       expect(page).toMatchObject({ found: true, totalMessages: 4, offset, hasOverreadContext });
-      expectEvents(page.events, ids, seqs);
+      expectEvents(
+        page.events,
+        seqs.map((seq) => firstIds[seq - 1]!),
+        seqs,
+      );
     }
     expectEvents(anchor("first-reset").events, firstIds);
 

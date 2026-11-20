@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { hasErrnoCode } from "../../src/infra/errno.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -156,15 +156,7 @@ child.once("message", () => {
             // A pre-fix wrapper can orphan these exact fixture PIDs. Reap only those
             // recorded by the fixture leaf; never broaden cleanup to process-name scans.
             const pids = [...readOwnedPids(), ...(wrapper?.pid ? [wrapper.pid] : [])];
-            for (const pid of pids) {
-              try {
-                process.kill(pid, "SIGKILL");
-              } catch (error) {
-                if (!hasErrnoCode(error, "ESRCH")) {
-                  throw error;
-                }
-              }
-            }
+            pids.forEach(killPidIfAlive);
             await completion;
             await Promise.all(pids.map((pid) => waitForDead(pid, signal)));
           });

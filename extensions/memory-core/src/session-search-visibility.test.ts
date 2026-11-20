@@ -1,7 +1,6 @@
 import * as engineSessions from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { normalizeSessionDeliveryState } from "openclaw/plugin-sdk/session-store-runtime";
-import * as sessionTranscriptHit from "openclaw/plugin-sdk/session-transcript-hit";
 import * as sessionVisibility from "openclaw/plugin-sdk/session-visibility";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
@@ -54,12 +53,12 @@ const crossAgentStore: Record<string, TestSessionEntry> = {
 };
 let combinedSessionStore: Record<string, TestSessionEntry> = crossAgentStore;
 
-vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-hit")>();
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-sessions")>();
   return {
     ...actual,
-    loadCombinedSessionStoreForGatewayAsync: vi.fn(async () => ({
+    loadMemorySearchSessionStore: vi.fn(async () => ({
       storePath: "(test)",
       store: combinedSessionStore,
     })),
@@ -69,7 +68,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-hit", async (importOriginal) => 
 describe("filterMemorySearchHitsBySessionVisibility", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 
@@ -91,7 +90,7 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
       conversationRecall: recallContext("agent:main:main", "configured"),
     });
     expect(filtered).toEqual(hits);
-    expect(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).not.toHaveBeenCalled();
+    expect(engineSessions.loadMemorySearchSessionStore).not.toHaveBeenCalled();
     expect(guard).not.toHaveBeenCalled();
   });
 
@@ -378,7 +377,7 @@ describe("reset-generation session search visibility", () => {
   });
   afterEach(() => {
     vi.restoreAllMocks();
-    vi.mocked(sessionTranscriptHit.loadCombinedSessionStoreForGatewayAsync).mockClear();
+    vi.mocked(engineSessions.loadMemorySearchSessionStore).mockClear();
     combinedSessionStore = crossAgentStore;
   });
 

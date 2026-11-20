@@ -162,7 +162,7 @@ export function withParticipantSessionToolsFixture(
         profileId,
         senderId: `${name.toLowerCase()}-sender`,
         name,
-        readCurrentRoleAssignment: () => "write",
+        readCurrentRoleFacts: () => ({ assignedRole: "write" }),
       };
     };
     const alice = person("Alice");

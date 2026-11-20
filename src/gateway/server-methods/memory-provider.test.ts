@@ -20,6 +20,10 @@ vi.mock("../../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManagerCore: mocks.legacy,
   resolveActiveMemoryBackendConfig: mocks.resolveBackend,
 }));
+// mock-isolation: a single-user Gateway; shared-Gateway policy is covered by the authority test.
+vi.mock("../../state/user-profile-list.js", () => ({
+  hasMultipleResidentSessionSharingIdentities: () => false,
+}));
 vi.mock("../operator-run-authority.js", () => ({
   captureGatewayOperatorRunAuthority: mocks.capture,
 }));

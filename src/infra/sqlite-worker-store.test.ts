@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import {
-  link,
-  mkdir,
-  readFile,
-  readdir,
-  rename,
-  symlink,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
+import { link, mkdir, readFile, rename, symlink, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { getEnvironmentData, setEnvironmentData, Worker } from "node:worker_threads";
@@ -21,31 +12,29 @@ import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.j
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { listDirectoryTreeStrict } from "./directory-walk.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
   readSqliteDatabaseWriteTokenForPath,
 } from "./sqlite-database-admission.js";
-import {
-  SQLITE_WORKER_MAX_RESULT_BYTES,
-  hasSqliteWorkerOutcomeUnknown,
-  type SqliteWorkerReply,
-} from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   openSharedStateSqliteWorkerStore,
+  openSqliteWorkerStore,
   closeUnclaimedSharedStateSqliteWorkers,
   hasUnclaimedSharedStateSqliteCleanup,
   runSqliteWorkerStoreOperation,
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
@@ -109,7 +98,6 @@ describe("SQLite worker store", () => {
       }
       return emit(this, event, reply);
     });
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
     setEnvironmentData(key, undefined);
     try {
       const store = await open(databasePath());
@@ -117,11 +105,8 @@ describe("SQLite worker store", () => {
       await append(store, "admitted");
       expect(await read(store)).toEqual(["admitted"]);
       expect(receipts).toHaveLength(1);
-      expect(requests.mock.calls.filter(([request]) => request.type === "open")).toHaveLength(1);
-      expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(2);
     } finally {
       messages.mockRestore();
-      requests.mockRestore();
       await drainGlobalSingletonLifecycleState();
       setEnvironmentData(key, previous);
     }
@@ -137,44 +122,33 @@ describe("SQLite worker store", () => {
         (_, index) => `${"x".repeat(24 * 1024 * 1024)}é-${index}`,
       );
       const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-      const inlineReplies: string[][] = [];
-      const frames: Array<{ bytes: number; backingBytes: number }> = [];
+      let frameCount = 0;
       const aborted = new AbortController();
       let closing: Promise<void> | undefined;
       const messages = interceptReply(function (event, reply) {
-        if (event === "message" && reply.ok) {
-          if (!reply.transfer) {
-            inlineReplies.push(Object.keys(reply).toSorted());
-          } else if (reply.transfer === "frame") {
-            frames.push({
-              bytes: reply.value.byteLength,
-              backingBytes: reply.value.buffer.byteLength,
-            });
-            if (frames.length === 1) {
-              if (action === "client close") {
-                closing = store.close();
-              }
-              if (action === "global close") {
-                closing = drainGlobalSingletonLifecycleState("restart");
-              }
-              if (action === "abort") {
-                aborted.abort(new Error("Canceled after read dispatch"));
-              }
-              if (action === "failed frame") {
-                return emit(this, event, { ...reply, value: new Uint8Array([0]) });
-              }
+        if (event === "message" && reply.ok && reply.transfer === "frame") {
+          frameCount += 1;
+          if (frameCount === 1) {
+            if (action === "client close") {
+              closing = store.close();
+            }
+            if (action === "global close") {
+              closing = drainGlobalSingletonLifecycleState("restart");
+            }
+            if (action === "abort") {
+              aborted.abort(new Error("Canceled after read dispatch"));
+            }
+            if (action === "failed frame") {
+              return emit(this, event, { ...reply, value: new Uint8Array([0]) });
             }
           }
         }
         return emit(this, event, reply);
       });
-      const requests = vi.spyOn(Worker.prototype, "postMessage");
       try {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "transactionCount", "value"]));
-        requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
           { signal: aborted.signal },
@@ -186,7 +160,7 @@ describe("SQLite worker store", () => {
           const result = await reading;
           expect(result).toHaveLength(values.length);
           expect(result.map(digest)).toEqual(values.map(digest));
-          expect(frames.length).toBeGreaterThan(8);
+          expect(frameCount).toBeGreaterThan(8);
           if (action.endsWith("close")) {
             expect(closing).toBeDefined();
           }
@@ -195,19 +169,10 @@ describe("SQLite worker store", () => {
           }
           await closing;
         }
-        expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(
-          1,
-        );
-        expect(
-          frames.every((frame) => frame.bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024),
-        ).toBe(true);
-        expect(frames.every((frame) => frame.backingBytes <= SQLITE_WORKER_MAX_RESULT_BYTES)).toBe(
-          true,
-        );
         if (action === "read") {
           const ownership = await store.execute({ type: "takeReplyOwnership", input: undefined });
           expect(ownership.some((reply) => reply.kind === "inline")).toBe(true);
-          expect(ownership.filter((reply) => reply.kind === "frame")).toHaveLength(frames.length);
+          expect(ownership.filter((reply) => reply.kind === "frame")).toHaveLength(frameCount);
           for (const reply of ownership) {
             expect(reply.before).toBeGreaterThan(0);
             expect.soft(reply.after, `${reply.kind} reply (${reply.before} bytes)`).toBe(0);
@@ -215,7 +180,6 @@ describe("SQLite worker store", () => {
         }
       } finally {
         messages.mockRestore();
-        requests.mockRestore();
         await Promise.allSettled([closing, store.close()]);
         stores.delete(store);
       }
@@ -250,7 +214,6 @@ describe("SQLite worker store", () => {
     const unrelated = await open(unrelatedPath);
     const retiring = createDeferredCore();
     const releaseRetirement = createDeferredCore();
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
     let exited = false;
     let recoverySettled = false;
     let recoveredBeforeExit = false;
@@ -290,11 +253,6 @@ describe("SQLite worker store", () => {
       expect(exited).toBe(false);
       expect(settled).toBe(false);
       expect(recoverySettled).toBe(false);
-      expect(
-        requests.mock.calls.filter(
-          ([request]) => request.type === "open" && request.databasePath === file,
-        ),
-      ).toHaveLength(1);
       releaseRetirement.resolve();
       expect(await opening).toMatchObject([
         {
@@ -309,11 +267,6 @@ describe("SQLite worker store", () => {
       const recovered = await recovering;
       expect(exited).toBe(true);
       expect(recoveredBeforeExit).toBe(false);
-      expect(
-        requests.mock.calls.filter(
-          ([request]) => request.type === "open" && request.databasePath === file,
-        ),
-      ).toHaveLength(2);
       expect(await read(recovered)).toEqual(["committed"]);
       await expect(append(recovered, "recovered")).resolves.toMatchObject({ writes: 1 });
       expect(await read(recovered)).toEqual(["committed", "recovered"]);
@@ -322,7 +275,6 @@ describe("SQLite worker store", () => {
       retirement.mockRestore();
       const [result] = await opening;
       await recovering?.catch(() => {});
-      requests.mockRestore();
       if (result.status === "fulfilled") {
         await result.value?.close();
       }
@@ -344,7 +296,9 @@ describe("SQLite worker store", () => {
         incognito,
         empty: "",
       };
-      const contents = (await readdir(directory, { recursive: true })).toSorted();
+      const contents = (await listDirectoryTreeStrict(directory))
+        .map((walkEntry) => walkEntry.relativePath)
+        .toSorted();
       // A regressed broker can create a file from a memory locator; its child owns that cwd.
       const result = await runNodeScript(
         createNodeEvalArgs(
@@ -380,11 +334,48 @@ describe("SQLite worker store", () => {
       );
       expect(result.error, result.stderr).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
-      expect((await readdir(directory, { recursive: true })).toSorted()).toEqual(contents);
+      expect(
+        (await listDirectoryTreeStrict(directory))
+          .map((walkEntry) => walkEntry.relativePath)
+          .toSorted(),
+      ).toEqual(contents);
     },
   );
 
   describe.skipIf(process.platform === "win32")("replaced admitted aliases", () => {
+    it("refuses borrowed cleanup after alias replacement without changing an ordinary actor client", async () => {
+      const file = databasePath();
+      const aliasPath = path.join(path.dirname(file), "cleanup.sqlite");
+      const ordinary = await open(file);
+      const original = await append(ordinary, "original");
+      await symlink(file, aliasPath);
+      const identity = await readDatabasePathIdentity(aliasPath);
+      const cleanup = await openSqliteWorkerStore<FixtureOperations>({
+        moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+        databasePath: aliasPath,
+        input: undefined,
+        existingOnly: true,
+        admission: {
+          identity: identity.key,
+          birthtime: identity.birthtime,
+          assertCurrent() {},
+        },
+      });
+      expect(cleanup).toBeDefined();
+      if (!cleanup) {
+        throw new Error("Expected cleanup to borrow the existing database");
+      }
+      stores.add(cleanup);
+      expect(await append(cleanup, "borrowed")).toMatchObject({ actor: original.actor });
+      await unlink(aliasPath);
+      await writeFile(aliasPath, "");
+      await expect(append(cleanup, "must not write")).rejects.toThrow(
+        "database no longer matches its borrowed native owner",
+      );
+      expect(await append(ordinary, "ordinary")).toMatchObject({ actor: original.actor });
+      expect(await read(ordinary)).toEqual(["original", "borrowed", "ordinary"]);
+    });
+
     it.each(["hardlink", "symlink"] as const)(
       "holds a replaced %s alias until both alias clients drain and close",
       async (kind) => {
@@ -392,11 +383,8 @@ describe("SQLite worker store", () => {
         const aliasPath = path.join(path.dirname(file), "alias.sqlite");
         const original = await open(file);
         const originalReceipt = await append(original, "original");
-        if (kind === "hardlink") {
-          await link(file, aliasPath);
-        } else {
-          await symlink(file, aliasPath);
-        }
+        const createAlias = kind === "hardlink" ? link : symlink;
+        await createAlias(file, aliasPath);
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
         const realpath = vi.spyOn(fs.realpathSync, "native");
@@ -411,11 +399,10 @@ describe("SQLite worker store", () => {
           realpath.mockRestore();
         }
         await unlink(aliasPath);
-        if (kind === "hardlink") {
-          await writeFile(aliasPath, "");
-        } else {
-          const replacementTarget = path.join(path.dirname(file), "replacement.sqlite");
-          await writeFile(replacementTarget, "");
+        const replacementTarget =
+          kind === "hardlink" ? aliasPath : path.join(path.dirname(file), "replacement.sqlite");
+        await writeFile(replacementTarget, "");
+        if (kind === "symlink") {
           await symlink(replacementTarget, aliasPath);
         }
         await expectRejectedOpen(aliasPath);

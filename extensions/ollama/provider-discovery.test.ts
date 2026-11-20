@@ -1,3 +1,4 @@
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,9 +8,17 @@ import { ollamaProviderDiscovery } from "./provider-discovery.js";
 const OLLAMA_LOCAL_AUTH_MARKER = "ollama-local";
 const liveEnv = { VITEST: "", NODE_ENV: "development" };
 const cloudUrl = "https://ollama.com";
+type CatalogOptions = Partial<
+  Pick<ProviderCatalogContext, "env" | "providerIds" | "resolveProviderApiKey">
+> & {
+  provider?: ModelProviderConfig;
+};
 
-const createConfiguredModel = () =>
-  createModel("gpt-oss:20b", "GPT-OSS 20B", { contextWindow: 8_192, maxTokens: 81_920 });
+const configuredProvider = (overrides: Partial<ModelProviderConfig>): ModelProviderConfig => ({
+  baseUrl: `${cloudUrl}/v1`,
+  models: [createModel("gpt-oss:20b", "GPT-OSS 20B")],
+  ...overrides,
+});
 
 beforeEach(() => vi.stubEnv("OLLAMA_API_KEY", undefined));
 afterEach(() => {
@@ -18,35 +27,24 @@ afterEach(() => {
 });
 
 describe("Ollama provider", () => {
-  const countFetchCallUrls = (fetchMock: ReturnType<typeof vi.fn>, suffix: string): number =>
-    fetchMock.mock.calls.filter(([input]) => String(input).endsWith(suffix)).length;
+  const tagAuthHeaders = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/api/tags"))
+      .map(([, init]) => new Headers(init?.headers).get("authorization"));
 
-  const stubOllamaFetch = (fetchMock: ReturnType<typeof vi.fn>) =>
-    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
-
-  async function runOllamaCatalog(params: {
-    provider?: ModelProviderConfig;
-    env?: NodeJS.ProcessEnv;
-    providerIds?: readonly string[];
-    resolveProviderApiKey?: () => { apiKey: string | undefined; discoveryApiKey?: string };
-  }) {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
-      VITEST: "1",
-      NODE_ENV: "test",
-      ...params.env,
-    };
+  async function runOllamaCatalog({ provider, env: overrides, ...context }: CatalogOptions) {
+    const env: NodeJS.ProcessEnv = { ...process.env, VITEST: "1", NODE_ENV: "test", ...overrides };
     const apiKey = env.OLLAMA_API_KEY?.trim() ? env.OLLAMA_API_KEY : undefined;
     const result = await ollamaProviderDiscovery.catalog.run({
-      config: params.provider ? { models: { providers: { ollama: params.provider } } } : {},
+      config: provider ? { models: { providers: { ollama: provider } } } : {},
       env,
-      ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
-      resolveProviderApiKey: params.resolveProviderApiKey ?? (() => ({ apiKey })),
+      resolveProviderApiKey: () => ({ apiKey }),
       resolveProviderAuth: () => ({
         apiKey,
         mode: apiKey ? "api_key" : "none",
         source: apiKey ? "env" : "none",
       }),
+      ...context,
     });
     return result && "provider" in result ? result.provider : undefined;
   }
@@ -70,7 +68,7 @@ describe("Ollama provider", () => {
       }
       return show && url.endsWith("/api/show") ? jsonResponse(show) : jsonResponse({}, 404);
     });
-    stubOllamaFetch(fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
     return fetchMock;
   };
 
@@ -79,24 +77,16 @@ describe("Ollama provider", () => {
     const baseUrl = "http://remote-ollama:11434/v1";
     const apiKey = "config-ollama-key";
     const provider = await runOllamaCatalog({
-      provider: { baseUrl, api: "openai-completions", apiKey, models: [createConfiguredModel()] },
+      provider: configuredProvider({ baseUrl, api: "openai-completions", apiKey }),
       env: liveEnv,
     });
     expect(provider).toMatchObject({ baseUrl, api: "openai-completions", apiKey });
-    expect(
-      fetch.mock.calls
-        .filter(([url]) => String(url).endsWith("/api/tags"))
-        .map(([, init]) => new Headers(init?.headers).get("authorization")),
-    ).toEqual([`Bearer ${apiKey}`]);
+    expect(tagAuthHeaders(fetch)).toEqual([`Bearer ${apiKey}`]);
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
     const fetchMock = stubTagsFetch(
-      [
-        "deepseek-r1:latest",
-        "llama3.3:latest",
-        ...Array.from({ length: 248 }, (_, idx) => `model-${idx}`),
-      ],
+      Array.from({ length: 250 }, (_, i) => `model-${i}`),
       { model_info: { "llama.context_length": 65536 } },
     );
     const provider = await runOllamaCatalog({
@@ -107,17 +97,10 @@ describe("Ollama provider", () => {
       api: "ollama",
       baseUrl: "http://127.0.0.1:11434",
     });
-    expect(provider?.models.slice(0, 2)).toMatchObject([
-      { id: "deepseek-r1:latest", reasoning: true },
-      { id: "llama3.3:latest", reasoning: false },
-    ]);
-    expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
-    expect(
-      fetchMock.mock.calls
-        .filter(([url]) => String(url).endsWith("/api/tags"))
-        .map(([, init]) => new Headers(init?.headers).get("authorization")),
-    ).toEqual([null]);
-    expect(countFetchCallUrls(fetchMock, "/api/show")).toBe(200);
+    expect(tagAuthHeaders(fetchMock)).toEqual([null]);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/show"))).toHaveLength(
+      200,
+    );
     expect(provider?.models).toHaveLength(200);
   });
 
@@ -126,13 +109,9 @@ describe("Ollama provider", () => {
     ["preserves resolved cloud env markers", "OLLAMA_API_KEY"],
   ])("%s", async (_name, configuredKey) => {
     const fetchMock = vi.fn();
-    stubOllamaFetch(fetchMock);
+    vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
     const provider = await runOllamaCatalog({
-      provider: {
-        baseUrl: `${cloudUrl}/v1`,
-        models: [createConfiguredModel()],
-        apiKey: configuredKey,
-      },
+      provider: configuredProvider({ apiKey: configuredKey }),
       env: { ...liveEnv, ...(configuredKey ? { OLLAMA_API_KEY: "real-secret" } : {}) },
       resolveProviderApiKey: () => ({
         apiKey: configuredKey,

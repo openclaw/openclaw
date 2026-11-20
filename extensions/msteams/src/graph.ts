@@ -51,15 +51,9 @@ export type GraphUser = {
   mail?: string;
 };
 
-export type GraphGroup = {
-  id?: string;
-  displayName?: string;
-};
+export type GraphGroup = Pick<GraphUser, "id" | "displayName">;
 
-export type GraphChannel = {
-  id?: string;
-  displayName?: string;
-};
+export type GraphChannel = Pick<GraphUser, "id" | "displayName">;
 
 export type GraphResponse<T> = { value?: T[]; "@odata.nextLink"?: string };
 

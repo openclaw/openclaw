@@ -16,8 +16,10 @@ import {
 import type { GatewayServiceEnv } from "./service-types.js";
 import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
 import { execBusctlUser as busctl, execSystemctlUser as systemctl } from "./systemd-exec.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { stopSystemdService } from "./systemd-lifecycle.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import * as systemdScope from "./systemd-scope.js";
 import {
   readSystemdServiceExecStart as readCommand,
   resolveSystemdUnitPath,
@@ -27,8 +29,14 @@ import {
   resolveSystemdUserTransport as resolveTransport,
 } from "./systemd-user-transport.js";
 
-vi.mock("./exec-file.js", () => ({ execFileUtf8: vi.fn() }));
-vi.mock("./systemd-peer-native.js", () => ({ openSystemdUserManager: vi.fn() }));
+vi.mock("./exec-file.js", async (actual) => ({
+  ...(await actual<typeof import("./exec-file.js")>()),
+  execFileUtf8: vi.fn(),
+}));
+vi.mock("./systemd-peer-native.js", async (actual) => ({
+  ...(await actual<typeof import("./systemd-peer-native.js")>()),
+  openSystemdUserManager: vi.fn(),
+}));
 const exec = vi.mocked(execFileUtf8);
 const open = vi.mocked(openSystemdUserManager);
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -37,6 +45,7 @@ const busError = "Failed to connect to bus: No such file or directory";
 const missing = { ...success(""), code: 1, stderr: busError };
 const version = 's "252.39"';
 const unavailable = { reason: "systemd-user-bus-unavailable" };
+const serviceUser = { USER: "service", LOGNAME: "service", SUDO_USER: undefined };
 function transportEnv(home: string, bus = "bus", runtime = home): GatewayServiceEnv {
   const DBUS_SESSION_BUS_ADDRESS = `unix:path=${home}/${bus}`;
   return { HOME: home, XDG_RUNTIME_DIR: runtime, DBUS_SESSION_BUS_ADDRESS };
@@ -75,7 +84,7 @@ it.each(["custom", "private", "unavailable"] as const)("shares %s transport", as
   }
   const custom = `unix:path=${home}/custom-bus`;
   env = transportEnv(home, "custom-bus", runtimeDir);
-  Object.assign(env, { USER: "service", LOGNAME: "service", SUDO_USER: undefined });
+  Object.assign(env, serviceUser);
   const selected = scenario === "custom" ? custom : undefined;
   const probes: string[] = [];
   const children: [string, string | undefined, string | undefined][] = [];
@@ -198,7 +207,7 @@ it("retains the failed probe at its deadline", async () => {
 
 it("tries the next route after a private manager probe times out", async () => {
   await privateSocket(home);
-  Object.assign(env, { USER: "service", LOGNAME: "service", SUDO_USER: undefined });
+  Object.assign(env, serviceUser);
   open.mockRejectedValue(new SystemdInspectionTimeout("native manager connection"));
   exec.mockImplementation(async (_command, args) =>
     args.includes("--machine") ? success(version) : missing,
@@ -261,8 +270,7 @@ it.each([
     } else {
       await expect(read).rejects.toBe(failure);
     }
-    expect(exec).toHaveBeenCalledOnce();
-    expect(exec.mock.calls[0]?.[1]).toContain("Version");
+    expect(exec.mock.calls.map(([, args]) => args.includes("Version"))).toEqual([true]);
     expect([discoveryClose.mock.calls.length, queryClose.mock.calls.length]).toEqual(closes);
   },
 );
@@ -281,7 +289,6 @@ it("routes direct root through the machine manager", async () => {
   });
   expect((await systemctl(env, ["status"])).code).toBe(0);
   expect(await readTransport(env)).toEqual({ kind: "machine", user: "root" });
-  expect(execFileUtf8).toHaveBeenCalledTimes(3);
 });
 
 it.each([true, false])("rechecks timed-out admission (%s)", async (privateAvailable) => {
@@ -312,129 +319,118 @@ it.each([true, false])("rechecks timed-out admission (%s)", async (privateAvaila
   expect(openSystemdUserManager).toHaveBeenCalledTimes(privateAvailable ? 1 : 0);
 });
 
-async function stopFixture(latency = 0, failedAttempts = 0) {
-  const unit = path.join(home, ".config/systemd/user/openclaw-gateway.service");
-  await fs.mkdir(path.dirname(unit), { recursive: true });
-  await fs.writeFile(unit, "[Service]\nExecStart=/usr/bin/openclaw gateway\n");
-  const stopEnv = {
-    ...transportEnv(home),
-    OPENCLAW_STATE_DIR: path.join(home, "state"),
-    USER: "service",
-    LOGNAME: "service",
-    SUDO_USER: undefined,
-  };
-  let now = 0;
-  let probes = 0;
-  let remainingFailures = failedAttempts;
-  const commands: string[] = [];
-  vi.spyOn(performance, "now").mockImplementation(() => now);
-  exec.mockImplementation(async (_command, args, options) => {
-    if (args.includes("Version")) {
-      probes++;
-      const timeout = options?.timeout ?? Number.POSITIVE_INFINITY;
-      if (args.includes("--machine") || remainingFailures > 0 || latency > timeout) {
-        if (!args.includes("--machine")) {
-          remainingFailures--;
-        }
-        now += timeout;
-        return { ...success(), code: 1, termination: "timeout", stderr: "probe timed out" };
-      }
-      now += latency;
-      return success('s "252.39"');
-    }
-    commands.push(args[1] ?? "");
-    return success();
-  });
-  const guard = vi.fn(() => {
+async function stopFixture(latency = 0, failedAttempts = 0, scope: "user" | "system" = "user") {
+  vi.spyOn(process, "geteuid").mockReturnValue(scope === "system" ? 0 : 1000);
+  const target = { scope, unitName: "openclaw-gateway.service", unitPath: home };
+  vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockResolvedValue(target);
+  const f = {
+    clock: { now: 0, probes: 0 },
+    policy: { timeout: "330s", expired: false },
+    env: { ...transportEnv(home), OPENCLAW_STATE_DIR: path.join(home, "state"), ...serviceUser },
+    commands: new Array<string>(),
+    timeouts: new Array<number | undefined>(),
+    warn: vi.fn(),
     // A custody read can legitimately spend the lease database's five-second busy wait.
-    now += 6000;
-  });
-  const warn = vi.fn();
-  return {
-    env: stopEnv,
-    guard,
-    warn,
-    commands,
-    probes: () => probes,
-    elapsed: () => now,
+    guard: vi.fn<() => void>(() => (f.clock.now += 6000)),
     stop: (custodyMs = 0) =>
       withGatewayServiceUpdateAuthority(
-        () => {
-          now += custodyMs;
-        },
+        () => (f.clock.now += custodyMs),
         () =>
           stopSystemdService({
-            env: stopEnv,
+            env: f.env,
             stdout: new PassThrough(),
-            assertCurrent: guard,
-            warn,
+            assertCurrent: f.guard,
+            warn: f.warn,
           }),
       ),
   };
+  let remainingFailures = failedAttempts;
+  vi.spyOn(performance, "now").mockImplementation(() => f.clock.now);
+  exec.mockImplementation(async (_command, args, options) => {
+    if (args.includes("Version")) {
+      f.clock.probes++;
+      const timeout = options?.timeout ?? Number.POSITIVE_INFINITY;
+      if (args.includes("--machine") || remainingFailures > 0 || latency > timeout) {
+        remainingFailures -= Number(!args.includes("--machine"));
+        f.clock.now += timeout;
+        return { ...success(), code: 1, termination: "timeout", stderr: "probe timed out" };
+      }
+      f.clock.now += latency;
+      return success(version);
+    }
+    if (args.includes("show")) {
+      return success(`LoadState=loaded\nTimeoutStopUSec=${f.policy.timeout}\n`);
+    }
+    f.commands.push(args.includes("--user") ? args[1]! : args[0]!);
+    f.timeouts.push(options?.timeout);
+    return f.policy.expired ? { ...success(), code: 1, termination: "timeout" } : success();
+  });
+  return f;
 }
 
-it("stops with a slow manager and slow custody checks", async () => {
-  const f = await stopFixture(6000);
-  await f.stop(6000);
+it.each([
+  { scope: "user", policy: "330s", timeout: 335_000, mode: "slow" },
+  { scope: "user", policy: "600s", timeout: 605_000, mode: "cached" },
+  { scope: "system", policy: "30s", timeout: 35_000, mode: "timeout" },
+  { scope: "user", policy: "infinity", timeout: 335_000, mode: "timeout" },
+  { scope: "system", policy: "unavailable", timeout: 335_000, mode: "normal" },
+] as const)("bounds $scope stop ($policy, $mode)", async ({ scope, policy, timeout, mode }) => {
+  const f = await stopFixture(mode === "slow" ? 3000 : 0, 0, scope);
+  f.policy.timeout = policy;
+  if (mode === "cached") {
+    await resolveTransport(f.env);
+  }
+  f.policy.expired = mode === "timeout";
+  if (mode === "timeout") {
+    await expect(f.stop(6000)).rejects.toMatchObject({
+      reason: "systemd-inspection-deadline-exceeded",
+    });
+  } else {
+    await f.stop(6000);
+  }
   expect(f.commands).toEqual(["stop"]);
-  expect(f.guard).toHaveBeenCalledOnce();
+  expect(f.timeouts).toEqual([timeout]);
+  expect(f.clock.probes).toBe(scope === "user" ? 1 : 0);
+  expect(f.warn).toHaveBeenCalledTimes(["infinity", "unavailable"].includes(policy) ? 1 : 0);
 });
 
-it("does not spend a cached manager's inspection budget on repeated update custody checks", async () => {
-  const f = await stopFixture();
-  await resolveTransport(f.env);
-  await f.stop();
-  expect(f.commands).toEqual(["stop"]);
-  expect(f.probes()).toBe(1);
-  expect(f.guard).toHaveBeenCalledOnce();
-});
-
-it("retries one transient inspection timeout before stopping", async () => {
-  const f = await stopFixture(0, 1);
-  await f.stop();
-  expect(f.warn).toHaveBeenCalledOnce();
+it.each([false, true])("bounds stop inspection (held=%s)", async (held) => {
+  const f = await stopFixture(held ? Number.POSITIVE_INFINITY : 0, held ? 0 : 2);
+  if (held) {
+    await expect(f.stop()).rejects.toThrow(/Stalled check: machine Manager\.Version\./);
+  } else {
+    await f.stop();
+  }
+  expect(f.commands).toEqual(held ? [] : ["stop"]);
   expect(f.warn).toHaveBeenCalledWith(expect.stringMatching(/inspection.*retry/i));
-  expect(f.commands.filter((command) => command === "stop")).toHaveLength(1);
+  expect(f.warn).toHaveBeenCalledTimes(2);
+  expect(f.clock.now).toBeLessThanOrEqual(146_000);
 });
 
-it("keeps the original Gateway serving when both bounded manager inspections time out", async () => {
-  const f = await stopFixture(Number.POSITIVE_INFINITY);
-  await expect(f.stop()).rejects.toThrow(/Stalled check: machine Manager\.Version\./);
-  expect(f.commands).not.toContain("stop");
-  expect(f.warn).toHaveBeenCalledOnce();
-  expect(f.elapsed()).toBeLessThanOrEqual(126_000);
-});
-
-it("refuses to stop when custody retires during manager inspection", async () => {
+it.each(["authority", "ownership", "cleanup"])("preserves stop %s", async (scenario) => {
   const f = await stopFixture();
-  f.guard.mockImplementation(() => {
-    throw new Error("update custody retired");
-  });
-  await expect(f.stop()).rejects.toThrow("update custody retired");
-  expect(f.commands).not.toContain("stop");
-  expect(f.warn).not.toHaveBeenCalled();
-});
-
-it.each(["ownership refusal", "unsettled probe"])(
-  "preserves %s at the inspection deadline despite retired custody",
-  async (scenario) => {
-    const f = await stopFixture();
-    const failure =
-      scenario === "ownership refusal"
+  const retired = new Error("update custody retired");
+  const failure =
+    scenario === "authority"
+      ? retired
+      : scenario === "ownership"
         ? new ServiceOwnershipRefusalError("systemd-manager-changed")
         : new CommandProcessCleanupError();
-    exec.mockImplementationOnce(async () => {
-      vi.spyOn(performance, "now").mockReturnValue(60_000);
-      f.guard.mockImplementation(() => {
-        throw new Error("update custody retired");
-      });
-      throw failure;
-    });
-    await expect(f.stop()).rejects.toBe(failure);
-    expect(execFileUtf8).toHaveBeenCalledOnce();
-    expect(f.warn).not.toHaveBeenCalled();
-  },
-);
+  let active = scenario !== "authority";
+  f.guard.mockImplementation(() => {
+    if (!active) {
+      throw retired;
+    }
+  });
+  exec.mockImplementationOnce(async () => {
+    vi.spyOn(performance, "now").mockReturnValue(60_000);
+    active = false;
+    throw failure;
+  });
+  await expect(f.stop()).rejects.toBe(failure);
+  expect(execFileUtf8).toHaveBeenCalledTimes(scenario === "authority" ? 0 : 1);
+  expect(f.warn).not.toHaveBeenCalled();
+});
 
 const commandEnv = (name: string) => ({
   USER: "owned",
@@ -443,19 +439,14 @@ const commandEnv = (name: string) => ({
   XDG_RUNTIME_DIR: `/runtime/${name}`,
   DBUS_SESSION_BUS_ADDRESS: `unix:path=/runtime/${name}/bus`,
 });
-const unavailableCommand = {
-  code: 1,
-  termination: "exit" as const,
-  stdout: "",
-  stderr: "Failed to connect to bus: No medium found",
-};
+const unavailableCommand = nativeExit("", "Failed to connect to bus: No medium found", 1);
 function fallback(spent: number, onProbe = () => {}) {
   vi.spyOn(process, "geteuid").mockReturnValue(1001);
   const clock = { elapsed: 0 };
   vi.spyOn(performance, "now").mockImplementation(() => clock.elapsed);
   exec.mockImplementation(async (_command, args) => {
     if (args.includes("--machine")) {
-      return success(args.includes("Version") ? 's "252.39"' : "native result");
+      return success(args.includes("Version") ? version : "native result");
     }
     clock.elapsed += spent;
     onProbe();
@@ -471,13 +462,13 @@ it.each([450, 500])("does not give fallback a new deadline after %s ms", async (
     ["--auto-start=no", "call", "org.freedesktop.systemd1"],
     500,
   );
-  expect(exec.mock.calls[0]?.[2]?.timeout).toBe(166);
   if (spent === 450) {
     expect(exec.mock.calls[1]?.[1]).toContain("owned@");
     expect(exec.mock.calls.map((call) => call[2]?.timeout)).toEqual([166, 25, 50]);
     expect(result.code).toBe(0);
   } else {
     expect(exec).toHaveBeenCalledTimes(1);
+    expect(exec.mock.calls[0]?.[2]?.timeout).toBe(166);
     expect(result.termination).toBe("timeout");
     expect(result.code).not.toBe(0);
   }

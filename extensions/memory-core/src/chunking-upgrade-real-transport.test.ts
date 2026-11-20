@@ -1,28 +1,22 @@
-import { once } from "node:events";
-import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { json } from "node:stream/consumers";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
+import { createMemoryForgetFixture } from "./memory-forget.test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./memory/background-context.test-support.js";
 import type { MemoryIndexManager } from "./memory/manager.js";
-import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
 import "./memory/test-runtime-mocks.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-} from "./test-helpers.js";
+import { isolateMemoryManagerTestConfig } from "./memory/test-config-helpers.js";
+import { resetMemoryCoreDreamingStateForTests } from "./test-helpers.js";
 import { createMemorySearchTool, testing } from "./tools.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./memory/index.js");
@@ -30,14 +24,6 @@ const { closeAllMemorySearchManagers, getMemorySearchManager } = await import(".
 type ServerMode = "ok" | "unauthorized" | "quota";
 
 const closeServers: Array<() => Promise<void>> = [];
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-}
 
 function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
   const quota = mode === "quota";
@@ -62,7 +48,7 @@ async function startEmbeddingServer() {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const body = await readJsonBody(req);
+        const body = (await json(req)) as Record<string, unknown>;
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
           requests.push({ status, body });
@@ -87,12 +73,9 @@ async function startEmbeddingServer() {
       }
     })();
   });
-  const listening = once(server, "listening");
-  server.listen(0, "127.0.0.1");
-  await listening;
-  const address = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   const fixture = {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl: `http://127.0.0.1:${port}/v1`,
     requests,
     setMode: (next: ServerMode) => {
       mode = next;
@@ -111,6 +94,7 @@ vi.setConfig({ testTimeout: 240_000 });
 let root = "";
 let workspace = "";
 let memory = "";
+let state: Awaited<ReturnType<typeof createMemoryForgetFixture>>;
 
 async function acquireManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
   const result = await getMemorySearchManager({
@@ -213,39 +197,22 @@ function expectPaused(details: unknown) {
   });
 }
 
-beforeAll(async () => {
-  const rawRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mem-real-transport-"),
-  );
-  root = await fs.realpath(rawRoot);
-  workspace = path.join(root, "workspace");
-  memory = path.join(workspace, "memory");
-});
-
-afterAll(async () => {
-  vi.resetConfig();
-  if (root) {
-    await fs.rm(root, { recursive: true, force: true });
-  }
-});
+afterAll(() => vi.resetConfig());
 
 beforeEach(async () => {
+  state = await createMemoryForgetFixture("openclaw-mem-real-transport-");
+  workspace = state.workspaceDir;
+  root = path.dirname(workspace);
+  memory = path.join(workspace, "memory");
+  await fs.mkdir(memory);
   testing.resetMemorySearchToolCooldowns();
-  rmSync(workspace, { recursive: true, force: true });
-  mkdirSync(memory, { recursive: true });
-  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspace, ".state-memory-index"));
-  await configureMemoryCoreDreamingStateForTests();
 });
 
 afterEach(async () => {
   await Promise.all(closeServers.splice(0).map((close) => close()));
   await closeAllMemorySearchManagers();
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
   resetMemoryCoreDreamingStateForTests();
-  vi.unstubAllEnvs();
+  await state.cleanup();
 });
 
 it.each([

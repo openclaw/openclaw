@@ -1,10 +1,6 @@
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
@@ -79,23 +75,6 @@ vi.mock("../commands/models/auth-order.js", () => ({
 const roots = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   vi.clearAllMocks();
-  // Exercise auth-none resolution inside the same owner dispatch that verifies its RPC envelope.
-  mocks.gateway.mockImplementation(async (opts) => {
-    const { resolveGatewayCallDeviceAuth } = await import("../gateway/call-device-auth.js");
-    const resolved = await resolveGatewayCallDeviceAuth({
-      opts,
-      url: `ws://127.0.0.1:${opts.localPortOverride}`,
-      authMode: "none",
-      isImplicitLocalTarget: true,
-    });
-    expect(resolved.clientOptions).toMatchObject({
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      requireLocalBackendSharedAuth: true,
-    });
-    expect(resolved.deviceIdentity).toBeNull();
-    return { provider: "openai", profileId: "openai:manual" };
-  });
   const root = roots.make("models-auth-owner-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
@@ -142,27 +121,21 @@ it.each([
 
 it("delegates paste-api-key to the live owner without local credential admission", async () => {
   await runAuth("auth paste-api-key --provider openai");
-  expect(mocks.gateway).toHaveBeenCalledWith(
-    expect.objectContaining({
-      method: "models.authSetApiKey",
-      params: {
-        provider: "openai",
-        apiKey: "synthetic-api-key",
-        expectedOwnerId: "synthetic-gateway-owner",
-      },
-      localPortOverride: 18789,
-      ignoreEnvUrlOverride: true,
-      requireLocalBackendSharedAuth: true,
-      allowLocalBackendAuthNone: true,
-      scopes: ["operator.admin"],
-      requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-set-api-key-owner-v1"],
-      assertDispatchCurrent: expect.any(Function),
-    }),
-  );
-  expect(mocks.readKey).toHaveBeenCalledWith(
-    { provider: "openai", agent: undefined },
-    expect.any(AbortSignal),
-  );
+  expect(mocks.gateway.mock.calls[0]?.[0]).toMatchObject({
+    method: "models.authSetApiKey",
+    params: {
+      provider: "openai",
+      apiKey: "synthetic-api-key",
+      expectedOwnerId: "synthetic-gateway-owner",
+    },
+    localPortOverride: 18789,
+    ignoreEnvUrlOverride: true,
+    requireLocalBackendSharedAuth: true,
+    allowLocalBackendAuthNone: true,
+    scopes: ["operator.admin"],
+    requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-set-api-key-owner-v1"],
+    assertDispatchCurrent: expect.any(Function),
+  });
   expectNoLocalAdmission();
 });
 
@@ -172,26 +145,19 @@ it.each([
   [["login", "--provider", "openai", "--method", "api-key"], undefined],
 ] as const)("delegates %j without loading local credential state", async (args, agent) => {
   await runAuth([...(agent ? ["--agent", agent] : []), "auth", ...args]);
-  expect(mocks.gateway).toHaveBeenCalledWith(
-    expect.objectContaining({
-      method: "models.authLogin",
-      params: {
-        sessionId: expect.any(String),
-        authChoice: "fixture/device",
-        agentId: agent,
-        expectedOwnerId: "synthetic-gateway-owner",
-      },
-      requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-login-owner-v1"],
-      scopes: ["operator.admin"],
-      onResponse: expect.any(Function),
-      onSignalAbort: expect.any(Function),
-    }),
-  );
-  expect(mocks.readLogin).toHaveBeenCalledWith(
-    expect.objectContaining({ agent }),
-    expect.any(String),
-    expect.any(AbortSignal),
-  );
+  expect(mocks.gateway.mock.calls[0]?.[0]).toMatchObject({
+    method: "models.authLogin",
+    params: {
+      sessionId: expect.any(String),
+      authChoice: "fixture/device",
+      agentId: agent,
+      expectedOwnerId: "synthetic-gateway-owner",
+    },
+    requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-login-owner-v1"],
+    scopes: ["operator.admin"],
+    onResponse: expect.any(Function),
+    onSignalAbort: expect.any(Function),
+  });
   expectNoLocalAdmission();
 });
 

@@ -43,11 +43,6 @@ const MINIMAX_MODEL_ALLOWED_RESOLUTIONS: Readonly<Record<string, readonly string
 };
 const MINIMAX_RESOLUTION_ORDER = ["480P", "720P", "768P", "1080P"] as const;
 
-type MinimaxCreateResponse = {
-  task_id?: string;
-  base_resp?: MinimaxBaseResp;
-};
-
 type MinimaxQueryResponse = {
   task_id?: string;
   status?: string;
@@ -178,7 +173,7 @@ export function buildMinimaxVideoGenerationProvider(
                 Math.abs(current - rounded) < Math.abs(best - rounded) ? current : best,
               );
       }
-      const submitted = await postJsonResponse<MinimaxCreateResponse>({
+      const submitted = await postJsonResponse<{ task_id?: string; base_resp?: MinimaxBaseResp }>({
         url: `${baseUrl}/v1/video_generation`,
         headers,
         body,

@@ -12,7 +12,7 @@ import type {
   SessionRetirementReadOperation,
   SessionRetirementReadResult,
 } from "./session-retirement-read.types.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -78,7 +78,7 @@ export function captureSessionRetirementReader(
         return result;
       },
       // Ordered scans retain writer admission through reader failure and eviction cleanup.
-      targetDiscoveryLane,
+      sessionStoreLane,
     );
   }
   return { database, assertCurrent, read };
@@ -90,14 +90,10 @@ export function withSessionRetirementReaders<T>(
   read: () => Promise<T>,
 ): Promise<T> {
   const databases = readers.map((reader) => reader.database);
-  return runOpenClawAgentWriteAdmissions(
-    databases,
-    async () => {
-      const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
-      const result = await read();
-      assertNativeCurrent();
-      return result;
-    },
-    true,
-  );
+  return runOpenClawAgentWriteAdmissions(databases, async () => {
+    const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
+    const result = await read();
+    assertNativeCurrent();
+    return result;
+  });
 }

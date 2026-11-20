@@ -26,6 +26,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { readPidFile } from "../test-utils/process-tree.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
+import { hasCommandProcessCleanupError } from "./exec-result.js";
 import * as execSpawn from "./exec-spawn.js";
 import { resolveCommandEnv } from "./exec-spawn.js";
 import {
@@ -127,6 +128,22 @@ describe("runCommandWithTimeout", () => {
           await waitForDead(descendant, signal);
         }
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reports confirmed process-tree extinction after a child-requested signal",
+    async () => {
+      const result = await runNode("process.kill(process.pid, 'SIGTERM')", {
+        killProcessTree: true,
+        requireProcessTreeExtinction: true,
+      });
+      expect(result).toMatchObject({
+        code: null,
+        signal: "SIGTERM",
+        termination: "signal",
+        cleanup: "normal",
+      });
     },
   );
 
@@ -237,7 +254,7 @@ describe("runCommandWithTimeout", () => {
     ],
     [
       "does not treat combined overflow as selected-stream overflow",
-      "process.stderr.write('abcdefgh'); setImmediate(() => process.stdout.write('x'))",
+      "process.stdout.write('abcdefghx')",
       {
         maxCombinedOutputBytes: 8,
         maxOutputBytes: 16,
@@ -246,8 +263,8 @@ describe("runCommandWithTimeout", () => {
       },
       {
         termination: "exit",
-        stdout: "",
-        stderr: "abcdefgh",
+        stdout: "abcdefgh",
+        stderr: "",
         outputLimitExceeded: undefined,
       },
     ],
@@ -318,7 +335,34 @@ describe("runCommandWithTimeout", () => {
 });
 
 describe("runCommandBuffered", () => {
+  it("passes a prepared environment to each child without changing its bytes", async () => {
+    const parentToken = process.env.GH_TOKEN;
+    const argv = nodeCommand(
+      'console.log(require("node:crypto").createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort())).digest("hex"))',
+    );
+    const baseEnv = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, REMOVE: "base" };
+    const env = { GH_TOKEN: "synthetic-child-only", REMOVE: undefined, EMPTY: "", TEXT: "λ=x" };
+    const preparedEnv = resolveCommandEnv({ argv, baseEnv, env });
+    const ordinary = await runCommandBuffered(argv, { baseEnv, env, timeoutMs: 10_000 });
+    expect(ordinary.code).toBe(0);
+    for (let i = 0; i < 2; i++) {
+      const prepared = await runCommandBuffered(argv, { preparedEnv, timeoutMs: 10_000 });
+      expect(prepared.code).toBe(0);
+      expect(prepared.stdout.toString()).toBe(ordinary.stdout.toString());
+    }
+    expect(process.env.GH_TOKEN === parentToken).toBe(true);
+    expect(env.REMOVE).toBeUndefined();
+    expect(baseEnv.REMOVE).toBe("base");
+  });
+
   it.each([
+    {
+      name: "preserves ordinary nonzero exit and output",
+      source: "process.stdout.write('out'); process.stderr.write('err'); process.exitCode = 7",
+      options: {},
+      expected: { code: 7, signal: null, termination: "exit" },
+      output: ["out", "err"],
+    },
     {
       name: "caps stdout and stderr under one aggregate budget",
       source: "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
@@ -337,6 +381,7 @@ describe("runCommandBuffered", () => {
     const result = await bufferNode(source, options);
     expect(result).toMatchObject(expected);
     expect([result.stdout, result.stderr]).toEqual(output.map((text) => Buffer.from(text)));
+    expect(result.error).toBeUndefined();
   });
 
   it("maps timeout and pre-aborted signals without throwing", async () => {
@@ -385,7 +430,8 @@ describe("runCommandBuffered", () => {
         let parent: ChildProcess | undefined;
         let descendantPid: number | undefined;
         let command: ReturnType<typeof runCommandBuffered> | undefined;
-        // Freeze deadlines so startup cannot consume timeout/pipe grace; receipts stay real.
+        // Freeze startup deadlines; receipts stay real. Final joins must also run
+        // timers scheduled after asynchronous filesystem reads complete.
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
         try {
           let settled = false;
@@ -429,6 +475,7 @@ describe("runCommandBuffered", () => {
             await advanceTime(timeoutMs - 101, "next", 100, "next", 100);
             // Give Node/Bun pipe I/O its poll turn before release.
             await vi.advanceTimersByTimeAsync(1);
+            vi.setTimerTickMode("nextTimerAsync");
             await bounded(closed);
             expect(await bounded(command)).toMatchObject({
               code: null,
@@ -459,6 +506,7 @@ describe("runCommandBuffered", () => {
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_TREE_KILL_GRACE_MS);
           // Force delivery now has a separate bounded exit-observation phase.
           await vi.advanceTimersByTimeAsync(execSpawn.COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS);
+          vi.setTimerTickMode("nextTimerAsync");
           expect(await bounded(command)).toMatchObject(
             exitCode === 0
               ? { code: null, termination: "timeout" }
@@ -503,14 +551,16 @@ describe("runCommandBuffered", () => {
   );
 
   it.runIf(process.platform !== "win32")(
-    "preserves a child-requested signal in buffered results",
+    "preserves cleanup uncertainty alongside a child-requested signal and buffered output",
     async () => {
-      const result = await bufferNode("process.kill(process.pid, 'SIGTERM')", {
-        timeoutMs: 2_000,
-      });
+      const result = await bufferNode(
+        "require('node:fs').writeSync(1, 'out'); require('node:fs').writeSync(2, 'err'); process.kill(process.pid, 'SIGTERM')",
+        { timeoutMs: 2_000 },
+      );
 
       expect(result).toMatchObject({ code: null, signal: "SIGTERM", termination: "signal" });
-      expect(result.error).toBeUndefined();
+      expect([result.stdout, result.stderr]).toEqual([Buffer.from("out"), Buffer.from("err")]);
+      expect(hasCommandProcessCleanupError(result.error)).toBe(true);
     },
   );
 

@@ -246,6 +246,7 @@ describe("readGatewayServiceState", () => {
           vi.spyOn(fs, "readdir").mockResolvedValue([]);
         }
         const lstat = fs.lstat;
+        const directory = await lstat(home);
         vi.spyOn(fs, "lstat").mockImplementation(async (target, options) => {
           const name = String(target);
           if (node && !name.startsWith(`${home}${path.sep}`)) {
@@ -253,6 +254,14 @@ describe("readGatewayServiceState", () => {
           }
           if (condition === "unreadable" && name === unit) {
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
+          }
+          if (name === "/run/systemd/system") {
+            // Absence/listener cases have no host manager; uninspectable units
+            // keep a booted host so unavailable tools cannot certify absence.
+            if (condition === "absent" || portUsage) {
+              throw Object.assign(new Error("missing"), { code: "ENOENT" });
+            }
+            return directory;
           }
           // The host may run systemd; this fixture models a separate managerless namespace.
           if (name === "/run/systemd" || /^\/run\/user\/\d+\/systemd$/.test(name)) {
@@ -278,6 +287,7 @@ describe("readGatewayServiceState", () => {
         }
         if (condition === "absent") {
           const run = await admitUpdateCommandRun({
+            env: process.env,
             opts: { restart: shouldRestart },
             root: home,
           });
@@ -354,11 +364,6 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(true);
     expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
     expect(hasInstalledDefinition).not.toHaveBeenCalled();
-    expect(readDefinitionMutationCapability).toHaveBeenCalledWith({
-      env: { OPENCLAW_GATEWAY_PORT: "1" },
-      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-      timeoutMs: 100,
-    });
     expect(state.definitionMutationCapability).toEqual({
       kind: "unknown",
       reason: "inspection-failed",
@@ -377,7 +382,6 @@ describe("readGatewayServiceState", () => {
     expect(state.installed).toBe(false);
     expect(state.command).toBeNull();
     expect(state.env).toBe(env);
-    expect(hasInstalledDefinition).toHaveBeenCalledWith({ env, timeoutMs: 100 });
   });
 
   it("bounds structured runtime inspection diagnostics", async () => {

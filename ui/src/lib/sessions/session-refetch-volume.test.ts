@@ -1,13 +1,15 @@
 // @vitest-environment node
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionActivity } from "../../pages/activity/session-activity-owner.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentCapability } from "../agents/index.ts";
 import { rosterActivityStore } from "../agents/roster-activity-store.ts";
+import { sessionRequest as gatewayRequest } from "./hydration-family.test-support.ts";
 import { createTestSessionCapability, sessionsResult } from "./session-capability.test-support.ts";
-import { gatewayRequest, sessionRow } from "./session-fixtures.test-support.ts";
+import { sessionRow } from "./session-fixtures.test-support.ts";
 
 it("bounds list reads across two viewers and three streaming sessions for three minutes", async () => {
   vi.useFakeTimers();
@@ -27,12 +29,7 @@ it("bounds list reads across two viewers and three streaming sessions for three 
     const client = createTestGatewayClient(
       gatewayRequest({
         "sessions.subscribe": () => ({ subscribed: true }),
-        "agents.list": () => ({
-          agents: [{ id: "main" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "per-sender",
-        }),
+        "agents.list": () => makeBootRoster(),
         "sessions.list": (params) => {
           const query = params as { includeActivitySummary?: boolean; archived?: string };
           const owner = query.includeActivitySummary

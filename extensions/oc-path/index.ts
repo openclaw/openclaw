@@ -12,13 +12,6 @@ function hasCliFlag(argv: readonly string[], flag: "--human" | "--json"): boolea
   return false;
 }
 
-function isPathMachineOutput(params: { argv: readonly string[]; stdoutIsTTY: boolean }): boolean {
-  if (hasCliFlag(params.argv, "--json")) {
-    return true;
-  }
-  return !hasCliFlag(params.argv, "--human") && !params.stdoutIsTTY;
-}
-
 export default definePluginEntry({
   id: "oc-path",
   name: "OC Path",
@@ -35,7 +28,12 @@ export default definePluginEntry({
             name: "path",
             description: "Inspect and edit workspace files via oc:// paths",
             hasSubcommands: true,
-            machineOutput: isPathMachineOutput,
+            machineOutput: (params) => {
+              if (hasCliFlag(params.argv, "--json")) {
+                return true;
+              }
+              return !hasCliFlag(params.argv, "--human") && !params.stdoutIsTTY;
+            },
           },
         ],
       },

@@ -46,6 +46,7 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
+  refreshContinuation?: boolean;
 }): Promise<ResolvedPromptBuildHookResult> {
   const turnContext = await resolvePluginTurnContext(params);
   const logHookFailure = (hookName: string) => (hookErr: unknown) => {
@@ -404,7 +405,29 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {
-        ...params.attempt,
+        sessionKey: params.attempt.sessionKey,
+        sandboxSessionKey: params.attempt.sandboxSessionKey,
+        sandboxAgentId: params.attempt.sandboxAgentId,
+        messageChannel: params.attempt.messageChannel,
+        messageProvider: params.attempt.messageProvider,
+        agentAccountId: params.attempt.agentAccountId,
+        currentChannelId: params.attempt.currentChannelId,
+        currentThreadTs: params.attempt.currentThreadTs,
+        currentMessageId: params.attempt.currentMessageId,
+        authProfileId: params.attempt.authProfileId,
+        authProfileIdSource: params.attempt.authProfileIdSource,
+        modelSelectionLocked: params.attempt.modelSelectionLocked,
+        config: params.attempt.config,
+        toolsAllow: params.attempt.toolsAllow,
+        skillsSnapshot: params.attempt.skillsSnapshot,
+        senderId: params.attempt.senderId,
+        provider: params.attempt.provider,
+        modelId: params.attempt.modelId,
+        thinkLevel: params.attempt.thinkLevel,
+        reasoningLevel: params.attempt.reasoningLevel,
+        bashElevated: params.attempt.bashElevated,
+        extraSystemPrompt: params.attempt.extraSystemPrompt,
+        ownerNumbers: params.attempt.ownerNumbers,
         modelCallUrgency: resolveModelCallUrgency(params.attempt),
         runtimeAuthPlan: params.attempt.runtimePlan?.auth,
         workspaceDir: params.workspaceDir,

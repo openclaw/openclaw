@@ -1,8 +1,8 @@
 // Real HTTP/SSRF/NDJSON proof for #122513 and the delta shape used by tool-call-repair.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { Tool } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createModel } from "../model.test-support.js";
 import { createOllamaStreamFn } from "./stream-api.js";
 
@@ -49,10 +49,7 @@ async function streamRecords(records: readonly unknown[], tools: Tool[]) {
     });
   });
   servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const { port } = server.address() as AddressInfo;
+  const port = await listenOnLoopback(server);
   const baseUrl = `http://127.0.0.1:${port}`;
   const stream = await createOllamaStreamFn(baseUrl)(
     {

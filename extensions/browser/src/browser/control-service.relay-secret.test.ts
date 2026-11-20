@@ -14,10 +14,6 @@ vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
 });
 // mock-isolation: runtime refresh reads the operator's on-disk config instead of this fixture.
 vi.mock("./config-refresh-source.js", () => ({ loadBrowserConfigForRuntimeRefresh: () => cfg }));
-// mock-isolation: browser auth bootstrap persists a generated Gateway token to config.
-vi.mock("./control-auth.js", () => ({
-  ensureBrowserControlAuth: async () => ({ generatedToken: false }),
-}));
 
 const { startBrowserControlServiceFromConfig, stopBrowserControlService } =
   await import("../control-service.js");

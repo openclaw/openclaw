@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { WizardSession } from "../wizard/session.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn<typeof import("../gateway/call.js").callGatewayCli>(),
@@ -70,14 +71,6 @@ function runWithGatewayMocks(dependencies: {
     dependencies.target ?? makeTarget(),
     dependencies.runtime ?? makeRuntime(),
   );
-}
-
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
 }
 
 function makeLocalConfig(): OpenClawConfig {

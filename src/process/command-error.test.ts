@@ -1,15 +1,13 @@
 import { expect, it } from "vitest";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createCommandError, formatCommandOutput, formatCommandResult } from "./command-error.js";
 import type { SpawnResult } from "./exec-result.js";
 
-const failure: SpawnResult = {
-  stdout: "",
-  stderr: "",
+const failure: SpawnResult = createCommandResult({
   code: 124,
-  signal: null,
   killed: true,
   termination: "timeout",
-};
+});
 
 function exited(overrides: Partial<SpawnResult>): SpawnResult {
   return { ...failure, code: 23, killed: false, termination: "exit", ...overrides };

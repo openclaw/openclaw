@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -27,12 +26,14 @@ import {
   storeDeviceAuthToken,
 } from "../../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayMaintenanceDrain } from "../update-cli/update-command-service-drain.js";
 import { waitForGatewayHealthyRestart } from "./restart-health.js";
 
-vi.mock("../../daemon/systemd-maintenance.js", () => ({
+vi.mock("../../daemon/systemd-stop-policy.js", async (actual) => ({
+  ...(await actual<typeof import("../../daemon/systemd-stop-policy.js")>()),
   readSystemdGatewayStopTimeout: async () => 330_000,
 }));
 
@@ -40,22 +41,22 @@ vi.mock("../../daemon/systemd-maintenance.js", () => ({
 // predicates, so a diagnostic client cannot accidentally stand in for local control.
 describe("restart verifier local control identity", () => {
   it.each([
-    { mode: "token", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "password", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "none", requirePluginHealth: true, host: "127.0.0.1" },
-    { mode: "token", requirePluginHealth: false, host: "127.0.0.1" },
-    { mode: "trusted-proxy", requirePluginHealth: false, host: "127.0.0.1" },
-    { mode: "token", requirePluginHealth: false, host: "0.0.0.0" },
+    { mode: "token", channelFailure: true, host: "127.0.0.1" },
+    { mode: "password", channelFailure: true, host: "127.0.0.1" },
+    { mode: "none", channelFailure: true, host: "127.0.0.1" },
+    { mode: "token", channelFailure: false, host: "127.0.0.1" },
+    { mode: "trusted-proxy", channelFailure: false, host: "127.0.0.1" },
+    { mode: "token", channelFailure: false, host: "0.0.0.0" },
     ...(["token", "password", "none", "trusted-proxy"] as const).map((mode) => ({
       mode,
-      requirePluginHealth: false,
+      channelFailure: false,
       host: "127.0.0.1",
       drain: true,
     })),
   ] as const)(
-    "local control on $host with $mode auth (drain=$drain, requirePluginHealth=$requirePluginHealth)",
+    "local control on $host with $mode auth (drain=$drain, channelFailure=$channelFailure)",
     async (scenario) => {
-      const { mode, requirePluginHealth, host } = scenario;
+      const { mode, channelFailure, host } = scenario;
       const drain = "drain" in scenario && scenario.drain;
       const paired = drain && mode === "trusted-proxy";
       await withOpenClawTestState(
@@ -181,7 +182,7 @@ describe("restart verifier local control identity", () => {
                 );
                 return;
               }
-              if (request.method !== "health" && !scopes.includes("operator.read")) {
+              if (request.method !== "health" || !scopes.includes("operator.read")) {
                 reject("missing scope: operator.read");
                 return;
               }
@@ -208,7 +209,7 @@ describe("restart verifier local control identity", () => {
                     },
                   ],
                 },
-                channels: requirePluginHealth
+                channels: channelFailure
                   ? { fixture: { probe: { ok: false, error: "fixture channel failure" } } }
                   : {},
               });
@@ -239,7 +240,9 @@ describe("restart verifier local control identity", () => {
           const service = createMockGatewayService({
             readRuntime: async () => ({ status: "running", pid: process.pid }),
           });
-          const before = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
+          const before = (await listDirectoryTreeStrict(state.stateDir))
+            .map((walkEntry) => walkEntry.relativePath)
+            .toSorted();
           const callerEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
           if (paired) {
             process.env.OPENCLAW_STATE_DIR = state.path("unrelated-caller");
@@ -279,9 +282,11 @@ describe("restart verifier local control identity", () => {
                   }),
                 ).toMatchObject({ token: "fixture-paired-token" });
               }
-              expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
-                before,
-              );
+              expect(
+                (await listDirectoryTreeStrict(state.stateDir))
+                  .map((walkEntry) => walkEntry.relativePath)
+                  .toSorted(),
+              ).toEqual(before);
               return;
             }
             const result = await waitForGatewayHealthyRestart({
@@ -291,13 +296,13 @@ describe("restart verifier local control identity", () => {
               probeHosts: ["127.0.0.1"],
               expectedVersion: "2026.8.1",
               expectedBuildId: "fixture-build",
-              requirePluginHealth,
               attempts: 0,
               delayMs: 1,
             });
             expect(result).toMatchObject({
-              healthy: !requirePluginHealth,
-              waitOutcome: requirePluginHealth ? "plugin-errors" : "healthy",
+              // Plugin load errors are notices; only the channel failure is unhealthy.
+              healthy: !channelFailure,
+              waitOutcome: channelFailure ? "channel-errors" : "healthy",
               gatewayVersion: "2026.8.1",
               gatewayBuildId: "fixture-build",
               activatedPluginErrors: [{ id: "fixture-plugin", error: "fixture load failure" }],
@@ -308,7 +313,7 @@ describe("restart verifier local control identity", () => {
                   detail: "Fixture entry missing",
                 },
               ],
-              ...(requirePluginHealth
+              ...(channelFailure
                 ? { channelProbeErrors: [{ id: "fixture", error: "fixture channel failure" }] }
                 : {}),
             });
@@ -325,9 +330,11 @@ describe("restart verifier local control identity", () => {
                 : { id: "cli", mode: "cli" },
             );
             expect(connections[0]?.scopes).toEqual(["operator.read"]);
-            expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
-              before,
-            );
+            expect(
+              (await listDirectoryTreeStrict(state.stateDir))
+                .map((walkEntry) => walkEntry.relativePath)
+                .toSorted(),
+            ).toEqual(before);
           } finally {
             callerEnv.restore();
             await closeMinimalGatewayServer(gateway);

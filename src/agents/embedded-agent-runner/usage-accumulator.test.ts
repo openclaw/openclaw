@@ -15,6 +15,7 @@ const FIRST_USAGE: UsageInput = {
   cacheRead: 80_000,
   cacheWrite: 5_000,
   cacheWrite1h: 3_000,
+  cacheWrite5m: 2_000,
   total: 85_150,
 };
 const FINAL_USAGE: UsageInput = {
@@ -56,21 +57,32 @@ describe("usage-accumulator", () => {
     });
   });
 
-  it("accumulates usage across multiple API calls", () => {
-    const acc = createAccumulatorWithUsage(
-      FIRST_USAGE,
-      { input: 120, output: 30, cacheRead: 82_000, cacheWrite: 0, total: 82_150 },
-      FINAL_USAGE,
-    );
-    expect(acc).toMatchObject({
+  it("accumulates usage and both TTL buckets across calls, attempts and run totals", () => {
+    const attempt = normalizedAttempt(FIRST_USAGE, {
+      input: 120,
+      output: 30,
+      cacheRead: 82_000,
+      cacheWrite: 10,
+      cacheWrite1h: 4,
+      cacheWrite5m: 6,
+      total: 82_160,
+    });
+    const run = normalizedAttempt(attempt, {
+      ...FINAL_USAGE,
+      cacheWrite: 5,
+      cacheWrite5m: 5,
+      total: 84_195,
+    });
+    expect(run).toMatchObject({
       input: 370,
       output: 120,
       reasoningTokens: 19,
       cacheRead: 246_000,
-      cacheWrite: 5_000,
-      total: 251_490,
+      cacheWrite: 5_015,
+      cacheWrite1h: 3_004,
+      cacheWrite5m: 2_011,
+      total: 251_505,
     });
-    expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000 });
   });
 
   it("carries complete costs across attempts without claiming provider provenance", () => {
@@ -106,6 +118,9 @@ describe("usage-accumulator", () => {
 
   it("accumulates turns and bridge calls across retry/fallback attempts", () => {
     const acc = createUsageAccumulator();
+    mergeAttemptRunStatsIntoAccumulator(acc, { assistantTurns: 1 });
+    expect(acc.assistantTurns).toBe(1);
+    expect(acc.bridgeCalls).toBeUndefined();
     mergeAttemptRunStatsIntoAccumulator(acc, {
       assistantTurns: 2,
       bridgeCalls: { search: 1, describe: 2, call: 3 },
@@ -114,15 +129,8 @@ describe("usage-accumulator", () => {
       assistantTurns: 1,
       bridgeCalls: { search: 0, describe: 1, call: 4 },
     });
-    expect(acc.assistantTurns).toBe(3);
+    expect(acc.assistantTurns).toBe(4);
     expect(acc.bridgeCalls).toEqual({ search: 1, describe: 3, call: 7 });
-  });
-
-  it("keeps bridgeCalls absent for catalog-less attempts", () => {
-    const acc = createUsageAccumulator();
-    mergeAttemptRunStatsIntoAccumulator(acc, { assistantTurns: 1 });
-    expect(acc.assistantTurns).toBe(1);
-    expect(acc.bridgeCalls).toBeUndefined();
   });
 
   it("preserves reported zero cache counters across attempt and run totals", () => {
@@ -139,4 +147,15 @@ describe("usage-accumulator", () => {
       cacheWrite: undefined,
     });
   });
+
+  it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+    "preserves a reported zero %s across attempt and run totals without inventing its sibling",
+    (bucket) => {
+      const attempt = normalizedAttempt({ input: 100, cacheWrite: 10, [bucket]: 0 });
+      const normalized = normalizedAttempt(attempt, { input: 50 });
+      expect(normalized).toMatchObject({ input: 150, cacheWrite: 10, [bucket]: 0 });
+      const sibling = bucket === "cacheWrite1h" ? "cacheWrite5m" : "cacheWrite1h";
+      expect(normalized).not.toHaveProperty(sibling);
+    },
+  );
 });

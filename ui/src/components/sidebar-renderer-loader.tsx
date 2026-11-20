@@ -1,16 +1,21 @@
 import { Errored, Loading, onCleanup, type ParentProps } from "solid-js";
 import { createIdleImport } from "../lib/idle-import.ts";
 
-/** Keep mounted lazy reads retryable through the sidebar's idle/online loader. */
-export function createSidebarRendererLoader<T>(importModule: () => Promise<T>) {
+/** Schedule lazy preloads and retry mounted reads without owning their component modules. */
+export function createSidebarRendererLoader(preload: () => Promise<unknown>) {
   const resets = new Set<() => void>();
-  const importer = createIdleImport(importModule, () => {
-    // Reset replaces fallback registrations while this set is being traversed.
-    const mountedResets = [...resets];
-    for (const reset of mountedResets) {
-      reset();
-    }
-  });
+  const importer = createIdleImport(
+    async () => {
+      await preload();
+    },
+    () => {
+      // Reset replaces fallback registrations while this set is being traversed.
+      const mountedResets = [...resets];
+      for (const reset of mountedResets) {
+        reset();
+      }
+    },
+  );
 
   function Boundary(props: ParentProps) {
     return (

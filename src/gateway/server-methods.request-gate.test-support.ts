@@ -1,5 +1,5 @@
 import { expect } from "vitest";
-import { createDeferredCore } from "../shared/deferred.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 
 export function expectRejected(
   respond: unknown,
@@ -15,24 +15,20 @@ export function expectRejectedOnce(respond: unknown, error: Record<string, unkno
 
 /** Hold preparation until the test changes authority, then join the chosen outcome. */
 export function createRequestGate() {
-  const entered = createDeferredCore();
-  const released = createDeferredCore();
+  const { entered, release, wait: pause } = createEnteredGate();
   return {
-    entered: entered.promise,
-    release: released.resolve,
-    pause: async () => {
-      entered.resolve();
-      await released.promise;
-    },
+    entered,
+    release,
+    pause,
     during: async (task: Promise<unknown>, inspect: () => void | Promise<void>, settled = task) => {
       try {
-        await Promise.race([entered.promise, task]);
+        await Promise.race([entered, task]);
         await inspect();
       } finally {
-        released.resolve();
+        release();
         await settled;
       }
     },
-    [Symbol.dispose]: released.resolve,
+    [Symbol.dispose]: release,
   };
 }

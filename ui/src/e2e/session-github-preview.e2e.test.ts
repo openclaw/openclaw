@@ -4,6 +4,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
+import { createLightDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { pullPreviewResponse } from "./github-link-hovercard.test-support.ts";
 
@@ -15,12 +16,7 @@ const suite = createControlUiE2eSuite({
 });
 suite.define(() => {
   it("reads a configured Enterprise card in the current chat session", async () => {
-    const context = await suite.newBrowserContext({
-      colorScheme: "light",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 800, width: 1180 },
-    });
+    const context = await suite.newBrowserContext(createLightDesktopControlUiContextOptions());
     const page = await context.newPage();
     const url = "https://code.example.com/example/project/pull/7";
     const gateway = await installMockGateway(page, {
@@ -65,9 +61,9 @@ suite.define(() => {
     const card = page.locator(".link-reader-hovercard");
     await card.waitFor({ state: "visible" });
     await expect.poll(() => card.textContent()).toContain("Repair private project preview");
-    const startup = await gateway.waitForRequest("chat.startup");
+    const subscription = await gateway.waitForRequest("sessions.messages.subscribe");
     const sessionKey = "agent:main:main";
-    expect(startup.params).toMatchObject({ sessionKey });
+    expect(subscription.params).toMatchObject({ key: sessionKey });
     expect((await gateway.getRequests("forge.preview")).map(({ params }) => params)).toEqual([
       expect.objectContaining({ url, sessionKey }),
     ]);

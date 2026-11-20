@@ -1,19 +1,22 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Match, Show, Switch, createMemo, onSettled } from "solid-js";
-import { t } from "../lib/reactive/i18n.ts";
+import type { BoardDocumentProps } from "../components/board/board-document.tsx";
+import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
+import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import type { FocusDashboardRouteState } from "./app-root-focus.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
-import { isNativeWebChromeHost } from "./native-web-chrome.ts";
+import type { ApplicationGatewaySnapshot } from "./context.ts";
+
+registerEnglishCatalog(registerSessionNavigationEnglish);
 
 type FocusDashboardProps = {
   route: Promise<FocusDashboardRouteState>;
   snapshot: ApplicationGatewaySnapshot;
-  sessions: ApplicationContext["sessions"];
-  onClose: () => void;
   onReady: () => void;
   renderSplash: () => SolidJSX.Element;
   renderEscape: () => SolidJSX.Element;
-  renderLoading: () => SolidJSX.Element;
+  renderDocument: (
+    props: Pick<BoardDocumentProps, "sessionKey" | "preparedSession">,
+  ) => SolidJSX.Element;
 };
 
 export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
@@ -95,21 +98,15 @@ export function FocusDashboard(props: FocusDashboardProps): SolidJSX.Element {
             <Match when={session()}>
               {(data) => (
                 <>
-                  <openclaw-board-document
-                    prop:gatewaySnapshot={props.snapshot}
-                    prop:sessions={props.sessions}
-                    prop:sessionKey={data().sessionKey}
-                    prop:preparedSession={
-                      data().agentId
-                        ? { sessionKey: data().sessionKey, agentId: data().agentId }
-                        : null
-                    }
-                    prop:onDocumentClose={isNativeWebChromeHost() ? null : props.onClose}
-                  />
+                  {props.renderDocument({
+                    sessionKey: data().sessionKey,
+                    preparedSession: data().agentId
+                      ? { sessionKey: data().sessionKey, agentId: data().agentId }
+                      : null,
+                  })}
                   <Show when={!connected() && props.snapshot.lastError === null}>
                     {props.renderSplash()}
                   </Show>
-                  <Show when={connected()}>{props.renderLoading()}</Show>
                 </>
               )}
             </Match>

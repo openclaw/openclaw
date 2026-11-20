@@ -86,106 +86,47 @@ const present = (...blocks: Presentation["blocks"]): Pick<ReplyPayload, "present
   presentation: { blocks },
 });
 const openControls = present({ type: "buttons", buttons: [{ label: "Open", value: "open" }] });
+const nativeButton = { buttons: [[{ id: "open", callback_data: "open" }]] };
+const suppressed = (outcome: "empty" | "reasoning_skipped") => ({
+  outcome,
+  visibleReplySent: false,
+  suppression: { reason: "no_visible_result" },
+});
 
-it.each<[string, ReplyPayload, string, string?]>([
-  [
-    "presentation-only title",
-    { presentation: { title: "Build complete", blocks: [] } },
-    "Build complete",
-  ],
-  [
-    "presentation-only text",
-    present({ type: "text", text: "Release finished" }),
-    "Release finished",
-  ],
-  ["presentation-only native value button", openControls, "- Open", "open"],
-  [
-    "presentation-only URL button",
-    present({ type: "buttons", buttons: [{ label: "Docs", url: "https://example.com/docs" }] }),
-    "- Docs: https://example.com/docs",
-  ],
-  [
-    "presentation-only select",
-    present({
-      type: "select",
-      placeholder: "Environment",
-      options: [{ label: "Production", value: "production" }],
-    }),
-    "Environment:\n- Production",
-  ],
-  [
-    "authored text with native buttons",
-    { text: "Deploy finished", ...openControls },
-    "Deploy finished\n\n- Open",
-    "open",
-  ],
-  [
-    "authored fallback without duplicate presentation text",
-    {
+it("uses authored fallback text without duplicating presentation text", async () => {
+  const result = await deliver({
+    payload: {
       text: "Already formatted",
       presentationTextMode: "fallback",
       ...present({ type: "text", text: "Generated summary" }),
     },
+    replyToId: "root-post",
+  });
+  expect(sendMessage).toHaveBeenCalledWith(
+    "channel:town-square",
     "Already formatted",
-  ],
-  [
-    "typed callback action stays text-only",
-    present({
-      type: "buttons",
-      buttons: [
-        { label: "Inspect", action: { type: "callback", value: "private-callback-token" } },
-      ],
-    }),
-    "- Inspect",
-  ],
-])(
-  "delivers %s through the normal reply owner",
-  async (_name, payload, expectedText, expectedButtonValue) => {
-    const result = await deliver({
-      payload,
-      replyToId: "root-post",
-    });
-
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "channel:town-square",
-      expectedText,
-      expect.objectContaining({ accountId: "default", replyToId: "root-post" }),
-    );
-    const options = sendMessage.mock.calls[0]![2];
-    if (expectedButtonValue) {
-      expect(options).toMatchObject({
-        buttons: [[{ id: expectedButtonValue, callback_data: expectedButtonValue }]],
-      });
-    } else {
-      expect("buttons" in options ? options.buttons : undefined).toBeUndefined();
-    }
-    expect(result).toMatchObject({ outcome: "text", visibleReplySent: true });
-    expect(result.receipt?.parts[0]?.kind).toBe(expectedButtonValue ? "card" : "text");
-  },
-);
+    expect.objectContaining({ accountId: "default", replyToId: "root-post" }),
+  );
+  expect(sendMessage.mock.calls[0]![2]).not.toHaveProperty("buttons");
+  expect(result).toMatchObject({ outcome: "text", visibleReplySent: true });
+});
 
 it("attaches presentation controls only to the first visible text chunk", async () => {
   core.channel.text.chunkMarkdownTextWithMode = vi.fn(() => ["alpha", "beta"]);
+  sendMessage
+    .mockResolvedValueOnce(sendResult("post-1", "provider-finalized alpha", "card"))
+    .mockResolvedValueOnce(sendResult("post-2", "beta"));
 
-  const result = await deliver({
-    payload: {
-      text: "alpha beta",
-      ...openControls,
-    },
-    textLimit: 6,
-  });
+  const result = await deliver({ payload: { text: "alpha beta", ...openControls }, textLimit: 6 });
 
   expect(sendMessage).toHaveBeenCalledTimes(2);
-  expect(sendMessage.mock.calls[0]![2]).toMatchObject({
-    buttons: [[{ id: "open", callback_data: "open" }]],
-  });
+  expect(sendMessage.mock.calls[0]![2]).toMatchObject(nativeButton);
   expect("buttons" in sendMessage.mock.calls[1]![2]).toBe(false);
   expect(result).toMatchObject({
     outcome: "text",
     messageIds: ["post-1", "post-2"],
     visibleReplySent: true,
-    content: "alpha\nbeta",
+    content: "provider-finalized alpha\nbeta",
   });
   expect(result.receipt?.parts.map((part) => part.platformMessageId)).toEqual(["post-1", "post-2"]);
 });
@@ -205,18 +146,11 @@ it("keeps multiple-media presentations on the text/media fallback path", async (
   }
 });
 
-it.each<ReplyPayload>([
-  { text: "hidden", isReasoning: true },
-  { text: "  \n Reasoning:\n_hidden_" },
-  { text: "> Reasoning:\n> _hidden_" },
-])("suppresses reasoning payload %j", async (payload) => {
+it("suppresses reasoning before sending", async () => {
+  const payload = { text: "> Reasoning:\n> _hidden_" };
   const outcome = await deliver({ payload, agentId: "agent-1", replyToId: "root-post" });
   expect(sendMessage).not.toHaveBeenCalled();
-  expect(outcome).toEqual({
-    outcome: "reasoning_skipped",
-    visibleReplySent: false,
-    suppression: { reason: "no_visible_result" },
-  });
+  expect(outcome).toEqual(suppressed("reasoning_skipped"));
 });
 
 it("returns 'empty' for substantive text that produced no send (regression: #80501)", async () => {
@@ -230,11 +164,7 @@ it("returns 'empty' for substantive text that produced no send (regression: #805
   });
 
   expect(sendMessage).not.toHaveBeenCalled();
-  expect(outcome).toEqual({
-    outcome: "empty",
-    visibleReplySent: false,
-    suppression: { reason: "no_visible_result" },
-  });
+  expect(outcome).toEqual(suppressed("empty"));
 });
 
 it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
@@ -278,19 +208,6 @@ it("passes agent-scoped mediaLocalRoots when sending media paths", async () => {
   } finally {
     await openClawState.cleanup();
   }
-});
-
-it("returns provider-finalized visible content instead of the requested text", async () => {
-  const result = await deliver({
-    payload: { text: "requested text" },
-    sendMessage: vi.fn(async () => sendResult("post-final", "provider-finalized")),
-  });
-
-  expect(result).toMatchObject({
-    messageIds: ["post-final"],
-    visibleReplySent: true,
-    content: "provider-finalized",
-  });
 });
 
 it("preserves the accepted post when a later chunk fails", async () => {

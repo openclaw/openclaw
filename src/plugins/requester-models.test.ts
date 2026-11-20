@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { preparePluginToolExecutionCapabilities } from "../agents/plugin-tool-execution.js";
+import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
 import * as catalogReader from "../gateway/server-methods/requester-model-catalog.js";
 import { registerPluginCommandInRegistry } from "./command-registration.js";
 import { createPluginRecord } from "./loader-records.js";
@@ -16,6 +17,35 @@ import { createPluginToolFactoryContext } from "./tool-factory-context.js";
 import type { OpenClawPluginToolContext } from "./tool-types.js";
 
 const result = { revision: "fixture-revision", state: "prepared" as const, models: [] };
+const requester = () => ({
+  config: {},
+  agentId: "main",
+  sessionKey: "agent:main:one",
+  sessionId: "one",
+  assertCurrent() {},
+});
+const authority = () =>
+  createAdmittedRunOperatorAuthority({
+    profileId: "person",
+    scopes: [],
+    assertCurrent() {},
+  });
+function prepareDispatch() {
+  const dispatch = createPluginCommandRuntime()
+    .listNativeCandidates("webchat")[0]
+    ?.prepareDispatch();
+  if (dispatch?.kind !== "plugin") {
+    throw new Error("Expected plugin dispatch");
+  }
+  return dispatch;
+}
+const command = { name: "catalog", description: "Catalog" };
+const execution = () => ({
+  channel: "webchat",
+  commandBody: "/catalog",
+  config: {},
+  agentId: "main",
+});
 afterEach(() => {
   vi.restoreAllMocks();
   resetPluginRuntimeStateForTest();
@@ -37,31 +67,20 @@ function registry() {
 }
 
 it("advertises a version without removing the released string-list capability contract", () => {
-  const runtime = createRuntimeBase();
+  const runtime = createRuntimeBase(enqueueSessionEventForHost);
   expect(runtime.capabilities).toContain("requester-model-catalog-v1");
+  expect(runtime.capabilities).toContain("requester-model-family-v1");
   expect(runtime.capabilities).toContain("sender-restricted-hidden-helpers-v1");
 });
 
 it("omits model authority when requester or exact session authority is missing and rejects forged authority", () => {
-  const params = {
-    config: {},
-    agentId: "main",
-    sessionKey: "agent:main:one",
-    sessionId: "one",
-    assertCurrent() {},
-  };
-  expect(createPluginRequesterModels(params)).toBeUndefined();
-  const authority = createAdmittedRunOperatorAuthority({
-    profileId: "person",
-    scopes: [],
-    assertCurrent() {},
-  });
+  expect(createPluginRequesterModels(requester())).toBeUndefined();
   expect(
-    createPluginRequesterModels({ ...params, sessionId: undefined, authority }),
+    createPluginRequesterModels({ ...requester(), sessionId: undefined, authority: authority() }),
   ).toBeUndefined();
   expect(() =>
     createPluginRequesterModels({
-      ...params,
+      ...requester(),
       authority: { profileId: "forged", scopes: [], assertCurrent() {} },
     }),
   ).toThrow("must be issued by the host");
@@ -71,15 +90,8 @@ it("exposes the tool reader only through v2 and fences retained readers by invoc
   const value = registry();
   let current = true;
   const bindExecutionCapabilities = preparePluginToolExecutionCapabilities({
-    config: {},
-    agentId: "main",
-    sessionKey: "agent:main:one",
-    sessionId: "one",
-    authority: createAdmittedRunOperatorAuthority({
-      profileId: "person",
-      scopes: [],
-      assertCurrent() {},
-    }),
+    ...requester(),
+    authority: authority(),
   });
   const entry = {
     pluginId: "catalog-test",
@@ -124,8 +136,7 @@ it.each([
     let observed: PluginRequesterModels | undefined;
     let invoked = false;
     registerPluginCommandInRegistry(value, "catalog-test", {
-      name: "catalog",
-      description: "Catalog",
+      ...command,
       requireAuth: false,
       ...(optedIn ? { runtimeCapabilities: ["models"] } : {}),
       handler(ctx) {
@@ -134,17 +145,8 @@ it.each([
         return {};
       },
     });
-    const dispatch = createPluginCommandRuntime()
-      .listNativeCandidates("webchat")[0]
-      ?.prepareDispatch();
-    if (dispatch?.kind !== "plugin") {
-      throw new Error("Expected plugin dispatch");
-    }
-    await dispatch.execute({
-      channel: "webchat",
-      commandBody: "/catalog",
-      config: {},
-      agentId: "main",
+    await prepareDispatch().execute({
+      ...execution(),
       isAuthorizedSender: authorized,
       runtimeContext: present ? { createModels: () => ({ list: async () => result }) } : {},
     });
@@ -171,8 +173,7 @@ it("keeps command opt-in immutable and rejects reads after retirement or invocat
       return result;
     });
   registerPluginCommandInRegistry(value, "catalog-test", {
-    name: "catalog",
-    description: "Catalog",
+    ...command,
     runtimeCapabilities: requested,
     async handler(ctx) {
       retained = ctx.runtimeContext?.models;
@@ -182,30 +183,14 @@ it("keeps command opt-in immutable and rejects reads after retirement or invocat
     },
   });
   requested.length = 0;
-  const dispatch = createPluginCommandRuntime()
-    .listNativeCandidates("webchat")[0]
-    ?.prepareDispatch();
-  if (dispatch?.kind !== "plugin") {
-    throw new Error("Expected plugin dispatch");
-  }
-  const executing = dispatch.execute({
-    channel: "webchat",
-    commandBody: "/catalog",
-    config: {},
-    agentId: "main",
+  const executing = prepareDispatch().execute({
+    ...execution(),
     isAuthorizedSender: true,
     runtimeContext: {
       createModels: ({ signal, assertCurrent }) =>
         createPluginRequesterModels({
-          config: {},
-          agentId: "main",
-          sessionKey: "agent:main:one",
-          sessionId: "one",
-          authority: createAdmittedRunOperatorAuthority({
-            profileId: "person",
-            scopes: [],
-            assertCurrent() {},
-          }),
+          ...requester(),
+          authority: authority(),
           signal,
           assertCurrent,
         }),

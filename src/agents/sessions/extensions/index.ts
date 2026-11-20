@@ -9,4 +9,3 @@ export type {
   ToolDefinition,
   ToolInfo,
 } from "./types.js";
-export { wrapRegisteredTools } from "./wrapper.js";

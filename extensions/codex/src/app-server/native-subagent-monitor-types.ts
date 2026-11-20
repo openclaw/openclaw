@@ -94,6 +94,11 @@ export type NativeModelToolInputRequest = Omit<NativeModelInputRequest, "targetT
 
 export type ParentOwner = {
   requestCustody?: NativeRequestCustody;
+  cancelChildProcesses?: (
+    threadId: string,
+    turnId: string,
+    assertCurrent: () => void,
+  ) => Promise<void>;
   requesterAgentId?: string;
   requesterSessionKey?: string;
   requesterTurnRunId?: string;
@@ -182,12 +187,28 @@ export type ParentState = {
   turnIds: Set<string>;
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   requesterSessionKey?: string;
+  requesterStorePath?: string;
   completionScope?: AgentHarnessCompletionScope;
   historyOwner?: CodexNativeSubagentHistoryOwner;
   agentId?: string;
   submissionStore?: CodexNativeSubagentSubmissionStore;
   assignmentStore?: CodexNativeSubagentAssignmentStore;
 };
+
+export type NativeSubagentsReadRequest = {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision?: string;
+  storePath: string;
+  parentThreadId: string;
+  historyOwner: CodexNativeSubagentHistoryOwner;
+  assertCurrent(): void;
+};
+
+export type NativeSubagentsSnapshot = Awaited<
+  ReturnType<NonNullable<AgentHarness["readNativeSubagents"]>>
+>;
 
 export type NativeExecutionWait = {
   kind: "approval" | "user_input" | "agent_messages" | "children";
@@ -204,6 +225,8 @@ export type NativeTurnObservation = {
 
 export type ChildState = NativeSubagentAssignment & {
   requestCustody?: NativeRequestCustody;
+  // Interruption releases execution admission, but explicit Stop still owes process cleanup.
+  cancelProcesses?: ParentOwner["cancelChildProcesses"];
   requesterTurnRunId?: string;
   cancellationRequested?: true;
   terminalHandling?: Promise<void>;
@@ -245,7 +268,7 @@ export type KnownChild = {
   deliveryReceipts: CodexNativeSubagentDeliveryReceipts;
   assignment: NativeSubagentAssignment & { terminal: boolean; unanchored?: true };
   turnId?: string;
-  observedTurns: Map<string, { awaitingInteraction?: true }>;
+  observedTurns: Map<string, { awaitingInteraction?: true; state?: NativeTurnState }>;
   pendingTurns: Array<
     NativeTurnObservation & {
       admittedOwner?: ParentOwner;

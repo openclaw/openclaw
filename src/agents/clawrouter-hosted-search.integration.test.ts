@@ -4,7 +4,8 @@ import type { OpenAIResponsesOptions } from "@openclaw/ai/internal/openai";
 import MarkdownIt from "markdown-it";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { streamSimple } from "../llm/stream.js";
@@ -150,96 +151,87 @@ describe("ClawRouter admitted hosted search HTTP composition", () => {
                   route: "/v1/chat/completions",
                 },
               ];
-              reply.writeHead(200, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify({
-                  providers: [
-                    {
-                      id: "openai",
-                      openaiCompatible: true,
-                      nativeBaseUrl: "/v1/native/openai",
-                      routes: [],
-                      models: rows.map((row) => ({
-                        id: row.id,
-                        upstream: "fixture",
-                        capabilities: ["llm.responses"],
-                        ...(row.supported
-                          ? {
-                              nativeCapabilities: {
-                                version: row.version ?? "clawrouter.native-capabilities.v1",
-                                endpoints: {
-                                  responses: {
-                                    hostedTools: row.malformed
-                                      ? [true, "web_search"]
-                                      : ["web_search"],
-                                  },
+              respondJson(reply, {
+                providers: [
+                  {
+                    id: "openai",
+                    openaiCompatible: true,
+                    nativeBaseUrl: "/v1/native/openai",
+                    routes: [],
+                    models: rows.map((row) => ({
+                      id: row.id,
+                      upstream: "fixture",
+                      capabilities: ["llm.responses"],
+                      ...(row.supported
+                        ? {
+                            nativeCapabilities: {
+                              version: row.version ?? "clawrouter.native-capabilities.v1",
+                              endpoints: {
+                                responses: {
+                                  hostedTools: row.malformed
+                                    ? [true, "web_search"]
+                                    : ["web_search"],
                                 },
                               },
-                            }
-                          : {}),
-                      })),
-                      offers: rows.map((row) => ({
-                        modelId: row.id,
-                        endpoint: "responses",
-                        transport: "http",
-                        routeKind: "unified",
-                        route: row.route ?? "/v1/responses",
-                        eligible: true,
-                        hostedToolAdmission: row.admission
-                          ? {
-                              version:
-                                row.admissionVersion ?? "clawrouter.hosted-tool-admission.v1",
-                              web_search: admitted ? row.admission : "pricing_required",
-                            }
-                          : undefined,
-                      })),
-                    },
-                  ],
-                }),
-              );
+                            },
+                          }
+                        : {}),
+                    })),
+                    offers: rows.map((row) => ({
+                      modelId: row.id,
+                      endpoint: "responses",
+                      transport: "http",
+                      routeKind: "unified",
+                      route: row.route ?? "/v1/responses",
+                      eligible: true,
+                      hostedToolAdmission: row.admission
+                        ? {
+                            version: row.admissionVersion ?? "clawrouter.hosted-tool-admission.v1",
+                            web_search: admitted ? row.admission : "pricing_required",
+                          }
+                        : undefined,
+                    })),
+                  },
+                ],
+              });
               return;
             }
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
+            const bodyText = await readRequestText(request);
             requests.push({
               path: request.url,
               authorization: request.headers.authorization,
-              body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+              body: JSON.parse(bodyText),
             });
             if (mode === "rotate" && request.headers.authorization === rejectedRotationKey) {
-              reply.writeHead(429, { "content-type": "application/json" });
-              reply.end(JSON.stringify({ error: { message: "Synthetic profile rate limit" } }));
+              respondJson(reply, { error: { message: "Synthetic profile rate limit" } }, 429);
               return;
             }
             if (mode === "reject") {
-              reply.writeHead(400, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify({
+              respondJson(
+                reply,
+                {
                   error: {
                     code: "pricing_required",
                     message:
                       "Hosted web_search is not admitted for this key; ask your ClawRouter administrator to qualify this route.",
                   },
-                }),
+                },
+                400,
               );
               return;
             }
             if (mode === "json" || mode === "json-failed" || mode === "json-invalid") {
-              reply.writeHead(200, { "content-type": "application/json" });
-              reply.end(
-                JSON.stringify(
-                  mode === "json-failed"
-                    ? {
-                        ...response,
-                        status: "failed",
-                        error: { code: "search_failed", message: "Synthetic hosted search failed" },
-                      }
-                    : mode === "json-invalid"
-                      ? { object: "not-a-response", status: "completed" }
-                      : response,
-                ),
+              respondJson(
+                reply,
+                mode === "json-failed"
+                  ? {
+                      ...response,
+                      status: "failed",
+                      error: { code: "search_failed", message: "Synthetic hosted search failed" },
+                    }
+                  : mode === "json-invalid"
+                    ? { object: "not-a-response", status: "completed" }
+                    : response,
               );
               return;
             }
@@ -873,12 +865,7 @@ describe("ClawRouter admitted hosted search HTTP composition", () => {
     const before = requests.length;
     const pending = call(undefined, { signal: controller.signal });
     try {
-      await Promise.race([
-        held.promise,
-        pending.then(() => {
-          throw new Error("Completed before held HTTP response");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(held.promise, pending, "Completed before held HTTP response");
       controller.abort();
       expect((await pending).result.stopReason).toBe("aborted");
       await closed.promise;

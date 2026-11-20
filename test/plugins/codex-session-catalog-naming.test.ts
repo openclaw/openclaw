@@ -48,6 +48,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           }
           const pluginConfig = {
             appServer: { transport: "websocket" as const, url: `ws://127.0.0.1:${address.port}` },
+            supervision: { enabled: true },
           };
           const config = {
             agents: {

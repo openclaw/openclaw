@@ -6,7 +6,6 @@ import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test
 const seed = {
   boards: [{ id: "planning", icon: "rocket", color: "blue" }],
   cards: [],
-  tasks: [],
   methodResponses: { "workboard.cards.list": { statuses: ["todo"] } },
 };
 

@@ -6,7 +6,10 @@ import {
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import { readSessionTranscriptContextMessages } from "../config/sessions/session-accessor.sqlite-model-context.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import {
@@ -90,9 +93,16 @@ test.each([
         roleAndText,
       );
       expect(modelContext).toEqual(contextual ? exchange : []);
+    } catch (error) {
+      console.error("[chat-command-context] before cleanup", error);
+      throw error;
     } finally {
       // The final event can precede dispatch cleanup; settle it before the suite resets runtime.
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      await vi.waitFor(() =>
+        expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(
+          0,
+        ),
+      );
       dispatchInboundMessageMock.mockReset();
     }
   },

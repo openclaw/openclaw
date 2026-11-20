@@ -4,6 +4,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -20,14 +21,7 @@ test("named preferences stay profile-scoped over authenticated multi-agent Gatew
   const scopes: OperatorScope[] = ["operator.read", "operator.write"];
   const controlUi = { allowedOrigins: [origin] };
   const readerRole = { agents: "*" as const, scopes, sessions: { others: "none" as const } };
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   testState.gatewayControlUi = controlUi;
   await writeConfigFile(

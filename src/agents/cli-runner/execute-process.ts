@@ -38,6 +38,7 @@ import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
+  createCliStreamRefusalError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -101,9 +102,37 @@ export async function executeCliProcess(params: {
     runId: runParams.runId,
     classifyErrorCode: context.backendResolved.classifyErrorCode,
   };
+  // The runner may keep a refused first turn's native session, so the refusal
+  // carries the executed prompt for its reseed receipt as a returned turn does.
+  const refuseStream = (
+    errorText: string,
+    output: CliOutput | null | undefined,
+    options?: Parameters<typeof createCliStreamRefusalError>[3],
+  ) =>
+    createCliStreamRefusalError(
+      errorText,
+      failoverContext,
+      output && { ...output, finalPromptText: params.prompt },
+      options,
+    );
+  // buildCliArgs emits this option only for an actual checkpointed resume.
+  const resumeAtArg =
+    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
+  const resumeCheckpointId = params.useResume ? runParams.cliSessionResumeAt : undefined;
   const createOutputFailoverError = (output: CliOutput): FailoverError | undefined => {
     if (!output.errorText) {
       return undefined;
+    }
+    // The CLI can report a rejected resume checkpoint as a structured result
+    // error instead of a process exit failure; classify it before the generic
+    // provider-reason mapping so recovery sees the invalidated session.
+    const resumeAtError = resolveCliResumeAtError(
+      output.errorText,
+      { resumeCheckpointId },
+      failoverContext,
+    );
+    if (resumeAtError) {
+      return resumeAtError;
     }
     const message = formatCliOutputError(output, {
       runId: outputErrorContext.runId,
@@ -133,9 +162,6 @@ export async function executeCliProcess(params: {
       rawError: output.errorText,
     });
   };
-  // buildCliArgs emits this option only for an actual checkpointed resume.
-  const resumeAtArg =
-    params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
   const eventDelivery =
     runParams.sourceReplyDeliveryMode === "message_tool_only" ||
@@ -286,6 +312,7 @@ export async function executeCliProcess(params: {
     : undefined;
   try {
     if (params.nodePlacement) {
+      await context.preparedBackend.prepareCredentialUse?.();
       const nodeRun = await executeNodeClaudeRun({
         context,
         nodePlacement: params.nodePlacement,
@@ -322,7 +349,7 @@ export async function executeCliProcess(params: {
           consumeStdout(chunk);
           const errorText = streamingParser?.getErrorText();
           if (errorText) {
-            throw createCliFailoverError(errorText, "format", failoverContext);
+            throw refuseStream(errorText, streamingParser?.getOutput());
           }
         },
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
@@ -339,7 +366,7 @@ export async function executeCliProcess(params: {
           streamingParser?.finish();
           const partialOutput = streamingParser?.getOutput();
           if (partialOutput?.partialOutputRejected && partialOutput.errorText) {
-            throw createCliFailoverError(partialOutput.errorText, "format", failoverContext, {
+            throw refuseStream(partialOutput.errorText, partialOutput, {
               code: CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE,
             });
           }
@@ -358,6 +385,7 @@ export async function executeCliProcess(params: {
           beginCapture: params.toolTracking.beginGatewayCapture,
           registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
           waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
+          onInputSubmitted: params.toolTracking.onInputSubmitted,
         },
         ...(params.useManagedClaudeLiveSession
           ? {
@@ -373,7 +401,7 @@ export async function executeCliProcess(params: {
         if (runParams.abortSignal?.aborted || params.events.hasObservedCliActivity()) {
           throw error;
         }
-        throw resolveCliResumeAtError(error, resumeAtArg, failoverContext) ?? error;
+        throw resolveCliResumeAtError(error, { resumeAtArg }, failoverContext) ?? error;
       });
     } else {
       const supervisor = getProcessSupervisor();
@@ -411,7 +439,13 @@ export async function executeCliProcess(params: {
               prepareSpawn: params.argsPrompt
                 ? context.cliHistoryWriter?.assertReadable
                 : undefined,
-              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
+              prepareTargetSpawn: context.preparedBackend.prepareCredentialUse,
+              prepareInput: params.stdin
+                ? async () => {
+                    await context.cliHistoryWriter?.assertReadable();
+                    await context.preparedBackend.prepareCredentialUse?.();
+                  }
+                : undefined,
               runId: runParams.runId,
               scopeKey,
               replaceExistingScope: Boolean(params.useResume && scopeKey),
@@ -427,7 +461,9 @@ export async function executeCliProcess(params: {
               cwd: context.cwd ?? context.workspaceDir,
               env: params.env,
               input: params.stdin ?? "",
-              secretInput: context.preparedBackend.secretInput,
+              secretInput: runParams.nativeAuthOnly
+                ? undefined
+                : context.preparedBackend.secretInput,
               captureOutput: false,
               onStdout: consumeStdout,
               onStderr: consumeStderr,
@@ -468,7 +504,7 @@ export async function executeCliProcess(params: {
   streamingParser?.finish();
   const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
-    throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
+    throw refuseStream(streamingParserErrorText, streamingParser?.getOutput());
   }
   // The node re-injects the terminal result after truncation. If even that is
   // missing, the turn outcome is unknowable and cannot pass as a clean exit.
@@ -618,9 +654,11 @@ export async function executeCliProcess(params: {
       context: failoverContext,
       classifyErrorCode: context.backendResolved.classifyErrorCode,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
-      fallbackMessage: "CLI failed.",
       retryEmptyFailure,
       resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
+      // The checkpoint guard names the exact uuid this run sent, so it stays
+      // safe after observed CLI activity (a rejection result record counts).
+      resumeCheckpointId,
     });
   }
 

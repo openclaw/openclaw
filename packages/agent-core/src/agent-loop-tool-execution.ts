@@ -1,14 +1,25 @@
-import type { AgentEventSink } from "./agent-stream-response.js";
+import type { AgentEventSink, ExecutedToolCallBatch } from "./agent-stream-response.js";
 import {
   getInternalToolExecutionPreparer,
   type InternalToolExecutionPreparation,
 } from "./internal-hooks.js";
-import { createErrorToolResult, createToolExecutionErrorResult } from "./tool-call-outcome.js";
+import type { AgentCoreStreamRuntimeDeps } from "./runtime-deps.js";
+import { mergeToolExecutionFailure } from "./tool-batch-completion.js";
+import {
+  createErrorToolResult,
+  immediateToolArgumentValidationError,
+  immediateToolPreparationError,
+  createToolExecutionErrorResult,
+  type FinalizedToolCallOutcome,
+  type ImmediateToolCallOutcome,
+} from "./tool-call-outcome.js";
 import {
   type AgentToolExecutionContext,
   runWithAgentToolExecutionContext,
 } from "./tool-execution-context.js";
+import { USER_TOOL_INTERRUPTION_MESSAGE, type ToolInterruptions } from "./tool-interruption.js";
 import type { AgentTool, AgentToolCall, AgentToolResult } from "./types.js";
+import { validateToolArguments } from "./validation.js";
 
 export type PreparedToolCall = {
   kind: "prepared";
@@ -16,6 +27,36 @@ export type PreparedToolCall = {
   tool: AgentTool;
   args: unknown;
 };
+
+export function prepareResolvedToolCall(
+  tool: AgentTool,
+  toolCall: AgentToolCall,
+): PreparedToolCall | ImmediateToolCallOutcome {
+  let preparedToolCall: AgentToolCall;
+  try {
+    const preparedArguments = tool.prepareArguments
+      ? tool.prepareArguments(toolCall.arguments)
+      : toolCall.arguments;
+    preparedToolCall =
+      preparedArguments === toolCall.arguments
+        ? toolCall
+        : {
+            ...toolCall,
+            // SAFETY: The validator below checks this value before returning execution arguments.
+            arguments: preparedArguments as Record<string, unknown>,
+          };
+  } catch (error) {
+    return immediateToolPreparationError(error);
+  }
+
+  let validatedArgs: unknown;
+  try {
+    validatedArgs = validateToolArguments(tool, preparedToolCall);
+  } catch (error) {
+    return immediateToolArgumentValidationError(error);
+  }
+  return { kind: "prepared", toolCall, tool, args: validatedArgs };
+}
 
 export type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
@@ -35,12 +76,24 @@ export type PreparedToolCallExecution =
   | { kind: "immediate"; outcome: ExecutedToolCallOutcome }
   | ReadyToolCallExecution;
 
+function interruptedResult(result?: AgentToolResult<unknown>): AgentToolResult<unknown> {
+  return {
+    content: [...(result?.content ?? []), { type: "text", text: USER_TOOL_INTERRUPTION_MESSAGE }],
+    details: { status: "interrupted", reason: "user_steer", partialResult: result?.details },
+  };
+}
+
 export async function prepareToolCallExecution(
   prepared: PreparedToolCall,
   executionContext: AgentToolExecutionContext,
-  signal: AbortSignal | undefined,
+  runSignal: AbortSignal | undefined,
   emit: AgentEventSink,
+  isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"],
+  interruptions?: ToolInterruptions,
 ): Promise<PreparedToolCallExecution> {
+  const canInterrupt = prepared.tool.interruptible;
+  const interruption = interruptions?.register(prepared.toolCall, Boolean(canInterrupt), runSignal);
+  const signal = interruption?.signal ?? runSignal;
   const updateEvents: Promise<void>[] = [];
   let acceptingUpdates = true;
   let pendingInput = executionContext.pendingInput;
@@ -71,7 +124,9 @@ export async function prepareToolCallExecution(
       : undefined,
   };
   const closeUpdates = () => {
+    interruption?.dispose();
     acceptingUpdates = false;
+    scopedExecutionContext.pendingInput = undefined;
     pendingInput = undefined;
     for (const release of inputSubscriptions) {
       release();
@@ -96,20 +151,29 @@ export async function prepareToolCallExecution(
       ),
     );
   };
-  const finishUpdates = async () => {
-    closeUpdates();
-    await Promise.all(updateEvents);
-  };
-  const immediateError = async (error: unknown): Promise<PreparedToolCallExecution> => {
-    await finishUpdates();
-    return {
-      kind: "immediate",
-      outcome: {
-        result: createToolExecutionErrorResult(error),
-        isError: true,
-        executionStarted: false,
-      },
-    };
+  const finishUpdates = async (
+    primary?: ExecutedToolCallBatch["fatal"],
+    disposeSource?: () => void,
+  ) => {
+    let failure: ExecutedToolCallBatch["fatal"];
+    try {
+      closeUpdates();
+    } catch (error) {
+      failure = mergeToolExecutionFailure(primary, error);
+    }
+    for (const update of await Promise.allSettled(updateEvents)) {
+      if (update.status === "rejected") {
+        failure = mergeToolExecutionFailure(failure ?? primary, update.reason);
+      }
+    }
+    try {
+      disposeSource?.();
+    } catch (error) {
+      failure = mergeToolExecutionFailure(failure ?? primary, error);
+    }
+    if (failure) {
+      throw failure.error;
+    }
   };
   const readyExecution = (
     args: unknown,
@@ -131,15 +195,22 @@ export async function prepareToolCallExecution(
       async execute(onImplementationStart) {
         let executionStarted = false;
         let implementationStartError: { error: unknown } | undefined;
+        let executionFailure: ExecutedToolCallBatch["fatal"];
         try {
           if (signal?.aborted) {
             return {
-              result: createErrorToolResult("Operation aborted"),
+              result: interruption?.interrupted
+                ? interruptedResult()
+                : createErrorToolResult("Operation aborted"),
               isError: true,
               executionStarted: false,
             };
           }
           try {
+            // Hooks finish rewriting args before this prepared source can launch.
+            interruption?.ready(
+              canInterrupt === true || (typeof canInterrupt === "function" && canInterrupt(args)),
+            );
             const result = await run(() => {
               try {
                 onImplementationStart?.();
@@ -152,23 +223,39 @@ export async function prepareToolCallExecution(
             if (implementationStartError) {
               throw implementationStartError.error;
             }
-            return { result, isError: false, executionStarted };
+            return interruption?.interrupted
+              ? {
+                  result: interruptedResult(result),
+                  isError: true,
+                  executionStarted,
+                  callerCancelled: true,
+                }
+              : { result, isError: false, executionStarted };
           } catch (error) {
+            executionFailure = { error: implementationStartError?.error ?? error };
             if (implementationStartError) {
               throw implementationStartError.error;
             }
+            if (isLocalError?.(error)) {
+              throw error;
+            }
             return {
-              result: createToolExecutionErrorResult(error),
+              result: interruption?.interrupted
+                ? interruptedResult()
+                : createToolExecutionErrorResult(error),
               isError: true,
               executionStarted,
-              ...(executionStarted && signal?.aborted && error === signal.reason
+              ...(executionStarted &&
+              (interruption?.interrupted || (signal?.aborted && error === signal.reason))
                 ? { callerCancelled: true }
                 : {}),
             };
           }
+        } catch (error) {
+          executionFailure = { error };
+          throw error;
         } finally {
-          await finishUpdates();
-          dispose();
+          await finishUpdates(executionFailure, dispose);
         }
       },
     };
@@ -204,17 +291,48 @@ export async function prepareToolCallExecution(
       }),
     );
   } catch (error) {
-    return await immediateError(error);
+    await finishUpdates({ error });
+    if (isLocalError?.(error)) {
+      throw error;
+    }
+    return {
+      kind: "immediate",
+      outcome: {
+        result: interruption?.interrupted
+          ? interruptedResult()
+          : createToolExecutionErrorResult(error),
+        isError: true,
+        executionStarted: false,
+      },
+    };
   }
 
   if (internalPreparation.kind === "immediate") {
-    closeUpdates();
-    internalPreparation.dispose();
-    await finishUpdates();
+    await finishUpdates(
+      internalPreparation.outcome.kind === "error"
+        ? { error: internalPreparation.outcome.error }
+        : undefined,
+      () => internalPreparation.dispose(),
+    );
+    if (
+      internalPreparation.outcome.kind === "error" &&
+      isLocalError?.(internalPreparation.outcome.error)
+    ) {
+      throw internalPreparation.outcome.error;
+    }
     return {
       kind: "immediate",
-      outcome:
-        internalPreparation.outcome.kind === "result"
+      outcome: interruption?.interrupted
+        ? {
+            result: interruptedResult(
+              internalPreparation.outcome.kind === "result"
+                ? internalPreparation.outcome.result
+                : undefined,
+            ),
+            isError: true,
+            executionStarted: false,
+          }
+        : internalPreparation.outcome.kind === "result"
           ? {
               result: internalPreparation.outcome.result,
               isError: internalPreparation.outcome.isError,
@@ -237,4 +355,95 @@ export async function prepareToolCallExecution(
       ),
     readyPreparation.dispose,
   );
+}
+
+export type ToolPlanState = {
+  executionStarted: boolean;
+};
+
+export type ReadyPreparedToolCall = PreparedToolCall & { execution: ReadyToolCallExecution };
+
+export type FinalizedToolCallEntry = FinalizedToolCallOutcome | ReadyPreparedToolCall;
+
+export type StartedToolCall = {
+  index: number;
+  entry: ReadyPreparedToolCall;
+  outcome: Promise<ExecutedToolCallOutcome>;
+};
+
+type ParallelToolCallLaunches = {
+  started: StartedToolCall[];
+  completed: Array<Omit<StartedToolCall, "outcome"> & { outcome: ExecutedToolCallOutcome }>;
+  rejected?: { index: number; error: unknown };
+};
+
+export async function launchParallelToolCalls(
+  entries: FinalizedToolCallEntry[],
+  toolPlan: ToolPlanState,
+): Promise<ParallelToolCallLaunches> {
+  const ready = entries.flatMap((entry, index) => ("kind" in entry ? [{ entry, index }] : []));
+  const result: ParallelToolCallLaunches = { started: [], completed: [] };
+  const preparations: Promise<void>[] = [];
+  const reject = (index: number, error: unknown) => {
+    result.rejected = {
+      index: result.rejected?.index ?? index,
+      error: mergeToolExecutionFailure(result.rejected, error).error,
+    };
+  };
+  let cursor = 0;
+  let finish!: () => void;
+  const done = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const launchNext = () => {
+    const current = ready[cursor++];
+    if (!current || result.rejected) {
+      finish();
+      return;
+    }
+    // Package declarations target ES2023, which lacks Promise.withResolvers.
+    let resolvePreparation = () => {};
+    preparations.push(
+      new Promise<void>((resolve) => {
+        resolvePreparation = resolve;
+      }),
+    );
+    const launchState: { outcome?: Promise<ExecutedToolCallOutcome> } = {};
+    let started = false;
+    const onStart = () => {
+      started = true;
+      resolvePreparation();
+      toolPlan.executionStarted = true;
+      if (launchState.outcome) {
+        result.started.push({ ...current, outcome: launchState.outcome });
+      }
+      // Advance only from the source-start callback so started bodies overlap in order;
+      // pre-source completion advances below.
+      queueMicrotask(launchNext);
+    };
+    const outcome = current.entry.execution.execute(onStart);
+    launchState.outcome = outcome;
+    if (started) {
+      result.started.push({ ...current, outcome });
+    }
+    void outcome.then(
+      (completed) => {
+        resolvePreparation();
+        if (!started) {
+          result.completed.push({ ...current, outcome: completed });
+          queueMicrotask(launchNext);
+        }
+      },
+      (error: unknown) => {
+        resolvePreparation();
+        reject(current.index, error);
+        finish();
+      },
+    );
+  };
+  launchNext();
+  await done;
+  // Already-invoked sources retain custody until they start or settle, even after a sibling fails.
+  await Promise.all(preparations);
+  return result;
 }

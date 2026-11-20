@@ -18,6 +18,7 @@ import * as updateGlobal from "../../infra/update-global.js";
 import * as processExec from "../../process/exec.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { registerUpdateCli } from "../update-cli.js";
 import * as shared from "./shared.js";
@@ -48,10 +49,7 @@ const refusal = "global-install-foreign-destination";
 
 async function writePackage(root: string, version: string, label: string) {
   await fs.mkdir(root, { recursive: true });
-  await fs.writeFile(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-  );
+  await writeFixtureJson(path.join(root, "package.json"), { name: "openclaw", version });
   await fs.writeFile(entrypoint(root), `// ${label} deployment\n`);
 }
 
@@ -246,29 +244,21 @@ it.each([
     } else {
       expect(result).toMatchObject({ dryRun: true, root: oldRoot });
     }
-    if (separatePackage && destination !== "claimed") {
-      const launcher = path.join(bin, process.platform === "win32" ? "openclaw.cmd" : "openclaw");
-      const entry = await fs.realpath(entrypoint(newRoot));
-      const ownerMessage = managedForeign
-        ? `The selected service (${sourcePath}) uses ${entrypoint(oldRoot)}; it does not own this destination.`
-        : "No selected managed service could be verified as owning this destination.";
-      const alternative =
-        !managedForeign || destination === "foreign-sealed"
-          ? "Alternatively, ask the destination's deployment owner to resolve its package/launcher and select it for the intended service using their deployment procedure. Do not overwrite it."
-          : `Alternatively, if the destination's owner agrees to use it for this service, explicitly select it with \`node ${quote(entry)} gateway install --force --runtime-path ${quote(process.execPath)}\` and rerun the update. This changes the service binding; it does not grant ownership of another deployment's package.`;
-      expectRefusalMessage(
-        result,
-        `Selected npm destination ${selected} is occupied by another OpenClaw installation: package ${newRoot}; launcher ${launcher} -> ${entry}. ${ownerMessage} No installation was attempted. Switch the runtime back and run \`node ${quote(entrypoint(oldRoot))} update\`. ${alternative}`,
-      );
-    }
-    if (unknown) {
-      const prefix = unresolved ? "(unresolved installation layout)" : selected;
-      expectRefusalMessage(
-        result,
-        `Selected npm destination ${prefix} could not be inspected (${unknownCause}); ownership is unknown. No installation was attempted. Fix inspection permissions on this prefix for the service account, or restore the selected package layout, then run \`node ${quote(entrypoint(oldRoot))} update\`. Alternatively, ask the deployment owner to verify the layout and explicitly select the intended installation using its existing deployment procedure.`,
-      );
-    }
     if (refused) {
+      expectRefusalMessage(result, `node ${quote(entrypoint(oldRoot))} update`);
+      if (separatePackage) {
+        expectRefusalMessage(result, newRoot);
+        expectRefusalMessage(result, managedForeign ? sourcePath : "No selected managed service");
+        expectRefusalMessage(
+          result,
+          destination === "foreign-managed"
+            ? `node ${quote(await fs.realpath(entrypoint(newRoot)))} gateway install --force --runtime-path ${quote(process.execPath)}`
+            : "Do not overwrite it.",
+        );
+      }
+      if (unknown) {
+        expectRefusalMessage(result, "Fix inspection permissions");
+      }
       await expect(updateCommand(opts)).rejects.toEqual(new ExitError(1));
       expect(lastJson()).toMatchObject({ reason: refusal });
     }
@@ -280,6 +270,38 @@ it.each([
     }
   },
 );
+
+it("previews the retry of an interrupted link replacement without moving the link", async () => {
+  vi.mocked(packageDestination.inspectNpmGlobalDestination).mockRestore();
+  const selected = path.join(path.dirname(fixture.root), "selected");
+  const newRoot = packageRoot(selected);
+  const backup = path.join(path.dirname(newRoot), ".openclaw.package-backup-1-1");
+  await fs.mkdir(path.dirname(newRoot), { recursive: true });
+  await fs.writeFile(entrypoint(fixture.root), "// original deployment\n");
+  // A killed update left this installation's npm link under its backup name.
+  await fs.symlink(fixture.root, backup, process.platform === "win32" ? "junction" : "dir");
+  await writeLauncher(selected, newRoot);
+  vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
+    manager: "npm",
+    command: "npm",
+    globalRoot: path.dirname(newRoot),
+    packageRoot: newRoot,
+    npmOwner: { version: "11.10.0", lifecyclePolicy: "unflagged" },
+  });
+  vi.spyOn(plugins, "preflightConfiguredNpmPluginTargets").mockResolvedValue([]);
+
+  await updateCommand({ ...opts, dryRun: true });
+
+  expect(lastJson()).toMatchObject({ dryRun: true, root: fixture.root });
+  expect(vi.mocked(defaultRuntime.error).mock.calls.flat()).toContainEqual(
+    expect.stringContaining(
+      `Would restore the npm package link an interrupted update left at ${backup}`,
+    ),
+  );
+  await expect(fs.lstat(newRoot)).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.realpath(backup)).toBe(await fs.realpath(fixture.root));
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+});
 
 const lastJsonCall = () => vi.mocked(defaultRuntime.writeJson).mock.lastCall;
 function preflightOutcome(

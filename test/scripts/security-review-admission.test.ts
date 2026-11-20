@@ -27,12 +27,13 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
     created_at: "2026-09-01T00:00:00Z",
     user: { id: 1, login: "contributor", type: "User" },
     head: { sha: head },
-    base: { ref: "main" },
+    base: { ref: "main", sha: rolloutCommit },
+    changed_files: 1,
   };
   const state = {
     currentPull: structuredClone(pullRequest),
     rollout: "enforced" as "enforced" | "grandfathered" | "inactive",
-    role: needsApproval ? "maintain" : "write",
+    role: needsApproval ? "admin" : "write",
     afterPermission: () => {},
   };
   const notice = (marker: string) => ({
@@ -108,19 +109,30 @@ function fixture(needsApproval = false, projectionState = "failure", projection 
     pullRequest,
     pullPath,
     issuePath,
+    membershipApi: {
+      async request(path: string) {
+        expect(path).toMatch(
+          /^\/orgs\/openclaw\/teams\/openclaw-secops\/memberships\/(?:contributor|maintainer)$/u,
+        );
+        throw Object.assign(new Error("Not a SecOps member"), { status: 404 });
+      },
+    },
     api: {
       async request(path: string, options?: unknown) {
         expect(options, "Admission must not publish").toBeUndefined();
         return routes[path]?.() ?? Promise.reject(new Error(`Unexpected request: ${path}`));
       },
       async paginate(path: string) {
-        expect(path).toBe(`${issuePath}/comments`);
-        return comments;
+        if (path === `${issuePath}/comments`) {
+          return comments;
+        }
+        return routes[path]?.() ?? Promise.reject(new Error(`Unexpected pagination: ${path}`));
       },
     },
   };
   return {
     state,
+    routes,
     statuses,
     dependency,
     combined,
@@ -136,6 +148,15 @@ type Mutation = [string, keyof Targets, Partial<Targets[keyof Targets]>, string?
 type Mode = "enforced" | "inactive" | "grandfathered";
 type Projection = [Mode, string, string, boolean];
 type StatusPatch = Partial<ReturnType<typeof fixture>["combined"]>;
+
+it.each([
+  `/refresh-security-review ${head}`,
+  `/refresh-security-review ${head}\n/allow-dependencies-change\n/allow-security-sensitive-change`,
+])("never treats refresh comment %j as approval", async (body) => {
+  const f = fixture(true);
+  f.approval.body = body;
+  await expect(f.run()).rejects.toThrow("approval is no longer current");
+});
 
 it.each<Projection>([
   ...ciProjections.flatMap<Projection>(([state, description]) => [
@@ -159,7 +180,7 @@ it.each<Projection>([
           context,
           kind: "comment",
           login: "maintainer",
-          role: "maintain",
+          role: "admin",
           sha: head,
           url: f.approval.html_url,
         }))
@@ -226,3 +247,42 @@ it("does not discard a contradictory fresh guard failure during an exempt rollou
   f.dependency.state = "failure";
   await expect(f.run()).rejects.toThrow("unsuccessful openclaw/dependency-review");
 });
+
+it.each(["maintain", "write"])(
+  "revalidates release alignment for a %s author without workflow caches",
+  async (role) => {
+    const f = fixture();
+    f.dependency.description = "PR #7: Dependency review requirements satisfied.";
+    f.routes["/repos/openclaw/openclaw/collaborators/contributor/permission"] = () => ({
+      role_name: role,
+    });
+    f.routes["/repos/openclaw/openclaw/pulls/7/files"] = () => [{ filename: "package.json" }];
+    for (const [ref, version] of [
+      [rolloutCommit, "2026.11.4"],
+      [head, "2026.11.5"],
+    ]) {
+      f.routes[`/repos/openclaw/openclaw/contents/package.json?ref=${ref}`] = () => ({
+        type: "file",
+        encoding: "base64",
+        content: Buffer.from(JSON.stringify({ version })).toString("base64"),
+      });
+    }
+    if (role === "maintain") {
+      await expect(f.run()).resolves.toMatchObject({
+        approvals: [
+          {
+            context: "openclaw/dependency-review",
+            kind: "author",
+            login: "contributor",
+            role,
+            sha: head,
+          },
+        ],
+      });
+      f.routes["/repos/openclaw/openclaw/pulls/7/files"] = () => [];
+      await expect(f.run()).rejects.toThrow("complete changed-file list");
+    } else {
+      await expect(f.run()).rejects.toThrow("approval is no longer current");
+    }
+  },
+);

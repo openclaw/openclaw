@@ -19,22 +19,28 @@ import * as rfbProbe from "./rfb-probe.js";
 import { createDesktopSessionRegistry } from "./session-registry.js";
 
 const cleanups: Array<() => Promise<void>> = [];
-
+let completedVncProbes = 0;
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.restoreAllMocks();
   vi.useRealTimers();
+  completedVncProbes = 0;
 });
-
 async function listenRfb(params?: { banner?: string; securityTypes?: number[] }) {
   const shutdown = params ? cleanups : [];
   const { server } = createSocketServer(shutdown, (socket) => {
     socket.write(Buffer.from(params?.banner ?? "RFB 003.008\n", "ascii"));
-    if (params?.securityTypes) {
-      socket.once("data", () => {
-        socket.write(Buffer.from([params.securityTypes!.length, ...params.securityTypes!]));
-      });
-    }
+    const types = params?.securityTypes;
+    const replies = types
+      ? [Buffer.from([types.length, ...types]), ...[16, 4, 24].map((size) => Buffer.alloc(size))]
+      : [];
+    socket.on("data", () => {
+      const reply = replies.shift();
+      if (reply) {
+        socket.write(reply);
+        completedVncProbes += Number(replies.length === 0);
+      }
+    });
   });
   const port = await listenLoopback(server);
   if (!params) {
@@ -80,13 +86,10 @@ function fakeManagedDesktop(
   return { acquire, acquireComputer, managed, stop };
 }
 
-function hostService(
-  getConfig: () => DesktopHostConfig,
-  options: Omit<Parameters<typeof createHostDesktopService>[0], "getConfig" | "registry"> = {},
-) {
+function hostService(getConfig: () => DesktopHostConfig) {
   const registry = createDesktopSessionRegistry();
   cleanups.push(() => registry.stopAll());
-  const service = createHostDesktopService({ getConfig, registry, ...options });
+  const service = createHostDesktopService({ getConfig, registry });
   return { service, registry };
 }
 
@@ -94,8 +97,9 @@ function managedService(
   managedDesktop: ManagedLinuxDesktop,
   getConfig = (): DesktopHostConfig => ({ enabled: true, managed: true }),
 ) {
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   vi.spyOn(managedLinux, "createManagedLinuxDesktop").mockReturnValue(managedDesktop);
-  return hostService(getConfig, { platform: "linux" });
+  return hostService(getConfig);
 }
 
 describe("gateway host desktop source", () => {
@@ -172,14 +176,12 @@ describe("gateway host desktop source", () => {
       const explicitPort = mode !== "default-port" && mode !== "managed";
       const port = explicitPort ? await listenRfb({ securityTypes: [2] }) : 5900;
       const password = "desktop-secret";
-      let passwordFile: string | undefined;
-      if (withPassword) {
-        const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
-        passwordFile = path.join(root, "passwd");
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-host-desktop-"));
+      cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
+      const passwordFile = withPassword ? path.join(root, "passwd") : undefined;
+      if (passwordFile) {
         await fs.writeFile(passwordFile, `${password}\n`);
-        cleanups.push(async () => fs.rm(root, { recursive: true, force: true }));
       }
-
       const managed = fakeManagedDesktop();
       if (!explicitPort) {
         vi.spyOn(rfbProbe, "probeRfbServer").mockResolvedValue(
@@ -189,31 +191,28 @@ describe("gateway host desktop source", () => {
       const source = createHostDesktopSource({
         config: {
           enabled: true,
-          ...(explicitPort ? { port } : {}),
-          passwordFile,
-          ...(managedMode ? { managed: true } : {}),
+          port: explicitPort ? port : undefined,
+          passwordFile: mode === "managed" ? "/nonexistent/desktop-password" : passwordFile,
+          managed: managedMode,
         },
         platform: "linux",
-        ...(managedMode ? { managedDesktop: managed.managed } : {}),
+        managedDesktop: managed.managed,
       });
-      if (mode === "managed") {
-        await expect(source.acquire()).resolves.toMatchObject({
-          attachment: { host: "127.0.0.1", port: 46_001 },
-          auth: "vnc-password",
-        });
-        expect(managed.acquire).toHaveBeenCalledOnce();
-        return;
-      }
-      await expect(source.acquire()).resolves.toEqual({
-        attachment: { kind: "tcp", host: "127.0.0.1", port },
-        auth: "vnc-password",
-        ...(withPassword ? { vncPassword: password } : {}),
-      });
+      await expect(source.acquire()).resolves.toEqual(
+        mode === "managed"
+          ? managedAttachment
+          : {
+              attachment: { kind: "tcp", host: "127.0.0.1", port },
+              auth: "vnc-password",
+              ...(withPassword ? { vncPassword: password } : {}),
+            },
+      );
       if (withPassword) {
         expect(isSecretValueRegisteredForRedaction(password)).toBe(true);
+        expect(completedVncProbes).toBe(1);
       }
-      if (managedMode) {
-        expect(managed.acquire).not.toHaveBeenCalled();
+      expect(managed.acquire).toHaveBeenCalledTimes(mode === "managed" ? 1 : 0);
+      if (managedMode && mode !== "managed") {
         await expect(source.acquireComputer({ onStop })).rejects.toThrow(
           "selected host desktop is an external VNC server",
         );
@@ -221,10 +220,9 @@ describe("gateway host desktop source", () => {
       }
     },
   );
-
   it("attaches ARD and keeps account credentials only in the observer token", async () => {
     const port = await listenRfb({ banner: "RFB 003.889\n", securityTypes: [30] });
-    const { service } = hostService(() => ({ enabled: true, port }), { platform: "darwin" });
+    const { service } = hostService(() => ({ enabled: true, port }));
     await expect(service.observe({ control: false })).rejects.toThrow(
       "macOS account credentials are required",
     );

@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
@@ -12,7 +12,6 @@ import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Cron loading mocked Gateway E2E",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}.`,
@@ -86,6 +85,9 @@ suite.define(() => {
       const bUrl = `${suite.server.baseUrl}cron?job=${b.id}`;
       const aUrl = `${suite.server.baseUrl}cron?job=${a.id}`;
       await page.goto(bUrl);
+      // An automation opens on its prompt; its settings open from Edit.
+      const openEditor = () => page.locator('[data-test-id="cron-edit"]').click();
+      await openEditor();
       const name = page.locator("#cron-name");
       const editor = page.locator("fieldset.cron-editor");
       await expect.poll(() => name.inputValue()).toBe(b.name);
@@ -109,6 +111,7 @@ suite.define(() => {
           history.pushState(null, "", url);
           window.dispatchEvent(new PopStateEvent("popstate"));
         }, aUrl);
+        await openEditor();
         await expect.poll(() => name.inputValue()).toBe(a.name);
         expect((await observe()).samePage).toBe(true);
         await name.fill(saved.name);
@@ -124,6 +127,7 @@ suite.define(() => {
         if (goBack) {
           await page.goBack();
           await page.waitForURL(bUrl);
+          await openEditor();
           await expect.poll(() => name.inputValue()).toBe(b.name);
         }
         expect(await observe()).toMatchObject({ samePage: true, busy: "true" });
@@ -138,15 +142,25 @@ suite.define(() => {
             ...(outcome === "conflict" ? { details: { code: "CRON_JOB_CHANGED" } } : {}),
           });
         }
-        await expect.poll(() => editor.getAttribute("aria-busy")).toBe("false");
-        const settled = await observe();
-        expect(settled).toMatchObject({
-          url: goBack ? bUrl : aUrl,
-          name: goBack ? b.name : saved.name,
-          title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
-          samePage: true,
-        });
-        const errors = await page.locator(".cron-error-banner").allTextContents();
+        if (!goBack && outcome === "saved") {
+          // A saved edit returns to the automation's prompt and history.
+          await page.locator('[data-test-id="cron-edit"]').waitFor();
+          expect(await editor.count()).toBe(0);
+          await expect
+            .poll(async () => (await page.locator(".cron-detail-title").textContent())?.trim())
+            .toBe(saved.name);
+          expect(page.url()).toBe(aUrl);
+        } else {
+          await expect.poll(() => editor.getAttribute("aria-busy")).toBe("false");
+          const settled = await observe();
+          expect(settled).toMatchObject({
+            url: goBack ? bUrl : aUrl,
+            name: goBack ? b.name : saved.name,
+            title: goBack ? b.name : outcome === "error" ? a.name : saved.name,
+            samePage: true,
+          });
+        }
+        const errors = await page.locator(".callout.danger").allTextContents();
         if (goBack || outcome === "saved") {
           expect(errors).toEqual([]);
         } else {
@@ -176,8 +190,7 @@ suite.define(() => {
       const gateway = await installCronGateway(page, {
         "cron.runs": runsPage([oldRun], 51, 0, 50),
       });
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.goto(`${suite.server.baseUrl}cron?activity`);
       await page.getByText(oldRun.summary, { exact: true }).waitFor();
       await gateway.deferNext("cron.runs");
       await gateway.setMethodResponse("cron.runs", runsPage([secondRun], 2, 50, null));
@@ -188,7 +201,7 @@ suite.define(() => {
             (await gateway.getRequests("cron.runs", { query: "Lunar", offset: 0 })).length,
         )
         .toBe(1);
-      const loadMore = page.getByRole("button", { name: "Load more runs", exact: true });
+      const loadMore = page.getByRole("button", { name: "Load more activity", exact: true });
       if ((await loadMore.isVisible()) && (await loadMore.isEnabled())) {
         await loadMore.click();
       }

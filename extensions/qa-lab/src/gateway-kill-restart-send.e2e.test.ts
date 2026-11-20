@@ -6,8 +6,14 @@ import { startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.js";
-import { QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER } from "./providers/mock-openai/mock-openai-contracts.js";
+import {
+  QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER,
+  QA_RESTART_RESUME_PROMPT_RE,
+} from "./providers/mock-openai/mock-openai-contracts.js";
 import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
+import { fetchOkJson } from "./providers/mock-openai/server.test-harness.js";
+import { readQaMockRequestCursor } from "./providers/shared/debug-request-cursor.js";
+import type { QaMockRequestSnapshot } from "./providers/shared/types.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { waitForQaTransportCondition } from "./qa-transport.js";
 import {
@@ -24,12 +30,12 @@ afterEach(async () => {
     await cleanup().catch((error: unknown) => errors.push(error));
   }
   if (errors.length) {
-    throw new AggregateError(errors, "hard-kill recovery test cleanup failed");
+    throw new AggregateError(errors, "hard-kill test cleanup failed");
   }
 });
 
 it.skipIf(process.platform === "win32")(
-  "recovers a killed run and replies",
+  "resumes a killed run once and accepts fresh input after abort",
   async () => {
     const state = createQaBusState();
     const transport = createQaChannelTransport(state);
@@ -62,7 +68,7 @@ it.skipIf(process.platform === "win32")(
         },
         tools: {
           ...cfg.tools,
-          alsoAllow: ["qa_restart_wait", "qa_restart_unsafe_probe"],
+          alsoAllow: ["qa_restart_wait"],
           // Suspend the 30-second tool so the model's wait is pending at SIGKILL.
           codeMode: { enabled: true, timeoutMs: 10_000 },
         },
@@ -106,8 +112,9 @@ it.skipIf(process.platform === "win32")(
         ? { entry, transcript }
         : undefined;
     });
-    expect(pending.entry.status).toBeUndefined();
-    expect(pending.entry.restartRecoveryDeliveryRunId).toEqual(expect.any(String));
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
     const pid = gateway.pid;
     expect(pid).not.toBeNull();
     expect(signalQaPosixProcessGroup(pid!, "SIGKILL")).toBeUndefined();
@@ -117,27 +124,54 @@ it.skipIf(process.platform === "win32")(
       30_000,
       25,
     );
+    const requestCursor = readQaMockRequestCursor(
+      await fetchOkJson(`${mock.baseUrl}/debug/request-cursor`),
+    );
     await gateway.restartAfterStateMutation(async () => {
-      const orphan = await readEntry();
-      expect(orphan).toMatchObject({
+      const entry = await readEntry();
+      expect(entry).toMatchObject({
         sessionId: pending.entry.sessionId,
-        restartRecoveryDeliveryRunId: pending.entry.restartRecoveryDeliveryRunId,
       });
-      expect(orphan?.status).toBeUndefined();
-      expect(orphan?.abortedLastRun).not.toBe(true);
     });
     expect(gateway.pid).not.toBe(pid);
     await transport.waitReady({ gateway });
-    await poll(async () =>
-      gateway.logs().includes("dispatching restart-safe recovery") &&
-      (await readTranscript()).eventCursor > pending.transcript.eventCursor
-        ? true
-        : undefined,
+    // Crash recovery sends one ordinary input; it does not replay the old prompt.
+    await poll(async () => {
+      const transcript = await readTranscript({
+        afterEventCursor: pending.transcript.eventCursor,
+        allowEmpty: true,
+        includeCodeModeControl: true,
+        pendingCodeModeExecNeedle: "CHECKPOINT-2",
+      });
+      return transcript.hasPendingCodeModeWait ? transcript : undefined;
+    });
+    expect((await readEntry())?.sessionId).toBe(pending.entry.sessionId);
+    const requests = await fetchOkJson<QaMockRequestSnapshot[]>(
+      `${mock.baseUrl}/debug/requests?after=${requestCursor}`,
     );
-    expect(gateway.logs()).toContain("marked 1 startup-orphaned main session(s)");
-    const { messages } = state.getSnapshot();
-    const sinceIndex = messages.filter((message) => message.direction === "outbound").length;
-    // The current-turn fixture takes precedence over the restart prompt in history.
+    const resumedInput = requests.at(-1)?.allInputText ?? "";
+    expect([...resumedInput.matchAll(new RegExp(QA_RESTART_RESUME_PROMPT_RE, "gu"))]).toHaveLength(
+      1,
+    );
+    expect(resumedInput.match(/KILL-RESTART-PROMPT/g)).toHaveLength(1);
+    await transport.waitForNoOutbound({ sinceIndex });
+    // This fixture normally waits for three restarts; stop this test's resumed run.
+    expect(await gateway.call("chat.abort", { sessionKey: key })).toMatchObject({
+      ok: true,
+      aborted: true,
+    });
+    await poll(async () => {
+      const listed = await gateway.call("sessions.list", { agentId: "qa" });
+      const idle = expect.objectContaining({ key, hasActiveRun: false });
+      return isRecord(listed) &&
+        Array.isArray(listed.sessions) &&
+        listed.sessions.some((row) => idle.asymmetricMatch(row))
+        ? true
+        : undefined;
+    }, 30_000);
+    expect(
+      (await readTranscript({ afterEventCursor: pending.transcript.eventCursor })).userMessageCount,
+    ).toBe(1);
     const second = await send("repeated request queued reply gateway qa check");
     const reply = await transport.waitForOutbound({
       conversation,
@@ -152,5 +186,5 @@ it.skipIf(process.platform === "win32")(
     }, 30_000);
     expect(settled.sessionId).toBe(pending.entry.sessionId);
   },
-  600_000,
+  240_000,
 );

@@ -21,6 +21,7 @@ import {
   NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION,
   NextcloudTalkWebhookPayloadError,
   parseNextcloudTalkFileSharedActivity,
+  parseNextcloudTalkQuotedReply,
   parseRawObject,
   requiredString,
   type NextcloudTalkIngressPayload,
@@ -81,6 +82,7 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     );
   }
   const roomId = requiredString(webhook.target.id, "target.id");
+  const quote = parseNextcloudTalkQuotedReply(rawEnvelope);
   const message: NextcloudTalkInboundMessage = {
     messageId: webhook.object.id,
     roomToken: roomId,
@@ -95,6 +97,7 @@ function parseClaimedMessage(payload: NextcloudTalkIngressPayload, claimedId: st
     isGroupChat: true,
     ...(fileShare?.attachment ? { attachment: fileShare.attachment } : {}),
     ...(fileShare?.attachmentIssue ? { attachmentIssue: fileShare.attachmentIssue } : {}),
+    ...(quote ? { quote } : {}),
   };
   return message;
 }

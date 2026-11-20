@@ -42,12 +42,11 @@ function fixture(resolveDisplayId?: WorkerProvider["resolveDisplayId"]) {
 }
 
 describe("profile backend display identity", () => {
-  it("uses only provider-authored presentation with the existing settings snapshot", async () => {
+  it("reflects profile snapshots and live provider replacement", async () => {
     const resolveDisplayId = vi.fn<NonNullable<WorkerProvider["resolveDisplayId"]>>((profile) =>
       typeof profile.backend === "string" ? profile.backend : undefined,
     );
-    const { config, catalog } = fixture(resolveDisplayId);
-    expect(catalog.readProviderDisplayId("production")).toBe("aws");
+    const { config, catalog, provider, setProvider } = fixture(resolveDisplayId);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
     expect(catalog.readProviderDisplayId("aws")).toBe("azure");
     config.cloudWorkers!.profiles!.production!.settings = { backend: "hetzner" };
@@ -58,20 +57,15 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("missing")).toBeUndefined();
     delete config.cloudWorkers!.profiles!.production;
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-  });
-
-  it("refreshes display metadata when the live provider binding changes", async () => {
-    const firstHook = vi.fn(() => "aws");
-    const { catalog, provider, setProvider } = fixture(firstHook);
+    config.cloudWorkers!.profiles!.production = {
+      provider: "adapter",
+      settings: { backend: "aws" },
+    };
     setProvider(undefined);
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-
     setProvider(provider);
     expect(catalog.readProviderDisplayId("production")).toBe("aws");
-    expect(catalog.readProviderDisplayId("production")).toBe("aws");
-
-    const reloadedHook = vi.fn(() => "gcp");
-    setProvider({ ...provider, resolveDisplayId: reloadedHook });
+    setProvider({ ...provider, resolveDisplayId: () => "gcp" });
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
     await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
     expect(catalog.readProviderDisplayId("production")).toBe("gcp");
@@ -80,24 +74,27 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
   });
 
-  it.each(["", "AWS", "aws\n", "a".repeat(65), "a_b"])(
-    "omits invalid metadata %j without losing machine choices",
-    async (value) => {
-      const { catalog } = fixture(() => value);
-      expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-      await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-    },
-  );
-
-  it("keeps missing and throwing hooks cosmetic without exposing their error", async () => {
-    expect(fixture().catalog.readProviderDisplayId("production")).toBeUndefined();
-    const hook = vi.fn(() => {
-      throw new Error("private provider details");
-    });
-    const { catalog, warn } = fixture(hook);
+  it.each([
+    "",
+    "AWS",
+    "aws\n",
+    "a".repeat(65),
+    "a_b",
+    undefined,
+    new Error("private provider details"),
+  ])("keeps unusable metadata %j cosmetic and private", async (value) => {
+    const { catalog, warn } = fixture(
+      value === undefined
+        ? undefined
+        : () => {
+            if (value instanceof Error) {
+              throw value;
+            }
+            return value;
+          },
+    );
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
     await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-    expect(hook).toHaveBeenCalledOnce();
     expect(warn).not.toHaveBeenCalled();
   });
 });
@@ -119,15 +116,35 @@ function discoveryFixture(section: Section) {
 }
 
 describe("provider metadata in-flight ownership", () => {
-  it.each(["machines", "systems"] as const)(
-    "coalesces concurrent %s reads and uses the live provider after settlement",
-    async (section) => {
-      const { pending, hook, read, provider, setProvider, operation } = discoveryFixture(section);
+  it.each([
+    ["machines", false],
+    ["systems", false],
+    ["machines", true],
+    ["systems", true],
+  ] as const)(
+    "coalesces %s reads and refreshes after settlement (rejected=%s)",
+    async (section, rejected) => {
+      const { catalog, pending, hook, read, provider, setProvider, operation, warn } =
+        discoveryFixture(section);
       const first = read();
       const second = read();
-      pending.resolve(choices);
-      expect(await Promise.all([first, second])).toEqual([choices, choices]);
+      const settled = Promise.allSettled([first, second]);
+      const failure = new Error("metadata unavailable");
+      if (rejected) {
+        pending.reject(failure);
+      } else {
+        catalog.warmMachineShape("production");
+        catalog.warmMachineShape("production");
+        pending.resolve(choices);
+      }
+      const expected = rejected
+        ? { status: "rejected", reason: failure }
+        : { status: "fulfilled", value: choices };
+      expect(await settled).toEqual([expected, expected]);
       expect(hook).toHaveBeenCalledOnce();
+      hook.mockResolvedValue(choices);
+      expect(await read()).toEqual(choices);
+      expect(hook).toHaveBeenCalledTimes(2);
       const updated = [{ id: "updated", label: "Updated" }];
       const refreshedHook = vi.fn(async () => updated);
       setProvider({ ...provider, [operation]: refreshedHook });
@@ -135,28 +152,10 @@ describe("provider metadata in-flight ownership", () => {
       refreshedHook.mockResolvedValue(choices);
       expect(await read()).toEqual(choices);
       expect(refreshedHook).toHaveBeenCalledTimes(2);
-      expect(hook).toHaveBeenCalledOnce();
+      expect(hook).toHaveBeenCalledTimes(2);
+      expect(warn).not.toHaveBeenCalled();
     },
   );
-
-  it("joins active machine and operating-system work during warmup", async () => {
-    const { catalog, provider, warn } = fixture();
-    const machines = createDeferred<readonly { id: string; label: string }[]>();
-    const systems = createDeferred<readonly { id: string; label: string }[]>();
-    const listMachineOptions = vi.fn(() => machines.promise);
-    const listOperatingSystems = vi.fn(() => systems.promise);
-    Object.assign(provider, { listMachineOptions, listOperatingSystems });
-    const first = catalog.listMachineOptions("production");
-    const second = catalog.listOperatingSystems("production");
-    catalog.warmMachineShape("production");
-    catalog.warmMachineShape("production");
-    machines.resolve(choices);
-    systems.resolve(choices);
-    await Promise.all([first, second]);
-    expect(listMachineOptions).toHaveBeenCalledOnce();
-    expect(listOperatingSystems).toHaveBeenCalledOnce();
-    expect(warn).not.toHaveBeenCalled();
-  });
 
   it("retries a failed section while joining the sibling's pending warmup work", async () => {
     const { catalog, provider, warn } = fixture();
@@ -184,21 +183,6 @@ describe("provider metadata in-flight ownership", () => {
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "Worker machine catalog warmup failed for profile production",
     );
-  });
-
-  it.each(["machines", "systems"] as const)("retries a rejected %s flight", async (section) => {
-    const { pending, hook, read } = discoveryFixture(section);
-    const settled = Promise.allSettled([read(), read()]);
-    const failure = new Error("metadata unavailable");
-    pending.reject(failure);
-    expect(await settled).toEqual([
-      { status: "rejected", reason: failure },
-      { status: "rejected", reason: failure },
-    ]);
-    expect(hook).toHaveBeenCalledOnce();
-    hook.mockResolvedValue(choices);
-    expect(await read()).toEqual(choices);
-    expect(hook).toHaveBeenCalledTimes(2);
   });
 
   it("does not retain old machine shape after a fresh empty response", async () => {

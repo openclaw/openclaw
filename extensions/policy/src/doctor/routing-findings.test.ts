@@ -21,8 +21,12 @@ const baseRules: PolicyRoutingRules = {
   ],
 };
 
+const baseConfig = {
+  agents: { list: [{ id: "main", default: true }, { id: "private" }] },
+  channels: { imessage: {} },
+};
 function evaluate(cfg: Record<string, unknown>, rules: PolicyRoutingRules = baseRules) {
-  const evidence = collectPolicyEvidence(cfg, { routing: rules });
+  const evidence = collectPolicyEvidence({ ...baseConfig, ...cfg }, { routing: rules });
   return {
     evidence,
     findings: routingFindings(rules, "policy.jsonc", "policy.jsonc", evidence),
@@ -32,7 +36,6 @@ function evaluate(cfg: Record<string, unknown>, rules: PolicyRoutingRules = base
 describe("routing policy findings", () => {
   it("accepts a configured peer binding and emits redacted evidence", () => {
     const result = evaluate({
-      agents: { list: [{ id: "main", default: true }, { id: "private" }] },
       channels: { imessage: { enabled: false } },
       bindings: [
         {
@@ -54,11 +57,7 @@ describe("routing policy findings", () => {
   });
 
   it("detects empty bindings and default-agent fallthrough", () => {
-    const result = evaluate({
-      agents: { list: [{ id: "main", default: true }, { id: "private" }] },
-      channels: { imessage: {} },
-      bindings: [],
-    });
+    const result = evaluate({ bindings: [] });
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual([
       "policy/routing-bindings-required",
@@ -69,8 +68,6 @@ describe("routing policy findings", () => {
 
   it("detects a retired binding channel even when another channel is configured", () => {
     const result = evaluate({
-      agents: { list: [{ id: "main", default: true }, { id: "private" }] },
-      channels: { imessage: {} },
       bindings: [{ agentId: "private", match: { channel: "bluebubbles" } }],
     });
 
@@ -83,7 +80,6 @@ describe("routing policy findings", () => {
   it("does not count ACP bindings as channel route bindings", () => {
     const result = evaluate({
       agents: { list: [{ id: "main", default: true }] },
-      channels: { imessage: {} },
       bindings: [{ type: "acp", agentId: "main", match: { channel: "imessage" } }],
     });
 

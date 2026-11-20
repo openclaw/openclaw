@@ -6,7 +6,15 @@ import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
 
 const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
-vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: lookupMock,
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -192,10 +200,7 @@ describe("uploadToConsentUrl", () => {
     const backing = Buffer.from([0xfe, 0xfd, 1, 2, 3, 0xfc]);
     const buffer = backing.subarray(2, 5);
     const expectedBytes = Buffer.from([0, 0x80, 0xff]);
-    let finishResolution: () => void = () => {};
-    const resolutionReady = new Promise<void>((resolve) => {
-      finishResolution = resolve;
-    });
+    const { promise: resolutionReady, resolve: finishResolution } = Promise.withResolvers<void>();
     const resolveFn = vi.fn(async () => {
       await resolutionReady;
       return { address: "13.107.136.10" };

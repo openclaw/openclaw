@@ -10,34 +10,6 @@ type ChatProjection = {
   payload: Record<string, unknown>;
 };
 
-export type AssistantProjection = { itemId?: string; text: string };
-
-export function projectAssistantRunEvent(
-  event: OpenClawEvent,
-  previous: AssistantProjection | undefined,
-): { event: OpenClawEvent; assistant: AssistantProjection | undefined } | undefined {
-  if (event.raw?.event !== "agent" || asRecord(event.raw.payload).stream !== "assistant") {
-    return undefined;
-  }
-  const data = asRecord(event.data);
-  if (typeof data.text !== "string" && typeof data.delta !== "string") {
-    return undefined;
-  }
-  const itemId = typeof data.itemId === "string" ? data.itemId : undefined;
-  let text = typeof data.text === "string" ? data.text : undefined;
-  if (
-    text === undefined &&
-    typeof data.delta === "string" &&
-    (data.replace === true || (previous && previous.itemId === itemId))
-  ) {
-    text = (data.replace === true ? "" : (previous?.text ?? "")) + data.delta;
-  }
-  return {
-    event: text === undefined ? event : { ...event, data: { ...data, text } },
-    assistant: text === undefined ? undefined : { itemId, text },
-  };
-}
-
 export function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
   const raw = event.raw;
   if (event.type !== "raw" || raw?.event !== "chat") {

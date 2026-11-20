@@ -8,6 +8,7 @@ import {
 } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,15 +43,22 @@ async function inspectFixture(
 }
 
 it("includes nondefault inspections in the retry command after advisory findings", async () => {
+  const secret = "sk-doctorTargetSecret1234567890";
+  const target = `survivor/model token=${secret} ${"x".repeat(200)}`;
   const observed = await inspectFixture(
     "doctor-advisory-retry-",
     `process.stdout.write(JSON.stringify({
       ok: false, checksRun: 1,
-      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks." }]
+      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks.", target: ${JSON.stringify(target)} }]
     })); process.exitCode = 1;`,
     ["core/doctor/hooks-model"],
   );
   expect(observed.status).toBe("ok");
+  const retainedTarget = observed.steps.at(-1)?.doctorLintFindings?.[0]?.target;
+  expect(retainedTarget).toContain("survivor/model");
+  expect(retainedTarget).not.toContain(secret);
+  expect(retainedTarget?.length).toBeLessThanOrEqual(160);
+  expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toEqual([]);
   expect(observed.steps.at(-1)?.advisory?.message).toContain(
     "openclaw doctor --lint --all --severity-min info",
   );
@@ -73,6 +81,7 @@ process.exitCode = 1;
   );
   expect(JSON.parse(await fs.readFile(argvPath, "utf8"))).toContain(`--only=${selector}`);
   expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toBeUndefined();
   expect(observed.steps.at(-1)).toMatchObject({
     exitCode: 1,
     advisory: { message: expect.stringContaining("did not run every deferred inspection") },
@@ -102,37 +111,25 @@ process.exitCode = 13;
   );
 });
 
-it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selectors })))(
-  "does not revive an earlier report when the latest Doctor selectors are unusable ($selectors)",
-  async ({ selectors }) => {
-    // Decode a malformed wire receipt rather than constructing a valid typed step.
-    const result: UpdateRunResult = JSON.parse(`{
-      "status": "ok", "mode": "git", "durationMs": 0,
-      "steps": ${JSON.stringify([
-        doctorStep(["core/doctor/command-owner"]),
-        {
-          ...doctorStep(null),
-          name: "post-plugin doctor",
-          deferredInspectionCheckIds: selectors,
-        },
-      ])}
-    }`);
-    const observed = await runPostActivationInspections({
-      root: "/synthetic/candidate",
-      gatewayReady: true,
-      result,
-    });
-    expect(observed.status).toBe("ok");
-    expect(observed.steps.at(-1)).toMatchObject({
-      name: "post-activation doctor inspections",
-      exitCode: null,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: expect.stringContaining("did not report usable deferred inspection selectors"),
-      },
-    });
-  },
-);
+it("does not revive an earlier report when the latest Doctor selectors are unusable", async () => {
+  const observed = await runPostActivationInspections({
+    root: "/synthetic/candidate",
+    gatewayReady: true,
+    result: updateResult({
+      mode: "git",
+      steps: [doctorStep(["core/doctor/command-owner"]), doctorStep([" "])],
+    }),
+  });
+  expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)).toMatchObject({
+    name: "post-activation doctor inspections",
+    exitCode: null,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: expect.stringContaining("did not report usable deferred inspection selectors"),
+    },
+  });
+});
 
 it.each(["doctor", "inline lint"])(
   "does not turn an empty deferred set from %s into an unfiltered lint pass",
@@ -144,27 +141,13 @@ it.each(["doctor", "inline lint"])(
     });
     if (receiptOwner === "inline lint") {
       result.postUpdate = {
-        plugins: {
+        plugins: createPostCorePluginUpdateResult({
           status: "ok",
-          changed: false,
-          sync: {
-            changed: false,
-            switchedToBundled: [],
-            switchedToNpm: [],
-            warnings: [],
-            errors: [],
-          },
-          npm: { changed: false, outcomes: [] },
-          integrityDrifts: [],
           doctorLint: {
-            name: "post-plugin-doctor-lint",
+            ...doctorStep([]),
             command: "doctor --lint --all",
-            cwd: "/synthetic/candidate",
-            durationMs: 0,
-            exitCode: 0,
-            deferredInspectionCheckIds: [],
           },
-        },
+        }),
       };
     }
     await expect(

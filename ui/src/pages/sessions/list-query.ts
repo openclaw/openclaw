@@ -1,23 +1,18 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import {
-  SESSIONS_PAGE_DEFAULT_LIMIT,
-  type SessionArchivedFilter,
-  type SessionListOptions,
-} from "../../lib/sessions/index.ts";
+import type { SessionArchivedFilter, SessionListOptions } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
-
-type SessionsPageListFilters = {
-  activeMinutes?: string;
-  limit?: string;
-  includeGlobal: boolean;
-  includeUnknown: boolean;
-  statusFilter: SessionArchivedFilter;
-  searchQuery?: string;
-};
+import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
 export function buildSessionsListQuery(
   scopeId: string | null,
-  filters: SessionsPageListFilters,
+  filters: {
+    activeMinutes?: string;
+    limit?: string;
+    includeGlobal: boolean;
+    includeUnknown: boolean;
+    statusFilter: SessionArchivedFilter;
+    searchQuery?: string;
+  },
   linkedSessionKey?: string | null,
   search = filters.searchQuery,
 ): SessionListOptions {

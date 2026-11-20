@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import {
   seedChatSettings,
@@ -39,6 +40,28 @@ suite.define(() => {
         swarm: swarmSnapshot(child.swarmGroupId, 1, [child]),
       };
       const other = { key: otherKey, kind: "direct", label: "Notes", updatedAt: 3 };
+      const researchMessage = (content: string) => ({
+        role: "assistant",
+        content,
+        __openclaw: { id: "research-launch", runId: "research-run" },
+        activity: [
+          {
+            itemId: "research-spawn",
+            kind: "tool",
+            title: "Research worker",
+            phase: "end",
+            status: "completed",
+            delegation: [
+              {
+                runId: child.sessionId,
+                childSessionKey: child.key,
+                groupId: child.swarmGroupId,
+                status: "accepted",
+              },
+            ],
+          },
+        ],
+      });
       await seedChatSettings(page, suite.server.baseUrl, {
         chatSplitLayout: splitColumns([parent, other], 0),
       });
@@ -46,7 +69,7 @@ suite.define(() => {
         sessionKey: parentKey,
         sessions: [parent, other, child],
         sessionTranscripts: {
-          [parentKey]: { messages: [{ role: "assistant", content: "Research conversation." }] },
+          [parentKey]: { messages: [researchMessage("Research conversation.")] },
           [otherKey]: { messages: [{ role: "assistant", content: "Notes conversation." }] },
         },
       });
@@ -54,12 +77,16 @@ suite.define(() => {
       const cells = page.locator("openclaw-chat-page .chat-split-view__cell");
       await expect.poll(() => cells.count()).toBe(2);
       const research = cells.first().locator('openclaw-chat-pane[aria-hidden="false"]');
-      const widget = research.locator('[data-test-id="chat-swarm"]');
-      const outcome = widget.getByText(
-        "Child runs finished. Check the conversation for the final response.",
-      );
-      await widget.locator("summary").click();
-      await expect.poll(() => outcome.isVisible()).toBe(true);
+      const details = await openChatDetails(research);
+      const group = details.locator('[data-details-group="subagents"]');
+      const summary = group.locator(":scope > summary");
+      if ((await summary.getAttribute("aria-expanded")) !== "true") {
+        await summary.click();
+      }
+      const childRow = group.locator('[data-subagent-session-key="' + child.key + '"]');
+      const outcome = childRow.locator(".chat-details-subagents__status");
+      await childRow.getByText("Research worker", { exact: true }).waitFor();
+      await expect.poll(() => outcome.textContent()).toBe("Done");
       // Finish compaction after the other pane replaces the primary session page.
       await gateway.deferNext("sessions.compact");
       const composer = research.locator(".agent-chat__composer-combobox textarea");
@@ -92,14 +119,15 @@ suite.define(() => {
           { sessionKey: parentKey },
           {
             sessionId: parent.sessionId,
-            messages: [{ role: "assistant", content: "Refreshed research results." }],
+            messages: [researchMessage("Refreshed research results.")],
             sessionInfo: { ...parent, updatedAt: 2, status: "running", hasActiveRun: true },
           },
         ),
       );
       await gateway.resolveDeferred("sessions.compact", { ok: true, compacted: true });
       await research.getByText("Refreshed research results.", { exact: true }).waitFor();
-      await expect.poll(() => outcome.isVisible()).toBe(true);
+      await expect.poll(() => outcome.textContent()).toBe("Done");
+      expect(await research.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
     });
   });
 });

@@ -13,20 +13,20 @@ import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createModelAccountConnectService } from "../src/gateway/model-account-connect.js";
 import { broadcastChatMetadataChanged } from "../src/gateway/server-chat-metadata-lifecycle.js";
 import { createDirectChatContext } from "../src/gateway/server-chat.agent-events.test-helpers.js";
+import { callAgentHandler } from "../src/gateway/server-methods/agents-mutate.test-support.js";
 import {
   createModelsListTestContext,
   catalogEntry,
-  WITHOUT_OPENAI_ENV_AUTH,
 } from "../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import { modelsHandlers } from "../src/gateway/server-methods/models.js";
 import { roleConfig } from "../src/gateway/server-methods/sessions-reactions.test-support.js";
-import type { RespondFn } from "../src/gateway/server-methods/types.js";
-import { usersAuthConnectHandlers } from "../src/gateway/server-methods/users-auth-connect.js";
+import { usersHandlers as usersAuthConnectHandlers } from "../src/gateway/server-methods/users.js";
 import {
   readPreparedCatalog,
   registerGatewayModelCatalogPrivateAccess,
 } from "../src/gateway/server-model-catalog-auth.js";
 import { createOperatorWsClient } from "../src/gateway/server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../src/gateway/test-helpers.env.js";
 import { fetchWithSsrFGuard } from "../src/infra/net/fetch-guard.js";
 import { clearLiveCatalogCacheForTests } from "../src/plugin-sdk/provider-catalog-shared.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
@@ -298,25 +298,19 @@ it.each([
           onChanged: () => broadcastChatMetadataChanged(context),
         });
         context.modelAccountConnectService = service;
-        const request = async (
+        const request = (
           method: "models.list" | "users.unlinkAuthProfile",
           params: Record<string, unknown>,
-        ) => {
-          const respond = vi.fn<RespondFn>();
-          const handler = expectDefined(
-            method === "models.list" ? modelsHandlers[method] : usersAuthConnectHandlers[method],
-            "registered handler",
-          );
-          await handler({
-            req: { type: "req", id: "catalog-link-proof", method, params },
+        ) =>
+          callAgentHandler(
+            expectDefined(
+              method === "models.list" ? modelsHandlers[method] : usersAuthConnectHandlers[method],
+              "registered handler",
+            ),
+            method,
             params,
-            context,
-            client,
-            respond,
-            isWebchatConnect: () => false,
-          });
-          return respond;
-        };
+            { context, client },
+          );
         transport.resolveAuth.mockResolvedValue(resolvedAuth(selected));
         const allowed = boundary === null;
         const gate =

@@ -17,6 +17,7 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { makeTextToolResult } from "../../test-support/message-fixtures.test-support.js";
 import { createAttemptTranscriptJournal } from "../src/attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "../src/attempt-types.js";
 
@@ -103,14 +104,7 @@ async function groups(prefix: string, count: number) {
     });
     journal.recordToolResult({
       eventId: `result-${id}`,
-      message: {
-        role: "toolResult",
-        toolCallId: id,
-        toolName: "read",
-        content: [{ type: "text", text: "done" }],
-        isError: false,
-        timestamp: 2,
-      },
+      message: makeTextToolResult(id, "read", "done", false, 2),
     });
     await journal.barrier("benchmark group");
     timings.push(performance.now() - start);

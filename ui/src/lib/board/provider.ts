@@ -20,7 +20,8 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
   return snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
 }
 
-function createNullProvider(sessionKey: string): BoardProvider {
+export function createNullBoardProvider(key: string): BoardProvider {
+  const sessionKey = normalizeDefaultMainSessionAliasForUi(key);
   const pinWidget = async () => {
     throw new Error("Session dashboard unavailable");
   };
@@ -49,12 +50,6 @@ function createNullProvider(sessionKey: string): BoardProvider {
   };
 }
 
-type BoardProviderCapabilities = Pick<
-  BoardProvider,
-  "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant"
->;
-
-const nullProviders = new Map<string, BoardProvider>();
 const gatewayProviders = new Map<
   string,
   { provider: GatewayBoardProvider; consumers: number; presentationScope?: object }
@@ -70,19 +65,11 @@ export function boardProviderCacheKey(session: BoardGetParams): string {
 
 // Session lookups are read-only: only a lifecycle-owned lease may create and
 // subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
-export function boardProviderForSession(session: BoardGetParams, available = true): BoardProvider {
-  const key = boardProviderCacheKey(session);
-  const sessionKey = normalizeDefaultMainSessionAliasForUi(session.sessionKey);
-  const gatewayProvider = available ? gatewayProviders.get(key)?.provider : undefined;
-  if (gatewayProvider) {
-    return gatewayProvider;
-  }
-  let provider = nullProviders.get(key);
-  if (!provider) {
-    provider = createNullProvider(sessionKey);
-    nullProviders.set(key, provider);
-  }
-  return provider;
+export function boardProviderForSession(
+  session: BoardGetParams,
+  available = true,
+): BoardProvider | undefined {
+  return available ? gatewayProviders.get(boardProviderCacheKey(session))?.provider : undefined;
 }
 
 export type BoardProviderLease = {
@@ -91,7 +78,7 @@ export type BoardProviderLease = {
   update: (
     client: BoardGatewayClient,
     connected: boolean,
-    capabilities: BoardProviderCapabilities,
+    capabilities: Pick<BoardProvider, "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant">,
   ) => void;
   release: () => void;
 };

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,17 +6,12 @@ import {
   pruneStandaloneRuntime,
   standaloneResourceCategory,
 } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture(files: string[]) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-sidecar-"));
-  roots.push(root);
+  const root = tempDirs.make("standalone-sidecar-");
   const runtime = path.join(root, "runtime");
   for (const name of files) {
     const filename = path.join(runtime, name);
@@ -41,7 +35,6 @@ describe("standalone resource allowlist", () => {
     ["custodian-skills/recover/SKILL.md", "skills"],
     ["dist/control-ui/assets/index.js", "controlUi"],
     ["dist/assets/session-card/Lato-Regular.ttf", "runtimeAssets"],
-    ["dist/canvas-host/a2ui/a2ui.bundle.js", "runtimeAssets"],
     ["dist/export-html/template.js", "templates"],
     ["dist/bundled/session-memory/HOOK.md", "hookMetadata"],
     ["dist/bundled/session-memory/handler.js", undefined],
@@ -53,6 +46,9 @@ describe("standalone resource allowlist", () => {
     ["dist/extensions/example/openclaw.plugin.json", "pluginMetadata"],
     ["extensions/example/package.json", "pluginMetadata"],
     ["dist/cli-startup-metadata.json", "runtimeMetadata"],
+    ["dist/.source-module-urls/build.json", undefined],
+    ["dist/extensions/example/.source-module-urls/build.json", undefined],
+    ["extensions/example/dist/.source-module-urls/build.json", undefined],
     ["dist/tree-sitter-bash.wasm", "runtimeAssets"],
     ["LICENSE", "licenses"],
     ["THIRD_PARTY_NOTICES.md", "licenses"],

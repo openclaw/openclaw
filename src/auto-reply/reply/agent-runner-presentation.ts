@@ -9,7 +9,7 @@ import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import { hasCommittedReplyOperationOutcome } from "../../sessions/session-controller.js";
 import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, shouldKeepPayloadDuringSilentTurn } from "../reply-payload.js";
 import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -54,7 +54,7 @@ export function createAgentTurnPresentation(params: {
   ): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
-    if (params.turn.followupRun.run.silentExpected) {
+    if (params.turn.followupRun.run.silentExpected && !shouldKeepPayloadDuringSilentTurn(payload)) {
       return { skip: true };
     }
     if (hasHeartbeatToken !== false && text?.includes("HEARTBEAT_OK")) {
@@ -76,6 +76,7 @@ export function createAgentTurnPresentation(params: {
   const sanitizeStreamingText = (
     text: string | undefined,
     errorContext: boolean,
+    preserveLeadingSourceBoundary = false,
   ): { text?: string; skip: boolean } => {
     if (!text) {
       return { skip: true };
@@ -84,7 +85,11 @@ export function createAgentTurnPresentation(params: {
       params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
     const sanitized = errorContext
       ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
-      : sanitizeUserFacingText(text, { conversationContext, streaming: true });
+      : sanitizeUserFacingText(text, {
+          conversationContext,
+          streaming: true,
+          preserveLeadingSourceBoundary,
+        });
     return sanitized.trim() ? { text: sanitized, skip: false } : { skip: true };
   };
 
@@ -93,7 +98,11 @@ export function createAgentTurnPresentation(params: {
     if (classified.skip || !classified.text) {
       return classified;
     }
-    return sanitizeStreamingText(classified.text, Boolean(payload.isError));
+    return sanitizeStreamingText(
+      classified.text,
+      Boolean(payload.isError),
+      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+    );
   };
 
   const preserveProgressCallbackStartOrder =
@@ -204,6 +213,7 @@ export function createAgentTurnPresentation(params: {
           typingSignals: params.turn.typingSignals,
           reasoningPayloadsEnabled: params.turn.opts?.reasoningPayloadsEnabled,
           commentaryPayloadsEnabled: params.turn.opts?.commentaryPayloadsEnabled,
+          silentExpected: params.turn.followupRun.run.silentExpected,
           blockStreamingEnabled: params.turn.blockStreamingEnabled,
           blockReplyPipeline,
           directBlockDeliveries: params.directBlockDeliveries,

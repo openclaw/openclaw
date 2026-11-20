@@ -21,7 +21,7 @@ type SessionScopeTestParams = {
     }>;
   }) => unknown;
   getActiveMemorySearchManagerMock: Mock;
-  loadCombinedSessionStoreForGatewayAsyncMock: Mock;
+  loadMemorySearchSessionStoreMock: Mock;
   searchMemoryWiki: typeof searchMemoryWiki;
 };
 
@@ -32,7 +32,7 @@ export function registerSessionlessAgentScopeQueryTests(params: SessionScopeTest
       initialize: true,
       config: { search: { backend: "shared", corpus: "memory" } },
     });
-    params.loadCombinedSessionStoreForGatewayAsyncMock.mockResolvedValue({
+    params.loadMemorySearchSessionStoreMock.mockResolvedValue({
       storePath: "(test)",
       store: {
         "agent:secondary:visible-session": {
@@ -75,9 +75,12 @@ export function registerSessionlessAgentScopeQueryTests(params: SessionScopeTest
       maxResults: 10,
     });
 
-    expect(params.loadCombinedSessionStoreForGatewayAsyncMock).toHaveBeenCalledWith(appConfig, {
-      agentId: "secondary",
-    });
+    expect(params.loadMemorySearchSessionStoreMock).toHaveBeenCalledWith(
+      appConfig,
+      expect.objectContaining({
+        agentId: "secondary",
+      }),
+    );
     expect(results.map((result) => result.path)).toEqual([
       "sessions/visible-session.jsonl",
       "sessions/secondary/unlisted-session.jsonl",

@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createTeamReportsHttpHandler,
@@ -11,12 +10,9 @@ import type { ResolvedGatewayAuth } from "../../src/gateway/auth.js";
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../src/gateway/control-ui-contract.js";
 import { setControlUiPluginAuthCookie } from "../../src/gateway/control-ui-plugin-auth-cookie.js";
 import { resolveControlUiPluginAuthCookieGeneration } from "../../src/gateway/http-auth-plugin-cookie.js";
-import {
-  authorizePluginGatewayHttpRequestOrReply,
-  resolveSharedSecretHttpOperatorScopes,
-} from "../../src/gateway/http-auth-utils.js";
 import { invalidateOperatorRolePolicy } from "../../src/gateway/operator-role-policy.js";
 import { createDirectChatContext } from "../../src/gateway/server-chat.agent-events.test-helpers.js";
+import { createTestGatewayServer } from "../../src/gateway/server-http.test-harness.js";
 import { createGatewayTestRegistry } from "../../src/gateway/server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "../../src/gateway/server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "../../src/gateway/server/ws-shared-generation.js";
@@ -188,10 +184,19 @@ async function withReports(
           getGatewayRequestContext: () => context,
           log: createSubsystemLogger("test/reports-http"),
         });
-        const server = createServer((req, res) => {
-          void (async () => {
-            // The fixture issues synthetic identity cookies through the real signer.
-            if (req.url === "/fixture-cookie") {
+        const server = createTestGatewayServer({
+          resolvedAuth: auth,
+          overrides: {
+            getResolvedAuth: () => auth,
+            getRuntimeConfig: () => cfg,
+            getGatewayRequestContext: () => context,
+            handlePluginRequest: handler,
+            shouldEnforcePluginGatewayAuth: () => true,
+            handleHooksRequest: async (req, res) => {
+              // The fixture issues synthetic identity cookies through the real signer.
+              if (req.url !== "/fixture-cookie") {
+                return false;
+              }
               setControlUiPluginAuthCookie(res, [{ ...reportRoute, scopes: ["operator.read"] }], {
                 generation: resolveControlUiPluginAuthCookieGeneration(
                   resolveSharedGatewaySessionGeneration(auth),
@@ -201,26 +206,9 @@ async function withReports(
                 nowMs: issuedAt,
               });
               res.end();
-              return;
-            }
-            const authorized = await authorizePluginGatewayHttpRequestOrReply({
-              req,
-              res,
-              auth,
-              getResolvedAuth: () => auth,
-              requestPath: new URL(req.url ?? "/", "http://localhost").pathname,
-              resolveOperatorScopes: resolveSharedSecretHttpOperatorScopes,
-            });
-            if (authorized) {
-              await handler(req, res, undefined, {
-                gatewayAuthSatisfied: true,
-                gatewayRequestAuth: authorized.requestAuth,
-                gatewayRequestOperatorScopes: authorized.operatorScopes,
-              });
-            }
-          })().catch((error: unknown) =>
-            res.destroy(error instanceof Error ? error : new Error(String(error))),
-          );
+              return true;
+            },
+          },
         });
         try {
           await projection.ensureMaterialized();

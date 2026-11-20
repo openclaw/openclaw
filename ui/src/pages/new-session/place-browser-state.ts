@@ -165,9 +165,16 @@ export class PlaceBrowserState {
         this.draft = "";
         return await this.load(undefined, "navigation", requestId);
       } else if (mode !== "typing") {
-        return readMissingScopeError(error)?.missingScope
+        const missingScope = readMissingScopeError(error)?.missingScope;
+        return missingScope === "operator.admin"
           ? t("newSession.browseRequiresAdmin")
-          : t("newSession.browserLoadFailed");
+          : missingScope === "operator.write"
+            ? t("newSession.browseRequiresWrite")
+            : missingScope === "operator.read"
+              ? t("newSession.browseRequiresRead")
+              : missingScope
+                ? t("newSession.browseAccessDenied")
+                : t("newSession.browserLoadFailed");
       }
     } finally {
       if (requestId === this.token) {

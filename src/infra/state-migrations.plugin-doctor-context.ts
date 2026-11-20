@@ -24,6 +24,7 @@ import {
   type SessionStoreTarget as DoctorSessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pluginStatePublication } from "../plugin-state/plugin-state-publication.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
 import {
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
@@ -374,7 +375,7 @@ async function repairPluginStateEntriesForDoctor(params: {
       assertCurrent();
       authority.assertOwnedInTransaction(db);
       validate(db);
-      for (const { key, valueJson } of rows) {
+      for (const { entry, key, valueJson } of rows) {
         executeSqliteQuerySync(
           db,
           getPluginStateKysely(db)
@@ -384,6 +385,14 @@ async function repairPluginStateEntriesForDoctor(params: {
             .where("namespace", "=", namespace)
             .where("entry_key", "=", key),
         );
+        pluginStatePublication.stagePostimage(db, {
+          plugin_id: pluginId,
+          namespace,
+          entry_key: key,
+          value_json: valueJson,
+          created_at: entry.createdAt,
+          expires_at: entry.expiresAt,
+        });
       }
       authority.assertOwnedInTransaction(db);
     },

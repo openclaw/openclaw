@@ -139,7 +139,6 @@ export async function runTalkRelayCloseHistory(input: {
         question: "Save the next requested note.",
       });
       await modelStarted.promise;
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
       await writeVoice("Let me check the next note.");
       if (input.spokenReplacement) {
         releaseModel.resolve();

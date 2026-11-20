@@ -1,62 +1,51 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 
 function dockerResult(stdout = "", stderr = "", code = 0) {
   return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), code };
 }
-function finding(suffix: string, severity = "warn") {
-  return expect.objectContaining({ checkId: `sandbox.browser_container.${suffix}`, severity });
+function finding(suffix: string, severity = "warn", extra = {}) {
+  return expect.objectContaining({
+    checkId: `sandbox.browser_container.${suffix}`,
+    severity,
+    ...extra,
+  });
 }
-beforeEach(() => {
-  vi.useRealTimers();
-});
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 describe("security audit sandbox browser findings", () => {
-  it.each([
-    {
-      name: "missing and stale hash labels",
-      labels: { old: "abc123\tepoch-v0\n", missing: "<no value>\t<no value>\n" },
-      ports: "",
-      expected: [
-        finding("hash_label_missing"),
-        expect.objectContaining({
-          checkId: "sandbox.browser_container.hash_epoch_stale",
-          severity: "warn",
-          detail: expect.stringContaining("openclaw-sbx-browser-old"),
-        }),
-      ],
-    },
-    {
-      name: "non-loopback published ports",
-      labels: { exposed: "hash123\t2026-02-21-novnc-auth-default\n" },
-      ports: "6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n",
-      expected: [finding("non_loopback_publish", "critical")],
-    },
-  ])("warns about $name", async ({ labels, ports, expected }) => {
-    const containers = new Map(
-      Object.entries(labels).map(([name, label]) => [`openclaw-sbx-browser-${name}`, label]),
-    );
+  it("reports missing labels, stale epochs, and exposed ports across browser containers", async () => {
+    const labels = new Map([
+      ["openclaw-sbx-browser-old", "abc123\tepoch-v0\n"],
+      ["openclaw-sbx-browser-missing", "<no value>\t<no value>\n"],
+      ["openclaw-sbx-browser-exposed", "hash123\t2026-02-21-novnc-auth-default\n"],
+    ]);
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args) => {
+        const name = args.at(-1) ?? "";
         if (args[0] === "ps") {
-          return dockerResult([...containers.keys()].join("\n") + "\n");
+          return dockerResult([...labels.keys()].join("\n") + "\n");
         }
-        const label = containers.get(args.at(-1) ?? "");
-        if (args[0] === "inspect" && label) {
-          return dockerResult(label);
+        if (args[0] === "inspect" && labels.has(name)) {
+          return dockerResult(labels.get(name));
         }
-        if (args[0] === "port" && ports && containers.has(args.at(-1) ?? "")) {
-          return dockerResult(ports);
+        if (args[0] === "port" && labels.has(name)) {
+          return dockerResult(
+            name.endsWith("-exposed")
+              ? "6080/tcp -> 0.0.0.0:49101\n9222/tcp -> 127.0.0.1:49100\n"
+              : "",
+          );
         }
         return dockerResult("", "not found", 1);
       },
     });
-    for (const expectedFinding of expected) {
-      expect(findings).toContainEqual(expectedFinding);
-    }
+    expect(findings).toContainEqual(finding("hash_label_missing"));
+    expect(findings).toContainEqual(
+      finding("hash_epoch_stale", "warn", {
+        detail: expect.stringContaining("openclaw-sbx-browser-old"),
+      }),
+    );
+    expect(findings).toContainEqual(finding("non_loopback_publish", "critical"));
   });
 
   it("skips sandbox browser hash label checks when docker inspect is unavailable", async () => {

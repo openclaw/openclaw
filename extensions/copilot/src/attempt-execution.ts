@@ -165,7 +165,6 @@ export async function runCopilotExecution(context: {
             externalAbort: true,
             messagesSnapshot: messages,
             promptError: undefined,
-            sdkSessionId: undefined,
           }),
         );
       }
@@ -177,7 +176,6 @@ export async function runCopilotExecution(context: {
             `[copilot-attempt] sandbox resolution failed: ${toCopilotError(error).message}`,
             error,
           ),
-          sdkSessionId: undefined,
         }),
       );
     }
@@ -192,7 +190,6 @@ export async function runCopilotExecution(context: {
           "sandbox_cwd_override_unsupported",
           "[copilot-attempt] cwd override is not supported for sandboxed Copilot runs; omit cwd or use the agent workspace as cwd",
         ),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -227,7 +224,6 @@ export async function runCopilotExecution(context: {
       createResult(input, {
         messagesSnapshot: messages,
         promptError: createPromptError("model_not_supported", toCopilotError(error).message, error),
-        sdkSessionId: undefined,
       }),
     );
   }
@@ -319,7 +315,6 @@ export async function runCopilotExecution(context: {
             `[copilot-attempt] tool-bridge construction failed: ${toCopilotError(error).message}`,
             error,
           ),
-          sdkSessionId: undefined,
         });
         return finishAttempt(result);
       }

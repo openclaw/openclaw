@@ -75,7 +75,7 @@ export function createDevicePolicyReads(options: {
     if (!read || read.client !== current.client || read.connectionEpoch !== current.configEpoch) {
       return Promise.resolve();
     }
-    return Promise.race([read.completion.promise, read.invalidated.promise]).then((result) => {
+    return read.settled.then((result) => {
       // A failed reload must preserve the editable last-good bindings and draft.
       if (!result.ok && currentConfigRead(current.state) === read && !options.hasConfig()) {
         throw new Error(result.error);

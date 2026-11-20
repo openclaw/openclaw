@@ -2,20 +2,11 @@ import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-c
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
 import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
-import { getRuntimeConfig } from "../../config/config.js";
 import type { SessionEntryUsageUpdate } from "../../config/sessions/session-entry-usage.js";
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-
-function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
-  const resolved = asNonNegativeFiniteNumber(value);
-  return resolved === undefined ? undefined : Math.floor(resolved);
-}
 
 type SessionUsageUpdateParams = {
-  cfg?: OpenClawConfig;
-  agentDir?: string;
+  estimatedCostUsd?: number;
   usage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated). Supplies context
@@ -39,9 +30,8 @@ type SessionUsageUpdateParams = {
   preserveUserFacingSessionModelState?: boolean;
 };
 
-/** Prepare host-owned pricing without choosing a persistence envelope. */
+/** Prepare usage facts without choosing a persistence envelope. */
 export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
-  const cfg = params.cfg ?? getRuntimeConfig();
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
     model: params.modelUsed,
@@ -68,8 +58,13 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     return undefined;
   }
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+  const currentContextTokens = asNonNegativeFiniteNumber(params.currentContextSnapshot?.tokens);
   const update: SessionEntryUsageUpdate = {
     usage: params.usage,
+    estimatedCostUsd:
+      preserveUserFacingRunState || !hasBilling
+        ? undefined
+        : asNonNegativeFiniteNumber(params.estimatedCostUsd),
     lastCallUsage: params.lastCallUsage,
     modelSelection,
     agentHarnessId: normalizeOptionalString(params.agentHarnessId),
@@ -78,7 +73,8 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     contextBudgetStatus: params.contextBudgetStatus,
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,
-    currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
+    currentContextTokens:
+      currentContextTokens === undefined ? undefined : Math.floor(currentContextTokens),
     hasContextUpdate,
     hasFreshContextSnapshot,
     hasCurrentContextSnapshot,
@@ -86,17 +82,5 @@ export function prepareSessionUsageUpdate(params: SessionUsageUpdateParams) {
     preserveUserFacingRunState,
     preserveFreshTotalTokensOnStaleUsage: params.preserveFreshTotalTokensOnStaleUsage,
   };
-  const estimateCost = (entry?: SessionEntry) =>
-    preserveUserFacingRunState || !hasBilling
-      ? undefined
-      : asNonNegativeFiniteNumber(
-          estimateAggregateUsageCost({
-            config: cfg,
-            agentDir: params.agentDir,
-            usage: params.usage,
-            provider: params.providerUsed ?? entry?.modelProvider,
-            model: params.modelUsed ?? entry?.model,
-          }),
-        );
-  return { update, estimateCost };
+  return update;
 }

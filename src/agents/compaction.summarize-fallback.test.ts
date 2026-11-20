@@ -8,13 +8,8 @@ const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-sessions")>()),
-  generateSummary: agentSessionMocks.generateSummary,
-}));
-
-vi.mock("./sessions/index.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./sessions/index.js")>()),
+vi.mock("./sessions/compaction/compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sessions/compaction/compaction.js")>()),
   generateSummary: agentSessionMocks.generateSummary,
 }));
 
@@ -86,9 +81,7 @@ describe("compaction summarization fallback", () => {
     const controller = new AbortController();
     controller.abort();
 
-    const result = expect(summarizeHello(controller.signal)).rejects.toBe(abortErr);
-    // Caller cancellation is terminal and must not be masked as a CompactionError.
-    await finish(result, 1);
+    await finish(expect(summarizeHello(controller.signal)).rejects.toBe(abortErr), 1);
   });
 
   it("does not retry transport timeouts", async () => {
@@ -101,6 +94,15 @@ describe("compaction summarization fallback", () => {
       ),
       1,
     );
+  });
+
+  it("does not replay a deterministic provider rejection", async () => {
+    agentSessionMocks.generateSummary.mockRejectedValue(
+      new Error(
+        '400 {"error":{"code":"401006","type":"invalid_request_error","message":"Unsupported operation"}}',
+      ),
+    );
+    await finish(expect(summarizeHello()).rejects.toThrow("Unsupported operation"), 1);
   });
 
   it("throws CompactionError with the last error after retries are exhausted", async () => {

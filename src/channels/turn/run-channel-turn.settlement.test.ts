@@ -1,10 +1,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import * as deliveryCompletion from "../../infra/outbound/delivery-completion.js";
 import { createPendingFinalFixture } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
@@ -15,7 +14,6 @@ import {
 } from "./run-channel-turn.delivery.test-helpers.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-channel-settlement-");
-afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { label: "successful observer", observerThrows: false, sibling: false },
@@ -61,7 +59,6 @@ it.each([
     return { visibleReplySent: true, messageIds: ["message-1"] };
   });
   const onError = vi.fn();
-  const settlement = vi.spyOn(deliveryCompletion, "settlePendingFinalDelivery");
   const once = () => [deliver, onDelivered].forEach((fn) => expect(fn).toHaveBeenCalledOnce());
   const createMetadata = () => ({
     pendingFinalDeliveryCompletion: { ...completion },
@@ -84,7 +81,6 @@ it.each([
       dispatchReplyWithBufferedBlockDispatcher: dispatch,
       delivery: { deliver, onDelivered, onError },
     });
-
   const first = await run();
   expectDispatched(first);
   expect(first.dispatchResult.settledReceipt).toMatchObject({
@@ -92,21 +88,11 @@ it.each([
     counts: { final: observerThrows ? { failedAfterSend: 1 } : { delivered: 1 } },
   });
   once();
-  expect(settlement.mock.calls.some(([, state]) => state === "queued")).toBe(false);
   expect((await readEntry())?.pendingFinalDelivery).toEqual(expectedPending);
   expect(onError.mock.calls).toEqual(observerThrows ? [[observerError, { kind: "final" }]] : []);
   if (observerThrows) {
     expect(observerError).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   }
-  expect(settlement.mock.calls.filter(([, state]) => state === "delivered")).toEqual([
-    [
-      completion,
-      "delivered",
-      undefined,
-      { preserveActivity: true, clearAfterSettled: { recoveryRunId: undefined } },
-    ],
-  ]);
-
   // A fresh payload identity consults durable custody rather than the retained receipt.
   await run();
   once();

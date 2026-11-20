@@ -11,10 +11,9 @@ import {
   getActiveGatewayRootWorkCount,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import {
-  beginSessionEffect,
-  getCompetingSessionWorkAdmissionRelease,
-} from "../../sessions/session-controller.lifecycle.js";
+import { selectedEffects } from "../../sessions/session-controller.lifecycle-projections.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
+import { targetFrom } from "../../sessions/session-controller.target.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -52,20 +51,18 @@ const expectFailed = (outcome: { value: unknown } | { error: unknown }) =>
   expect(outcome).toEqual(
     "error" in outcome ? { error: expect.any(Error) } : { value: { ok: false } },
   );
-function lifecycleRelease(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
-  return getCompetingSessionWorkAdmissionRelease({
-    scope: fixture.scope.storePath,
-    identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
-  });
+function lifecycleEffects(fixture: Awaited<ReturnType<typeof createBrowserFollowupFixture>>) {
+  return selectedEffects([
+    targetFrom({
+      scope: fixture.scope.storePath,
+      identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
+    }),
+  ]);
 }
 
-it.each([
-  { revokeInCallback: false, scoped: true },
-  { revokeInCallback: true, scoped: true },
-  { revokeInCallback: true, scoped: false },
-])(
-  "keeps caller authority current through admission callbacks (revoked: $revokeInCallback, scoped: $scoped)",
-  async ({ revokeInCallback, scoped }) => {
+it.each([true, false])(
+  "rejects caller authority revoked in the admission callback (scoped: %s)",
+  async (scoped) => {
     await using fixture = await createBrowserFollowupFixture();
     const prepared = await prepareChatAdmission(fixture);
     let current = true;
@@ -82,21 +79,16 @@ it.each([
       current = false;
       return true;
     };
-    const admitting = admitChatSend({
-      ...prepared,
-      respond: vi.fn(),
-      ...(scoped ? { assertCurrent, withCurrent } : {}),
-      assertCurrentAsync: () => withCurrent(assertCurrent),
-      onAdmissionOwned: revokeInCallback ? revoke : undefined,
-    });
-    if (revokeInCallback) {
-      await expect(admitting).rejects.toThrow("caller revoked during admission");
-      expect(rpcSourceTesting.size).toBe(0);
-    } else {
-      const admitted = await admitting;
-      assert(admitted.ok);
-      admitted.value.cleanupAdmittedRun();
-    }
+    await expect(
+      admitChatSend({
+        ...prepared,
+        respond: vi.fn(),
+        ...(scoped ? { assertCurrent, withCurrent } : {}),
+        assertCurrentAsync: () => withCurrent(assertCurrent),
+        onAdmissionOwned: revoke,
+      }),
+    ).rejects.toThrow("caller revoked during admission");
+    expect(rpcSourceTesting.size).toBe(0);
   },
 );
 it("clears a pending reservation when its retained reader is revoked after publication", async () => {
@@ -124,7 +116,7 @@ it("clears a pending reservation when its retained reader is revoked after publi
     await closing;
     expect(fixture.context.dedupe.has(pendingKey)).toBe(false);
     expect(rpcSourceTesting.size).toBe(0);
-    expect(lifecycleRelease(fixture)).toBeUndefined();
+    expect(lifecycleEffects(fixture).size).toBe(0);
 
     fixture.params.message = "Corrected input after the failed reservation.";
     admitted = await admitChatSend(await authorize(fixture));
@@ -182,8 +174,14 @@ it("retains callback custody during database closure", async () => {
     );
     assert(retainedRead, "Expected the callback's retained worker read");
     const [readerOutcome] = await Promise.allSettled([retainedRead]);
-    const released = lifecycleRelease(fixture);
-    expect(released).toBeDefined();
+    const effects = [...lifecycleEffects(fixture)];
+    expect(effects).toHaveLength(1);
+    expect(effects[0]!.phase).toBe("acquired");
+    const released = effects[0]!.ref.released;
+    const onReleased = vi.fn();
+    void released.then(onReleased);
+    await Promise.resolve();
+    expect(onReleased).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore + 1);
     expect(caller.isCurrent()).toBe(true);
     expect(rpcSourceTesting.size).toBe(1);
@@ -196,6 +194,7 @@ it("retains callback custody during database closure", async () => {
       expectFailed(result);
     }
     await released;
+    expect(lifecycleEffects(fixture).size).toBe(0);
     expect(getActiveGatewayRootWorkCount()).toBe(rootsBefore);
     expect(caller.isCurrent()).toBe(false);
     expect(rpcSourceTesting.size).toBe(0);
@@ -356,7 +355,7 @@ it.each(["revocation", "role change"] as const)(
       );
       expect(fixture.context.broadcast).not.toHaveBeenCalled();
       expect(rpcSourceTesting.size).toBe(0);
-      expect(lifecycleRelease(fixture)).toBeUndefined();
+      expect(lifecycleEffects(fixture).size).toBe(0);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       resume.resolve();

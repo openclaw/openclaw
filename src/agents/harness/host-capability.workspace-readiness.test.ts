@@ -2,6 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolExecutionPreparer,
+  type InternalToolExecutionPreparer,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,11 +16,6 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { markCodeModeControlTool } from "../code-mode-control-tools.js";
-import {
-  attachInternalToolExecutionPreparer,
-  getInternalToolExecutionPreparer,
-  type InternalToolExecutionPreparer,
-} from "../runtime/internal-hooks.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
@@ -69,6 +69,31 @@ beforeEach(() => {
 });
 
 describe("agent harness workspace readiness and boundaries", () => {
+  it.each(["host", "admission"] as const)(
+    "retires local scratch preparation with its %s owner",
+    async (owner) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-exec-scratch-"));
+      const { attempt, admission } = await admittedAttempt("local-scratch");
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
+      try {
+        const retained = host.capabilities.prepareLocalExecScratch;
+        const env = await retained?.({ cwd: root });
+        const scratch = path.join(fs.realpathSync(root), ".openclaw/tmp");
+        expect(env).toEqual({ TMPDIR: scratch, TMP: scratch, TEMP: scratch });
+        expect(fs.statSync(scratch).isDirectory()).toBe(true);
+        if (owner === "host") {
+          host.close();
+        } else {
+          admission.close();
+        }
+        expect(() => retained?.({ cwd: root })).toThrow();
+      } finally {
+        host.close();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["host", "admission"] as const)(
     "retires continuation retry preparation with its %s owner",
     async (owner) => {

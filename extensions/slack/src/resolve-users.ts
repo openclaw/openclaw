@@ -32,9 +32,6 @@ export type SlackUserResolution = {
 
 function parseSlackUserInput(raw: string): { id?: string; name?: string; email?: string } {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return {};
-  }
   const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mention) {
     return { id: mention[1]?.toUpperCase() };

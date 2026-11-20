@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -5,43 +6,111 @@ import {
   emitTrustedDiagnosticEvent,
   isDiagnosticsEnabled,
 } from "../infra/diagnostic-events.js";
-import { estimateAggregateUsageCost } from "../utils/usage-format.js";
+import { estimateAggregateUsageCostAsync, resolveModelCostConfig } from "../utils/usage-format.js";
 import type { IsolatedCompletionResult } from "./isolated-completion-output.js";
 import type { IsolatedCompletionPurpose } from "./isolated-completion-purpose.js";
 import { hasObservedModelUsage, normalizeUsage, toDiagnosticUsage } from "./usage.js";
 
-/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
-export function emitIsolatedCompletionUsage(params: {
+type CompletionUsage = Pick<
+  IsolatedCompletionResult,
+  "provider" | "model" | "usage" | "diagnosticUsage"
+>;
+
+type CompletionUsageOwner = {
   config: OpenClawConfig;
   agentId: string;
   agentDir: string;
   purpose?: IsolatedCompletionPurpose;
-  result: IsolatedCompletionResult;
-}): void {
+  completionId: string;
+  sessionId?: string;
+  sessionKey?: string;
+  runtimeKind: "cli" | "harness";
+  provider: string;
+  model: string;
+  assertCurrent?: () => void;
+};
+
+/** Plugin completions finalize usage with host-plugin attribution; core callers have no other path. */
+async function emitIsolatedCompletionUsage(
+  params: CompletionUsageOwner & {
+    attemptId: string;
+    result?: CompletionUsage;
+  },
+): Promise<void> {
   const { config, result } = params;
   if (params.purpose === "plugin-completion" || !isDiagnosticsEnabled(config)) {
     return;
   }
-  const usage = normalizeUsage(result.diagnosticUsage ?? result.usage);
-  if (!hasObservedModelUsage(usage)) {
-    return;
-  }
+  const usage = normalizeUsage(result?.diagnosticUsage ?? result?.usage);
+  const available = hasObservedModelUsage(usage) && usage.usageReport?.state !== "unavailable";
+  const provider = result?.provider ?? params.provider;
+  const model = result?.model ?? params.model;
   emitTrustedDiagnosticEvent({
     type: "model.usage",
     agentId: params.agentId,
-    provider: result.provider,
-    model: result.model,
+    provider,
+    model,
     purpose: params.purpose ?? "isolated-completion",
-    runtimeKind: result.owner.kind,
-    usage: toDiagnosticUsage(usage),
-    costUsd: estimateAggregateUsageCost({
-      usage,
-      provider: result.provider,
-      model: result.model,
-      config,
-      agentDir: params.agentDir,
-    }),
+    runtimeKind: params.runtimeKind,
+    completionId: params.completionId,
+    attemptId: params.attemptId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    usageReport: available ? usage.usageReport : { state: "unavailable" },
+    usage: available ? toDiagnosticUsage(usage) : {},
+    ...(available
+      ? {
+          costUsd: await estimateAggregateUsageCostAsync({
+            usage,
+            prepareCost: () =>
+              resolveModelCostConfig({
+                provider,
+                model,
+                config,
+                agentDir: params.agentDir,
+              }).catch(() => undefined),
+          }),
+        }
+      : {}),
   });
+}
+
+/** Account for a dispatched attempt even when its result is rejected or its caller has retired. */
+export async function observeIsolatedCompletionUsage<T>(
+  params: CompletionUsageOwner,
+  run: (observe: (result: T) => void) => Promise<T>,
+  project: (result: T) => CompletionUsage,
+): Promise<T> {
+  const attemptId = randomUUID();
+  params.assertCurrent?.();
+  let observed = false;
+  let observation: Promise<void> | undefined;
+  const observe = (result?: T) => {
+    if (observed) {
+      return;
+    }
+    observed = true;
+    observation = (async () => {
+      try {
+        await emitIsolatedCompletionUsage({
+          ...params,
+          attemptId,
+          ...(result === undefined ? {} : { result: project(result) }),
+        });
+      } catch {
+        // Accounting must neither authorize stale output nor replace the runtime's outcome.
+      }
+    })();
+  };
+  try {
+    const result = await run(observe);
+    observe(result);
+    return result;
+  } finally {
+    // Logical abort can precede settlement. Only this actual dispatch closes its observation.
+    observe();
+    await observation;
+  }
 }
 
 /** Measure runtime dispatch, not provider-wire inference or an inferred queue wait. */

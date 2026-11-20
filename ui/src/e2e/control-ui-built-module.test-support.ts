@@ -2,8 +2,8 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import { inject } from "vitest";
-import { extractControlUiStartupAssetPaths } from "../../../scripts/check-control-ui-performance.mts";
 import { selectControlUiRoutePreloads } from "../../../src/gateway/control-ui-route-preloads.ts";
+import { extractControlUiStartupAssetPaths } from "../../config/control-ui-startup-assets.ts";
 
 export async function failControlUiModuleForDocuments(
   page: Page,
@@ -16,6 +16,20 @@ export async function failControlUiModuleForDocuments(
     if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
       documentSequence += 1;
     }
+  });
+  // These cases model retired chunks after an update, rather than same-build downtime.
+  await page.route("**/index.html", async (route) => {
+    if (
+      route.request().headers()["x-openclaw-reachability-probe"] !== "1" ||
+      requestedDocuments.size === 0
+    ) {
+      await route.fallback();
+      return;
+    }
+    await route.fulfill({
+      contentType: "text/html",
+      body: '<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO={"buildId":"replacement-test-build"};</script>',
+    });
   });
   await page.route(module, async (route) => {
     requestedDocuments.add(documentSequence);

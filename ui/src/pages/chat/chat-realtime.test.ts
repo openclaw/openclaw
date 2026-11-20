@@ -36,8 +36,7 @@ function inspectSession(): InspectableRealtimeTalkSession {
 
 async function start() {
   await state.toggleRealtimeTalk();
-  const session = inspectSession();
-  return { session, callbacks: session.callbacks };
+  return inspectSession();
 }
 
 function mockVideo() {
@@ -45,7 +44,7 @@ function mockVideo() {
 }
 
 async function startVideo() {
-  const { session } = await start();
+  const session = await start();
   session.callbacks.onVideoCapability?.(true);
   return session;
 }
@@ -81,12 +80,13 @@ function preview(nextDeviceId: string, label: string) {
 }
 
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
+let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
 
 beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
-  vi.spyOn(GatewaySpeechPlayback.prototype, "prepare").mockImplementation(() =>
-    document.createElement("audio"),
-  );
+  prepareSpy = vi
+    .spyOn(GatewaySpeechPlayback.prototype, "prepare")
+    .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
@@ -97,6 +97,7 @@ beforeEach(() => {
     },
     connected: true,
     sessionKey: "main",
+    chatMessages: [],
     ...createInitialChatRealtimeState(),
   } as unknown as ChatRealtimeState;
   attachChatRealtimeActions(state);
@@ -307,7 +308,10 @@ it("does not infer microphone recovery from error text", async () => {
   });
 });
 
-it("enables camera only after a video-capable voice session starts", async () => {
+it.each([
+  ["enables camera only after a video-capable voice session starts", false],
+  ["does not change the remembered preference when the camera track ends", true],
+] as const)("%s", async (_name, trackEnds) => {
   const setVideoEnabled = mockVideo();
   const session = await startVideo();
   const stream = {} as MediaStream;
@@ -320,11 +324,13 @@ it("enables camera only after a video-capable voice session starts", async () =>
   expect(read().realtimeTalkVideoStream).toBe(stream);
   expect(loadSettings().talkCameraAutoEnable).toBe(true);
 
-  await state.toggleRealtimeTalkCamera();
-  expect(setVideoEnabled).toHaveBeenLastCalledWith(false);
+  if (!trackEnds) {
+    await state.toggleRealtimeTalkCamera();
+    expect(setVideoEnabled).toHaveBeenLastCalledWith(false);
+  }
   session.callbacks.onVideoStream?.(null);
   expect(read().realtimeTalkVideoStream).toBeNull();
-  expect(loadSettings().talkCameraAutoEnable).toBe(false);
+  expect(loadSettings().talkCameraAutoEnable).toBe(trackEnds);
 });
 
 it.each([
@@ -360,7 +366,9 @@ it.each([
 );
 
 it("uses the latest Settings camera choice on the next enable", async () => {
-  const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
+  const switchCamera = vi
+    .spyOn(RealtimeTalkSession.prototype, "switchCamera")
+    .mockResolvedValue(undefined);
   mockVideo();
 
   await startVideo();
@@ -398,20 +406,6 @@ it.each([false, true])(
   },
 );
 
-it("does not change the remembered preference when the camera track ends", async () => {
-  mockVideo();
-
-  const session = await startVideo();
-  await state.toggleRealtimeTalkCamera();
-  session.callbacks.onVideoStream?.({} as MediaStream);
-  expect(loadSettings().talkCameraAutoEnable).toBe(true);
-
-  session.callbacks.onVideoStream?.(null);
-
-  expect(read().realtimeTalkVideoStream).toBeNull();
-  expect(loadSettings().talkCameraAutoEnable).toBe(true);
-});
-
 it("does not let a stale camera-off completion overwrite a newer camera stream", async () => {
   const cameraOff = createDeferred();
   const setVideoEnabled = vi
@@ -438,9 +432,7 @@ it("does not let a stale camera-off completion overwrite a newer camera stream",
 });
 
 it("cycles live cameras in enumeration order and persists the successful switch", async () => {
-  const switchCamera = vi
-    .spyOn(RealtimeTalkSession.prototype, "switchCamera")
-    .mockResolvedValue(undefined);
+  const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
 
   await state.toggleRealtimeTalk();
   preview("back", "Back Camera");
@@ -680,3 +672,52 @@ it("retires callback ownership before stopping a session", async () => {
     realtimeTalkDetail: null,
   });
 });
+
+it.each(["stop", "route", "disconnect", "superseded", "replacement"] as const)(
+  "prepares gesture audio synchronously and admits only the current startup after %s",
+  async (change) => {
+    type Runtime = typeof import("./talk/chat-actions-runtime.ts");
+    const loaded = createDeferred<Runtime>();
+    const loading = createDeferred();
+    const startChatRealtimeSession = vi.fn<Runtime["startChatRealtimeSession"]>();
+    // mock-isolation: Hold module evaluation open to prove cancellation before the voice runtime loads.
+    vi.doMock("./talk/chat-actions-runtime.ts", () => {
+      loading.resolve();
+      return loaded.promise;
+    });
+    const starting = state.toggleRealtimeTalk();
+    let replacement: Promise<void> | undefined;
+    try {
+      expect(prepareSpy).toHaveBeenCalledOnce();
+      expect(read().realtimeTalkStatus).toBe("connecting");
+      await loading.promise;
+      if (change === "stop" || change === "replacement") {
+        await state.toggleRealtimeTalk();
+        if (change === "replacement") {
+          replacement = state.toggleRealtimeTalk();
+        }
+      } else if (change === "route") {
+        state.sessionKey = "another-session";
+      } else if (change === "disconnect") {
+        state.connected = false;
+      } else {
+        const superseded = prepareSpy.mock.calls[0]?.[1];
+        expect(superseded).toBeTypeOf("function");
+        superseded?.();
+      }
+      loaded.resolve({
+        startChatRealtimeSession,
+        setRealtimeTalkCameraEnabled: vi.fn(),
+        switchRealtimeTalkCamera: vi.fn(),
+      });
+      await starting;
+      await replacement;
+      expect(startChatRealtimeSession).toHaveBeenCalledTimes(change === "replacement" ? 1 : 0);
+      expect(startSpy).not.toHaveBeenCalled();
+      expect(read().realtimeTalkSession).toBeNull();
+      expect(read().realtimeTalkActive).toBe(change === "replacement");
+    } finally {
+      vi.doUnmock("./talk/chat-actions-runtime.ts");
+    }
+  },
+);

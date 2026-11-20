@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withTestTimeout } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -10,7 +10,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
+import { prepareCompiledSdkHost } from "../../plugins/compiled-sdk-host.test-support.js";
 import { registerComputerUseProvider } from "../../plugins/computer-use-registration.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { computerUseSdkEntrypoint } from "../../plugins/loader-sdk-bridge-artifacts.test-support.js";
@@ -20,15 +20,13 @@ import {
   createColdPluginFixture,
 } from "../../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
+import { createGatewayAuxHandlerTestParams } from "../server-aux-handlers.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { computerHandlers } from "../server-methods/computer.js";
 import type { RespondFn } from "../server-methods/types.js";
-import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { startComputerHostProcess } from "./computer-process.js";
 import { createGatewayComputerService } from "./computer-service.js";
 import { computerCapabilities } from "./computer.test-support.js";
@@ -50,7 +48,7 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
     config.desktop = { host: { enabled: true, managed: true } };
   }
   await state.writeConfig(config);
-  const sdkHost = createCompiledSdkHost([computerUseSdkEntrypoint], (prefix) =>
+  const sdkHost = prepareCompiledSdkHost([computerUseSdkEntrypoint])((prefix) =>
     tempDirs.make(prefix),
   );
   const env = {
@@ -68,12 +66,11 @@ async function createRuntimeFixture(pluginId: string, managed = false) {
 }
 
 function reachGate<T>(gate: Promise<T>, invocation: Promise<unknown>, label: string) {
-  return Promise.race([
+  return awaitGateBeforeSettlement(
     gate,
-    invocation.then(() => {
-      throw new Error(`${label} native input never reached its gate`);
-    }),
-  ]);
+    invocation,
+    `${label} native input never reached its gate`,
+  );
 }
 
 it.each(["direct-run", "parent-closes-scope", "scope-closes"] as const)(
@@ -249,26 +246,11 @@ module.exports = {
     const unrelated = claimAgentRunApprovalAuthority(parentAuthority, [
       new AbortController().signal,
     ]);
-    const aux = createGatewayAuxHandlers({
-      scheduler: createTestGatewayScheduler(),
-      log: {},
-      getNativeApprovalRouteCoordinator: () => undefined,
-      activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-      sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-        current: undefined,
-        required: null,
+    const aux = createGatewayAuxHandlers(
+      createGatewayAuxHandlerTestParams({
+        onAgentRunAuthorityClosed: (closed) => service.revokeRunAuthority(closed),
       }),
-      resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-      clients: [],
-      channelManager: {
-        startChannel: async () => new Map(),
-        stopChannel: async () => {},
-        isManuallyStopped: () => false,
-        resolveRuntimeAccountId: (_channel, accountId) => accountId,
-      },
-      logChannels: { info: () => {} },
-      onAgentRunAuthorityClosed: (closed) => service.revokeRunAuthority(closed),
-    });
+    );
     const validateAuthority = createAgentRuntimeApprovalAuthorityValidator();
     const requestLifetime = new AbortController();
     const pending: Promise<unknown>[] = [];

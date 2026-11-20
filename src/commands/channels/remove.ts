@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
+import { listReadOnlyChannelPluginsForConfigAsync } from "../../channels/plugins/read-only.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   formatUnknownChannelMessage,
@@ -12,6 +12,7 @@ import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { withCommandPluginMetadata } from "../config-validation.js";
@@ -20,19 +21,19 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-type ChannelsRemoveOptions = {
-  agent?: string;
-  channel?: string;
-  account?: string;
-  delete?: boolean;
-};
-
 /** Disable or delete a channel account, stopping gateway runtime state before mutation. */
 export async function channelsRemoveCommand(
-  opts: ChannelsRemoveOptions,
+  opts: {
+    agent?: string;
+    channel?: string;
+    account?: string;
+    delete?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   parseAccountSelector(opts.account);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
@@ -56,7 +57,7 @@ export async function channelsRemoveCommand(
 
       if (useWizard && prompter) {
         await prompter.intro("Remove channel account");
-        const readOnlyPlugins = listReadOnlyChannelPluginsForConfig(cfg, {
+        const readOnlyPlugins = await listReadOnlyChannelPluginsForConfigAsync(cfg, {
           includeSetupFallbackPlugins: true,
         });
         const selectedChannel = await prompter.select({
@@ -91,19 +92,7 @@ export async function channelsRemoveCommand(
         return;
       }
 
-      if (useWizard || !deleteConfig) {
-        const confirm = prompter ?? createClackPrompter();
-        const channelPromptLabel = channel ? channelLabel(channel) : rawChannel;
-        const ok = await confirm.confirm({
-          message: `Disable ${channelPromptLabel} account "${accountId}"? (keeps config)`,
-          initialValue: true,
-        });
-        if (!ok) {
-          await prompter?.outro("Cancelled.");
-          return;
-        }
-      }
-
+      // Resolve the channel before asking anything, so an unknown id fails instead of prompting.
       const shouldResolveInstallablePlugin = Boolean(lookupChannel || channel);
       const resolvedPluginState = shouldResolveInstallablePlugin
         ? await (async () => {
@@ -134,6 +123,17 @@ export async function channelsRemoveCommand(
         runtime.exit(1);
         return;
       }
+      if (useWizard || !deleteConfig) {
+        const confirm = prompter ?? createClackPrompter();
+        const ok = await confirm.confirm({
+          message: `Disable ${channelLabel(resolvedChannel)} account "${accountId}"? (keeps config)`,
+          initialValue: true,
+        });
+        if (!ok) {
+          await prompter?.outro("Cancelled.");
+          return;
+        }
+      }
       const removal = await applyChannelAccountRemoval({
         cfg,
         plugin,
@@ -158,12 +158,15 @@ export async function channelsRemoveCommand(
               mode: GATEWAY_CLIENT_MODES.BACKEND,
               clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
               deviceIdentity: null,
+              signal,
             });
           } catch (error) {
+            signal?.throwIfAborted();
             runtime.log(
               `Could not stop running ${channelLabel(resolvedChannel)} account "${accountId}" before removing it: ${formatErrorMessage(error)}`,
             );
           }
+          signal?.throwIfAborted();
         },
       });
       if (!removal.ok) {

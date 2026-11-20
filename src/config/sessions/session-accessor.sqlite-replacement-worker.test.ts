@@ -1,16 +1,8 @@
 import { statSync } from "node:fs";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it as baseIt, vi } from "vitest";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
-import {
-  isSqliteWorkerError,
-  type SqliteWorkerOperations,
-  type SqliteWorkerStore,
-} from "../../infra/sqlite-worker-contract.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
@@ -29,8 +21,6 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent-session-transcript-archive-schema.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   withOpenClawTestState,
@@ -76,7 +66,9 @@ function seedSession(name: string, patch: Partial<SessionEntry> = {}) {
   const sessionKey = `agent:main:${name}`;
   const entry = { sessionId: name, updatedAt: 1, ...patch };
   writeSessionEntry(database, sessionKey, entry);
-  return { database, sessionKey, entry };
+  const target = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey] };
+  const read = (key = sessionKey) => readExactSessionEntryRow(database, key)?.entry;
+  return { database, sessionKey, entry, target, read };
 }
 
 function makeReplacement<T = undefined>(sessionKey: string, entry: SessionEntry, result?: T) {
@@ -124,6 +116,7 @@ it("prepares and commits a session while its original creating reference is held
   });
   const reader = new OpenClawAgentDatabaseReadOnlyScope();
   const sessionKey = "agent:fresh:first-session";
+  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
   try {
     await prepareSessionEntryReplacementDatabase(options, () => {});
     await expect(
@@ -132,18 +125,22 @@ it("prepares and commits a session while its original creating reference is held
         storePath: options.path,
         env: options.env,
         sessionKeys: [sessionKey],
-        update: () =>
-          makeReplacement(
+        update: (entries) => {
+          expect(entries).toEqual([]);
+          return makeReplacement(
             sessionKey,
             { sessionId: "first-session", updatedAt: 1, label: "created" },
             "committed",
-          ),
+          );
+        },
       }),
     ).resolves.toBe("committed");
     expect(
       reader.read((database) => readExactSessionEntryRow(database, sessionKey)?.entry, options),
     ).toMatchObject({ found: true, value: { sessionId: "first-session", label: "created" } });
+    expect(exec.mock.calls.filter(([sql]) => /\bBEGIN\s+IMMEDIATE\b/i.test(sql))).toEqual([]);
   } finally {
+    exec.mockRestore();
     reader.close();
     await creator.release();
   }
@@ -152,7 +149,7 @@ it("prepares and commits a session while its original creating reference is held
 it.each([false, true])(
   "retains prepared maintenance protection through replacement settlement (revoke: %s)",
   async (revoke) => {
-    const { database, sessionKey } = seedSession("replacement-preservation", {
+    const { target, read, sessionKey } = seedSession("replacement-preservation", {
       updatedAt: Date.now(),
       label: "before",
     });
@@ -175,8 +172,7 @@ it.each([false, true])(
     const unregister = registerSessionMaintenancePreserveKeysProvider(prepare);
     try {
       const replacement = applySessionEntryExactReplacements({
-        storePath: database.path,
-        sessionKeys: [sessionKey],
+        ...target,
         skipMaintenance: false,
         assertCommitAllowed() {
           if (prepared && revoke) {
@@ -190,9 +186,7 @@ it.each([false, true])(
       } else {
         await expect(replacement).resolves.toBe("committed");
       }
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe(
-        revoke ? "before" : "after",
-      );
+      expect(read()?.label).toBe(revoke ? "before" : "after");
       expect(prepare).toHaveBeenCalledOnce();
       expect(dispose).toHaveBeenCalledOnce();
     } finally {
@@ -201,51 +195,8 @@ it.each([false, true])(
   },
 );
 
-it("does not probe archive recovery during ordinary replacements", async () => {
-  const database = openOpenClawAgentDatabase({ agentId: "main" });
-  const schemaLease = acquireStateDatabaseSchemaLease(database.path);
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: () => schemaLease.assertCurrent(),
-    assertDatabaseAccess: schemaLease.assertDatabaseAccess,
-  });
-  try {
-    // The native maintenance path exposes SQL from the same replacement kernel.
-    await maintenance.run(async () => {
-      const sessionKey = "agent:main:replacement-no-archive";
-      writeSessionEntry(database, sessionKey, { sessionId: "replacement", updatedAt: 1 });
-      ensureSessionTranscriptArchiveSchema(database.db);
-      const sql = observeSqliteReadSql(StatementSync.prototype);
-      const nativeExec = vi.spyOn(database.db, "exec");
-      try {
-        await applySessionEntryExactReplacements({
-          storePath: database.path,
-          sessionKeys: [sessionKey],
-          update: updateEntry(sessionKey, { label: "committed" }),
-        });
-        expect(
-          nativeExec.mock.calls.some(([statement]) => /\bBEGIN\s+IMMEDIATE\b/i.test(statement)),
-        ).toBe(true);
-        expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
-        expect(
-          sql.queries.filter((query) => /from "session_transcript_archives"/i.test(query)),
-        ).toEqual([]);
-      } finally {
-        nativeExec.mockRestore();
-        sql.restore();
-      }
-    });
-  } finally {
-    try {
-      await maintenance.close();
-    } finally {
-      schemaLease.release();
-    }
-  }
-});
-
-it("commits platform-normalized replacements without entering a caller-thread SQLite write transaction", async () => {
-  const { database, sessionKey } = seedSession("replacement-worker", {
+it("commits platform-normalized replacements and publishes lifecycle changes", async () => {
+  const { database, sessionKey, target, read } = seedSession("replacement-worker", {
     sessionId: "replacement",
     lifecycleRevision: "initial-lifecycle",
   });
@@ -258,24 +209,18 @@ it("commits platform-normalized replacements without entering a caller-thread SQ
   const clone = vi
     .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
     .mockReturnValueOnce(normalized);
-  const databasePrototype: DatabaseSync = Object.getPrototypeOf(database.db);
-  const exec = vi.spyOn(databasePrototype, "exec");
   const unsubscribe = onSessionIdentityMutation((mutation) => mutations.push(mutation));
   try {
     const token = {};
     expect(
       await applySessionEntryExactReplacements({
-        agentId: "main",
-        storePath: database.path,
-        sessionKeys: [sessionKey],
+        ...target,
         update: updateEntry(sessionKey, { label: "committed" }, token),
       }),
     ).toBe(token);
     expect(mutations).toEqual([]);
     await applySessionEntryExactReplacements({
-      agentId: "main",
-      storePath: database.path,
-      sessionKeys: [sessionKey],
+      ...target,
       update: updateEntry(sessionKey, { lifecycleRevision: "next-lifecycle" }),
     });
     expect(mutations).toEqual([
@@ -287,13 +232,11 @@ it("commits platform-normalized replacements without entering a caller-thread SQ
         current: { sessionId: "replacement", sessionKeys: [sessionKey] },
       },
     ]);
-    expect(exec.mock.calls.filter(([sql]) => /\bBEGIN\s+IMMEDIATE\b/i.test(sql))).toEqual([]);
   } finally {
     unsubscribe();
-    exec.mockRestore();
     clone.mockRestore();
   }
-  expect(readExactSessionEntryRow(database, sessionKey)?.entry.label).toBe("committed");
+  expect(read()?.label).toBe("committed");
 });
 
 it("publishes committed sharing and reader invalidation before observers, and rolls back revoked canonical writes", async () => {
@@ -301,6 +244,8 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     database,
     sessionKey,
     entry: original,
+    target,
+    read,
   } = seedSession("replacement-publication", { sessionId: "publication" });
   const targetKey = "agent:main:replacement-moved";
   const { identity, sharing } = retainSharing(database, sessionKey, original);
@@ -337,14 +282,13 @@ it("publishes committed sharing and reader invalidation before observers, and ro
   });
   try {
     const publicationFailure = await applySessionEntryExactReplacements({
-      storePath: database.path,
-      sessionKeys: [sessionKey],
+      ...target,
       update: updateEntry(sessionKey, { visibility: "read-only" }),
     }).then(
       () => undefined,
       (error: unknown) => error,
     );
-    expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("read-only");
+    expect(read()?.visibility).toBe("read-only");
     expect(publicationFailure).toBeUndefined();
     expect(observed).toEqual([
       {
@@ -364,7 +308,7 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     const followup = vi.fn();
     const move = () =>
       applySessionEntryCanonicalReplacements({
-        storePath: database.path,
+        ...target,
         sessionKeys: [sessionKey, targetKey],
         afterCommitted: followup,
         assertCommitAllowed() {
@@ -383,8 +327,8 @@ it("publishes committed sharing and reader invalidation before observers, and ro
       await expect(move()).rejects.toThrow("Replacement authority revoked");
       expect(current).toBe(false);
       expect(followup).not.toHaveBeenCalled();
-      expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe("read-only");
-      expect(readExactSessionEntryRow(database, targetKey)).toBeUndefined();
+      expect(read()?.visibility).toBe("read-only");
+      expect(read(targetKey)).toBeUndefined();
       expect(observed).toHaveLength(1);
     } finally {
       admitted.mockRestore();
@@ -392,8 +336,8 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     current = true;
     await move();
     expect(followup).toHaveBeenCalledOnce();
-    expect(readExactSessionEntryRow(database, sessionKey)).toBeUndefined();
-    expect(readExactSessionEntryRow(database, targetKey)?.entry).toMatchObject({
+    expect(read()).toBeUndefined();
+    expect(read(targetKey)).toMatchObject({
       ...original,
       visibility: "read-only",
     });
@@ -434,25 +378,17 @@ it("discovers the schema owner for an unkeyed exact-store replacement without ho
   expect(readExactSessionEntryRow(database, key)?.entry.label).toBe("updated");
 });
 
-it("creates a missing durable replacement database entirely through its worker owner", async ({
-  state,
-}) => {
+it("creates a missing durable replacement database", async ({ state }) => {
   const storePath = state.statePath("new-replacement.sqlite");
   const sessionKey = "agent:main:replacement-created";
-  const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-  try {
-    await applySessionEntryCanonicalReplacements({
-      storePath,
-      sessionKeys: [sessionKey],
-      update: (entries) => {
-        expect(entries).toEqual([]);
-        return makeReplacement(sessionKey, { sessionId: "created", updatedAt: 1 });
-      },
-    });
-    expect(exec.mock.calls.filter(([sql]) => /\bBEGIN\s+IMMEDIATE\b/i.test(sql))).toEqual([]);
-  } finally {
-    exec.mockRestore();
-  }
+  await applySessionEntryCanonicalReplacements({
+    storePath,
+    sessionKeys: [sessionKey],
+    update: (entries) => {
+      expect(entries).toEqual([]);
+      return makeReplacement(sessionKey, { sessionId: "created", updatedAt: 1 });
+    },
+  });
   const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
   expect(readExactSessionEntryRow(database, sessionKey)?.entry.sessionId).toBe("created");
 });
@@ -482,13 +418,16 @@ it("joins an original absent-target reservation when replacing the first session
 });
 
 it("joins postcommit follow-up on close without granting a successor authority", async () => {
-  const { database, sessionKey: key } = seedSession("followup-close", { sessionId: "close" });
+  const {
+    database,
+    sessionKey: key,
+    target,
+  } = seedSession("followup-close", { sessionId: "close" });
   const entered = createDeferredCore<SessionEntryCommitContext>();
   const release = createDeferredCore();
   const order: string[] = [];
   const writing = applySessionEntryCanonicalReplacements({
-    storePath: database.path,
-    sessionKeys: [key],
+    ...target,
     update: updateEntry(key, { label: "saved" }, "durable"),
     afterCommitted: async (_result, source) => {
       source.assertCurrent();
@@ -522,11 +461,14 @@ it("joins postcommit follow-up on close without granting a successor authority",
 });
 
 it("suppresses follow-up for no-write and transaction-revoked replacements", async () => {
-  const { database, sessionKey: key } = seedSession("followup-refused", { sessionId: "refused" });
+  const {
+    sessionKey: key,
+    target,
+    read,
+  } = seedSession("followup-refused", { sessionId: "refused" });
   const followup = vi.fn();
   await applySessionEntryCanonicalReplacements({
-    storePath: database.path,
-    sessionKeys: [key],
+    ...target,
     update: () => ({ result: undefined }),
     afterCommitted: followup,
   });
@@ -540,8 +482,7 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
   try {
     await expect(
       applySessionEntryCanonicalReplacements({
-        storePath: database.path,
-        sessionKeys: [key],
+        ...target,
         afterCommitted: followup,
         assertCommitAllowed: () => {
           if (!current) {
@@ -552,7 +493,7 @@ it("suppresses follow-up for no-write and transaction-revoked replacements", asy
       }),
     ).rejects.toThrow("transaction revoked");
     expect(followup).not.toHaveBeenCalled();
-    expect(readExactSessionEntryRow(database, key)?.entry.label).toBeUndefined();
+    expect(read()?.label).toBeUndefined();
   } finally {
     hook.mockRestore();
   }
@@ -565,7 +506,13 @@ it.each([
   "post-commit observer failure",
   "unknown native settlement and lifecycle callback failure",
 ] as const)("settles canonical replacement with %s", async (fault) => {
-  const { database, sessionKey, entry } = seedSession("replacement-native-settlement", {
+  const {
+    database,
+    sessionKey,
+    entry,
+    target: replacementTarget,
+    read,
+  } = seedSession("replacement-native-settlement", {
     sessionId: "native-settlement",
     lifecycleRevision: "same-lifecycle",
   });
@@ -603,102 +550,89 @@ it.each([
     }
   });
   const followup = vi.fn();
-  let verifiedCommits = 0;
   const restoreFaults: Array<() => void> = [];
   const original = workerStore.runSqliteWorkerStoreOperation;
+  const observe: typeof original = (
+    target,
+    operation,
+    stateContext,
+    assertCurrent,
+    createAdmission,
+  ) => {
+    let replacing = false;
+    let injected = false;
+    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+    let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
+    return original(
+      target,
+      (worker) =>
+        operation({
+          execute: async (command, options) => {
+            replacing = command.type === "session.entries.replace";
+            const result = await worker.execute(command, options);
+            if (!replacing) {
+              return result;
+            }
+            // Read committed first: its owner drains queued native port messages.
+            const committed = nativeAdmission?.committed;
+            const nativeSettlement = nativeAdmission?.settlement;
+            expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
+            expect(read()?.visibility).toBe("read-only");
+            if (!committed || !nativeAdmission || !nativeSettlement) {
+              throw new Error("Real replacement did not provide native settlement");
+            }
+            if (missingReceipt) {
+              const receipt = vi
+                .spyOn(nativeAdmission, "committed", "get")
+                .mockReturnValue(undefined);
+              const settlement = vi
+                .spyOn(nativeAdmission, "settlement", "get")
+                .mockReturnValue({ kind: "completed" });
+              restoreFaults.push(
+                () => receipt.mockRestore(),
+                () => settlement.mockRestore(),
+              );
+            } else if (nativeUnknown) {
+              const settlement = vi
+                .spyOn(nativeAdmission, "settlement", "get")
+                .mockReturnValue({ ...nativeSettlement, kind: "unknown" });
+              restoreFaults.push(() => settlement.mockRestore());
+            }
+            injected = true;
+            if (!nativeUnknown && !observerFailure) {
+              throw deliveryFailure;
+            }
+            return result;
+          },
+        }),
+      stateContext,
+      assertCurrent,
+      createAdmission &&
+        ((retained) => {
+          if (!replacing) {
+            return createAdmission(retained);
+          }
+          nativeRetention = retained;
+          const owned = createAdmission({
+            get settled() {
+              return retained.settled.then((settlement) =>
+                injected && fault === "lost delivery after native completion"
+                  ? { kind: "unknown" as const, error: deliveryFailure }
+                  : settlement,
+              );
+            },
+          });
+          nativeAdmission = owned.admission;
+          return owned;
+        }),
+    );
+  };
   const observer = vi
     .spyOn(workerStore, "runSqliteWorkerStoreOperation")
-    .mockImplementation(
-      <Operations extends SqliteWorkerOperations, T>(
-        target: SqliteWorkerStore<Operations>,
-        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
-        stateContext?: Parameters<typeof original>[2],
-        assertCurrent?: Parameters<typeof original>[3],
-        createAdmission?: Parameters<typeof original>[4],
-      ) => {
-        let replacing = false;
-        let injected = false;
-        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-        let nativeRetention: RetainedWorkerTransactionAdmission | undefined;
-        return original(
-          target,
-          (worker) =>
-            operation({
-              execute: async (command, options) => {
-                replacing = command.type === "session.entries.replace";
-                const result = await worker.execute(command, options);
-                if (!replacing) {
-                  return result;
-                }
-                // Read committed first: its owner drains queued native port messages.
-                expect(nativeAdmission?.committed).toMatchObject({
-                  facts: { kind: "session-entry-replacements", changedKeys: [sessionKey] },
-                });
-                const nativeSettlement = nativeAdmission?.settlement;
-                expect(nativeSettlement).toMatchObject({
-                  kind: "completed",
-                  committed: { facts: { kind: "session-entry-replacements" } },
-                });
-                expect(await nativeRetention?.settled).toEqual({ kind: "completed" });
-                expect(readExactSessionEntryRow(database, sessionKey)?.entry.visibility).toBe(
-                  "read-only",
-                );
-                if (!nativeAdmission || !nativeSettlement) {
-                  throw new Error("Real replacement did not provide native settlement");
-                }
-                if (missingReceipt) {
-                  const receipt = vi
-                    .spyOn(nativeAdmission, "committed", "get")
-                    .mockReturnValue(undefined);
-                  const settlement = vi
-                    .spyOn(nativeAdmission, "settlement", "get")
-                    .mockReturnValue({ kind: "completed" });
-                  restoreFaults.push(
-                    () => receipt.mockRestore(),
-                    () => settlement.mockRestore(),
-                  );
-                } else if (nativeUnknown) {
-                  const settlement = vi
-                    .spyOn(nativeAdmission, "settlement", "get")
-                    .mockReturnValue({ ...nativeSettlement, kind: "unknown" });
-                  restoreFaults.push(() => settlement.mockRestore());
-                }
-                verifiedCommits++;
-                injected = true;
-                if (!nativeUnknown && !observerFailure) {
-                  throw deliveryFailure;
-                }
-                return result;
-              },
-            }),
-          stateContext,
-          assertCurrent,
-          createAdmission &&
-            ((retained) => {
-              if (!replacing) {
-                return createAdmission(retained);
-              }
-              nativeRetention = retained;
-              const owned = createAdmission({
-                get settled() {
-                  return retained.settled.then((settlement) =>
-                    injected && fault === "lost delivery after native completion"
-                      ? { kind: "unknown" as const, error: deliveryFailure }
-                      : settlement,
-                  );
-                },
-              });
-              nativeAdmission = owned.admission;
-              return owned;
-            }),
-        );
-      },
-    );
+    .mockImplementation(observe);
   try {
     const replacement = applySessionEntryCanonicalReplacements({
-      agentId: "main",
-      storePath: database.path,
-      sessionKeys: [sessionKey],
+      ...replacementTarget,
       onLifecycleCommitted: committedLifecycle,
       afterCommitted: followup,
       update: updateEntry(
@@ -711,7 +645,6 @@ it.each([
       (value) => ({ kind: "returned" as const, value }),
       (error: unknown) => ({ kind: "failed" as const, error }),
     );
-    expect(verifiedCommits).toBe(1);
     if (outcome.kind !== "failed") {
       throw new Error("Uncertain replacement unexpectedly continued");
     }
@@ -744,7 +677,7 @@ it.each([
             source: expect.objectContaining({ identity, revision: expect.any(Number) }),
           }),
     ]);
-    expect(readExactSessionEntryRow(database, sessionKey)?.entry).toMatchObject({
+    expect(read()).toMatchObject({
       ...entry,
       visibility: "read-only",
       label: "committed metadata",

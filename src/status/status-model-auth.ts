@@ -9,8 +9,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
-type StatusModelResolution = { authLabel?: string; endpoint?: string };
-
 /** Status borrows the account and route selected by the prepared model owner. */
 export function createStatusModelResolver(params: {
   cfg: OpenClawConfig;
@@ -50,7 +48,7 @@ export function createStatusModelResolver(params: {
     runtimeId?: string;
     acceptedProviderIds: readonly string[];
     authLabelOverride?: string;
-  }): Promise<StatusModelResolution> => {
+  }): Promise<{ authLabel?: string; endpoint?: string }> => {
     const decisions = await preparation;
     const { provider, model, runtimeId } = selection;
     // Preserve SDK and built-in auth diagnostics; route display only borrows an

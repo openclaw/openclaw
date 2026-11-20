@@ -10,6 +10,7 @@ import {
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { jidToE164 } from "./targets-runtime.js";
 
 // Outbound callers only have a message ID; retain the sender and preview needed for quotes.
@@ -37,7 +38,20 @@ export type WhatsAppQuotedMessageKey = {
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENTRIES = 500;
-const cache = new Map<string, CacheEntry>();
+const cacheStore = createPluginRuntimeStore<Map<string, CacheEntry>>(
+  "WhatsApp quote cache not initialized",
+);
+
+function getCache(): Map<string, CacheEntry> {
+  let cache = cacheStore.tryGetRuntime();
+  if (!cache) {
+    cache = new Map();
+    cacheStore.setRuntime(cache);
+  }
+  // The instance releases its slot only after admitted work settles. A native
+  // ESM module can survive reload, so it must not own the cached message bodies.
+  return cache;
+}
 
 function makeCacheKey(accountId: string, remoteJid: string, messageId: string): string {
   return `${accountId}:${remoteJid}:${messageId}`;
@@ -52,6 +66,7 @@ export function cacheInboundMessageMeta(
   if (!accountId || !messageId || !remoteJid) {
     return;
   }
+  const cache = getCache();
   pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
   cache.set(makeCacheKey(accountId, remoteJid, messageId), { meta, ts: Date.now() });
 }
@@ -65,6 +80,7 @@ export function lookupInboundMessageMeta(
 }
 
 function readCachedMessageMeta(cacheKey: string): QuotedMeta | undefined {
+  const cache = getCache();
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -139,7 +155,7 @@ export function lookupInboundMessageMetaForTarget(
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
   let matched: QuotedMetaLookup | undefined;
-  for (const cacheKey of cache.keys()) {
+  for (const cacheKey of getCache().keys()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
     }

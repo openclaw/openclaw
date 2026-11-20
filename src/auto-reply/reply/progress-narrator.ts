@@ -33,9 +33,7 @@ const MAX_VISIBILITY_RETRIES = 30;
 const PREAMBLE_RETRY_EPSILON_MS = 1;
 const MAX_NARRATIONS_PER_TURN = 30;
 const MAX_CONSECUTIVE_FAILURES = 2;
-type ToolStartPayload = Parameters<NonNullable<InternalGetReplyOptions["onToolStart"]>>[0];
 type CommandOutputPayload = Parameters<NonNullable<InternalGetReplyOptions["onCommandOutput"]>>[0];
-type ItemEventPayload = Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>[0];
 
 function normalizeNarrationText(raw: string): string {
   const collapsed = raw
@@ -133,9 +131,11 @@ export function attachProgressNarratorToReplyOptions(params: {
       return;
     }
     lastText = "";
-    void Promise.resolve(onUpdate({ text: "" })).catch((err: unknown) => {
-      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
-    });
+    void Promise.resolve()
+      .then(() => onUpdate({ text: "" }))
+      .catch((err: unknown) => {
+        logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
+      });
   }
 
   const generate = async (input: ProgressNarrationInput, turnSignal: AbortSignal) => {
@@ -227,7 +227,16 @@ export function attachProgressNarratorToReplyOptions(params: {
       clearRetryTimer();
       return;
     }
-    if (isProgressDraftVisible?.() === false) {
+    let visible: boolean | undefined;
+    try {
+      visible = isProgressDraftVisible?.();
+    } catch (err) {
+      // Deferred wakeups may outlive the plugin scope that owns this callback.
+      stopTurn();
+      narratorLog.warn(`narration stopped after visibility check failed: ${String(err)}`);
+      return;
+    }
+    if (visible === false) {
       if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
         visibilityRetryCount += 1;
         scheduleRetry(VISIBILITY_RETRY_MS, immediate);
@@ -321,7 +330,7 @@ export function attachProgressNarratorToReplyOptions(params: {
   const narrator = {
     beginTurn: resetTurnState,
     stopTurn,
-    noteToolStart(payload: ToolStartPayload) {
+    noteToolStart(payload: Parameters<NonNullable<InternalGetReplyOptions["onToolStart"]>>[0]) {
       if (payload.phase !== "start" || !isChannelProgressDraftWorkToolName(payload.name)) {
         return;
       }
@@ -357,7 +366,7 @@ export function attachProgressNarratorToReplyOptions(params: {
         { immediate: true },
       );
     },
-    noteItemEvent(payload: ItemEventPayload) {
+    noteItemEvent(payload: Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>[0]) {
       if (payload.kind === "preamble") {
         const preambleText = sanitizeProgressStatusText(payload.progressText ?? "")
           .replace(/\s+/g, " ")

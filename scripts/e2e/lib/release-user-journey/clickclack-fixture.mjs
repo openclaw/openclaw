@@ -171,6 +171,24 @@ function frameText(text) {
   return Buffer.concat([header, payload]);
 }
 
+// The real server answers pings, and the Gateway reconnects a socket whose
+// pongs stop. Its client only sends masked control frames (under 126 bytes).
+function answerPings(socket) {
+  let pending = Buffer.alloc(0);
+  socket.on("data", (chunk) => {
+    pending = Buffer.concat([pending, chunk]);
+    while (pending.length >= 6 && pending.length >= 6 + (pending[1] & 0x7f)) {
+      const length = pending[1] & 0x7f;
+      if ((pending[0] & 0x0f) === 0x9) {
+        const mask = pending.subarray(2, 6);
+        const payload = pending.subarray(6, 6 + length).map((byte, i) => byte ^ mask[i % 4]);
+        socket.write(Buffer.concat([Buffer.from([0x8a, length]), payload]));
+      }
+      pending = pending.subarray(6 + length);
+    }
+  });
+}
+
 function broadcast(event) {
   const frame = frameText(JSON.stringify(event));
   for (const socket of sockets) {
@@ -305,7 +323,7 @@ server.on("upgrade", (req, socket) => {
     socket.end();
   });
   socket.on("error", cleanupSocket);
-  socket.resume();
+  answerPings(socket);
 });
 
 persist();

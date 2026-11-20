@@ -1,3 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 export type ProviderCatalogOutcome = {
   provider: string;
   /** Auth profile tested by discovery; omission means provider-wide auth. */
@@ -5,6 +8,15 @@ export type ProviderCatalogOutcome = {
   /** Limits an auth rejection to catalog discovery rather than model execution. */
   rejectionScope?: "catalog";
   status: "ready" | "auth-rejected" | "unavailable";
+  /** Accepted selections advertised by this authenticated account, never static model support. */
+  modelAccessPrograms?: readonly {
+    modelId: string;
+    runtimeId: string;
+    /** Physical route for host-owned credentials; native observations stay harness-scoped. */
+    api?: string;
+    baseUrl?: string;
+    cyber: readonly CyberAccessProgram[];
+  }[];
   /** Private account-scoped observations from successful discovery, never static model hints. */
   modelServiceTiers?: readonly {
     modelId: string;
@@ -30,3 +42,18 @@ export type ProviderCatalogOutcome = {
   /** Advisory only: configured ids absent from this successful server listing; never eligibility. */
   unlistedConfiguredModelIds?: readonly string[];
 };
+
+/** True when the successful listing made with this exact credential returned the model id. */
+export function isModelInCredentialListing(
+  outcomes: readonly ProviderCatalogOutcome[] | undefined,
+  ref: { provider: string; modelId: string; profileId?: string },
+): boolean {
+  const provider = normalizeProviderId(ref.provider);
+  return (outcomes ?? []).some(
+    (outcome) =>
+      outcome.status === "ready" &&
+      outcome.profileId === ref.profileId &&
+      normalizeProviderId(outcome.provider) === provider &&
+      (outcome.listedModelIds ?? outcome.modelIdCatalog?.modelIds)?.includes(ref.modelId),
+  );
+}

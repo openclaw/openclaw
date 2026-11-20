@@ -161,20 +161,17 @@ function parseXaiOAuthTokenResponse(
   const expires =
     resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: Date.now() }) ??
     resolveExpiresAtMsFromEpochSeconds(decodeJwtPayload(accessToken).exp);
+  if (expires === undefined) {
+    throw new Error(
+      "xAI OAuth token response is missing a usable access-token lifetime. Re-run xAI OAuth login.",
+    );
+  }
   return {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
     ...(idToken ? { idToken } : {}),
-    ...(expires ? { expires } : {}),
+    expires,
   };
-}
-
-function formatXaiOAuthError(params: { context: string; status: number; body: unknown }): string {
-  const body = asOptionalRecord(params.body);
-  const error = readStringValue(body?.error);
-  const description = readStringValue(body?.error_description);
-  const prefix = `${params.context} failed (${params.status})`;
-  return error ? `${prefix}: ${error}${description ? ` (${description})` : ""}` : prefix;
 }
 
 // RFC 6749 final codes that the shared refresh-reason reader does not classify.
@@ -186,6 +183,17 @@ async function requestXaiOAuthRefresh(
 ): Promise<XaiOAuthTokenResponse> {
   const endpoint = requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint");
   const context = "xAI OAuth refresh";
+  const unknownRefreshError = (
+    message: string,
+    phase: "token-response" | "after-token-response",
+    cause: unknown,
+    status?: number,
+  ) =>
+    createOAuthRefreshError(
+      context + " " + message,
+      { version: 1, phase, outcome: "unknown", ...(status === undefined ? {} : { status }) },
+      { cause },
+    );
   const maxChallengeAttempts = 3;
   for (let attempt = 1; attempt <= maxChallengeAttempts; attempt++) {
     let result: Awaited<ReturnType<typeof fetchXaiOAuth>>;
@@ -201,15 +209,7 @@ async function requestXaiOAuthRefresh(
       );
     } catch (cause) {
       // No headers does not mean the server did not consume a rotating grant.
-      throw createOAuthRefreshError(
-        context + " transport failed",
-        {
-          version: 1,
-          phase: "token-response",
-          outcome: "unknown",
-        },
-        { cause },
-      );
+      throw unknownRefreshError("transport failed", "token-response", cause);
     }
     const { response } = result;
     // Cloudflare documents this header as an intermediary response replacing the origin response.
@@ -229,15 +229,11 @@ async function requestXaiOAuthRefresh(
     try {
       body = await readResponseBody(result, { fatalUtf8: true });
     } catch (cause) {
-      throw createOAuthRefreshError(
-        context + " response could not be read",
-        {
-          version: 1,
-          phase: "token-response",
-          outcome: "unknown",
-          status: response.status,
-        },
-        { cause },
+      throw unknownRefreshError(
+        "response could not be read",
+        "token-response",
+        cause,
+        response.status,
       );
     }
     if (!response.ok || asOptionalRecord(body.json)?.error !== undefined) {
@@ -269,15 +265,11 @@ async function requestXaiOAuthRefresh(
     try {
       return parseXaiOAuthTokenResponse(body.json);
     } catch (cause) {
-      throw createOAuthRefreshError(
-        context + " returned invalid credentials",
-        {
-          version: 1,
-          phase: "after-token-response",
-          outcome: "unknown",
-          status: response.status,
-        },
-        { cause },
+      throw unknownRefreshError(
+        "returned invalid credentials",
+        "after-token-response",
+        cause,
+        response.status,
       );
     }
   }
@@ -477,7 +469,8 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
           });
         }
 
-        const error = readStringValue(asOptionalRecord(body)?.error);
+        const errorBody = asOptionalRecord(body);
+        const error = readStringValue(errorBody?.error);
         if (error === "authorization_pending" || error === "slow_down") {
           if (error === "slow_down") {
             pollIntervalMs += XAI_DEVICE_CODE_SLOW_DOWN_INCREMENT_MS;
@@ -495,12 +488,10 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
           throw new Error("xAI device code expired. Re-run the login.");
         }
 
+        const description = readStringValue(errorBody?.error_description);
+        const prefix = `xAI device token exchange failed (${tokenResponse.status})`;
         throw new Error(
-          formatXaiOAuthError({
-            context: "xAI device token exchange",
-            status: tokenResponse.status,
-            body,
-          }),
+          error ? `${prefix}: ${error}${description ? ` (${description})` : ""}` : prefix,
         );
       }
 
@@ -561,7 +552,7 @@ export async function refreshXaiOAuthCredential(
     provider: PROVIDER_ID,
     access: tokens.accessToken,
     refresh: tokens.refreshToken ?? refreshToken,
-    ...(tokens.expires ? { expires: tokens.expires } : {}),
+    expires: tokens.expires,
     ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
     ...resolveXaiOAuthIdentity(tokens),
     tokenEndpoint,

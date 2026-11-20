@@ -3,12 +3,12 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { readAgentConfigEntry } from "../agents/agent-scope-config.js";
+import { countRunningBackgroundProcesses } from "../agents/bash-process-observation.js";
 import { resolveModelContextTokenProjection } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
@@ -24,11 +24,6 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import {
-  resolveSessionCreatorActor,
-  sessionCreatorProfileId,
-  MAX_SESSION_PARTICIPANTS,
-} from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -53,30 +48,31 @@ import { buildControlUiChannelAvatarUrl } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
-import {
-  projectSessionActor,
-  projectSessionOwner,
-  projectSessionParticipants,
-} from "./session-identity-projection.js";
+import { projectSessionRowProfiles } from "./session-identity-projection.js";
 import { sessionModelRevision } from "./session-model-revision.js";
 import { isSessionPermissionChangePending } from "./session-permission-change.js";
-import { projectSessionProviderReview } from "./session-provider-review-projection.js";
+import { freezeSessionRow } from "./session-row-identity.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import { projectSessionRowProviderReview } from "./session-row-provider-review.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import type {
   GatewaySessionModelSource,
+  SessionChildActivity,
   SessionListRowContext,
 } from "./session-utils-contracts.js";
 import {
   resolveEstimatedSessionCostUsd,
+  prepareGatewaySessionBackgroundProcessScope,
   readStoreChildSessionLinks,
   type SessionChildLink,
-  resolveSessionChildOwners,
+  resolveSessionChildController,
 } from "./session-utils-core.js";
 import {
   resolveGatewaySessionDisplayName,
   projectGatewaySessionRunState,
+  projectPreparedSessionChild,
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
@@ -87,6 +83,7 @@ import {
 } from "./session-utils-projection.js";
 import { parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
+import { isUnscopedSessionHostWorkspace } from "./session-workspace-roots.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function readSessionRowInputs(params: {
@@ -103,6 +100,7 @@ export function readSessionRowInputs(params: {
   entry?: InternalSessionEntry;
   preparedAcpMeta?: SessionEntry["acp"] | null;
   preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
+  runtimeResolution?: SessionRuntimeResolution;
   preparedModelMetadata?: PluginMetadataSnapshot | null;
   preparedRepositoryWorkspace?: Readonly<SessionRepositoryWorkspaceRecord> | null;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
@@ -111,7 +109,7 @@ export function readSessionRowInputs(params: {
     GatewaySessionRow,
     "derivedTitle" | "lastMessagePreview" | "lastAssistantMessage"
   >;
-  childLinks?: SessionChildLink[];
+  childLinks?: readonly SessionChildLink[];
   excludedChildKeys?: ReadonlySet<string>;
   rowContext?: SessionListRowContext;
   configuredAgentIds?: ReadonlySet<string>;
@@ -119,6 +117,7 @@ export function readSessionRowInputs(params: {
   skipTranscriptUsageFallback?: boolean;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
   lightweightListRow?: boolean;
+  hasMessages?: boolean;
   includeSwarmChildren?: boolean;
 }) {
   const { cfg, storePath, store, key, entry, agentId } = params;
@@ -135,6 +134,7 @@ export function readSessionRowInputs(params: {
       entry,
       preparedAcpMeta: params.preparedAcpMeta,
       preparedRuntimeOwnership: params.preparedRuntimeOwnership,
+      runtimeResolution: params.runtimeResolution,
       preparedModelMetadata: params.preparedModelMetadata,
       source: params.modelSource ?? { entry, readSourceEntry: (parentKey) => store[parentKey] },
       agentId,
@@ -183,7 +183,7 @@ export function readSessionRowInputs(params: {
     catalogEntry,
     selected: entry?.contextWindow,
   });
-  const modelContext = resolveModelContextTokenProjection({
+  const modelContext = (params.runtimeResolution?.context ?? resolveModelContextTokenProjection)({
     cfg,
     provider,
     model,
@@ -234,9 +234,12 @@ export function readSessionRowInputs(params: {
       displayName,
       derivedTitle: params.preparedTitle?.derivedTitle,
       lastMessagePreview: params.preparedTitle?.lastMessagePreview,
+      hasMessages: params.hasMessages,
       lastAssistantMessage: params.preparedTitle?.lastAssistantMessage,
       thinkingProjection,
-      agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
+      agentRuntime: (params.runtimeResolution?.placement ?? projectWorkerPlacementAgentRuntime)(
+        thinkingProjection.agentRuntime,
+      ),
       contextWindowProfile,
       fastModeState: resolveFastModeState({
         cfg,
@@ -275,7 +278,6 @@ export function readSessionRowInputs(params: {
       estimatedCostUsd: lightweight
         ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
         : resolveEstimatedSessionCostUsd({
-            cfg,
             provider,
             model,
             entry,
@@ -360,54 +362,14 @@ export function resolveGatewaySessionActiveModel(params: {
     : undefined;
 }
 
-/** Profile publications invalidate display facts independently of stored session metadata. */
-function projectSessionRowProfiles(
-  input: Pick<
-    ReturnType<typeof readSessionRowInputs>["inputs"],
-    "entry" | "cfg" | "userProfileIdentityById" | "configuredAgentIds" | "identityProjection"
-  >,
-) {
-  const { entry, cfg, userProfileIdentityById, configuredAgentIds, identityProjection } = input;
-  const owner = (identityProjection?.owner ?? projectSessionOwner)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-    configuredAgentIds,
-  );
-  const projected = (identityProjection?.participants ?? projectSessionParticipants)(
-    entry,
-    userProfileIdentityById,
-    cfg,
-  );
-  const ownerKey = owner?.actor.identity && JSON.stringify(owner.actor.identity);
-  const participants = [...projected].flatMap(([key, participant]) =>
-    key === ownerKey ? [] : [participant],
-  );
-  return {
-    createdActor: projectSessionActor(
-      resolveSessionCreatorActor(entry?.createdActor),
-      userProfileIdentityById,
-      cfg,
-      Boolean(sessionCreatorProfileId(entry?.createdActor)),
-    ),
-    owner,
-    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
-    participants: participants.length
-      ? participants.slice(0, SESSION_PARTICIPANT_LIMIT)
-      : undefined,
-    expandedParticipants: participants.length
-      ? participants.slice(0, MAX_SESSION_PARTICIPANTS)
-      : undefined,
-    participantCount: participants.length || undefined,
-    archivedBy: projectSessionActor(entry?.archivedBy, userProfileIdentityById, cfg),
-  };
-}
-
 export function refreshSessionRowProfiles(materialized: ReturnType<typeof materializeSessionRow>) {
   return replaceSessionRowFacts(materialized, projectSessionRowProfiles(materialized.source));
 }
 
-export function materializeSessionRow(input: ReturnType<typeof readSessionRowInputs>["inputs"]) {
+export function materializeSessionRow(
+  input: ReturnType<typeof readSessionRowInputs>["inputs"],
+  previous?: { publicationIdentity: object; row: Readonly<GatewaySessionRow> },
+) {
   const { cfg, key, entry } = input;
   const observerDigest =
     entry?.observerDigest &&
@@ -424,6 +386,14 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   // Snooze shares the pin root-session rule.
   const pinnable = isPinnableSessionEntry(key, entry);
   const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
+  const classification = sessionClassificationForRow(cfg, key, input.agentId, entry);
+  // Custody identifiers stay in storage for recovery; clients receive their friendly display name.
+  // Explicit human labels and ordinary conversations retain normal label precedence.
+  const generatedPublicationLabel =
+    classification.classification === "github-publication" &&
+    /^github-publication-(?:[a-f0-9]{32}|[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+      entry?.label ?? "",
+    );
 
   const row: GatewaySessionRow = {
     key,
@@ -463,7 +433,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: resolveGatewaySessionKind(key, entry),
-    label: entry?.label,
+    label: generatedPublicationLabel ? undefined : entry?.label,
     autoLabel: entry?.autoLabel,
     icon: entry?.icon,
     color: entry?.color,
@@ -473,10 +443,13 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     category: entry?.category,
     boardFace: entry?.boardFace,
     boardPresentation: entry?.boardPresentation,
-    ...sessionClassificationForRow(cfg, key, input.agentId, entry),
-    displayName: input.displayName,
+    ...classification,
+    displayName: generatedPublicationLabel
+      ? (normalizeOptionalString(entry?.displayName) ?? "GitHub publication")
+      : input.displayName,
     derivedTitle: input.derivedTitle,
     lastMessagePreview: input.lastMessagePreview,
+    hasMessages: input.hasMessages,
     lastAssistantMessage: input.lastAssistantMessage,
     channel,
     subject: entry?.subject,
@@ -514,10 +487,6 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lifecycleRevision: entry?.lifecycleRevision,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
-    restartRecoveryStatus: entry?.mainRestartRecovery?.tombstone ? "tombstoned" : undefined,
-    restartRecoveryCycleId: entry?.mainRestartRecovery?.tombstone
-      ? entry.mainRestartRecovery.cycleId
-      : undefined,
     thinkingLevel: input.thinkingProjection.thinkingLevel,
     contextWindow: input.contextWindowProfile.contextWindow,
     contextWindows: input.contextWindowProfile.contextWindows,
@@ -525,6 +494,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     thinkingLevels: input.thinkingProjection.thinkingLevels,
     thinkingOptions: input.thinkingProjection.thinkingOptions,
     thinkingDefault: input.thinkingProjection.thinkingDefault,
+    cyberAccessProgram: entry?.cyberAccessProgram,
     fastMode: entry?.fastMode,
     toolOverrides: entry?.toolOverrides,
     effectiveFastMode: input.fastModeState.mode,
@@ -534,14 +504,14 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     traceLevel: entry?.traceLevel,
     reasoningLevel: entry?.reasoningLevel,
     reasoningDefault:
-      resolveAgentConfig(cfg, input.agentId)?.reasoningDefault ??
+      readAgentConfigEntry(cfg, input.agentId)?.reasoningDefault ??
       cfg.agents?.defaults?.reasoningDefault,
     elevatedLevel: entry?.elevatedLevel,
     sendPolicy: entry?.sendPolicy,
     inputTokens: entry?.inputTokens,
     outputTokens: entry?.outputTokens,
     usageReport: entry?.usageReport,
-    providerReview: projectSessionProviderReview(entry, key),
+    providerReview: projectSessionRowProviderReview(key, entry),
     lastRunId: entry?.lastRunId,
     hasAutomation: input.hasAutomation,
     // Navigation lineage is persisted; runtime control is exposed separately above.
@@ -582,16 +552,18 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     lastThreadId: deliveryFields.lastThreadId,
     pluginExtensions: input.pluginExtensions.length > 0 ? input.pluginExtensions : undefined,
   };
-  // JSON omits undefined fields; keep the resident projection equally sparse.
-  for (const field in row) {
-    if (Reflect.get(row, field) === undefined) {
-      Reflect.deleteProperty(row, field);
-    }
-  }
   return Object.freeze({
-    row: freezeTrustedJsonSnapshot<Readonly<GatewaySessionRow>>(row),
+    publicationIdentity: previous?.publicationIdentity ?? {},
+    row: freezeSessionRow(row, previous?.row),
     source: Object.freeze({
       parsedKey: parseAgentSessionKey(key),
+      backgroundProcessScope: prepareGatewaySessionBackgroundProcessScope(input),
+      // Materialization already owns config and workspace-entry invalidation.
+      unscopedHostRoot: Boolean(
+        entry &&
+        isUnscopedSessionHostWorkspace({ cfg, agentId: input.agentId, sessionKey: key, entry }),
+      ),
+      agentId: input.agentId,
       cfg,
       entry,
       selectedModel: input.selectedModel,
@@ -624,16 +596,24 @@ export function replaceSessionRowFacts(
   source?: Partial<ReturnType<typeof materializeSessionRow>["source"]>,
 ): ReturnType<typeof materializeSessionRow> {
   const nextSource = source ? { ...materialized.source, ...source } : materialized.source;
-  freezeTrustedJsonSnapshot(nextSource.childLinks);
+  freezeTrustedJsonSnapshot(source?.childLinks);
   return Object.freeze({
-    row: row ? freezeTrustedJsonSnapshot({ ...materialized.row, ...row }) : materialized.row,
+    publicationIdentity: materialized.publicationIdentity,
+    row: row
+      ? freezeSessionRow({ ...materialized.row, ...row }, materialized.row, Object.keys(row))
+      : materialized.row,
     source: Object.freeze(nextSource),
   });
 }
 
 export function presentSessionRow(
   materialized: ReturnType<typeof materializeSessionRow>,
-  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & { now: number },
+  options: Partial<ReturnType<typeof readSessionRowInputs>["presentation"]> & {
+    now: number;
+    childActivity?: SessionChildActivity;
+    backgroundProcessCount?: number;
+    preparedRunState?: ReturnType<typeof projectGatewaySessionRunState>;
+  },
 ): GatewaySessionRow {
   const row = { ...materialized.row };
   const { source } = materialized;
@@ -642,19 +622,27 @@ export function presentSessionRow(
   // Stamp the temporal projection, not the reusable materialized inputs.
   // Completed list caches retain this sample when they replay the finished row.
   row.snapshotAt = now;
+  const backgroundProcessCount =
+    options.backgroundProcessCount ??
+    countRunningBackgroundProcesses(source.backgroundProcessScope);
+  if (backgroundProcessCount > 0) {
+    row.backgroundProcessCount = backgroundProcessCount;
+  }
   const subagentRuns =
     options.subagentRuns ?? buildSubagentRunReadIndexFromRuns({ ...source.subagentRunInputs, now });
-  const { subagentRun, subagentOwner, fields } = projectGatewaySessionRunState({
-    key: row.key,
-    parsedKey: source.parsedKey,
-    entry,
-    now,
-    rowContext: {
-      subagentRuns,
-      projectedAgentRuns: options.projectedAgentRuns,
-      projectedSubagentActivity: options.projectedSubagentActivity,
-    },
-  });
+  const { subagentRun, fields } =
+    options.preparedRunState ??
+    projectGatewaySessionRunState({
+      key: row.key,
+      parsedKey: source.parsedKey,
+      entry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
   row.usageReport ??= usage?.usageReport;
@@ -664,7 +652,8 @@ export function presentSessionRow(
     (typeof row.totalTokens === "number" && row.totalTokens > 0) ||
     usage?.totalTokensFresh === true;
   row.agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
-  row.spawnedBy = row.controlOwnerSessionKey = subagentOwner || entry?.spawnedBy;
+  row.spawnedBy = entry?.spawnedBy;
+  row.controlOwnerSessionKey = entry ? resolveSessionChildController(row.key, entry) : undefined;
   row.goal = resolveGatewaySessionGoal(entry, now, {
     totalTokens: row.totalTokens,
     totalTokensFresh: row.totalTokensFresh,
@@ -673,39 +662,30 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, parsedKey, entry: childEntry }) => {
-    if (options.excludedChildKeys?.has(key)) {
-      return [];
-    }
-    const childActive = projectGatewaySessionRunState({
-      key,
-      entry: childEntry,
-      parsedKey,
-      now,
-      rowContext: {
+  let children = options.childActivity;
+  if (!children) {
+    const keys: string[] = [];
+    let active = false;
+    for (const child of source.childLinks ?? []) {
+      if (options.excludedChildKeys?.has(child.key)) {
+        continue;
+      }
+      const contribution = projectPreparedSessionChild(child, row.key, now, {
         subagentRuns,
         projectedAgentRuns: options.projectedAgentRuns,
         projectedSubagentActivity: options.projectedSubagentActivity,
-      },
-    }).fields.hasActiveSubagentRun;
-    if (
-      !resolveSessionChildOwners({
-        key,
-        entry: childEntry,
-        parsedKey,
-        now,
-        subagentRuns,
-        hasActiveRun: childActive,
-      }).includes(row.key)
-    ) {
-      return [];
+      });
+      if (contribution.included) {
+        keys.push(child.key);
+        active ||= contribution.active === true;
+      }
     }
-    if (childActive) {
-      row.hasActiveSubagentRun = true;
-    }
-    return [key];
-  });
-  row.childSessions = children?.length ? children : undefined;
+    children = { childSessions: keys.length ? keys : undefined, hasActiveSubagentRun: active };
+  }
+  row.childSessions = children.childSessions;
+  if (children.hasActiveSubagentRun) {
+    row.hasActiveSubagentRun = true;
+  }
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;
   return row;

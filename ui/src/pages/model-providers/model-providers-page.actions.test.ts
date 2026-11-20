@@ -2,17 +2,28 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
+  createApiKeyProviderData,
   createAuthStatus,
   createHarness,
   drainPageUpdates,
+  expandProvider,
   modelPicker,
   requestCount,
   saveKey,
   waitForProviders,
+  type ModelProvidersPageTestElement,
 } from "./model-providers-page.test-support.tsx";
+
+const keyInput = (page: ModelProvidersPageTestElement) =>
+  page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
+const keyButton = (page: ModelProvidersPageTestElement) =>
+  page.querySelector<HTMLButtonElement>(".model-providers__inline-form .btn.primary")!;
+const primaryButton = (page: ModelProvidersPageTestElement) =>
+  modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger");
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -33,32 +44,67 @@ describe("ModelProvidersPage mutation presentation", () => {
 
     await waitForSolid(() => {
       expect(requestCount(request, "models.authSetApiKey")).toBe(1);
-      expect(
-        page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
-      ).toBe(true);
-      expect(page.querySelector(".model-providers__inline-form button")?.textContent).toContain(
-        "Saving",
-      );
+      expect(keyInput(page)?.disabled).toBe(true);
+      expect(keyButton(page).textContent).toContain("Saving");
     });
-    page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+    keyButton(page).click();
     expect(requestCount(request, "models.authSetApiKey")).toBe(1);
 
     pending.reject(new Error("Synthetic credential rejection"));
     await waitForSolid(() => {
       expect(page.renderRoot.textContent).toContain("Synthetic credential rejection");
-      const input = page.querySelector<HTMLInputElement>(".model-providers__inline-form input");
-      expect(input?.value).toBe("synthetic-api-key");
-      expect(input?.disabled).toBe(false);
+      expect(keyInput(page)).toMatchObject({ value: "synthetic-api-key", disabled: false });
     });
 
     request.mockImplementation(async (method) =>
       method === "models.authSetApiKey" ? {} : original(method),
     );
-    page.querySelector<HTMLButtonElement>(".model-providers__inline-form button")!.click();
+    keyButton(page).click();
     await waitForSolid(() =>
       expect(page.querySelector(".model-providers__inline-form")).toBeNull(),
     );
     expect(requestCount(request, "models.authSetApiKey")).toBe(2);
+  });
+
+  it("keeps the newer Test access result when an older saved-key check finishes last", async () => {
+    const { context, request } = createHarness("main");
+    const savedCheck = deferred<ModelsProbeResult>();
+    const originalRequest = request.getMockImplementation()!;
+    let checks = 0;
+    request.mockImplementation(async (method) => {
+      if (method === "models.list") {
+        return {
+          models: [{ id: "test-model", name: "Test model", provider: "openai", available: true }],
+          providerOutcomes: [{ provider: "openai", status: "ready" }],
+        };
+      }
+      if (method === "models.authStatus") {
+        return createApiKeyProviderData().authStatus;
+      }
+      if (method === "models.authSetApiKey") {
+        return { provider: "openai", profileId: "openai:key" };
+      }
+      if (method === "models.probe") {
+        return ++checks === 1
+          ? savedCheck.promise
+          : { provider: "openai", status: "billing", results: [] };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForProviders(page);
+    await saveKey(page, "synthetic-replacement");
+    await waitForSolid(() => expect(checks).toBe(1));
+    const row = await expandProvider(page, "openai");
+    row.querySelector<HTMLButtonElement>('button[aria-label="Test access: OpenAI"]')!.click();
+    const badge = () => row.querySelector(".provider-row__status")?.textContent;
+    await waitForSolid(() => expect(badge()).toBe("Billing problem"));
+
+    savedCheck.resolve({ provider: "openai", status: "ok", results: [] });
+    await waitForSolid(() => expect(page.view.props.busy["key:openai"]).toBeUndefined());
+    expect(badge()).toBe("Billing problem");
+    expect(row.textContent).toContain("API key saved.");
+    expect(row.textContent).not.toContain("API key saved and verified.");
   });
 
   it("retains disabled defaults during a write and restores the saved selection on failure", async () => {
@@ -78,14 +124,18 @@ describe("ModelProvidersPage mutation presentation", () => {
     const previous = page.view.props.defaultModels.primary;
     const pending = deferred<boolean>();
     runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+    const behaviorDefaults = [
+      ...page.querySelectorAll<HTMLInputElement>(
+        '.settings-segmented__input[type="radio"][value=""]',
+      ),
+    ];
+    expect(behaviorDefaults).toHaveLength(2);
 
     page.view.props.onPrimaryChange("openai/synthetic-model");
     await waitForSolid(() => {
       expect(runtimeConfig.patch).toHaveBeenCalledTimes(1);
-      expect(
-        modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
-          ?.disabled,
-      ).toBe(true);
+      expect(primaryButton(page)?.disabled).toBe(true);
+      expect(behaviorDefaults.every((input) => input.disabled)).toBe(true);
     });
     expect(page.view.props.defaultModels.primary).toBe("openai/synthetic-model");
 
@@ -93,12 +143,57 @@ describe("ModelProvidersPage mutation presentation", () => {
     await waitForSolid(() => {
       expect(page.view.props.defaultModels.primary).toBe(previous);
       expect(page.renderRoot.textContent).toContain("Synthetic defaults rejection");
-      expect(
-        modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
-          ?.disabled,
-      ).toBe(false);
+      expect(primaryButton(page)?.disabled).toBe(false);
+      expect(behaviorDefaults.every((input) => !input.disabled)).toBe(true);
     });
   });
+
+  it.each(["thinking", "fastMode"] as const)(
+    "keeps only the initiating %s control focusable through rejection and retry",
+    async (field) => {
+      const { context, runtimeConfig } = createHarness("main");
+      const page = appendPage(context);
+      await waitForProviders(page);
+      const groups = page.querySelectorAll<HTMLElement>(
+        '.model-providers__defaults [role="radiogroup"]',
+      );
+      expect(groups).toHaveLength(2);
+      const own =
+        groups[field === "thinking" ? 0 : 1]!.querySelector<HTMLInputElement>('input[value=""]')!;
+      const other =
+        groups[field === "thinking" ? 1 : 0]!.querySelector<HTMLInputElement>('input[value=""]')!;
+      const pending = deferred<boolean>();
+      runtimeConfig.patch.mockImplementationOnce(() => pending.promise);
+      own.focus();
+      own.click();
+      flush();
+      expect(own.disabled).toBe(false);
+      expect(other.disabled).toBe(true);
+      expect(document.activeElement).toBe(own);
+      await waitForSolid(() => {
+        expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+        expect(own.getAttribute("aria-disabled")).toBe("true");
+      });
+      own.click();
+      other.click();
+      expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+
+      pending.reject(new Error("Synthetic behavior rejection"));
+      await waitForSolid(() => {
+        expect(page.renderRoot.textContent).toContain("Synthetic behavior rejection");
+        expect(own.getAttribute("aria-disabled")).toBeNull();
+        expect(own.disabled).toBe(false);
+        expect(other.disabled).toBe(false);
+      });
+      own.click();
+      await waitForSolid(() => {
+        expect(runtimeConfig.patch).toHaveBeenCalledTimes(2);
+        expect(own.getAttribute("aria-disabled")).toBeNull();
+        expect(other.disabled).toBe(false);
+        expect(page.renderRoot.textContent).not.toContain("Synthetic behavior rejection");
+      });
+    },
+  );
 
   it.each(["agent", "reconnect", "navigation"] as const)(
     "retires a held credential presentation on %s before the old write settles",
@@ -136,13 +231,9 @@ describe("ModelProvidersPage mutation presentation", () => {
           expect(page.view.props.credentialAgentLabel).toBe("Writer");
           expect(page.querySelector(".model-providers__inline-form")).toBeNull();
         } else if (retirement === "reconnect") {
-          expect(
-            page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.disabled,
-          ).toBe(false);
+          expect(keyInput(page)?.disabled).toBe(false);
         } else {
-          expect(
-            page.querySelector<HTMLInputElement>(".model-providers__inline-form input")?.value,
-          ).toBe("synthetic-draft-after-navigation");
+          expect(keyInput(page)?.value).toBe("synthetic-draft-after-navigation");
         }
       });
 

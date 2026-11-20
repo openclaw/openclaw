@@ -7,7 +7,6 @@ import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.
 
 registerUpdateActionsEnglish();
 
-type ReadyUpdateReport = Extract<UpdateReportResult, { status: "ready" }>;
 export type SubmittedUpdateReport = Exclude<UpdateReportResult, { status: "ready" }>;
 
 // Covers 30s each for auth, creation, and uncertain-outcome lookup, plus delivery margin.
@@ -18,7 +17,7 @@ export async function reportUpdateFailure(params: {
   client: GatewayBrowserClient;
   isCurrent: () => boolean;
 }): Promise<SubmittedUpdateReport | null> {
-  const preview = await params.client.request<ReadyUpdateReport>(
+  const preview = await params.client.request<Extract<UpdateReportResult, { status: "ready" }>>(
     "update.report",
     { action: "preview", attemptId: params.attemptId },
     { timeoutMs: UPDATE_REPORT_REQUEST_TIMEOUT_MS },

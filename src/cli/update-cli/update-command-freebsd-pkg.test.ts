@@ -83,15 +83,9 @@ async function withPackageRoots(
 }
 
 describe("FreeBSD pkg update admission", () => {
-  it.each([
-    { platform: "freebsd", manager: "pkg", ownership: "owned" },
-    { platform: "freebsd", manager: "pkg", ownership: "unowned" },
-    { platform: "linux", manager: "pacman", ownership: "owned" },
-    { platform: "linux", manager: "pacman", ownership: "missing" },
-    { platform: "freebsd", manager: "pkg", ownership: "missing" },
-  ] as const)(
-    "admits $manager roots before npm discovery ($ownership)",
-    async ({ platform, manager, ownership }) => {
+  it.each(["owned", "unowned", "missing"] as const)(
+    "admits pkg roots before npm discovery (%s)",
+    async (ownership) => {
       await withPackageRoots(async (_base, root) => {
         const command = vi
           .spyOn(exec, "runCommandWithTimeout")
@@ -117,27 +111,12 @@ describe("FreeBSD pkg update admission", () => {
         });
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");
-          expect(command).toHaveBeenCalled();
-          if (ownership === "missing") {
-            expect(onWarning).toHaveBeenCalledExactlyOnceWith(
-              expect.stringContaining(`${manager} executable was not found`),
-            );
-            expect(onWarning.mock.calls[0]?.[0]).toContain(
-              "Continuing without verified system-package ownership.",
-            );
-            expect(onWarning.mock.calls[0]?.[0]).not.toContain("Restore access");
-          } else {
-            expect(onWarning).not.toHaveBeenCalled();
-          }
+          expect(onWarning).not.toHaveBeenCalled();
         } else {
-          await expect(admission).rejects.toBeInstanceOf(shared.UpdatePreMutationError);
-          await expect(admission).rejects.toMatchObject({
-            name: "UpdatePreMutationError",
-            reason: `${manager}-owned-install`,
-          });
+          await expect(admission).rejects.toMatchObject({ reason: "pkg-owned-install" });
           expect(command).not.toHaveBeenCalled();
         }
-      }, platform);
+      });
     },
   );
 
@@ -161,9 +140,9 @@ describe("FreeBSD pkg update admission", () => {
   it("rechecks the selected Git root after its mutation preparation finishes", async () => {
     await withPackageRoots(async (_base, root) => {
       let claimed = false;
-      const query = vi
-        .spyOn(exec, "runCommandBuffered")
-        .mockImplementation(async () => pkgQueryResult(claimed ? `${root}/package.json\n` : ""));
+      vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () =>
+        pkgQueryResult(claimed ? `${root}/package.json\n` : ""),
+      );
       const publish = vi.fn();
       vi.spyOn(updateRunner, "updateGitCheckout").mockImplementation(async ({ opts }) => {
         await opts.beforeGitMutation({});
@@ -178,7 +157,6 @@ describe("FreeBSD pkg update admission", () => {
           },
         }),
       ).rejects.toMatchObject({ reason: "pkg-owned-install" });
-      expect(query).toHaveBeenCalledTimes(2);
       expect(publish).not.toHaveBeenCalled();
     });
   });

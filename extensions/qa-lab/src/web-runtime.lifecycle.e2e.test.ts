@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
+import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { chromium, type Browser } from "playwright-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -51,12 +52,9 @@ afterEach(async () => {
   for (const browser of browsers) {
     await browser.close().catch(record);
   }
-  const activeServer = server;
-  if (activeServer) {
-    activeServer.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      activeServer.close((error) => (error ? reject(error) : resolve()));
-    }).catch(record);
+  if (server) {
+    server.closeAllConnections();
+    await promisify(server.close.bind(server))().catch(record);
   }
   vi.restoreAllMocks();
   if (failures.length) {

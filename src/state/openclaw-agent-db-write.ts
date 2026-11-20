@@ -4,12 +4,12 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { waitForAgentDatabaseWriteAdmission } from "./agent-database-preparation-context.js";
+import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
-import { retainAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
   withOpenClawAgentDatabaseRuntime,

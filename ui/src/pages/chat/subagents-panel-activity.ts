@@ -6,8 +6,12 @@ import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-pr
 import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached, resolveToolCardOutcome } from "../../lib/chat/tool-cards.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import {
+  extractToolCardsCached,
+  projectToolCardActivityOutcome,
+  resolveToolCardOutcome,
+} from "../../lib/chat/tool-cards.ts";
+import { resolveToolDisplayIdentity } from "../../lib/chat/tool-display-identity.ts";
 import {
   cleanAgentActivityItem,
   isAgentActivityItem,
@@ -47,7 +51,7 @@ export function readSubagentToolEvent(
     toolCallId: data.toolCallId,
     kind: "tool",
     name,
-    title: resolveToolDisplay({ name }).label,
+    title: resolveToolDisplayIdentity(name).label,
     phase: data.phase === "result" ? "end" : data.phase === "start" ? "start" : "update",
     ...(data.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(data.suppressChannelProgress === true ? { suppressChannelProgress: true } : {}),
@@ -134,15 +138,14 @@ export function readSubagentActivitySnapshot(history: ChatHistoryResult): Subage
       if (preparedCallIds.has(identity)) {
         continue;
       }
-      const outcome = resolveToolCardOutcome(card, false);
       const item: AgentActivityItem = {
         itemId: card.callId,
         toolCallId: card.callId,
         kind: "tool",
         name: card.name,
-        title: resolveToolDisplay({ name: card.name }).label,
+        title: resolveToolDisplayIdentity(card.name).label,
         phase: "end",
-        status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
+        ...projectToolCardActivityOutcome(resolveToolCardOutcome(card, false)),
       };
       calls.set(identity, item);
       tool = { name: card.name, toolCallId: card.callId };

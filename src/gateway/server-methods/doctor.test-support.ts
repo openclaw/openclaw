@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, vi } from "vitest";
 import type { MemoryWorkspaceMaintenance } from "../../../packages/memory-host-sdk/src/host/workspace-files.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ShortTermDreamingStatsEntry } from "../../memory-host-sdk/dreaming.js";
+import type { ShortTermDreamingStatsEntry } from "../../memory-host-sdk/dreaming-report-types.js";
 
 type Mock = ReturnType<typeof vi.fn>;
 type Maintenance = Pick<MemoryWorkspaceMaintenance, "stat" | "readFile" | "listDirectory">;
@@ -217,14 +217,7 @@ export function useMemoryManagerFixture(options: MemoryManagerFixtureOptions) {
   const probeEmbeddingAvailability =
     options.probeEmbeddingAvailability ?? vi.fn().mockResolvedValue({ ok: true });
   getMemorySearchManager.mockResolvedValue({
-    manager: {
-      status: options.status,
-      probeEmbeddingAvailability,
-      ...(options.getCachedEmbeddingAvailability
-        ? { getCachedEmbeddingAvailability: options.getCachedEmbeddingAvailability }
-        : {}),
-      close,
-    },
+    manager: { ...options, probeEmbeddingAvailability, close },
   });
   return { close, probeEmbeddingAvailability };
 }

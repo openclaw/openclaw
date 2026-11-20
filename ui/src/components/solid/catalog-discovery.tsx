@@ -1,7 +1,8 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "./icon.tsx";
+import { useScrollState } from "./scroll-state.ts";
 
-/** Shared discovery controls for the Plugins and Claws catalogs. */
+/** Shared discovery controls for the Plugins and Templates catalogs. */
 export function CatalogDiscoverySearch(props: { children: JSX.Element }): JSX.Element {
   return (
     <label class="plugin-catalog-search">
@@ -17,8 +18,9 @@ export function CatalogDiscoveryChips(props: {
   label: string;
   children: JSX.Element;
 }): JSX.Element {
+  const scrollState = useScrollState(true);
   return (
-    <div class="plugin-catalog-chips" role="group" aria-label={props.label}>
+    <div class="plugin-catalog-chips" role="group" aria-label={props.label} ref={scrollState}>
       {props.children}
     </div>
   );

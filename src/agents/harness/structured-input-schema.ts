@@ -1,3 +1,4 @@
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { readQuestionResourcePreview } from "../../../packages/gateway-protocol/src/question-media.js";
 import {
   hasUnsafeVisibleCharacters,
@@ -246,11 +247,7 @@ export function compileStructuredInputField(
         return { kind: "present", value: decoded };
       };
       const rawDefault = ownValue(schema, "default");
-      const defaultValue =
-        Array.isArray(rawDefault) &&
-        rawDefault.every((value): value is string => typeof value === "string")
-          ? rawDefault
-          : undefined;
+      const defaultValue = isStringArray(rawDefault) ? rawDefault : undefined;
       if (rawDefault !== undefined && (!defaultValue || decode(defaultValue).kind !== "present")) {
         return "has an invalid string array default.";
       }
@@ -570,9 +567,7 @@ function compileResourceField(
   const defaults =
     typeof rawDefault === "string" && type === "string"
       ? [rawDefault]
-      : type === "array" &&
-          Array.isArray(rawDefault) &&
-          rawDefault.every((value): value is string => typeof value === "string")
+      : type === "array" && isStringArray(rawDefault)
         ? rawDefault
         : undefined;
   if (

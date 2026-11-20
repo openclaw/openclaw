@@ -69,7 +69,12 @@ function wrapMinimaxProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
     if ((ctx.sourceApi ?? model.api) !== "anthropic-messages" || !isMinimaxM31ModelId(model.id)) {
       return underlying(model, context, options);
     }
-    const thinkingLevel = options?.reasoning ?? ctx.thinkingLevel;
+    const requested = options?.reasoning ?? ctx.thinkingLevel;
+    // Runtime streams cap reasoning at "high"; keep the session's xhigh/max for M3.1.
+    const thinkingLevel =
+      requested === "high" && (ctx.thinkingLevel === "xhigh" || ctx.thinkingLevel === "max")
+        ? ctx.thinkingLevel
+        : requested;
     const effort = MINIMAX_M31_THINKING_LEVELS.find((level) => level === thinkingLevel) ?? "max";
     // The Anthropic client uses a manual budget for non-Claude models. Give that
     // calculation room to retain signed history; the payload keeps the real cap below.

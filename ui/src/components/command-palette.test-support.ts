@@ -8,8 +8,9 @@ import { createWebPushCapability } from "../app/web-push.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { invalidateChatMetadataStore } from "../lib/chat/chat-metadata-cache.ts";
-import { invalidateCronCatalog } from "../lib/cron/catalog.ts";
+import { clearCronInventory, receiveCronInventoryEvent } from "../lib/cron/inventory-connection.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -19,6 +20,7 @@ import {
   type GatewayRequestHandler,
 } from "../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import type { CommandPalette } from "./command-palette.tsx";
 
 export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
@@ -26,6 +28,7 @@ export function registerCommandPaletteTestHooks({ mockScroll = true } = {}) {
   let scrollIntoViewDescriptor: PropertyDescriptor | undefined;
 
   beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
     vi.useFakeTimers();
     restoreDialogPolyfill = installDialogPolyfill();
     scrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollIntoView");
@@ -60,7 +63,10 @@ export function createGateway(
     ((method: string) =>
       method === "sessions.search" ? { results: [], sessions: [] } : { models: [] });
   const client = createTestGatewayClient((...args) => {
-    // Creation catalogs must not consume scripted search replies.
+    // Draft chrome reads must not consume scripted search replies.
+    if (args[0] === "agent.identity.get") {
+      return null;
+    }
     if (args[0] === "environments.list") {
       return { environments: [], profiles: [] };
     }
@@ -75,17 +81,15 @@ export function createGateway(
     }
     return request(...args);
   });
-  const { gateway, publish, publishEvent } = createApplicationGateway({
-    client,
-    phase: connected ? "connected" : "reconnecting",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const { gateway, publish, publishEvent } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: connected ? "connected" : "reconnecting",
+      hello: options.methods ? ({ features: { methods: options.methods } } as never) : null,
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
   Object.assign(gateway, {
     connection: { gatewayUrl: "ws://localhost", token: "", bootstrapToken: "", password: "" },
     setSessionKey: () => undefined,
@@ -93,9 +97,7 @@ export function createGateway(
   return {
     gateway,
     emit(this: void, event: string, payload: unknown = {}) {
-      if (event === "cron" || event === "config.changed") {
-        invalidateCronCatalog(client);
-      }
+      receiveCronInventoryEvent(client, { type: "event", event, payload });
       const invalidation = modelCatalogEventInvalidation({ event, payload });
       if (invalidation) {
         invalidateChatMetadataStore(client, undefined, undefined, invalidation);
@@ -104,7 +106,7 @@ export function createGateway(
     },
     setConnected(this: void, nextConnected: boolean) {
       if (!nextConnected) {
-        invalidateCronCatalog(client);
+        clearCronInventory(client);
         invalidateChatMetadataStore(client);
       }
       publish({

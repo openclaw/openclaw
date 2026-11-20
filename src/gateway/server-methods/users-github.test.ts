@@ -53,9 +53,10 @@ import {
 import { getUserProfileListItem } from "../../state/user-profile-list-item.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { linkCanonicalUserProfileEmail } from "../../state/user-profile-writes.js";
-import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { withoutMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   createOpenClawTestState,
@@ -64,10 +65,10 @@ import {
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { createGitHubOAuthLifecycle } from "../github-oauth-lifecycle.js";
 import { bindPersonalGitHubPublicationSelection } from "../github-personal-publication.js";
-import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 import {
+  blockPersonalGitHubProfile,
   expectReceiptBackedPersonalGitHubAuthority,
   preparePersonalGitHubPoll,
 } from "./users-github.authority.test-support.js";
@@ -107,29 +108,18 @@ async function start(client = alice): Promise<UsersGitHubAuthorizeStartResult> {
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return respond.mock.calls[0]![1] as UsersGitHubAuthorizeStartResult;
 }
-function preparePoll(client = alice) {
-  preparePersonalGitHubPoll(owner(client));
-}
 async function connect(client = alice) {
   const started = await start(client);
-  preparePoll(client);
-  const result = await rpc(client, "users.github.authorize.poll", { requestId: started.requestId });
+  preparePersonalGitHubPoll(owner(client));
+  const result = await withoutMainThreadSql(() =>
+    rpc(client, "users.github.authorize.poll", { requestId: started.requestId }),
+  );
   expect(result.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
   const connection = (await readConnection(owner(client)))!;
   if (connection.selection.kind !== "connected") {
     throw new Error("Expected connected GitHub account");
   }
   return { ...connection, selection: connection.selection };
-}
-function blockAlice() {
-  config.gateway = {
-    roles: {
-      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
-      default: "blocked",
-    },
-  };
-  setUserProfileRole(owner(), "blocked");
-  invalidateOperatorRolePolicy(owner());
 }
 async function pendingRefresh() {
   expireUserGitHubAccessToken(owner());
@@ -354,6 +344,18 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     }
   });
 
+  it("keeps personal profile install, refresh, and retirement leases off the Gateway thread", async () => {
+    await connect();
+    expireUserGitHubAccessToken(owner());
+    await withoutMainThreadSql(async () => {
+      await lifecycle.personal.refresh(owner());
+      expect(network.refresh).toHaveBeenCalledOnce();
+      expect(await rpc(alice, "users.github.disconnect")).toHaveBeenCalledWith(true, {
+        disconnected: true,
+      });
+    });
+  });
+
   it("rejects a missing GitHub CLI before creating personal authorization state", async () => {
     network.assertCli.mockImplementationOnce(() => {
       throw new GitHubCliUnavailableError();
@@ -370,7 +372,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   });
 
   it.each(["disconnect", "role"] as const)(
-    "rechecks %s after personal status verification",
+    "retains admitted role authority but fences %s credential changes after verification",
     async (race) => {
       await connect();
       const verify = network.verify.getMockImplementation()!;
@@ -379,14 +381,21 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
           if (race === "disconnect") {
             await rpc(alice, "users.github.disconnect");
           } else {
-            blockAlice();
+            blockPersonalGitHubProfile(config, owner());
           }
         }
         return await verify(token, options);
       });
       const response = await rpc(alice, "users.github.status");
-      expect(response.mock.calls[0]?.[0]).toBe(false);
-      expect(response.mock.calls[0]?.[1]).toBeUndefined();
+      expect(response.mock.calls[0]?.[0]).toBe(race === "role");
+      if (race === "role") {
+        expect(response.mock.calls[0]?.[1]).toMatchObject({
+          personal: { state: "connected", account: { login: "personal-alice" } },
+        });
+        expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[0]).toBe(false);
+      } else {
+        expect(response.mock.calls[0]?.[1]).toBeUndefined();
+      }
     },
   );
 
@@ -509,15 +518,15 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   it("lets an identified reader manage only My GitHub without changing sign-in or agent identity", async () => {
     const before = getUserProfileListItem(owner());
     const connection = await connect();
-    const status = await rpc(alice, "users.github.status");
-    expect(status.mock.calls[0]?.[1]).toMatchObject({
+    expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[1]).toMatchObject({
       personal: { state: "connected", account: { accountId: 101, login: "personal-alice" } },
       system: { source: "system-detected", account: { login: "system-bot" } },
     });
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
     expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
-    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
+    const profile = { ...before, gitCoauthorAvailable: false };
+    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile });
     for (const [method, missingScope] of [
       ["tools.github.authorize.start", "operator.admin"],
       ["tools.github.configure", "operator.admin"],
@@ -583,7 +592,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("rejects copied pending IDs before lookup, deduplication, or cancellation", async () => {
     const started = await start();
-    preparePoll();
+    preparePersonalGitHubPoll(owner());
     const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
     network.poll.mockReturnValueOnce(waiting.promise);
     const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -661,10 +670,10 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   });
 
   it.each(["cancel", "disconnect", "replacement", "merge", "role", "expiry"] as const)(
-    "fences installation when %s wins the awaited poll",
+    "finishes admitted role changes while fencing %s selection changes during polling",
     async (race) => {
       const started = await start();
-      preparePoll();
+      preparePersonalGitHubPoll(owner());
       const waiting = createDeferredCore<{ status: "authorized"; tokens: typeof tokens }>();
       network.poll.mockReturnValueOnce(waiting.promise);
       const pending = rpc(alice, "users.github.authorize.poll", { requestId: started.requestId });
@@ -682,16 +691,22 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
         linkEmail("alice@example.test", owner(bob));
       }
       if (race === "role") {
-        blockAlice();
+        blockPersonalGitHubProfile(config, owner());
       }
       if (race === "expiry") {
         expireUserGitHubAuthorization(owner());
       }
       waiting.resolve({ status: "authorized", tokens });
       const response = await pending;
-      expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
-      expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
-      expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
+      if (race === "role") {
+        expect(response.mock.calls[0]?.[1]).toMatchObject({ status: "success" });
+        expect((await readConnection(owner()))?.selection.kind).toBe("connected");
+        expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[0]).toBe(false);
+      } else {
+        expect(response.mock.calls[0]?.[1]).not.toMatchObject({ status: "success" });
+        expect((await readConnection(resolveOwner(owner())!))?.selection.kind).toBe("disconnected");
+        expect(network.command.mock.calls.some(([argv]) => argv[1] === "auth")).toBe(false);
+      }
     },
   );
 
@@ -727,7 +742,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     "rechecks %s after credential verification before the final connection commit",
     async (race) => {
       const started = await start();
-      preparePoll();
+      preparePersonalGitHubPoll(owner());
       const fallback = network.verify.getMockImplementation()!;
       network.verify.mockImplementation(async (token, options) => {
         const result = await fallback(token, options);
@@ -901,7 +916,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
 
   it("skips maintenance leases for fresh personal connections", async () => {
     const connection = await connect();
-    const lease = vi.spyOn(stateLease, "withOpenClawStateLease");
+    const lease = vi.spyOn(stateLease, "withOpenClawStateLeaseAsync");
     try {
       await lifecycle.personal.maintain();
       expect(lease).not.toHaveBeenCalled();
@@ -924,16 +939,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
               ...connected,
               selection: { kind: "disconnected" as const },
             };
-      const acquire = stateLease.withOpenClawStateLease;
+      const acquire = stateLease.withOpenClawStateLeaseAsync;
       const lease = vi
-        .spyOn(stateLease, "withOpenClawStateLease")
-        .mockImplementation((options, run) =>
-          acquire(options, async (owned, identity) => {
-            updateUserGitHubConnection(
-              owner(),
-              () => current,
-              () => owned.assertOwned(),
-            );
+        .spyOn(stateLease, "withOpenClawStateLeaseAsync")
+        .mockImplementation((options, captured, run) =>
+          acquire(options, captured, async (owned, identity) => {
+            await owned.assertOwned();
+            updateUserGitHubConnection(owner(), () => current, owned.assertCurrent);
             return run(owned, identity);
           }),
         );

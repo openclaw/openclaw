@@ -5,6 +5,7 @@ import type {
   RealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { expect, it } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { buildXaiRealtimeVoiceProvider } from "./realtime-voice-provider.js";
@@ -38,12 +39,7 @@ async function captureRealtimeOutcome(
   wss.on("connection", (ws) => {
     socket = ws;
     ws.on("message", (message) => {
-      const bytes = Buffer.isBuffer(message)
-        ? message
-        : Array.isArray(message)
-          ? Buffer.concat(message)
-          : Buffer.from(message);
-      const { type } = JSON.parse(bytes.toString("utf8")) as { type: string };
+      const { type } = JSON.parse(rawDataToString(message, "utf8")) as { type: string };
       clientEvents.push(type);
       if (type === "response.create" && options.queuedUserMessage) {
         if (options.completeQueuedResponse) {

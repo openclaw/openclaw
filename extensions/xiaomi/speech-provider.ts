@@ -36,9 +36,7 @@ const XIAOMI_TTS_VOICES = [
 
 const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
-type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
-
-function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
+function normalizeXiaomiTtsFormat(value: unknown): (typeof XIAOMI_TTS_FORMATS)[number] | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
   return XIAOMI_TTS_FORMATS.find((format) => format === normalized);
 }

@@ -56,15 +56,6 @@ function withScopes(cfg: OpenClawConfig, scopes: OperatorScope[]): OpenClawConfi
   return { ...cfg, gateway: { auth: { identityScopes: { "viewer@example.test": scopes } } } };
 }
 
-function resolvedKeyFacts() {
-  return createConfigResolutionFacts(
-    [],
-    new Map(),
-    undefined,
-    new Map([["models.providers.unit.apiKey", "UNIT_KEY"]]),
-  );
-}
-
 function observeRowFacts(reads: string[], pause?: () => Promise<void>) {
   vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockRestore();
   watchRowFacts((owner) => async (input) => {
@@ -268,19 +259,9 @@ it("retains session facts on identity-scope changes and refreshes changes that a
       );
       expect(changedModel.sessions.map((row) => row.model)).toEqual(["changed", "changed"]);
 
-      for (const [index, facts] of [
-        createConfigResolutionFacts([]),
-        createConfigResolutionFacts([], new Map([["models.providers.unit.apiKey", "UNIT_KEY"]])),
-        resolvedKeyFacts(),
-      ].entries()) {
-        const next = withScopes(cfg, [index % 2 === 0 ? "operator.read" : "operator.admin"]);
-        setConfigResolutionFacts(next, facts);
-        await publish(next, true);
-      }
-
       reads.length = 0;
       const forced = withScopes(cfg, ["operator.admin"]);
-      setConfigResolutionFacts(forced, resolvedKeyFacts());
+      setConfigResolutionFacts(forced, createConfigResolutionFacts([]));
       context.getRuntimeConfig = () => forced;
       sessionChanges.emit({ all: true, scope: "config", factsInvalidated: true });
       await list();

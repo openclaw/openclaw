@@ -57,9 +57,15 @@ function formatInstallHint(install: PluginPackageInstall): string {
   return "install source";
 }
 
-function resolveOfficialPluginOnboardingInstallEntries(params: {
+// Prompt for optional official plugin installs during onboarding. The skip entry
+// is explicit so users can leave every plugin unselected without ambiguity.
+export async function setupOfficialPluginInstalls(params: {
   config: OpenClawConfig;
-}): OfficialPluginOnboardingInstallEntry[] {
+  prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
+}): Promise<OpenClawConfig> {
+  const config = params.config;
   const entries: OfficialPluginOnboardingInstallEntry[] = [];
   for (const entry of listOfficialExternalPluginCatalogEntries()) {
     if (!isGenericOfficialPluginEntry(entry)) {
@@ -67,7 +73,7 @@ function resolveOfficialPluginOnboardingInstallEntries(params: {
     }
     const pluginId = resolveOfficialExternalPluginId(entry);
     const install = resolveOfficialExternalPluginInstall(entry);
-    if (!pluginId || !install || isInstalledOrConfigured(params.config, pluginId)) {
+    if (!pluginId || !install || isInstalledOrConfigured(config, pluginId)) {
       continue;
     }
     entries.push({
@@ -78,20 +84,7 @@ function resolveOfficialPluginOnboardingInstallEntries(params: {
       trustedSourceLinkedOfficialInstall: true,
     });
   }
-  return entries.toSorted((left, right) => left.label.localeCompare(right.label));
-}
-
-// Prompt for optional official plugin installs during onboarding. The skip entry
-// is explicit so users can leave every plugin unselected without ambiguity.
-export async function setupOfficialPluginInstalls(params: {
-  config: OpenClawConfig;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  workspaceDir?: string;
-}): Promise<OpenClawConfig> {
-  const installEntries = resolveOfficialPluginOnboardingInstallEntries({
-    config: params.config,
-  });
+  const installEntries = entries.toSorted((left, right) => left.label.localeCompare(right.label));
   if (installEntries.length === 0) {
     return params.config;
   }

@@ -8,39 +8,49 @@ import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
 import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtureUrl = (root: string, name: string) =>
+  pathToFileURL(path.join(root, `scripts/lib/${name}.mts`)).href;
+const manifestFixture = new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url).href;
 
-it("retains verified artifacts after the runner's module loader stops", async () => {
-  const root = tempDirs.make("vitest-worker-loader-shutdown-");
-  const ownerUrl = copyWorkerRunFixture(root);
-  const artifactsUrl = pathToFileURL(
-    path.join(root, "scripts/lib/vitest-worker-artifacts.mts"),
-  ).href;
-  const cacheUrl = pathToFileURL(path.join(root, "scripts/lib/vitest-worker-cache.mts")).href;
-  const input = writeFixture(root, "fixture-input.ts", "export {};\n");
-  const output = 'export const value = "compiled fixture";\n';
-  // The real owner still launches and joins a native compiler child and verifies its files.
-  writeFixture(
-    root,
-    "scripts/lib/vitest-worker-compiler.mts",
-    `import fs from 'node:fs';
-import path from 'node:path';
-import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
-const directory = process.argv[2];
-fs.mkdirSync(path.join(directory, 'dist'));
-const files = { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' };
-for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(directory, 'dist', name), bytes);
-const inputs = { [${JSON.stringify(input)}]: hash(fs.readFileSync(${JSON.stringify(input)})) };
-const outputs = Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, hash(bytes)]));
-fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
-  identity: hash(JSON.stringify([inputs, outputs])), inputs, outputs, durationMs: 1,
-  cacheSignature: hash('fixture compiler generation'),
-}));
-`,
+async function runProbe(root: string, probe: string, env: NodeJS.ProcessEnv) {
+  const result = await runNodeScript(
+    probe,
+    { ...process.env, CI: "", GITHUB_ACTIONS: "", NODE_OPTIONS: "", NODE_PATH: "", ...env },
+    DEFAULT_VITEST_TEST_TIMEOUT_MS,
+    { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
   );
-  const borrower = writeFixture(
-    root,
-    "borrower.mjs",
-    `import assert from 'node:assert/strict';
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr + result.stdout).toBe(0);
+}
+
+it.for([false, true])(
+  "verifies delegated borrowers before retaining artifacts after loader shutdown (tamper: %s)",
+  async (tamper) => {
+    const root = tempDirs.make("vitest-worker-loader-shutdown-");
+    const ownerUrl = copyWorkerRunFixture(root);
+    const artifactsUrl = fixtureUrl(root, "vitest-worker-artifacts");
+    const cacheUrl = fixtureUrl(root, "vitest-worker-cache");
+    const input = writeFixture(root, "fixture-input.ts", "export {};\n");
+    const output = 'export const value = "compiled fixture";\n';
+    // The real owner still launches and joins a native compiler child and verifies its files.
+    writeFixture(
+      root,
+      "scripts/lib/vitest-worker-compiler.mts",
+      `import { writeWorkerFixtureManifest } from ${JSON.stringify(manifestFixture)};
+import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
+import fs from 'node:fs';
+import path from 'node:path';
+const directory = process.argv[2];
+const manifest = writeWorkerFixtureManifest(directory, { [${JSON.stringify(input)}]: fs.readFileSync(${JSON.stringify(input)}) },
+  { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' });
+manifest.cacheSignature = hash('fixture compiler generation');
+fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
+`,
+    );
+    const leaf = writeFixture(
+      root,
+      "leaf.mjs",
+      `import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { requestVitestWorkerArtifacts } from ${JSON.stringify(artifactsUrl)};
@@ -52,11 +62,36 @@ try {
   process.disconnect();
 }
 `,
-  );
-  const probe = writeFixture(
-    root,
-    "probe.mjs",
-    `import assert from 'node:assert/strict';
+    );
+    const borrower = writeFixture(
+      root,
+      "borrower.mjs",
+      `import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import path from 'node:path';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const directory = process.argv[2];
+const owner = createVitestWorkerRun(process.env, { directory });
+try {
+  const child = spawn(process.execPath, [${JSON.stringify(leaf)}, directory], {
+    cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  await owner.borrow(child, once(child, 'close').then(result => assert.deepEqual(result, [0, null])));
+  if (${tamper}) fs.appendFileSync(path.join(directory, 'dist/probe.js'), '// changed\\n');
+  await owner.dispose();
+  assert.equal(fs.existsSync(directory), true);
+} finally {
+  try { await owner.dispose(); }
+  finally { process.disconnect(); }
+}
+`,
+    );
+    const probe = writeFixture(
+      root,
+      "probe.mjs",
+      `import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
@@ -80,36 +115,93 @@ try {
   const completion = once(child, 'close').then(result => assert.deepEqual(result, [0, null]));
   await owner.borrow(child, completion);
   stopped = true;
-  await owner.dispose();
+  const disposal = owner.dispose();
+  if (${tamper}) await assert.rejects(disposal, /Compiled subprocess artifact changed/);
+  else await disposal;
   const cached = path.join(${JSON.stringify(root)}, '.artifacts/vitest-worker-cache', path.basename(owner.descriptor.directory));
   assert.equal(fs.existsSync(owner.descriptor.directory), false);
-  assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
-  assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
-  console.log('joined cleanup retained verified artifacts');
+  if (${tamper}) assert.equal(fs.existsSync(cached), false);
+  else {
+    assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
+    assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
+  }
 } finally {
-  try { await owner.dispose(); }
+  try { await owner.dispose().catch(() => {}); }
   finally { hooks.deregister(); }
 }
 `,
-  );
-  const result = await runNodeScript(
-    probe,
-    {
-      ...process.env,
-      CI: "",
-      GITHUB_ACTIONS: "",
-      NODE_OPTIONS: "",
-      NODE_PATH: "",
+    );
+    await runProbe(root, probe, {
       NAPI_RS_NATIVE_LIBRARY_PATH: "",
       NAPI_RS_WASI_FLAVOR: "",
       NAPI_RS_FORCE_WASI: "",
-    },
-    DEFAULT_VITEST_TEST_TIMEOUT_MS,
-    { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
+    });
+  },
+);
+
+it("defaults to full and rejects borrowers broader than their connected parent", async () => {
+  const root = tempDirs.make("vitest-worker-presets-");
+  const ownerUrl = copyWorkerRunFixture(root);
+  const borrower = writeFixture(
+    root,
+    "preset-borrower.mjs",
+    `import assert from 'node:assert/strict';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const [full, runtime, tooling] = JSON.parse(process.argv[2]);
+try {
+  for (const [parent, requested, expected] of [
+    [{directory: full.directory}, 'runtime', 'full'],
+    [full, 'runtime', 'full'],
+    [runtime, undefined, 'runtime'],
+    [runtime, 'runtime', 'runtime'],
+    [full, 'tooling', 'full'],
+    [tooling, undefined, 'tooling'],
+    [tooling, 'tooling', 'tooling'],
+  ]) {
+    const owner = createVitestWorkerRun(process.env, parent, requested);
+    try {
+      assert.equal(owner.descriptor.preset, expected);
+      assert.equal(owner.descriptor.directory, parent.directory);
+    } finally {
+      await owner.dispose();
+    }
+  }
+  assert.throws(() => createVitestWorkerRun(process.env, runtime, 'full'),
+    /Runtime compiled subprocess owner cannot serve a full preset borrower/);
+  for (const [parent, requested] of [[runtime, 'tooling'], [tooling, 'runtime'], [tooling, 'full']]) {
+    assert.throws(() => createVitestWorkerRun(process.env, parent, requested), /cannot serve/);
+  }
+} finally {
+  process.disconnect();
+}
+`,
   );
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr + result.stdout).toBe(0);
-  expect(result.stdout).toContain("joined cleanup retained verified artifacts");
+  const probe = writeFixture(
+    root,
+    "preset-owner.mjs",
+    `import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import fs from 'node:fs';
+import { createVitestWorkerRun } from ${JSON.stringify(ownerUrl)};
+const full = createVitestWorkerRun();
+const explicit = createVitestWorkerRun(process.env, undefined, 'full');
+const runtime = createVitestWorkerRun(process.env, undefined, 'runtime');
+const tooling = createVitestWorkerRun(process.env, undefined, 'tooling');
+const owners = [full, explicit, runtime, tooling];
+try {
+  assert.deepEqual(owners.map(owner => owner.descriptor.preset), ['full', 'full', 'runtime', 'tooling']);
+  const child = spawn(process.execPath, [${JSON.stringify(borrower)}, JSON.stringify([full.descriptor, runtime.descriptor, tooling.descriptor])], {
+    cwd: ${JSON.stringify(root)}, stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+  });
+  await full.borrow(child, once(child, 'close').then(result => assert.deepEqual(result, [0, null])));
+} finally {
+  await Promise.all(owners.map(owner => owner.dispose()));
+}
+assert(owners.every(owner => !fs.existsSync(owner.descriptor.directory)));
+`,
+  );
+  await runProbe(root, probe, {});
 });
 
 function fixture(lateMetadata: boolean, reusesReleasedSlot: boolean) {
@@ -143,18 +235,33 @@ const reserve = () => {
   owners.push(owner);
   return owner;
 };
-let directories;
 try {
   const first = reserve();
   metadataTarget = first.descriptor.directory;
   if (process.platform !== 'win32') assert.equal(fs.statSync(metadataTarget).mode & 0o777, ${0o700 & ~process.umask()});
   const second = reserve();
+  if (${reusesReleasedSlot}) {
+    for (const preset of ['runtime', 'tooling']) {
+    const runtime = createVitestWorkerRun(process.env, undefined, preset);
+    owners.push(runtime);
+    assert.equal(path.basename(runtime.descriptor.directory), 'run-cache-' + preset + '-0');
+    assert.equal(path.basename(first.descriptor.directory), 'run-cache-1');
+    const nextRuntime = createVitestWorkerRun(process.env, undefined, preset);
+    owners.push(nextRuntime);
+    assert.equal(path.basename(nextRuntime.descriptor.directory), 'run-cache-' + preset + '-1');
+    await runtime.dispose();
+    const reusedRuntime = createVitestWorkerRun(process.env, undefined, preset);
+    owners.push(reusedRuntime);
+    assert.equal(reusedRuntime.descriptor.directory, runtime.descriptor.directory);
+    assert(fs.existsSync(nextRuntime.descriptor.directory));
+    assert(fs.existsSync(first.descriptor.directory));
+    }
+  }
   await first.dispose();
   assert.equal(fs.existsSync(first.descriptor.directory), false);
   assert.equal(fs.existsSync(second.descriptor.directory), true);
   const third = reserve();
-  directories = [first, second, third].map(owner => owner.descriptor.directory);
-  assert.notEqual(directories[0], directories[1]);
+  const directories = [first, second, third].map(owner => owner.descriptor.directory);
   assert.notEqual(directories[2], directories[1]);
   assert.equal(directories[2] === directories[0], ${reusesReleasedSlot});
 } finally {
@@ -164,42 +271,23 @@ try {
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Worker owners did not dispose');
 }
 assert.equal(metadataInjected, ${lateMetadata});
-console.log(JSON.stringify(directories));
 `,
   );
-  const preload = writeFixture(root, "preload.mjs", "export {};\n");
-  return { root, occupied, probe, preload };
+  return { root, occupied, probe };
 }
 
 it.each([
-  { label: "CI", ci: "1", cache: "", preload: false, reusesReleasedSlot: false },
-  { label: "cached CI", ci: "1", cache: "1", preload: false, reusesReleasedSlot: true },
-  { label: "custom loader", ci: "1", cache: "1", preload: true, reusesReleasedSlot: false },
-  { label: "late metadata", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
+  { label: "CI", ci: "1", cache: "", reusesReleasedSlot: false },
+  { label: "cached CI", ci: "1", cache: "1", reusesReleasedSlot: true },
+  { label: "late metadata", ci: "", cache: "", reusesReleasedSlot: true },
 ])(
   "preserves occupied generations and applies $label reservation lifetime",
-  async ({ label, ci, cache, preload, reusesReleasedSlot }) => {
+  async ({ label, ci, cache, reusesReleasedSlot }) => {
     const f = fixture(label === "late metadata", reusesReleasedSlot);
-    const result = await runNodeScript(
-      f.probe,
-      {
-        ...process.env,
-        CI: ci,
-        GITHUB_ACTIONS: "",
-        OPENCLAW_VITEST_WORKER_CACHE: cache,
-        NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
-        NODE_PATH: "",
-      },
-      DEFAULT_VITEST_TEST_TIMEOUT_MS,
-      { cwd: f.root, requireProcessTreeExit: process.platform !== "win32" },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr + result.stdout).toBe(0);
-    const directories = JSON.parse(result.stdout) as [string, string, string];
-    for (const directory of new Set(directories)) {
-      expect(directory).not.toBe(f.occupied);
-      expect(fs.existsSync(directory)).toBe(false);
-    }
+    await runProbe(f.root, f.probe, {
+      CI: ci,
+      OPENCLAW_VITEST_WORKER_CACHE: cache,
+    });
     expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe("owned");
     expect(fs.readdirSync(path.dirname(f.occupied))).toEqual([path.basename(f.occupied)]);
   },

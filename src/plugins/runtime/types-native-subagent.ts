@@ -1,14 +1,22 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+
 /** Native children retain the current requester's authority and parent lineage. */
 type NativeSubagentSpawnParams = {
   /** Stable within this parent turn and plugin; replay returns the native accepted child. */
   requestId: string;
   task: string;
+  /** Local id registered by this plugin; cannot select another plugin’s profile. */
+  profile?: string;
   taskName?: string;
   label?: string;
   model?: string;
   thinking?: string;
+  /** Same selection and eligibility rules as sessions_spawn; omission preserves inheritance. */
+  cyberAccessProgram?: CyberAccessProgram;
   fastMode?: boolean | "auto" | "ultrafast";
   context?: "fork" | "isolated";
+  /** Hosts advertising `native-subagent-blind-v1`: the child's prompt omits its model and workspace. */
+  blind?: boolean;
   runTimeoutSeconds?: number;
   outputSchema?: Record<string, unknown>;
 };
@@ -16,11 +24,26 @@ type NativeSubagentSpawnParams = {
 /** Control facts recorded by the host; absent fields are unknown, not defaults. */
 export type NativeSubagentSelection = {
   /** Explicit spawn inputs. Empty when the collecting invocation has no recorded request. */
-  requested: { model?: string; thinking?: string; fastMode?: boolean | "auto" | "ultrafast" };
+  requested: {
+    model?: string;
+    thinking?: string;
+    cyberAccessProgram?: CyberAccessProgram;
+    fastMode?: boolean | "auto" | "ultrafast";
+  };
   /** Current child-session controls, not a claim that a provider honored them. */
-  resolved?: { model?: string; thinking?: string; fastMode?: boolean | "auto" | "ultrafast" };
+  resolved?: {
+    model?: string;
+    thinking?: string;
+    cyberAccessProgram?: CyberAccessProgram;
+    fastMode?: boolean | "auto" | "ultrafast";
+  };
   /** Present only when the host has independent execution observations. */
-  observed?: { model?: string; thinking?: string; fastMode?: boolean | "auto" | "ultrafast" };
+  observed?: {
+    model?: string;
+    thinking?: string;
+    cyberAccessProgram?: CyberAccessProgram;
+    fastMode?: boolean | "auto" | "ultrafast";
+  };
 };
 
 export type NativeSubagentAccepted = {
@@ -44,6 +67,8 @@ type NativeSubagentCollection = {
     sessionKey: string;
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
+    /** The result may be incomplete: its complete answer was unavailable or exceeded 100 KB. */
+    resultTruncated?: true;
     structured?: unknown;
     error?: string;
     schemaError?: string;

@@ -75,7 +75,7 @@ describe("runMessageAction plugin dispatch", () => {
   });
   describe("alias-based plugin action dispatch", () => {
     useActionHubPluginFixture();
-    it("mirrors an inherited reply through its canonical root", async () => {
+    it("routes an inherited reply through its canonical root", async () => {
       const sessionKey = "agent:main:forum:channel:123:thread:root-42";
       vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
         sessionKey,
@@ -133,19 +133,15 @@ describe("runMessageAction plugin dispatch", () => {
               __sessionKey: sessionKey,
               __agentId: "main",
             }),
-            mirror: expect.objectContaining({ sessionKey }),
+            transcriptRoute: expect.objectContaining({ sessionKey }),
           }),
         }),
       );
     });
     it.each([
-      ["suppressed", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }, false],
-      [
-        "failed with an attempt ID",
-        { ok: false, error: "send failed", messageId: "attempt-id" },
-        false,
-      ],
-      ["dry-run", { ok: true, dryRun: true, messageId: "dry-run-id" }, false],
+      ["suppressed", { status: "suppressed", reason: "cancelled_by_message_sending_hook" }],
+      ["failed with an attempt ID", { ok: false, error: "send failed", messageId: "attempt-id" }],
+      ["dry-run", { ok: true, dryRun: true, messageId: "dry-run-id" }],
       [
         "explicit partial delivery",
         {
@@ -154,24 +150,26 @@ describe("runMessageAction plugin dispatch", () => {
           sentBeforeError: true,
           messageId: "partial-receipt",
         },
-        true,
       ],
-      ["successful delivery", { ok: true, messageId: "sent-1" }, true],
-    ] as const)("handles Gateway-relayed %s receipts", async (_name, receipt, accepted) => {
-      vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
-        sessionKey: "agent:main:gatewaychat:direct:user-123",
-        baseSessionKey: "agent:main:gatewaychat:direct:user-123",
-        peer: { kind: "direct", id: "user-123" },
-        chatType: "direct",
-        from: "gatewaychat:user-123",
-        to: "user-123",
-      });
-      registerGatewayChat(vi.fn());
-      mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
-      const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
-      expect(result.payload).toEqual(receipt);
-      expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(accepted ? 1 : 0);
-    });
+      ["successful delivery", { ok: true, messageId: "sent-1" }],
+    ] as const)(
+      "leaves Gateway-relayed %s route commits to the Gateway",
+      async (_name, receipt) => {
+        vi.mocked(resolveOutboundSessionRoute).mockResolvedValueOnce({
+          sessionKey: "agent:main:gatewaychat:direct:user-123",
+          baseSessionKey: "agent:main:gatewaychat:direct:user-123",
+          peer: { kind: "direct", id: "user-123" },
+          chatType: "direct",
+          from: "gatewaychat:user-123",
+          to: "user-123",
+        });
+        registerGatewayChat(vi.fn());
+        mocks.callGatewayLeastPrivilege.mockResolvedValue(receipt);
+        const result = await gatewaySend({ message: "omitted" }, { agentId: "main" });
+        expect(result.payload).toEqual(receipt);
+        expect(ensureOutboundSessionEntry).not.toHaveBeenCalled();
+      },
+    );
     it.each(["gatewaychat", "gatewaydeliver"])(
       "preserves data URL bytes and MIME through %s",
       async (channel) => {
@@ -436,7 +434,6 @@ describe("runMessageAction plugin dispatch", () => {
         {
           agentId: "main",
           sessionKey: sourceSessionKey,
-          suppressTranscriptMirror: true,
         },
       );
 
@@ -447,7 +444,6 @@ describe("runMessageAction plugin dispatch", () => {
       expectRecordFields(executeCall, { message: "Deployment trend" }, "execute send call");
       const executeContext = readRecordField(executeCall, "ctx", "execute send context");
       expectRecordFields(executeContext, { conversationType: "channel" }, "execute send context");
-      expect(executeContext.mirror).toBeUndefined();
       expectRecordFields(
         readRecordField(executeCall, "payload", "execute send payload"),
         { text: "Deployment trend", presentation },
@@ -471,7 +467,6 @@ describe("runMessageAction plugin dispatch", () => {
         {
           ...(actionOrigin ? { actionOrigin } : {}),
           agentId: "main",
-          suppressTranscriptMirror: true,
         },
       );
 

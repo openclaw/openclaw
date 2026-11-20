@@ -7,7 +7,7 @@ import {
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-selection.js";
 import {
   runUtilityCompletion,
   type UtilityCompletionAttempt,
@@ -209,10 +209,12 @@ async function runLabelAttempts(
         .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
         .join("")
         .trim();
-      const label = truncateUtf16Safe(visibleText, maxLength) || null;
-      const normalized = label && params.normalizeLabel ? params.normalizeLabel(label) : label;
-      if (normalized) {
-        return normalized;
+      // Normalize the whole answer: a model may put its title after a leading explanation.
+      const normalized =
+        visibleText && params.normalizeLabel ? params.normalizeLabel(visibleText) : visibleText;
+      const label = truncateUtf16Safe(normalized ?? "", maxLength) || null;
+      if (label) {
+        return label;
       }
     } catch {
       assertCurrent();

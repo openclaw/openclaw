@@ -3,6 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -14,10 +15,7 @@ import { ReadAloud } from "./chat-read-aloud.tsx";
 
 registerChatMessageMetadataEnglish();
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 it("retains downloaded speech through a blip but retires it when the client changes", async () => {
   const started = createDeferred();

@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { createContext, createMemo, createStore, onCleanup, useContext } from "solid-js";
+import { createContext, createMemo, createStore, useContext } from "solid-js";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 
 export type SessionBackgroundLayoutTarget = {
   kind: "composer" | "welcome" | "scroll";
@@ -40,10 +41,5 @@ export function SessionBackgroundLayoutScope(props: { children: JSX.Element }) {
 /** Capture the scope during setup; attach the actual element through its renderer ref. */
 export function createBackgroundLayoutRef(kind: SessionBackgroundLayoutTarget["kind"]) {
   const scope = useContext(SessionBackgroundLayoutContext);
-  let release: (() => void) | undefined;
-  onCleanup(() => release?.());
-  return (element: HTMLElement) => {
-    release?.();
-    release = scope?.register({ kind, element });
-  };
+  return elementRef((element: HTMLElement) => scope?.register({ kind, element }));
 }

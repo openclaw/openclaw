@@ -78,40 +78,6 @@ function diagnosticBase(params: ClaudeCliRunDiagnosticParams, trace: DiagnosticT
   };
 }
 
-function resultRunOutcome(
-  result: EmbeddedAgentRunResult,
-): "completed" | "aborted" | "blocked" | "error" {
-  if (result.meta.livenessState === "blocked") {
-    return "blocked";
-  }
-  if (result.meta.aborted === true) {
-    return "aborted";
-  }
-  if (result.meta.error) {
-    return "error";
-  }
-  return "completed";
-}
-
-function errorHarnessOutcome(
-  error: unknown,
-  abortSignal: AbortSignal | undefined,
-): "aborted" | "timed_out" | "error" {
-  const failureKind = diagnosticErrorFailureKind(error);
-  if (failureKind === "timeout") {
-    return "timed_out";
-  }
-  if (failureKind === "aborted" || abortSignal?.aborted) {
-    return abortSignal?.aborted && isSignalTimeoutReason(abortSignal.reason)
-      ? "timed_out"
-      : "aborted";
-  }
-  if (isTimeoutError(error)) {
-    return "timed_out";
-  }
-  return "error";
-}
-
 /**
  * Wraps one OpenClaw Claude CLI turn in synthetic harness/run boundaries.
  * The child run scope makes every real Claude CLI model call nest beneath it.
@@ -200,7 +166,14 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
 
   try {
     const result = await runWithDiagnosticTraceContext(runTrace, () => run(lifecycle));
-    const runOutcome = resultRunOutcome(result);
+    const runOutcome =
+      result.meta.livenessState === "blocked"
+        ? "blocked"
+        : result.meta.aborted === true
+          ? "aborted"
+          : result.meta.error
+            ? "error"
+            : "completed";
     const resultErrorMessage = result.meta.error?.message;
     const runErrorMessage = runOutcome === "error" ? resultErrorMessage : undefined;
     emitTrustedDiagnosticEventWithPrivateData(
@@ -237,7 +210,17 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
     return result.diagnosticTrace ? result : { ...result, diagnosticTrace: harnessTrace };
   } catch (error) {
     const errorMessage = diagnosticErrorMessage(error);
-    const harnessOutcome = errorHarnessOutcome(error, params.abortSignal);
+    const failureKind = diagnosticErrorFailureKind(error);
+    const harnessOutcome =
+      failureKind === "timeout"
+        ? "timed_out"
+        : failureKind === "aborted" || params.abortSignal?.aborted
+          ? params.abortSignal?.aborted && isSignalTimeoutReason(params.abortSignal.reason)
+            ? "timed_out"
+            : "aborted"
+          : isTimeoutError(error)
+            ? "timed_out"
+            : "error";
     // Failed, timed-out, and aborted turns keep their already-captured prompt:
     // it is precisely what operators need for diagnosis, and startup events
     // cannot carry it because CLI prompt publication happens after preparation.

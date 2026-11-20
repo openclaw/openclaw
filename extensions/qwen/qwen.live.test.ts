@@ -4,6 +4,10 @@ import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 import { buildQwenProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
@@ -86,12 +90,10 @@ describeLive.each(["qwen3.8-max", "qwen3.8-flash"])("Qwen Standard live: %s", (i
   it("round-trips a tool call with low and mapped xhigh reasoning", async () => {
     const context: Context = {
       messages: [
-        {
-          role: "user",
-          content:
-            "Call lookup_secret once, then reply with only its returned word. Do not guess the word.",
-          timestamp: Date.now(),
-        },
+        makeUserMessage(
+          "Call lookup_secret once, then reply with only its returned word. Do not guess the word.",
+          Date.now(),
+        ),
       ],
       tools: [
         {
@@ -107,14 +109,10 @@ describeLive.each(["qwen3.8-max", "qwen3.8-flash"])("Qwen Standard live: %s", (i
     if (!call) {
       throw new Error("Qwen did not call the requested tool");
     }
-    context.messages.push(first, {
-      role: "toolResult",
-      toolCallId: call.id,
-      toolName: call.name,
-      content: [{ type: "text", text: "marigold" }],
-      isError: false,
-      timestamp: Date.now(),
-    });
+    context.messages.push(
+      first,
+      makeTextToolResult(call.id, call.name, "marigold", false, Date.now()),
+    );
     const second = await complete(context, "high");
     expect(extractNonEmptyAssistantText(second.content).toLowerCase()).toContain("marigold");
   }, 130_000);

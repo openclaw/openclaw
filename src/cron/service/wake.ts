@@ -2,6 +2,7 @@ import type { SessionEventTarget } from "../../auto-reply/reply/session-event-co
 /** Manual cron wake helper for queueing system events into sessions. */
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isSubagentSessionKey, normalizeOptionalAgentId } from "../../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { CronAgentSelectionRequiredError } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -51,15 +52,6 @@ function resolveDeferredReceiverRunAt(job: CronJob, nowMs: number): number | und
   return hasScheduledNextRunAtMs(future) ? Math.max(next, future) : undefined;
 }
 
-/** Internal Hook adapter; the public Cron facade retains its existing wake contract. */
-export type DeferredHookWake = (opts: {
-  text: string;
-  agentId: string;
-  expectedTarget?: SessionEventTarget;
-  createIfMissing?: true;
-  commitGuard: () => void;
-}) => Promise<{ ok: true; eventOutcome: "queued" | "coalesced" } | { ok: false; reason?: string }>;
-
 /** Keeps safety notices with their creator and limits failure routes to explicit origins. */
 export async function enqueueCronNotification(
   state: CronServiceState,
@@ -67,6 +59,7 @@ export async function enqueueCronNotification(
   text: string,
   kind: "auto-disabled" | "failure-alert",
   routing: CronNotificationRouting,
+  options?: { privateFallback?: boolean },
 ): Promise<void> {
   const owner = resolveCronNotificationQueueOwner(job, kind);
   const { sessionKey } = owner;
@@ -74,8 +67,9 @@ export async function enqueueCronNotification(
   if (!agentId) {
     throw new CronAgentSelectionRequiredError();
   }
-  const deliveryContext =
-    sessionKey || (kind === "auto-disabled" && agentId)
+  const deliveryContext = options?.privateFallback
+    ? { channel: INTERNAL_MESSAGE_CHANNEL }
+    : sessionKey || (kind === "auto-disabled" && agentId)
       ? await state.deps.resolveOriginDeliveryContext?.({ agentId, sessionKey })
       : undefined;
   if (!state.deps.enqueueSessionEvent) {
@@ -85,6 +79,8 @@ export async function enqueueCronNotification(
     agentId,
     sessionKey,
     contextKey: `cron:${job.id}:${kind}`,
+    jobId: job.id,
+    ...(options?.privateFallback ? { deliver: false as const } : {}),
     ...(sessionKey ? {} : { createIfMissing: true as const }),
     ...(deliveryContext ? { deliveryContext } : {}),
   });

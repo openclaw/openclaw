@@ -16,7 +16,7 @@ import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export function launchCanary(params: {
-  entry: string;
+  entryPath: string;
   args: string[];
   root: string;
   env: NodeJS.ProcessEnv;
@@ -29,13 +29,13 @@ export function launchCanary(params: {
   hidesLine?: (line: string) => boolean;
   onStdout?: (stdout: string) => void;
 }) {
-  const { entry, args, env, capture } = params;
+  const { args, env, capture } = params;
   params.assertCurrent?.();
   const runtime = params.nodeRunner ?? process.execPath;
   const invocation = resolveOpenClawCliInvocation({
     execPath: runtime,
     execArgv: resolveRuntimeArgs(runtime),
-    entryPath: entry,
+    entryPath: params.entryPath,
     args,
   });
   const child = spawn(invocation.command, invocation.args, {

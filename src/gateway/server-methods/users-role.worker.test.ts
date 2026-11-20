@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -8,19 +9,21 @@ import {
   prepareUserProfileCatalog,
 } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveOperatorRolePolicyForProfile } from "../operator-role-policy.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
+import { dispatchProfile } from "../server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
 } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
+import { listSystemChanges, systemChangesHandlers } from "./system-changes.js";
 import { usersHandlers } from "./users.js";
 
 const boundary = vi.hoisted(() => ({
@@ -64,9 +67,11 @@ function roleConfig(): OpenClawConfig {
   return {
     gateway: {
       roles: {
+        default: "reader",
         definitions: {
           administrator: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
           reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+          'night "ops"': { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
         },
       },
     },
@@ -80,13 +85,7 @@ function profileClient(
 ): GatewayWsClient {
   return {
     ...createOperatorWsClient({ connId, socket: { close } }),
-    authenticatedUserProfile: {
-      profileId,
-      displayName: null,
-      avatarRevision: "1",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: dispatchProfile(profileId),
   };
 }
 
@@ -149,27 +148,27 @@ it.each(["failed delivery", "self downgrade"] as const)(
       expect(resolveOperatorRolePolicyForProfile(changed.id, roleConfig())?.scopes).toEqual([
         "operator.read",
       ]);
-      expect(harness.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: "role-delivery",
-          ...(scenario === "self downgrade"
-            ? {
-                ok: true,
-                payload: expect.objectContaining({
-                  profile: expect.objectContaining({ id: requester.id, role: "reader" }),
-                }),
-              }
-            : {
-                ok: false,
-                error: expect.objectContaining({
-                  code: "UNAVAILABLE",
-                  message: expect.stringContaining("synthetic committed role delivery failure"),
-                }),
-              }),
-        }),
+      expect(await harness.awaitResponseFrame("role-delivery")).toMatchObject(
+        scenario === "self downgrade"
+          ? { ok: true, payload: { profile: { id: requester.id, role: "reader" } } }
+          : {
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: expect.stringContaining("synthetic committed role delivery failure"),
+              },
+            },
       );
       expect(scenario === "self downgrade" ? clientClose : targetClose).toHaveBeenCalledOnce();
       expect(scenario === "self downgrade" ? targetClose : clientClose).not.toHaveBeenCalled();
+      // A committed role is history even when its RPC result could not be delivered.
+      expect((await listSystemChanges({})).entries).toEqual([
+        expect.objectContaining({
+          kind: "operation",
+          source: "config-rpc",
+          summary: `Role for profile ${changed.id} changed from "administrator" to "reader" by profile ${requester.id}`,
+        }),
+      ]);
     } finally {
       release();
       await state.cleanup();
@@ -212,18 +211,92 @@ it("preserves the cold missing-profile RPC error without disconnecting a client"
       },
       client,
     );
-    expect(harness.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: "cold-missing-role",
-        ok: false,
-        error: expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("user profile not found"),
-        }),
-      }),
-    );
+    expect(await harness.awaitResponseFrame("cold-missing-role")).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("user profile not found"),
+      },
+    });
     expect(disconnectClientsForUserProfile).not.toHaveBeenCalled();
   } finally {
+    await state.cleanup();
+  }
+});
+
+it("lists committed role assignments, not refused or unchanged ones, in change history", async () => {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "users-role-history-",
+    prepareProfileCatalog: true,
+  });
+  let release = () => {};
+  try {
+    const requester = ensureProfileForEmail("administrator@example.test");
+    setUserProfileRole(requester.id, "administrator");
+    const target = ensureProfileForEmail("reader@example.test");
+    ensureGatewayOwnerProfile("Owner");
+    release = (await prepareUserProfileCatalog()).release;
+    const client = profileClient(requester.id, "role-history-requester", vi.fn());
+    const clients = new GatewayClientRegistry([client]);
+    const owner = createGatewayRequestContext(makeContextParams({ clients }));
+    const context = createDirectChatContext({
+      getRuntimeConfig: roleConfig,
+      isConnectionActive: (connId) => connId === client.connId,
+      getClientConnIds: owner.getClientConnIds,
+      disconnectClientsForUserProfile: owner.disconnectClientsForUserProfile,
+    });
+    const harness = createDispatchTestHarness({
+      connId: client.connId,
+      getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({
+        current: "generation-a",
+        required: null,
+      }).reader,
+      buildRequestContext: () => context,
+      extraHandlers: { ...usersHandlers, ...systemChangesHandlers },
+    });
+    const request = async (id: string, method: string, params: Record<string, unknown>) => {
+      await harness.dispatcher.dispatch(
+        { type: "req", id, method, expectedProfileId: requester.id, params },
+        client,
+      );
+      return await harness.awaitResponseFrame(id);
+    };
+    const setRole = (id: string, profileId: string, role: string | null) =>
+      request(id, "users.setRole", { profileId, role });
+
+    // A quoted role name stays unambiguous in the summary.
+    const role = 'night "ops"';
+    expect(await setRole("assign", target.id, role)).toMatchObject({ ok: true });
+    expect(await setRole("repeat", target.id, role)).toMatchObject({ ok: true });
+    expect(await setRole("unknown-role", target.id, "ghost")).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining('unknown operator role "ghost"') },
+    });
+    expect(await setRole("owner", GATEWAY_OWNER_PROFILE_ID, "reader")).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("not governed by operator roles") },
+    });
+    expect(await setRole("clear", target.id, null)).toMatchObject({ ok: true });
+    expect(readResidentUserProfileIdentity(target.id)?.role ?? null).toBeNull();
+
+    const history = await request("history", "openclaw.changes.list", { limit: 10 });
+    expect(history).toMatchObject({ ok: true });
+    const by = `by profile ${requester.id}`;
+    expect((history.payload as { entries: unknown[] }).entries).toEqual([
+      expect.objectContaining({
+        kind: "operation",
+        source: "config-rpc",
+        summary: `Role for profile ${target.id} cleared (was "night \\"ops\\"") ${by}`,
+      }),
+      expect.objectContaining({
+        kind: "operation",
+        source: "config-rpc",
+        summary: `Role for profile ${target.id} changed from no role to "night \\"ops\\"" ${by}`,
+      }),
+    ]);
+  } finally {
+    release();
     await state.cleanup();
   }
 });

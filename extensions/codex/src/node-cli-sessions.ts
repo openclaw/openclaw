@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   floorPositiveFiniteNumber,
   resolveIntegerOption,
@@ -17,6 +18,7 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   asNonArrayRecord,
   isRecord,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
@@ -36,6 +38,10 @@ import {
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
+
+const loadSessionCatalogNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -214,7 +220,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       params.storePath ??
       params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
-      await import("./session-catalog-node-adoption.js");
+      await loadSessionCatalogNodeAdoption();
     const entry = await params.runtime.agent.session.getSessionEntryAsync({
       agentId: params.agentId,
       storePath,
@@ -306,7 +312,8 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
     min: 1,
     max: MAX_SESSION_LIMIT,
   });
-  const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
+  // Canonical forms compare equal here; sessions keep their original spelling.
+  const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
   await hydrateSessionsFromSessionFiles(codexHome, summaries);
@@ -316,7 +323,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         return true;
       }
       return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-        value?.toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(value).normalize("NFC").includes(filter),
       );
     })
     .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))

@@ -1,17 +1,10 @@
-// Memory Wiki tests cover synchronous guidance and async compiled prompt preparation.
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../api.js";
-import {
-  activateMemoryWikiCompiledCacheOwner,
-  type MemoryWikiCompiledDigestClaim,
-  type MemoryWikiCompiledDigestPage,
+import type {
+  MemoryWikiCompiledDigestClaim,
+  MemoryWikiCompiledDigestPage,
 } from "./compiled-cache.js";
 import { resolveMemoryWikiAgentConfig, type ResolvedMemoryWikiConfig } from "./config.js";
-import { ensureMemoryWikiVaultGeneration } from "./log.js";
 import {
   createWikiPromptSectionBuilder,
   createWikiPromptSectionPreparer,
@@ -22,8 +15,9 @@ import {
   createMemoryWikiTestHarness,
   publishCompiledSnapshot,
 } from "./test-helpers.js";
+import { initializeMemoryWikiVault } from "./vault.js";
 
-const { configureCompiledCacheStore, createVault } = createMemoryWikiTestHarness();
+const { createVault } = createMemoryWikiTestHarness();
 afterEach(() => vi.restoreAllMocks());
 
 function digestPage(
@@ -41,28 +35,19 @@ function digestPage(
   });
 }
 
-async function seedCompiledDigest(params: {
-  config: ResolvedMemoryWikiConfig;
-  claimCount: number;
-  contradictionCount?: number;
-  pages: MemoryWikiCompiledDigestPage[];
-}): Promise<void> {
-  configureCompiledCacheStore();
-  await fs.mkdir(path.join(params.config.vault.path, ".openclaw-wiki"), { recursive: true });
-  await Promise.all([
-    fs.writeFile(path.join(params.config.vault.path, "WIKI.md"), "# Memory Wiki\n", "utf8"),
-    fs.writeFile(path.join(params.config.vault.path, ".openclaw-wiki", "log.jsonl"), "", "utf8"),
-  ]);
-  activateMemoryWikiCompiledCacheOwner(
-    params.config,
-    await ensureMemoryWikiVaultGeneration(params.config.vault.path),
-  );
+async function seedCompiledDigest(
+  config: ResolvedMemoryWikiConfig,
+  pages: MemoryWikiCompiledDigestPage[],
+  claimCount = 1,
+  contradictionCount = 0,
+) {
+  await initializeMemoryWikiVault(config);
   await publishCompiledSnapshot(
-    params.config,
+    config,
     createCompiledSnapshot({
-      claimCount: params.claimCount,
-      contradictionCount: params.contradictionCount ?? 0,
-      pages: params.pages.map((page, index) => ({ ...page, path: `entities/page-${index}.md` })),
+      claimCount,
+      contradictionCount,
+      pages: pages.map((page, index) => ({ ...page, path: `entities/page-${index}.md` })),
     }),
   );
 }
@@ -75,13 +60,16 @@ describe("Memory Wiki prompt section", () => {
   const buildGuidance = createWikiPromptSectionBuilder();
 
   it("prefers shared memory corpus guidance when memory tools are available", () => {
-    const lines = buildGuidance({
+    const prompt = buildGuidance({
       availableTools: new Set(["memory_search", "memory_get", "wiki_search", "wiki_get"]),
-    });
-
-    expect(lines.join("\n")).toContain("`memory_search` with `corpus=all`");
-    expect(lines.join("\n")).toContain("`memory_get` with `corpus=wiki` or `corpus=all`");
-    expect(lines.join("\n")).toContain("wiki-specific ranking or provenance details");
+    }).join("\n");
+    for (const text of [
+      "`memory_search` with `corpus=all`",
+      "`memory_get` with `corpus=wiki` or `corpus=all`",
+      "wiki-specific ranking or provenance details",
+    ]) {
+      expect(prompt).toContain(text);
+    }
   });
 
   it.each([
@@ -118,7 +106,7 @@ describe("Memory Wiki prompt section", () => {
     const { config } = await createVault({
       config: { context: { includeCompiledDigestPrompt: true } },
     });
-    await seedCompiledDigest({ config, claimCount: pages.length * 2, pages });
+    await seedCompiledDigest(config, pages, pages.length * 2);
 
     const lines = await createStaticPreparer(config)({ availableTools: new Set() });
     const prompt = lines.join("\n");
@@ -134,11 +122,7 @@ describe("Memory Wiki prompt section", () => {
 
   it("keeps the digest disabled by default", async () => {
     const { config } = await createVault();
-    await seedCompiledDigest({
-      config,
-      claimCount: 1,
-      pages: [digestPage("Alpha")],
-    });
+    await seedCompiledDigest(config, [digestPage("Alpha")]);
 
     await expect(createStaticPreparer(config)({ availableTools: new Set() })).resolves.toEqual([]);
   });
@@ -169,17 +153,16 @@ describe("Memory Wiki prompt section", () => {
           contradictions: ["Conflicts with source.beta"],
         },
       ),
-    ];
-    await seedCompiledDigest({ config, claimCount: 6, contradictionCount: 1, pages });
+    ] as const;
+    await seedCompiledDigest(config, [...pages], 6, 1);
     const firstLines = await createStaticPreparer(config)({ availableTools: new Set() });
-    const firstPage = expectDefined(pages[0], "first Memory Wiki digest page");
-    const secondPage = expectDefined(pages[1], "second Memory Wiki digest page");
-    await seedCompiledDigest({
+    const [firstPage, secondPage] = pages;
+    await seedCompiledDigest(
       config,
-      claimCount: 6,
-      contradictionCount: 1,
-      pages: [{ ...secondPage, topClaims: secondPage.topClaims?.toReversed() }, firstPage],
-    });
+      [{ ...secondPage, topClaims: secondPage.topClaims?.toReversed() }, firstPage],
+      6,
+      1,
+    );
     const secondLines = await createStaticPreparer(config)({ availableTools: new Set() });
 
     expect(firstLines).toEqual(secondLines);
@@ -198,7 +181,7 @@ describe("Memory Wiki prompt section", () => {
   it("prepares only the invoking agent's compiled digest", async () => {
     const appConfig = {
       agents: { entries: { support: {}, marketing: {} } },
-    } as OpenClawConfig;
+    };
     const { config } = await createVault({
       config: {
         vault: { scope: "agent" },
@@ -210,11 +193,7 @@ describe("Memory Wiki prompt section", () => {
       ["marketing", "MARKETING_SENTINEL"],
     ] as const) {
       const agentConfig = resolveMemoryWikiAgentConfig({ config, appConfig, agentId });
-      await seedCompiledDigest({
-        config: agentConfig,
-        claimCount: 1,
-        pages: [digestPage(agentId, [{ text: marker }])],
-      });
+      await seedCompiledDigest(agentConfig, [digestPage(agentId, [{ text: marker }])]);
     }
     const prepare = createWikiPromptSectionPreparer({
       config,

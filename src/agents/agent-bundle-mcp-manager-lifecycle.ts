@@ -130,7 +130,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     if (!hasServers || store.liveRuntimeSlots.has(slot)) {
       return slot;
     }
-    const cleanupDeadline = Date.now() + CAPACITY_CLEANUP_WAIT_MS;
+    const cleanupDeadline = performance.now() + CAPACITY_CLEANUP_WAIT_MS;
     while (store.liveRuntimeSlots.size >= SESSION_MCP_MAX_LIVE_RUNTIMES) {
       const idle = [...store.runtimesBySessionId]
         .filter(([key, runtime]) => {
@@ -142,7 +142,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
           );
         })
         .toSorted(([, a], [, b]) => a.lastUsedAt - b.lastUsedAt)[0];
-      const remainingMs = cleanupDeadline - Date.now();
+      const remainingMs = Math.ceil(cleanupDeadline - performance.now());
       if (!idle || remainingMs <= 0) {
         throw capacityRefusal();
       }

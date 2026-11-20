@@ -26,7 +26,9 @@ const DEFAULT_TRANSCRIPT_POLICY: TranscriptPolicy = {
   preserveNativeAnthropicToolUseIds: false,
   repairToolUseResultPairing: true,
   preserveSignatures: false,
-  appendOnlyRuntimeContext: false,
+  // Earlier runtime-context carriers stay in history on every route, so each request extends
+  // the previous one byte for byte. An owning provider plugin may opt out explicitly.
+  appendOnlyRuntimeContext: true,
   inHistorySystemUpdates: false,
   sanitizeThoughtSignatures: undefined,
   dropThinkingBlocks: false,
@@ -105,25 +107,6 @@ function buildUnownedProviderTransportReplayFallback(params: {
   };
 }
 
-function mergeTranscriptPolicy(
-  policy: ProviderReplayPolicy | undefined,
-  modelApi: string | null | undefined,
-): TranscriptPolicy {
-  const merged = {
-    ...DEFAULT_TRANSCRIPT_POLICY,
-    // Exact-entry caches need earlier temporal carriers to remain in the request prefix.
-    appendOnlyRuntimeContext: modelApi === "openai-completions" || modelApi === "ollama",
-  };
-  for (const [key, value] of Object.entries(policy ?? {})) {
-    if (value != null) {
-      Object.assign(merged, {
-        [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
-      });
-    }
-  }
-  return merged;
-}
-
 /** Resolve the effective replay policy from the prepared provider and model context. */
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
@@ -173,12 +156,17 @@ export function resolveTranscriptPolicy(params: {
 
   // Provider hooks replace the fallback and can override the shared retention default.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  const policy = mergeTranscriptPolicy(
-    buildReplayPolicy
-      ? (buildReplayPolicy(context) ?? undefined)
-      : buildUnownedProviderTransportReplayFallback(context),
-    params.modelApi,
-  );
+  const replayPolicy = buildReplayPolicy
+    ? (buildReplayPolicy(context) ?? undefined)
+    : buildUnownedProviderTransportReplayFallback(context);
+  const policy = { ...DEFAULT_TRANSCRIPT_POLICY };
+  for (const [key, value] of Object.entries(replayPolicy ?? {})) {
+    if (value != null) {
+      Object.assign(policy, {
+        [key === "applyAssistantFirstOrderingFix" ? "applyGoogleTurnOrdering" : key]: value,
+      });
+    }
+  }
   if (policy.inHistorySystemUpdates) {
     policy.inHistorySystemUpdates = context.inHistorySystemUpdates;
     policy.appendOnlyRuntimeContext ||= context.inHistorySystemUpdates;

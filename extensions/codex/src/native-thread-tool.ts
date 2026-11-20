@@ -4,6 +4,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { AnyAgentTool, PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readStringParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { captureSessionEntryCurrentCheckAsync } from "openclaw/plugin-sdk/session-binding-runtime";
@@ -30,6 +31,24 @@ import {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { assertCodexArchiveDescendantsUnowned } from "./app-server/thread-archive-guard.js";
 import type { codexControlRequest, CodexControlRequestOptions } from "./command-rpc.js";
+
+const loadSessionBindingRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/session-binding-runtime"),
+);
+const loadCommandRpc = createLazyRuntimeModule(() => import("./command-rpc.js"));
+const loadModelSessionRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/model-session-runtime"),
+);
+const loadBindingConnection = createLazyRuntimeModule(
+  () => import("./app-server/binding-connection.js"),
+);
+const loadConfigRuntime = createLazyRuntimeModule(() => import("./app-server/config-runtime.js"));
+const loadThreadOwnership = createLazyRuntimeModule(
+  () => import("./app-server/thread-ownership.js"),
+);
+const loadAttemptClientCleanup = createLazyRuntimeModule(
+  () => import("./app-server/attempt-client-cleanup.js"),
+);
 
 function threadActionSchema<Action extends string, Properties extends TProperties>(
   action: Action,
@@ -136,15 +155,18 @@ function redactNativeThreadResponse(value: unknown): unknown {
   return redacted;
 }
 
-/** Builds the native Codex thread tool only for owner runs with native-home access. */
+/** Declares native-home access consistently; execution requires current owner authority. */
 export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAgentTool | null {
-  if (options.context.senderIsOwner !== true) {
-    return null;
-  }
   const configured = readCodexPluginConfig(options.getPluginConfig());
   if (configured.appServer?.homeScope !== "user" && configured.supervision?.enabled !== true) {
     return null;
   }
+  const assertOwnerCurrent = () => {
+    options.context.assertInvocationCurrent?.();
+    if (options.context.senderIsOwner !== true) {
+      throw new Error("Codex native thread access requires an owner-authorized sender.");
+    }
+  };
 
   return {
     name: "codex_threads",
@@ -153,6 +175,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       "Manage native Codex threads: list, read, fork, rename, archive (confirm:true), unarchive. When supervision is enabled, raw transcript reads and every mutation require their matching supervision policy option.",
     parameters: CodexThreadsParamsSchema,
     async execute(_toolCallId, rawParams) {
+      assertOwnerCurrent();
       const runtimeConfig = () =>
         options.context.getRuntimeConfig?.() ??
         options.context.runtimeConfig ??
@@ -214,7 +237,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
       }
       const run = async (archiveThreadId?: string) => {
         const { captureSessionEntryCurrentCheckAsync, composeSessionEntryCommitGuards } =
-          await import("openclaw/plugin-sdk/session-binding-runtime");
+          await loadSessionBindingRuntime();
         prepared =
           sessionKey && agentId
             ? await captureSessionEntryCurrentCheckAsync({
@@ -226,7 +249,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
               })
             : undefined;
         using _ = { [Symbol.dispose]: () => prepared?.release() };
-        options.context.assertInvocationCurrent?.();
+        assertOwnerCurrent();
         const archiveSession = archiveThreadId ? currentSession() : undefined;
         if (archiveThreadId && !archiveSession) {
           throw new Error("cannot safely archive a native Codex thread without a session identity");
@@ -239,13 +262,12 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 identity: currentIdentity(archiveSession.sessionId),
               }
             : undefined;
-        const request = options.request ?? (await import("./command-rpc.js")).codexControlRequest;
+        const request = options.request ?? (await loadCommandRpc()).codexControlRequest;
         const { isModelSelectionLocked, ModelSelectionLockedError } =
-          await import("openclaw/plugin-sdk/model-session-runtime");
+          await loadModelSessionRuntime();
         const { codexBindingConnectionSelection, resolveCodexBindingAppServerConnection } =
-          await import("./app-server/binding-connection.js");
-        const { resolveCodexSupervisionAppServerRuntimeOptions } =
-          await import("./app-server/config-runtime.js");
+          await loadBindingConnection();
+        const { resolveCodexSupervisionAppServerRuntimeOptions } = await loadConfigRuntime();
         const requestOptions = async (): Promise<CodexControlRequestOptions> => {
           const base = {
             agentId,
@@ -261,7 +283,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
           const binding = identity ? await options.bindingStore.readAsync(identity) : undefined;
           const selection = codexBindingConnectionSelection(binding);
           const assertCurrent = () => {
-            options.context.assertInvocationCurrent?.();
+            assertOwnerCurrent();
             const current = currentSession();
             if (
               runtimeConfig() !== base.config ||
@@ -400,10 +422,7 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
                 kind: "clear",
                 threadId,
               },
-              composeSessionEntryCommitGuards([
-                options.context.assertInvocationCurrent,
-                prepared?.source,
-              ]),
+              composeSessionEntryCommitGuards([assertOwnerCurrent, prepared?.source]),
             );
           }
           return jsonResult({ action, threadId });
@@ -429,9 +448,8 @@ export function createCodexThreadsTool(options: CodexThreadsToolOptions): AnyAge
         const {
           retainCodexAppServerBindingSubscription,
           rollbackCodexAppServerBindingSubscription,
-        } = await import("./app-server/thread-ownership.js");
-        const { closeCodexStartupClientBestEffort } =
-          await import("./app-server/attempt-client-cleanup.js");
+        } = await loadThreadOwnership();
+        const { closeCodexStartupClientBestEffort } = await loadAttemptClientCleanup();
         if (attach) {
           assertCodexBindingMayBeReplaced(binding, "attaching a different native fork");
           // Codex can snapshot an active source as interrupted. Attached forks require a known-safe

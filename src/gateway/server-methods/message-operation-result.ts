@@ -121,7 +121,7 @@ export function createGatewayInflightAuthorityFailure(params: {
     ...params,
     result: {
       ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "message action authority is no longer active"),
     },
   });
 }
@@ -141,7 +141,7 @@ export function scheduleDeliveredSourceReplyTranscriptMirror(params: {
       const mirrored = await mirrorDeliveredSourceReplyToTranscript(params.mirror);
       if (!mirrored && params.mirror.sourceReplyFinal === true) {
         params.context.logGateway?.warn?.(
-          "Terminal source reply receipt was not mirrored; restart recovery is fail-closed.",
+          "Final source reply was delivered but could not be mirrored to the chat history.",
           {
             channel: params.mirror.channel,
             sessionKey: params.mirror.sessionKey,

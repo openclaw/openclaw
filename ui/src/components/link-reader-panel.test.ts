@@ -4,7 +4,9 @@ import type {
   ControlUiLinkReaderDescriptor,
 } from "../../../src/shared/control-ui-link-reader.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { restorePropertyDescriptor } from "../test-helpers/property-descriptor.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
 import {
   item,
@@ -141,7 +143,7 @@ describe("Plugin link reader panel", () => {
       open(panel);
       await expectTitle(panel, "Item 1");
       button(panel, "Refresh item").click();
-      await waitForFast(() => expect(panel.textContent).toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).toContain("Couldn’t refresh"));
       expect(panel.textContent).toContain(
         section === "checks" ? "Build passed" : section === "files" ? "kept.ts" : "Comment text",
       );
@@ -151,7 +153,7 @@ describe("Plugin link reader panel", () => {
       [...panel.querySelectorAll<HTMLButtonElement>(".lr-section-nav button")]
         .find((node) => node.textContent?.startsWith(name))!
         .click();
-      await waitForFast(() => expect(panel.textContent).not.toContain("Could not refresh"));
+      await waitForFast(() => expect(panel.textContent).not.toContain("Couldn’t refresh"));
       expect(request).toHaveBeenCalledTimes(4);
       expect(request).toHaveBeenLastCalledWith(
         "forge.item",
@@ -243,7 +245,9 @@ describe("Plugin link reader panel", () => {
       await panel.updateComplete;
       await panel.updateComplete;
       await waitForFast(() =>
-        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item"),
+        expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe(
+          "Couldn’t load this item",
+        ),
       );
       expect(document.activeElement).toBe(composer);
       const address = panel.querySelector<HTMLInputElement>(".lr-url")!;
@@ -575,16 +579,12 @@ describe("Plugin link reader panel", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("copies and opens the current original from the mobile action menu without replacing the reader", async () => {
+  it("keeps the current original directly accessible while copying from the mobile menu", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     const previous = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
     onTestFinished(() => {
-      if (previous) {
-        Object.defineProperty(navigator, "clipboard", previous);
-      } else {
-        Reflect.deleteProperty(navigator, "clipboard");
-      }
+      restorePropertyDescriptor(navigator, "clipboard", previous);
     });
     const panel = await mount(
       vi.fn(async (_method, params) => requestedItem(params)),
@@ -602,14 +602,17 @@ describe("Plugin link reader panel", () => {
     address.value = itemUrl(2);
     address.dispatchEvent(new Event("input", { bubbles: true }));
     await panel.updateComplete;
+    const original = panel.querySelector<HTMLAnchorElement>(".lr-actions > a.lr-external")!;
+    expect(original).not.toBeNull();
+    expect(original.href).toBe(itemUrl(1));
+    expect(original.getAttribute("aria-label")).toBe("Open on Forge");
+    expect(original.target).toBe("_blank");
+    expect(original.rel).toBe("noopener noreferrer");
+    expect(original.hasAttribute("data-link-reader-external")).toBe(true);
     const trigger = button(panel, "Link reader actions");
     trigger.click();
     await panel.updateComplete;
     const menu = document.getElementById(trigger.getAttribute("aria-controls")!)!;
-    const original = menu.querySelector<HTMLAnchorElement>('a[aria-label="Open in browser"]')!;
-    expect(original.href).toBe(itemUrl(1));
-    expect(original.target).toBe("_blank");
-    expect(original.hasAttribute("data-link-reader-external")).toBe(true);
     menu.querySelector<HTMLElement>('[aria-label="Copy link"]')!.click();
     await waitForFast(() => expect(writeText).toHaveBeenCalledExactlyOnceWith(itemUrl(1)));
     expect(panel.querySelector(".lr-content:not([hidden])")).toBe(content);
@@ -724,7 +727,7 @@ describe("Plugin link reader panel", () => {
     await waitForFast(() =>
       expect(panel.querySelector('[role="alert"]')?.textContent).toContain(message),
     );
-    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Could not load item");
+    expect(panel.querySelector('[role="alert"] h2')?.textContent).toBe("Couldn’t load this item");
     expect(panel.querySelector('[role="alert"]')?.textContent).not.toContain(
       "This item may be private or deleted",
     );

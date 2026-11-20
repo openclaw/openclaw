@@ -16,6 +16,7 @@ import type {
   SettingKey,
 } from "../../app/native-device-settings.ts";
 import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -26,6 +27,7 @@ import {
   SettingsStatus,
   SettingsToggleRow,
   SettingsValue,
+  SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerAppsEnglish } from "../../i18n/locales/en-apps.ts";
@@ -35,6 +37,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
 import "./device.css";
 
 registerEnglishCatalog(registerAppsEnglish);
@@ -193,25 +196,18 @@ export function DevicePage() {
         title={title()}
         description={props.description}
         control={
-          <select
-            class="settings-select"
+          <SettingsSelect
             aria-label={title()}
             ref={liveValue(() => props.value)}
+            value={props.value}
+            options={props.options.map((option) => ({
+              value: option.id,
+              label: option.name,
+              disabled: option.disabled,
+            }))}
             disabled={props.disabled}
             onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
-          >
-            <For each={props.options} keyed={(option) => option.id}>
-              {(option) => (
-                <option
-                  value={option().id}
-                  selected={option().id === props.value}
-                  disabled={option().disabled}
-                >
-                  {option().name}
-                </option>
-              )}
-            </For>
-          </select>
+          />
         }
       />
     );
@@ -242,7 +238,8 @@ export function DevicePage() {
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || gatewayHostingPending()}
+          disabled={props.app.keepGatewayRunningAvailable !== true}
+          saving={gatewayHostingPending()}
           onChange={(value) => {
             if (!capability || disposed || finishGatewayHosting) {
               return;
@@ -465,17 +462,7 @@ export function DevicePage() {
               label="iconAnimations"
               description={t("configPage.deviceSettings.iconAnimationsHint")}
             />
-            <Toggle
-              setting="app.launchAtLogin"
-              checked={props.snapshot.app!.launchAtLogin}
-              label="launchAtLogin"
-              description={
-                props.snapshot.app!.launchAtLoginAvailable === false
-                  ? t("configPage.deviceSettings.launchAtLoginUnavailable")
-                  : undefined
-              }
-              disabled={props.snapshot.app!.launchAtLoginAvailable === false}
-            />
+            <LaunchAtLoginSetting app={props.snapshot.app!} />
             <GatewayHosting app={props.snapshot.app!} />
             <Toggle
               setting="app.quickChatEnabled"
@@ -695,7 +682,11 @@ export function DevicePage() {
         <SettingsPage>
           <Show
             when={capability}
-            fallback={<SettingsEmpty message={t("configPage.deviceSettings.appOnly")} />}
+            fallback={
+              <SettingsSection>
+                <SettingsUnavailable message={t("configPage.deviceSettings.appOnly")} />
+              </SettingsSection>
+            }
           >
             <Show
               when={Boolean(snapshot())}

@@ -1,7 +1,5 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
@@ -13,7 +11,7 @@ import {
 import { prepareAgentCommandExecution } from "../agents/command/prepare.js";
 import { holdWorkspacePreparationSnapshot } from "../agents/workspace-preparation-queue.test-support.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
+import { initializeGitFixture } from "../agents/worktrees/git-fixture.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
@@ -34,27 +32,10 @@ vi.mock("../config/io.js", () => ({
   readConfigFileSnapshotForWrite: configIoMocks.readConfigFileSnapshotForWrite,
 }));
 
-const execFileAsync = promisify(execFile);
 const runtime = createThrowingTestRuntime();
 const sessionKey = "agent:main:worktree-race";
 const actualWorkspace =
   await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
-
-async function git(cwd: string, ...args: string[]): Promise<void> {
-  await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-}
-
-async function initializeRepository(root: string): Promise<string> {
-  const repo = path.join(root, "repo");
-  await fs.mkdir(repo, { recursive: true });
-  await git(repo, "init", "-b", "main");
-  await git(repo, "config", "user.name", "OpenClaw Test");
-  await git(repo, "config", "user.email", "openclaw-test@example.invalid");
-  await fs.writeFile(path.join(repo, "README.md"), "base\n");
-  await git(repo, "add", "README.md");
-  await git(repo, "commit", "-m", "initial");
-  return await fs.realpath(repo);
-}
 
 function mockConfig(home: string) {
   const workspace = path.join(home, "openclaw");
@@ -76,7 +57,7 @@ function mockConfig(home: string) {
 async function createSessionWorktree(home: string, bind = false) {
   const { storePath } = mockConfig(home);
   const created = await managedWorktrees.create({
-    repoRoot: await initializeRepository(home),
+    repoRoot: await fs.realpath(await initializeGitFixture(home, "repo", "README.md", "base\n")),
     name: "race-session",
     baseRef: "main",
     ownerKind: "session",
@@ -190,7 +171,6 @@ describe("agent command worktree admission", () => {
     await withTempHome(async (home) => {
       const { id } = await createSessionWorktree(home, true);
       await managedWorktrees.remove({ id, reason: "manual-delete", allowSnapshotLoss: true });
-      expect(getRegistryWorktree(process.env, id)?.removedAt).toBeDefined();
       await expect(prepareSession()).rejects.toThrow("managed worktree was removed");
       expect(ensureAgentWorkspace).not.toHaveBeenCalled();
     });

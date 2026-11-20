@@ -31,7 +31,7 @@ const attempt = {
   agentId: "main",
   sessionKey: CHILD_KEY,
   sessionId: "child-session",
-  senderIsOwner: false,
+  run: { senderIsOwner: false },
   admission: { entry: { sessionId: "child-session", updatedAt: 1 }, storePath: STORE_PATH },
 };
 
@@ -89,7 +89,7 @@ it.each(["legacy", "stale", "unverified"] as const)(
     if (kind === "unverified") {
       expect(mocks.info).toHaveBeenCalledWith(
         expect.stringContaining("could not verify the lineage"),
-        expect.objectContaining({ kind: "unverified" }),
+        expect.objectContaining({ kind: "unverified", sessionKey: CHILD_KEY }),
       );
     }
   },

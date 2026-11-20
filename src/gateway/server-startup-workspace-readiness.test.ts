@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
+import { resolveLegacyWorkspaceSourcePaths } from "../agents/workspace-legacy-state.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { getRuntimeConfig, writeConfigFile, type OpenClawConfig } from "../config/config.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../config/io.js";
@@ -68,12 +68,11 @@ async function writeLegacyWorkspace(dir: string, bytes = legacyBytes) {
   return sourcePath;
 }
 
-async function migrate(cfg: OpenClawConfig, homedir?: () => string) {
+async function migrate(cfg: OpenClawConfig) {
   const stateDir = state.stateDir;
   const detected = await detectLegacyWorkspaceState({
     cfg,
     stateDir,
-    homedir,
     doctorOnlyStateMigrations: true,
   });
   expect((await migrateLegacyWorkspaceState({ stateDir, detected })).warnings).toEqual([]);
@@ -127,6 +126,11 @@ it("refuses every owned session workspace without reading its store on the main 
       workspaceDir: agent.workspace,
     });
     await writeLegacyWorkspace(sandboxWorkspaceDir, JSON.stringify({ version: 1 }));
+    // Genuine legacy copies also carry an operator-owned state-dir attestation.
+    const attestation = resolveLegacyWorkspaceSourcePaths(sandboxWorkspaceDir, { env: state.env })
+      .stateDirAttestationPaths[0]!;
+    await fs.mkdir(path.dirname(attestation), { recursive: true });
+    await fs.writeFile(attestation, "");
     return sandboxWorkspaceDir;
   };
   const workspaces: string[] = [];
@@ -167,41 +171,28 @@ it("refuses every owned session workspace without reading its store on the main 
   expect(prepare.mock.calls.filter(([sql]) => sql.includes('"retained_window"'))).toEqual([]);
 });
 
-it.each(["disk", "supplied snapshot"])(
-  "refuses a secondary workspace from %s until Doctor migrates it",
-  async (source) => {
-    const workspaceDir = state.statePath("workspace-secondary");
-    const cfg = config({
-      main: { workspace: state.statePath("workspace-main") },
-      secondary: { workspace: workspaceDir },
-    });
-    await writeConfigFile(cfg);
-    const sourcePath = await writeLegacyWorkspace(workspaceDir);
-    const initialSnapshotRead =
-      source === "supplied snapshot"
-        ? await readConfigFileSnapshotWithPluginMetadata({ observe: false })
-        : undefined;
-    if (initialSnapshotRead) {
-      await writeConfigFile(
-        config({
-          ...cfg.agents.entries,
-          secondary: { workspace: state.statePath("workspace-clean") },
-        }),
-      );
-    }
-    const port = await getFreePort();
-    const attempt = start(port, initialSnapshotRead);
-    await expect(attempt).rejects.toThrow("Legacy workspace setup state requires migration");
-    await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
-    await expect(fs.stat(sourcePath)).resolves.toBeDefined();
-
-    await migrate(cfg, os.homedir);
-    server = await start(port, initialSnapshotRead);
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-    expect(ready.status).toBe(200);
-    await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
-  },
-);
+it("refuses a secondary workspace from the supplied snapshot even after disk config changes", async () => {
+  const workspaceDir = state.statePath("workspace-secondary");
+  const cfg = config({
+    main: { workspace: state.statePath("workspace-main") },
+    secondary: { workspace: workspaceDir },
+  });
+  await writeConfigFile(cfg);
+  const sourcePath = await writeLegacyWorkspace(workspaceDir);
+  const snapshot = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
+  await writeConfigFile(
+    config({
+      ...cfg.agents.entries,
+      secondary: { workspace: state.statePath("workspace-clean") },
+    }),
+  );
+  const port = await getFreePort();
+  await expect(start(port, snapshot)).rejects.toThrow(
+    "Legacy workspace setup state requires migration",
+  );
+  await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+  await expect(fs.stat(sourcePath)).resolves.toBeDefined();
+});
 
 it.for(["managed write", "file watcher"])(
   "rejects an unmigrated workspace switch before publication via %s",

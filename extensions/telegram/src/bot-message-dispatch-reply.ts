@@ -112,6 +112,7 @@ function resolvePayloadTelegramControls(
     },
     {
       allowWebAppButtons: resolveTelegramTargetChatType(String(turn.context.chatId)) === "direct",
+      supportsDisabled: turn.richMessages,
       onDroppedControl: (control) => droppedControls.push(control),
       questionOptionIndices: resolveAskUserQuestionOptionIndices(payload),
     },
@@ -218,7 +219,6 @@ async function adoptProgressDraft(
     return false;
   }
   const adopt = info.adoptProgressDraft;
-  await turn.draftEventQueue;
   const stream = turn.answerLane.stream;
   if (!stream || turn.answerLane.finalized || turn.isSuperseded()) {
     return false;
@@ -259,7 +259,7 @@ async function adoptProgressDraft(
   // The retained draft now owns the card. Detach it from this turn so final
   // cleanup and late lane callbacks cannot edit or delete it.
   turn.answerLane.stream = undefined;
-  turn.progressContinuationAdopted = true;
+  turn.finalHandoff = "progress-continuation";
   resetLaneState(turn, turn.answerLane);
   resetReasoningStepState(turn);
   turn.deliveryState.markDelivered();
@@ -351,12 +351,7 @@ async function deliverReplyWithNormalization(
   const split = splitTextIntoLaneSegments(turn, lanePayload.text, payload.isReasoning);
   const { segment } = split;
   if (info.kind === "final" && (reply.text.length > 0 || reply.hasMedia)) {
-    // Mark final delivery before any queued draft drain; late tool progress must stay suppressed.
     turn.previewLifecycle.beginFinalDelivery();
-  }
-  if (info.kind === "final") {
-    // Final delivery drains queued draft work so an earlier block cannot overtake it.
-    await enqueueDraftEvent(turn, async () => {});
   }
   if (info.kind === "final" && effectivePayload.isStatusNotice === true) {
     // ACP identity notices finish dispatch but must not replace the answer preview.
@@ -446,6 +441,17 @@ async function deliverReplyWithNormalization(
       await prepareAnswerLaneForToolProgress(turn);
     }
 
+    if (
+      turn.streamMode === "progress" &&
+      info.kind === "block" &&
+      effectivePayload.isCompactionNotice === true
+    ) {
+      // Compaction notices are standalone messages. Held as an interim answer, the
+      // final would replace them; let past the hold, they would stream into the
+      // progress card and be deleted with it.
+      const delivery = await sendPayload(turn, effectivePayload);
+      return toTelegramReplyDeliveryResult(turn, delivery.visibleReplySent);
+    }
     const ownedByQueuedRotation = isQueuedAnswerBlock(
       turn,
       lanePayload,
@@ -483,7 +489,7 @@ async function deliverReplyWithNormalization(
       if (!suppressProgressAnswerBlock) {
         turn.progressCompositor.resetActivity();
       }
-      return toTelegramReplyDeliveryResult(turn, true);
+      return toTelegramReplyDeliveryResult(turn, !suppressProgressAnswerBlock);
     }
 
     if (segment.lane === "answer" && info.kind === "block") {

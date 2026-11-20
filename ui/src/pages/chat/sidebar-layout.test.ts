@@ -258,6 +258,33 @@ it("clamps and fits the single inherited resizable column", () => {
   expect(fitLayout(layout, 560)).toBeNull();
 });
 
+it("keeps panel identities and prior layouts intact while fitting, resizing, and changing tabs", () => {
+  const layout = withConversation(openAll());
+  const original = structuredClone(layout);
+  const source = layout.columns[0]!;
+  source.panels.forEach(Object.freeze);
+  Object.freeze(source.panels);
+  Object.freeze(source);
+  Object.freeze(layout.columns);
+  Object.freeze(layout);
+
+  expect(fitLayout(layout, 1_200)).toBe(layout);
+  for (const changed of [
+    fitLayout(layout, 800)!,
+    resizePanel(layout, source.id, 620),
+    activatePanel(layout, "discussion"),
+    reorderPanel(layout, "discussion", "detail", "after"),
+    closeSlot(layout, "dashboard"),
+  ]) {
+    expect(changed.columns[0]?.panels.find((panel) => panel.id === "discussion")).toBe(
+      source.panels.find((panel) => panel.id === "discussion"),
+    );
+    expect(layout).toEqual(original);
+  }
+  expect(setSidebarExpanded(layout, true).columns).toBe(layout.columns);
+  expect(setSidebarDock(layout, "bottom").columns).toBe(layout.columns);
+});
+
 it("defers browser sizing in narrow and bottom layouts and preserves manual or legacy widths", () => {
   const layout = normalize(openSlot({ columns: [] }, "browser"));
   expect(initBrowserWidth(layout, 500, 464)).toEqual(layout);

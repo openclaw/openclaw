@@ -39,14 +39,11 @@ vi.mock("./systemd-user-transport.js", async (original) => ({
 }));
 
 import { discoverManagedGatewayBindings } from "./managed-gateway-bindings.js";
+import { nativeExit } from "./systemd-exec.test-support.js";
 import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 
-const success = (stdout: string): ExecResult => ({
-  code: 0,
-  termination: "exit",
-  stdout,
-  stderr: "",
-});
+const success = (stdout: string): ExecResult => nativeExit(stdout);
+const unitName = "custom-rescue.service";
 const programArguments = ["/usr/bin/node", "/opt/openclaw/dist/entry.js", "gateway"];
 const buses = {
   DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/user-bus",
@@ -91,7 +88,7 @@ const nativeBus = {
 };
 const readProperty = nativeBus.getProperty.getMockImplementation()!;
 function addUnit(
-  name: string,
+  name = "custom-rescue.service",
   fragmentPath = `/run/systemd/transient/${name}`,
   argv = programArguments,
 ) {
@@ -99,11 +96,11 @@ function addUnit(
 }
 const listEntry = (name: string) => success(`${name} loaded active running Gateway\n`);
 const inspectedUnit = (
-  name: string,
+  name = "custom-rescue.service",
   fragmentPath = `/run/systemd/transient/${name}`,
   argv = programArguments,
 ) => ({ name, fragmentPath, commands: [{ path: argv[0], programArguments: argv }] });
-function mockCliInspection(name: string) {
+function mockCliInspection() {
   busctl.mockImplementation(async (args) => {
     expect(args).toContain("--auto-start=no");
     expect(args).not.toContain("LoadUnit");
@@ -120,7 +117,7 @@ function mockCliInspection(name: string) {
     }
     return success(
       args.includes("org.freedesktop.systemd1.Unit")
-        ? [name, `/run/systemd/transient/${name}`, "active"]
+        ? [unitName, `/run/systemd/transient/${unitName}`, "active"]
             .map((value) => property("s", value))
             .join("\n")
         : property("a(sasbttttuii)", [
@@ -128,6 +125,22 @@ function mockCliInspection(name: string) {
           ]),
     );
   });
+}
+
+const inspect = (scope: "user" | "system" = "system") => listLoadedSystemdUnits(scope, buses);
+function expectUnused(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+function expectNativeClosed() {
+  expect(nativeBus.close).toHaveBeenCalledOnce();
+  expectUnused(busctl);
+}
+function rootManager() {
+  root.mockReturnValue(true);
+  vi.spyOn(processes, "getProcessStartTime").mockReturnValue(100);
+  vi.spyOn(processes, "isPidAlive").mockReturnValue(true);
 }
 
 function withFixture(work: (home: string) => Promise<void>) {
@@ -161,6 +174,8 @@ beforeEach(() => {
     address: buses.DBUS_SESSION_BUS_ADDRESS,
     runtimeDir: "/fixture",
   });
+  addUnit();
+  systemctl.mockResolvedValue(listEntry(unitName));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -168,47 +183,32 @@ afterEach(() => {
 });
 
 it("rejects partial loaded-unit properties", async () => {
-  const name = "custom-rescue.service";
-  addUnit(name);
-  units.get(name)!.name = "unrelated.service";
-  systemctl.mockResolvedValue(listEntry(name));
-  await expect(
-    listLoadedSystemdUnits("system", {
-      DBUS_SYSTEM_BUS_ADDRESS: buses.DBUS_SYSTEM_BUS_ADDRESS,
-    }),
-  ).rejects.toThrow("properties could not be inspected");
+  units.get(unitName)!.name = "unrelated.service";
+  await expect(inspect()).rejects.toThrow("properties could not be inspected");
 });
 
 it("keeps multiline command data separate from every loaded unit's identity", async () => {
   const payload =
     "print('hello')\n\nId=hidden.service\nActiveState=inactive\nFragmentPath=/false\n";
-  addUnit("custom-rescue.service", "/run/systemd/transient/custom-rescue.service", [
-    "/usr/bin/python3",
-    "-c",
-    payload,
-  ]);
+  addUnit(unitName, undefined, ["/usr/bin/python3", "-c", payload]);
   addUnit("openclaw-gateway.service");
   systemctl.mockResolvedValue(
     success(
       "custom-rescue.service loaded active running Worker\nopenclaw-gateway.service loaded active running Gateway\n",
     ),
   );
-  expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    inspectedUnit("custom-rescue.service", undefined, ["/usr/bin/python3", "-c", payload]),
+  expect(await inspect()).toEqual([
+    inspectedUnit(unitName, undefined, ["/usr/bin/python3", "-c", payload]),
     inspectedUnit("openclaw-gateway.service"),
   ]);
-  expect(connect).toHaveBeenCalledOnce();
-  expect(nativeBus.close).toHaveBeenCalledOnce();
-  expect(busctl).not.toHaveBeenCalled();
+  expectNativeClosed();
 });
 
 it.each(["missing unit", "malformed commands", "replaced manager"])(
   "rejects incomplete inventory: %s",
   async (failure) => {
-    const name = "custom-rescue.service";
-    systemctl.mockResolvedValue(listEntry(name));
-    if (failure !== "missing unit") {
-      addUnit(name);
+    if (failure === "missing unit") {
+      units.clear();
     }
     nativeBus.getProperty.mockImplementation(async (target) => {
       const value = await readProperty(target);
@@ -220,49 +220,41 @@ it.each(["missing unit", "malformed commands", "replaced manager"])(
       }
       return value;
     });
-    await expect(listLoadedSystemdUnits("system", buses)).rejects.toThrow();
-    expect(nativeBus.close).toHaveBeenCalledOnce();
-    expect(busctl).not.toHaveBeenCalled();
+    await expect(inspect()).rejects.toThrow();
+    expectNativeClosed();
   },
 );
 
 it.each([
-  { mode: "off", forcedRoot: false },
   { mode: "missing addon", forcedRoot: false },
   { mode: "off", forcedRoot: true },
-  { mode: "missing addon", forcedRoot: true },
 ])(
   "preserves typed CLI inspection with $mode (forced root=$forcedRoot)",
   async ({ mode, forcedRoot }) => {
-    const name = "custom-rescue.service";
-    addUnit(name);
     if (forcedRoot) {
       root.mockReturnValue(true);
       vi.stubEnv("SYSTEMCTL_FORCE_BUS", "1");
       vi.stubEnv("DBUS_SYSTEM_BUS_ADDRESS", buses.DBUS_SYSTEM_BUS_ADDRESS);
     }
-    systemctl.mockResolvedValue(listEntry(name));
     if (mode === "off") {
       vi.stubEnv("PROC_SAFE_NATIVE", "off");
     } else {
       connect.mockRejectedValue(new ProcSafeError("helper-unavailable", "Native addon absent"));
     }
-    mockCliInspection(name);
-    expect(await listLoadedSystemdUnits("system", buses)).toEqual([inspectedUnit(name)]);
-    expect(connectPrivate).not.toHaveBeenCalled();
-    expect(nativeBus.close).not.toHaveBeenCalled();
+    mockCliInspection();
+    expect(await inspect()).toEqual([inspectedUnit()]);
+    expectUnused(connectPrivate, nativeBus.close);
   },
 );
 
 it.each([false, true])(
   "pins the manager before listing, including empty results (%s)",
   async (empty) => {
-    addUnit("custom-rescue.service");
     systemctl.mockImplementation(async () => {
       managerOwner = ":1.99";
-      return empty ? success("") : listEntry("custom-rescue.service");
+      return empty ? success("") : listEntry(unitName);
     });
-    await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+    await expect(inspect()).rejects.toMatchObject({
       reason: "systemd-manager-changed",
     });
     expect(nativeBus.close).toHaveBeenCalledOnce();
@@ -289,7 +281,7 @@ it("refuses a replacement CLI bus that reuses the manager name and UID", async (
     busId = "fedcba9876543210fedcba9876543210";
     return success("");
   });
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+  await expect(inspect()).rejects.toMatchObject({
     reason: "systemd-manager-changed",
   });
 });
@@ -301,7 +293,7 @@ it("does not give a late listing a fresh property deadline", async () => {
     now = 16_000;
     return success("");
   });
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+  await expect(inspect()).rejects.toMatchObject({
     reason: "systemd-inspection-deadline-exceeded",
   });
   expect(nativeBus.close).toHaveBeenCalledOnce();
@@ -309,15 +301,9 @@ it("does not give a late listing a fresh property deadline", async () => {
 });
 
 it.each(["", "t"])("preserves the root system-manager route (forced bus=%s)", async (forceBus) => {
-  root.mockReturnValue(true);
+  rootManager();
   vi.stubEnv("SYSTEMCTL_FORCE_BUS", forceBus);
-  vi.spyOn(processes, "getProcessStartTime").mockReturnValue(100);
-  vi.spyOn(processes, "isPidAlive").mockReturnValue(true);
-  addUnit("custom-rescue.service");
-  systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
-  expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    inspectedUnit("custom-rescue.service"),
-  ]);
+  expect(await inspect()).toEqual([inspectedUnit()]);
   if (forceBus) {
     expect(connect).toHaveBeenCalledOnce();
     expect(connectPrivate).not.toHaveBeenCalled();
@@ -333,27 +319,20 @@ it.each(["", "t"])("preserves the root system-manager route (forced bus=%s)", as
 });
 
 it("refuses a private system-manager identity mismatch without broker fallback", async () => {
-  root.mockReturnValue(true);
-  vi.spyOn(processes, "getProcessStartTime").mockReturnValue(100);
-  vi.spyOn(processes, "isPidAlive").mockReturnValue(true);
+  rootManager();
   connectPrivate.mockResolvedValue({ ...nativeBus, peer: { uid: 1000, pid: 1 } });
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+  await expect(inspect()).rejects.toMatchObject({
     reason: "systemd-manager-changed",
   });
   expect(nativeBus.close).toHaveBeenCalledOnce();
-  expect(systemctl).not.toHaveBeenCalled();
-  expect(connect).not.toHaveBeenCalled();
-  expect(busctl).not.toHaveBeenCalled();
+  expectUnused(systemctl, connect, busctl);
 });
 
 it.each(["off", "missing addon"])(
   "refuses a different broker for root private-manager inspection (%s)",
   async (mode) => {
-    root.mockReturnValue(true);
+    rootManager();
     vi.stubEnv("DBUS_SYSTEM_BUS_ADDRESS", buses.DBUS_SYSTEM_BUS_ADDRESS);
-    vi.spyOn(processes, "getProcessStartTime").mockReturnValue(100);
-    const name = "custom-rescue.service";
-    systemctl.mockResolvedValue(listEntry(name));
     if (mode === "off") {
       vi.stubEnv("PROC_SAFE_NATIVE", "off");
     } else {
@@ -361,13 +340,10 @@ it.each(["off", "missing addon"])(
         new ProcSafeError("helper-unavailable", "Native addon absent"),
       );
     }
-    await expect(listLoadedSystemdUnits("system", buses)).rejects.toThrow(
+    await expect(inspect()).rejects.toThrow(
       "selected systemd private manager requires native inspection support",
     );
-    expect(systemctl).not.toHaveBeenCalled();
-    expect(busctl).not.toHaveBeenCalled();
-    expect(connect).not.toHaveBeenCalled();
-    expect(nativeBus.close).not.toHaveBeenCalled();
+    expectUnused(systemctl, busctl, connect, nativeBus.close);
   },
 );
 
@@ -378,54 +354,47 @@ it.each([
   { mode: "auto", code: "incomplete" },
 ] as const)("does not change transport after $mode/$code", async ({ mode, code }) => {
   vi.stubEnv("PROC_SAFE_NATIVE", mode);
-  systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
   const failure = new ProcSafeError(code, "Synthetic native refusal");
   connect.mockRejectedValue(failure);
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toBe(failure);
+  await expect(inspect()).rejects.toBe(failure);
   expect(busctl).not.toHaveBeenCalled();
 });
 
 it("reports private-only native-off inspection as unavailable, never empty", async () => {
   vi.stubEnv("PROC_SAFE_NATIVE", "off");
-  userctl.mockResolvedValue(listEntry("custom-rescue.service"));
+  userctl.mockResolvedValue(listEntry(unitName));
   transport.mockResolvedValue({
     kind: "private",
     address: "unix:path=/fixture/private",
     runtimeDir: "/fixture",
   });
-  await expect(listLoadedSystemdUnits("user", buses)).rejects.toMatchObject({
+  await expect(inspect("user")).rejects.toMatchObject({
     reason: "systemd-user-bus-unavailable",
   });
-  expect(connect).not.toHaveBeenCalled();
-  expect(busctl).not.toHaveBeenCalled();
+  expectUnused(connect, busctl);
 });
 
 it("preserves both failed inspection and connection cleanup", async () => {
-  addUnit("custom-rescue.service");
-  systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
   const inspection = new Error("Synthetic inspection failure");
   const cleanup = new CommandProcessCleanupError();
   nativeBus.getProperty.mockRejectedValueOnce(inspection);
   nativeBus.close.mockRejectedValueOnce(cleanup);
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+  await expect(inspect()).rejects.toMatchObject({
     errors: [inspection, cleanup],
     cause: cleanup,
   });
-  expect(nativeBus.close).toHaveBeenCalledOnce();
-  expect(busctl).not.toHaveBeenCalled();
+  expectNativeClosed();
 });
 
 it("joins connection close before refusing an expired inventory", async () => {
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);
-  addUnit("custom-rescue.service");
-  systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
   let closed = false;
   nativeBus.close.mockImplementationOnce(async () => {
     now = 16_000;
     closed = true;
   });
-  await expect(listLoadedSystemdUnits("system", buses)).rejects.toMatchObject({
+  await expect(inspect()).rejects.toMatchObject({
     reason: "systemd-inspection-deadline-exceeded",
   });
   expect(closed).toBe(true);

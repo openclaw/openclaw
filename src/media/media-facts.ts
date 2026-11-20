@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { cloneTranscriptEnvelope } from "../shared/transcript-payload-ownership.js";
 import type { PromptImageOrderEntry } from "./prompt-image-order.js";
 
 /** One ordered runtime attachment; array position is its alignment identity. */
@@ -28,6 +29,8 @@ export type MediaFact = {
   height?: number;
   transcribed?: boolean;
   messageId?: string;
+  /** Supplemental quote provenance; absent on current-message media. */
+  source?: "quote";
   workspaceDir?: string;
   /** Internal proof that this exact fact was covered by a legacy staged projection. */
   staged?: boolean;
@@ -35,6 +38,8 @@ export type MediaFact = {
   // reprojection boundary; described images otherwise rehydrate or count failed.
   // Structured persistence may retain it; legacy Media* projections never emit it.
   hydrationSuppressed?: boolean;
+  /** Run-only: this turn could not read the attachment. Never persisted, so later turns retry it. */
+  unresolvedThisTurn?: boolean;
 };
 
 export type MediaFactInput = {
@@ -66,6 +71,31 @@ export function attachRuntimePromptMediaFacts<T extends object>(
 export function readRuntimePromptMediaFacts(message: object): MediaFact[] | undefined {
   const media = (message as Record<PropertyKey, unknown>)[RUNTIME_PROMPT_MEDIA_FACTS];
   return Array.isArray(media) ? (media as MediaFact[]) : undefined;
+}
+
+/**
+ * Pair run-only skips by source and occurrence; recorded facts remain retryable.
+ * Staged copies retain media:// URLs. URL-less remote restaging can miss a match
+ * and retry this turn; a failed read stays visible through the existing notice.
+ */
+export function applyRunHydrationSuppression(
+  recorded: readonly MediaFact[],
+  run: readonly MediaFact[] | undefined,
+): MediaFact[] {
+  const runFlagsByKey = new Map<string, boolean[]>();
+  for (const fact of run ?? []) {
+    const key = fact.url ?? fact.path;
+    if (key) {
+      const flags = runFlagsByKey.get(key) ?? [];
+      flags.push(fact.unresolvedThisTurn === true);
+      runFlagsByKey.set(key, flags);
+    }
+  }
+  return recorded.map((fact) => {
+    const key = fact.url ?? fact.path;
+    const suppressed = key ? runFlagsByKey.get(key)?.shift() : undefined;
+    return suppressed ? { ...fact, hydrationSuppressed: true } : fact;
+  });
 }
 
 /** Reads the canonical persisted media envelope without consulting legacy top-level fields. */
@@ -138,14 +168,18 @@ export function hasMeaningfulRetiredMediaCarrier(message: object): boolean {
   );
 }
 
-const LEGACY_MEDIA_KINDS = new Set<MediaKind>([
+const MEDIA_KINDS = [
   "image",
   "audio",
   "video",
   "document",
   "sticker",
   "unknown",
-]);
+] as const satisfies readonly MediaKind[];
+
+export function isMediaKind(kind: string | undefined): kind is MediaKind {
+  return MEDIA_KINDS.some((candidate) => candidate === kind);
+}
 
 type CanonicalizedPersistedMediaMessage<T extends object> = {
   changed: boolean;
@@ -206,10 +240,10 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
     const existing = canonicalInputs[index];
     const bareLegacyKind =
       legacyType &&
-      LEGACY_MEDIA_KINDS.has(legacyType as MediaKind) &&
+      isMediaKind(legacyType) &&
       !normalizeOptionalString(existing?.contentType) &&
       existing?.kind === undefined;
-    const explicitKind = existing?.kind ?? (bareLegacyKind ? (legacyType as MediaKind) : undefined);
+    const explicitKind = existing?.kind ?? (bareLegacyKind ? legacyType : undefined);
     media.push({
       ...(fact.path ? { path: fact.path } : {}),
       ...(fact.url ? { url: fact.url } : {}),
@@ -229,7 +263,7 @@ export function canonicalizePersistedUserMessageMedia<T extends object>(
     });
   }
 
-  const next: Record<string, unknown> = { ...record };
+  const next = cloneTranscriptEnvelope(record);
   delete next.media;
   for (const key of PERSISTED_LEGACY_MEDIA_KEYS) {
     delete next[key];
@@ -276,9 +310,7 @@ export function resolveMediaFactKind(fact: MediaFactInput): MediaKind | undefine
       return mimeKind;
     }
     // Legacy channel-mode projections persist bare image or sticker kind as MediaType.
-    return LEGACY_MEDIA_KINDS.has(normalizedContentType as MediaKind)
-      ? (normalizedContentType as MediaKind)
-      : undefined;
+    return isMediaKind(normalizedContentType) ? normalizedContentType : undefined;
   }
   const source = normalizeOptionalString(fact.path) ?? normalizeOptionalString(fact.url);
   if (!source) {
@@ -368,6 +400,7 @@ function normalizeMediaFact<TInput extends MediaFactInput>(
     ...(height ? { height } : {}),
     transcribed: input.transcribed === true || defaults.transcribed?.(input, index) === true,
     messageId: normalizeOptionalString(input.messageId) ?? defaults.messageId,
+    ...(input.source === "quote" ? { source: "quote" } : {}),
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(input.staged === true ? { staged: true } : {}),
     ...(input.hydrationSuppressed === true ? { hydrationSuppressed: true } : {}),

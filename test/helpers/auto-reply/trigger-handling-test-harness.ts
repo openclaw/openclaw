@@ -347,36 +347,6 @@ export async function expectInlineCommandHandledAndStripped(params: {
   expect(text).toBe("ok");
 }
 
-export async function expectBareNewOrResetAcknowledged(params: {
-  home: string;
-  body: "/new" | "/reset";
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply/get-reply.js").getReplyFromConfig;
-}) {
-  const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-  runEmbeddedAgentMock.mockClear();
-  runEmbeddedAgentMock.mockResolvedValue({
-    payloads: [{ text: "hello" }],
-    meta: {
-      durationMs: 1,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-  });
-
-  const res = await params.getReplyFromConfig(
-    {
-      Body: params.body,
-      From: "+1003",
-      To: "+2000",
-      CommandAuthorized: true,
-    },
-    {},
-    makeCfg(params.home),
-  );
-  const text = Array.isArray(res) ? res[0]?.text : res?.text;
-  expect(text).toBe(params.body === "/reset" ? "✅ Session reset." : "✅ New session started.");
-  expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-}
-
 function installTriggerHandlingE2eTestHooks() {
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();

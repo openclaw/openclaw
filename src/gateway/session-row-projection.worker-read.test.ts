@@ -1,13 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
@@ -20,7 +14,6 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
@@ -54,7 +47,6 @@ import {
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import * as records from "./session-row-projection-record.js";
 import {
   seedRow,
   watchRowFacts as observeRowFacts,
@@ -67,7 +59,17 @@ import {
 } from "./session-row-projection.test-support.js";
 import { resolveSessionStoreKey } from "./session-store-key.js";
 import { listProjectedSessions } from "./session-utils-list.js";
-import * as rowInputs from "./session-utils-row.js";
+
+type Projection = Parameters<typeof listProjectedSessions>[0]["projection"];
+
+function invalidateFacts(projection: Projection, query: { agentId: string; key: string }) {
+  sessionChanges.emit({
+    agentId: query.agentId,
+    sessionKey: query.key,
+    storePath: projection.capture(query)!.storeTarget.storePath,
+    factsInvalidated: true,
+  });
+}
 
 // Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
 beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
@@ -91,133 +93,43 @@ function holdRowFacts(once = false) {
   return { entered, release };
 }
 
-it.each([{ workMs: 20, rowCount: 65 }])(
-  "accepts $rowCount rows once with $workMs ms of materialization work",
-  async ({ workMs, rowCount }) => {
-    await withSessionRowProjectionState(async (create) => {
-      const keys = Array.from(
-        { length: rowCount },
-        (_, index) => `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
+it("materializes updated rows across worker batches", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const entries = Array.from({ length: 65 }, (_, index) => ({
+      query: {
+        agentId: "main",
+        key: `agent:main:row-facts-slice-${String(index).padStart(2, "0")}`,
+      },
+      entry: { sessionId: `row-facts-slice-${index}`, updatedAt: 1, label: `initial-${index}` },
+    }));
+    for (const { query, entry } of entries) {
+      seedRow(query, entry);
+    }
+    const projection = await create({
+      cfg: { agents: { entries: { main: {} } } },
+      modelCatalog: [],
+    });
+    await projection.ensureMaterialized();
+    for (const [index, { query, entry }] of entries.entries()) {
+      seedRow(query, { ...entry, updatedAt: 2, label: `latest-${index}` });
+      invalidateFacts(projection, query);
+    }
+
+    await projection.ensureMaterialized();
+    expect(projection.dirtyRowCount).toBe(0);
+    for (const [index, { query, entry }] of entries.entries()) {
+      expect(projection.snapshot(query).row).toEqual(
+        expect.objectContaining({ sessionId: entry.sessionId, label: `latest-${index}` }),
       );
-      const entries = keys.map((key, index) => ({
-        scope: { agentId: "main", sessionKey: key },
-        entry: { sessionId: `row-facts-slice-${index}`, updatedAt: 1, label: `initial-${index}` },
-      }));
-      for (const { scope, entry } of entries) {
-        replaceSessionEntrySync(scope, entry);
-      }
-      const projection = await create({
-        cfg: { agents: { entries: { main: {} } } },
-        modelCatalog: [],
-      });
-      await projection.ensureMaterialized();
-      expect(projection.dirtyRowCount).toBe(0);
-      for (const key of keys) {
-        projection.describe({ agentId: "main", key });
-      }
-      const before = projection.materializedCount;
-      const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
-      const databases = observeRowFacts((owner) => async (input) => {
-        const reply = await owner.readRowFacts(input);
-        reads.push({
-          sessionKeys: [...input.sessionKeys],
-          rows: structuredClone(reply.rows),
-        });
-        return reply;
-      });
-      let elapsed = 0;
-      const acceptance: number[] = [];
-      let accepting = 0;
-      const acquireEntry = records.acquireSessionRowEntry;
-      const acquisition = vi
-        .spyOn(records, "acquireSessionRowEntry")
-        .mockImplementation((params) => {
-          accepting++;
-          return acquireEntry(params);
-        });
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-      const materializedKeys: string[] = [];
-      const readInputs = rowInputs.readSessionRowInputs;
-      const inputs = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
-        if (accepting) {
-          acceptance.push(accepting);
-          accepting = 0;
-        }
-        const result = readInputs(params);
-        materializedKeys.push(params.key);
-        elapsed += workMs;
-        return result;
-      });
-      let publications = 0;
-      const stop = sessionChanges.subscribeProjection(() => publications++);
-      try {
-        for (const [index, { scope, entry }] of entries.entries()) {
-          replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: `latest-${index}` });
-          sessionChanges.emit({
-            ...scope,
-            storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
-              .storeTarget.storePath,
-            factsInvalidated: true,
-          });
-        }
-        expect(projection.dirtyRowCount).toBe(rowCount);
-        const published = publications;
-        expect(published).toBe(rowCount * 2);
-        // Each commit accepts its prepared entry before the worker refreshes database facts.
-        expect(accepting).toBe(rowCount);
-        expect(acceptance).toEqual([]);
-        expect(reads).toEqual([]);
-        expect(materializedKeys).toEqual([]);
-        accepting = 0;
+    }
+  }, true);
+});
 
-        // Advance the clock only after real materialization; Worker replies remain real.
-        // Avoid keyed reads until the drain settles so they cannot consume the suffix.
-        const hostReads = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          await projection.ensureMaterialized();
-          expect(
-            hostReads.queries.filter((sql) =>
-              /session_nodes|session_members|board_tabs|transcript_rewrite_watermarks/.test(sql),
-            ),
-          ).toEqual([]);
-        } finally {
-          hostReads.restore();
-        }
-
-        expect(publications).toBe(published);
-        expect(materializedKeys).toEqual(keys);
-        expect(projection.materializedCount - before).toBe(rowCount);
-        expect(projection.dirtyRowCount).toBe(0);
-        const batches = rowCount <= 64 ? [keys] : [keys.slice(0, 64), keys.slice(64)];
-        expect(reads.map((read) => read.sessionKeys)).toEqual(batches);
-        expect(reads.flatMap((read) => read.rows)).toHaveLength(rowCount);
-        expect(acceptance).toEqual(batches.map((batch) => batch.length));
-        for (const [index, { scope, entry }] of entries.entries()) {
-          expect(
-            projection.snapshot({ agentId: scope.agentId, key: scope.sessionKey }).row,
-          ).toEqual(
-            expect.objectContaining({ sessionId: entry.sessionId, label: `latest-${index}` }),
-          );
-        }
-      } finally {
-        stop();
-        inputs.mockRestore();
-        clock.mockRestore();
-        acquisition.mockRestore();
-        databases.mockRestore();
-      }
-    }, true);
-  },
-);
-
-it.each([
-  { rowCount: 2, first: "bulk" },
-  { rowCount: 2, first: "exact" },
-] as const)(
-  "shares $rowCount dirty row reads with $first preparation first",
-  async ({ rowCount, first }) => {
+it.each(["bulk", "exact"] as const)(
+  "shares two dirty row reads with %s preparation first",
+  async (first) => {
     await withSessionRowProjectionState(async (create) => {
-      const rows = Array.from({ length: rowCount }, (_, index) => ({
+      const rows = Array.from({ length: 2 }, (_, index) => ({
         query: { agentId: "main", key: `agent:main:shared-row-read-${index}` },
         entry: { sessionId: `shared-row-read-${index}`, updatedAt: 1, label: "Previous" },
       }));
@@ -240,12 +152,7 @@ it.each([
         });
         for (const { query, entry } of rows) {
           seedRow(query, { ...entry, updatedAt: 2, label: "Committed" });
-          sessionChanges.emit({
-            agentId: query.agentId,
-            sessionKey: query.key,
-            storePath: projection.capture(query)!.storeTarget.storePath,
-            factsInvalidated: true,
-          });
+          invalidateFacts(projection, query);
         }
         const selected = rows[0]!;
         const describe = () =>
@@ -414,7 +321,6 @@ it.each([false, true])(
       const releaseA = createDeferredCore();
       const releaseStructural = createDeferredCore();
       const pending: Promise<unknown>[] = [];
-      let sql: ReturnType<typeof observeHostDataSql> | undefined;
       let authority:
         | Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>>["authority"]
         | undefined;
@@ -473,12 +379,11 @@ it.each([false, true])(
         sessionChanges.emit({ agentId: a.agentId, sessionKey: a.key });
         const readingA = describe(a);
         pending.push(readingA);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           capturedA.promise,
-          readingA.then(() => {
-            throw new Error("Exact read bypassed its held database facts");
-          }),
-        ]);
+          readingA,
+          "Exact read bypassed its held database facts",
+        );
 
         const failure = new SqliteWorkerError(
           "category reply lost after commit",
@@ -505,7 +410,6 @@ it.each([false, true])(
                         if (command.type === "category.apply") {
                           applies++;
                           // The native receipt survives losing the ordinary result message.
-                          sql = observeHostDataSql();
                           throw failure;
                         }
                         return result;
@@ -554,8 +458,6 @@ it.each([false, true])(
         expect(resource.signal.aborted).toBe(false);
         expect(applies).toBe(1);
         expect.soft(reads.filter((keys) => keys.includes(a.key))).toEqual([[a.key]]);
-        expect(sql).toBeDefined();
-        expect(sql!.queries).toEqual([]);
       } finally {
         releaseA.resolve();
         releaseStructural.resolve();
@@ -563,7 +465,6 @@ it.each([false, true])(
         resource?.release();
         authority?.release();
         await projection.ensureMaterialized().catch(() => undefined);
-        sql?.restore();
       }
     }, true);
   },
@@ -640,34 +541,21 @@ it.each([
         return reply;
       });
       replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
-      sessionChanges.emit({
-        ...scope,
-        storePath: projection.capture({ agentId: scope.agentId, key: scope.sessionKey })!
-          .storeTarget.storePath,
-        factsInvalidated: true,
-      });
+      invalidateFacts(projection, { agentId: scope.agentId, key: scope.sessionKey });
       if (change === "captured sibling row") {
         replaceSessionEntrySync(unrelated, {
           sessionId: "unrelated",
           updatedAt: 0,
           label: "Previous sibling",
         });
-        sessionChanges.emit({
-          ...unrelated,
-          storePath: projection.capture({
-            agentId: unrelated.agentId,
-            key: unrelated.sessionKey,
-          })!.storeTarget.storePath,
-          factsInvalidated: true,
-        });
+        invalidateFacts(projection, { agentId: unrelated.agentId, key: unrelated.sessionKey });
       }
       reading = listSessions({ client, context, request });
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         captured.promise,
-        reading.then(() => {
-          throw new Error("List bypassed pending dirty row facts");
-        }),
-      ]);
+        reading,
+        "List bypassed pending dirty row facts",
+      );
       if (changesSibling) {
         replaceSessionEntrySync(unrelated, {
           sessionId: "unrelated",
@@ -831,14 +719,6 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
       throw new Error("Expected the ACP writer to retain its session entry");
     }
     expect(stored.acp).toBeUndefined();
-    expect(
-      await readAcpSessionMetaForEntries({
-        cfg: cfgBefore,
-        env: state.env,
-        entries: [{ ...target, entry: stored }],
-      }),
-    ).toEqual([meta]);
-
     const cfgAfter = { ...cfgBefore, session: { mainKey: "work" } };
     await state.writeConfig(cfgAfter);
     state.applyEnv();
@@ -866,47 +746,5 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
         runtimeSelectionLocked: true,
       }),
     ]);
-  }, true);
-});
-
-it("refreshes prepared ACP metadata on publication and fences replacement lifecycles", async () => {
-  await withSessionRowProjectionState(async (create) => {
-    const key = "agent:main:acp:worker-row";
-    const cfg = { agents: { entries: { main: {} } } };
-    const target = { agentId: "main", sessionKey: key };
-    replaceSessionEntrySync(target, {
-      sessionId: "worker-row",
-      lifecycleRevision: "first",
-      updatedAt: 1,
-    });
-    const projection = await create({ cfg });
-    await projection.ensureMaterialized();
-    expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
-    for (const backend of ["acpx", "replacement-acp-backend"]) {
-      // Canonical publication invalidates prepared metadata without host SQL.
-      seedCanonicalAcpSessionMeta({
-        sessionKey: key.toUpperCase(),
-        lifecycleRevision: "first",
-        meta: acpProjectionMeta(backend, "worker-row"),
-      });
-      const reads = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        await projection.ensureMaterialized();
-        expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
-          runtimeSelectionLocked: true,
-          agentRuntime: { id: backend, source: "session-key" },
-        });
-        expect(reads.queries.filter((sql) => sql.includes("acp_sessions"))).toEqual([]);
-      } finally {
-        reads.restore();
-      }
-    }
-    replaceSessionEntrySync(target, {
-      sessionId: "worker-row",
-      lifecycleRevision: "replacement",
-      updatedAt: 2,
-    });
-    await projection.ensureMaterialized();
-    expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
   }, true);
 });

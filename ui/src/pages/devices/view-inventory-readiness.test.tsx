@@ -20,7 +20,7 @@ it("keeps preloaded rows out of the temporary readiness fallback", async () => {
     return <DeviceInventory {...props} inventoryRead={read} />;
   });
   flush();
-  expect(container.querySelector(".device-entry__menu-trigger")).toBeNull();
+  expect(container.querySelector(".device-entry")).toBeNull();
   completion.resolve();
   await waitForSolid(() => expect(container.textContent).toContain("Office Mac"));
 });
@@ -48,4 +48,30 @@ it("shows an empty inventory refresh as one skeleton after initial readiness", a
   await waitForSolid(() =>
     expect(container.querySelector(".settings-loading-skeleton")).toBeNull(),
   );
+});
+
+it("retains inventory content while retrying a failed read", async () => {
+  const failed = createDeferred();
+  const retry = createDeferred();
+  let replaceRead = (_completion: Promise<void>) => {};
+  const props = createDevicesViewProps({
+    nodes: [{ nodeId: "office", displayName: "Office Mac" }],
+    onReloadInventory: () => replaceRead(retry.promise),
+  });
+  const { container } = mountSolid(() => {
+    const [completion, setCompletion] = createSignal(failed.promise);
+    replaceRead = (value) => void setCompletion(value);
+    const read = createMemo(() => completion());
+    return <DeviceInventory {...props} inventoryRead={read} />;
+  });
+  failed.reject(new Error("Synthetic inventory failure"));
+  await waitForSolid(() => expect(container.textContent).toContain("Synthetic inventory failure"));
+  const button = container.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+  button.click();
+  flush();
+  expect(container.textContent).toContain("Office Mac");
+  expect(container.textContent).toContain("Synthetic inventory failure");
+  retry.resolve();
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).toBeNull());
+  expect(container.textContent).toContain("Office Mac");
 });

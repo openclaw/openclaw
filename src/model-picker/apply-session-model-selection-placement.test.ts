@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
@@ -13,6 +13,7 @@ import {
 } from "./apply-session-model-selection.test-support.js";
 await vi.hoisted(() => import("./apply-session-model-selection.test-support.js"));
 const { placementMocks, validateRuntime } = selectionMocks;
+const capabilities = placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities;
 
 const persistedSession = useSelectionStore("openclaw-model-picker-runtime-race-");
 const { expectNoSelectionEffects } = useSelectionEffects();
@@ -22,131 +23,103 @@ import { applySessionModelSelectionInternal as applySessionModelSelection } from
 const { createEntry, createParams } = createModelSelectionInputs();
 
 function createPlacement(sessionId: string, state: "local" | "active" = "active") {
-  return {
-    sessionId,
-    state,
-    executionMode: "worker-turn" as const,
-    generation: 1,
-  };
+  return { sessionId, state, executionMode: "worker-turn" as const, generation: 1 };
 }
 
-describe("applySessionModelSelection — placement guard", () => {
-  it.each([undefined, "worker-turn"] as const)(
-    "checks active placement compatibility with %s",
-    async (executionMode) => {
-      const sessionEntry = createEntry({ sessionId: "placement-active-1" });
-      const initial = structuredClone(sessionEntry);
-      placementMocks.getMany.mockReturnValue(
-        new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
-      );
-      placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-        executionMode,
-      });
+async function persistedParams() {
+  const target = await persistedSession(createEntry(), "agent:main:dm:placement");
+  return { ...createParams(target), ...target };
+}
 
-      const result = await applySessionModelSelection(createParams({ sessionEntry }));
+function expectUnchanged(params: ReturnType<typeof createParams>) {
+  expect(params.sessionEntry).toEqual(createEntry());
+  if (params.storePath) {
+    expect(loadSessionEntryReadOnly(params)).toEqual(createEntry());
+  }
+  expectNoSelectionEffects();
+}
 
-      if (executionMode) {
-        expect(result.status).toBe("applied");
-      } else {
-        expect(result).toEqual({
-          status: "rejected",
-          reason: "invalid-runtime",
-          message:
-            "Session cannot select a runtime without cloud placement support while cloud worker placement is active.",
-        });
-        expect(sessionEntry).toEqual(initial);
-        expectNoSelectionEffects();
-      }
-    },
-  );
+it.each([undefined, "worker-turn"] as const)(
+  "checks active placement compatibility with %s",
+  async (executionMode) => {
+    const params = createParams();
+    const { sessionId } = params.sessionEntry;
+    placementMocks.getMany.mockReturnValue(new Map([[sessionId, createPlacement(sessionId)]]));
+    capabilities.mockReturnValue({ executionMode });
 
-  it.each(["runtime", "SDK account"] as const)(
-    "rejects %s availability revoked while waiting for the session writer",
-    async (source) => {
-      const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
-      const initial = structuredClone(sessionEntry);
-      const { sessionKey, storePath } = await persistedSession(
-        sessionEntry,
-        "agent:main:dm:runtime-race",
-      );
-      const entered = createDeferred();
-      const release = createDeferred();
-      const writer = patchSessionEntryCore({ sessionKey, storePath }, async () => {
-        entered.resolve();
-        await release.promise;
-        return null;
-      });
-      await entered.promise;
-      let available = true;
-      const validated = createDeferred();
-      const error = `Selected ${source === "runtime" ? "runtime" : "account"} is no longer available.`;
-      const validate = () => {
-        validated.resolve();
-        return available ? undefined : error;
-      };
-      if (source === "runtime") {
-        validateRuntime.mockImplementation(validate);
-      }
-      const applySelection =
-        source === "runtime" ? applySessionModelSelection : applySdkModelSelection;
-      const pending = applySelection(
-        createParams({
-          sessionEntry,
-          sessionKey,
-          storePath,
-          ...(source === "SDK account" ? { validateAuthProfileSelection: validate } : {}),
-          request: { ...createParams().request, runtime: { kind: "set", runtime: "openclaw" } },
-        }),
-      );
-      try {
-        // Preparation accepts the selection; revoke it before the queued write can commit.
-        expect(
-          await Promise.race([validated.promise.then(() => true), pending.then(() => false)]),
-        ).toBe(true);
-        available = false;
-      } finally {
-        release.resolve();
-        await writer;
-      }
+    const result = await applySessionModelSelection(params);
 
-      expect(await pending).toMatchObject({
-        status: "rejected",
-        reason: "not-allowed",
-        message: error,
-      });
-      expect(loadSessionEntryReadOnly({ sessionKey, storePath })).toEqual(initial);
-      expect(sessionEntry).toEqual(initial);
-      expectNoSelectionEffects();
-    },
-  );
+    expect(result.status).toBe(executionMode ? "applied" : "rejected");
+    if (!executionMode) {
+      expect(result).toMatchObject({ reason: "invalid-runtime" });
+      expectUnchanged(params);
+    }
+  },
+);
 
-  it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
-    const { sessionEntry, sessionKey, storePath } = await persistedSession(
-      createEntry({ sessionId: "placement-race-1" }),
-      "agent:main:dm:placement-race",
-    );
-    const initial = structuredClone(sessionEntry);
-    const localPlacement = createPlacement(sessionEntry.sessionId, "local");
-    const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
-    // The prepared owner sees local placement; its commit assertion observes activation.
-    placementMocks.getMany
-      .mockReturnValueOnce(new Map([["placement-race-1", localPlacement]]))
-      .mockReturnValueOnce(new Map([["placement-race-1", activePlacement]]));
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
-      executionMode: undefined,
+it.each(["runtime", "SDK account"] as const)(
+  "rejects %s availability revoked while waiting for the session writer",
+  async (source) => {
+    const params = await persistedParams();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const writer = patchSessionEntryCore(params, async () => {
+      entered.resolve();
+      await release.promise;
+      return null;
     });
+    await entered.promise;
+    let available = true;
+    const validated = createDeferred();
+    const error = `Selected ${source === "runtime" ? "runtime" : "account"} is no longer available.`;
+    const validate = () => {
+      validated.resolve();
+      return available ? undefined : error;
+    };
+    if (source === "runtime") {
+      validateRuntime.mockImplementation(validate);
+    }
+    const applySelection =
+      source === "runtime" ? applySessionModelSelection : applySdkModelSelection;
+    params.request.runtime = { kind: "set", runtime: "openclaw" };
+    if (source === "SDK account") {
+      params.validateAuthProfileSelection = validate;
+    }
+    const pending = applySelection(params);
+    try {
+      // Preparation accepts the selection; revoke it before the queued write can commit.
+      await awaitGateBeforeSettlement(validated.promise, pending, "Validation not reached");
+      available = false;
+    } finally {
+      release.resolve();
+      await writer;
+    }
 
-    const result = await applySessionModelSelection(
-      createParams({ sessionEntry, sessionKey, storePath }),
-    );
-
-    expect(result).toMatchObject({
+    expect(await pending).toMatchObject({
       status: "rejected",
-      message: "Session placement changed; retry model selection.",
+      reason: "not-allowed",
+      message: error,
     });
-    // The durable write was fenced: the stored entry is unchanged.
-    const stored = loadSessionEntryReadOnly({ sessionKey, storePath });
-    expect(stored).toEqual(initial);
-    expectNoSelectionEffects();
+    expectUnchanged(params);
+  },
+);
+
+it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
+  const params = await persistedParams();
+  const { sessionId } = params.sessionEntry;
+  const localPlacement = createPlacement(sessionId, "local");
+  const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
+  // The prepared owner sees local placement; its commit assertion observes activation.
+  placementMocks.getMany
+    .mockReturnValueOnce(new Map([[sessionId, localPlacement]]))
+    .mockReturnValueOnce(new Map([[sessionId, activePlacement]]));
+  capabilities.mockReturnValue({ executionMode: undefined });
+
+  const result = await applySessionModelSelection(params);
+
+  expect(result).toMatchObject({
+    status: "rejected",
+    message: "Session placement changed; retry model selection.",
   });
+  expectUnchanged(params);
 });

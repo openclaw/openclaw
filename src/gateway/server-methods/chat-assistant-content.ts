@@ -9,10 +9,14 @@ import {
 import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
-import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
+import {
+  combineNonStreamingReplyParts,
+  trimTextPreservingCode,
+} from "../../shared/text/trim-code-text.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
 import {
   buildManagedMediaFailureBlock,
@@ -29,26 +33,6 @@ export type AssistantDisplayMediaBySource = ReadonlyMap<
   string,
   readonly AssistantDisplayContentBlock[]
 >;
-
-/** Recombine non-streamed text without destroying Markdown's meaningful indentation. */
-export function combineNonStreamingReplyParts(parts: readonly string[]): string {
-  let combined = "";
-  for (const part of parts) {
-    if (!part.trim()) {
-      continue;
-    }
-    // Outbound media normalization trims a chunk's trailing newline, so an
-    // indented following chunk still needs its original single-line boundary.
-    const separator =
-      !combined || /[\r\n]$/.test(combined) || /^[\r\n]/.test(part)
-        ? ""
-        : /^[\t ]+\S/.test(part)
-          ? "\n"
-          : "\n\n";
-    combined += separator + part;
-  }
-  return trimTextPreservingCode(combined);
-}
 
 export function isMediaBearingPayload(payload: ReplyPayload): boolean {
   return (
@@ -126,6 +110,7 @@ type AssistantReplyContentParams = {
   agentId?: string;
   payloads: ReplyPayload[];
   managedMediaLocalRoots?: Parameters<typeof createManagedOutgoingMediaBlocks>[0]["localRoots"];
+  mediaAccess?: OutboundMediaAccess;
   includeSensitiveMedia?: boolean;
   includeSensitiveDisplay?: boolean;
   onManagedMediaPrepareError?: (message: string) => void;
@@ -203,13 +188,21 @@ export async function buildAssistantReplyContentFromInputs(
     const mediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
     const statusNotice = isReplyPayloadStatusNotice(payload);
+    const statusNoticeFields = statusNotice
+      ? {
+          openclawStatusNotice: true,
+          ...(getReplyPayloadMetadata(payload)?.modelFallbackNotice
+            ? { openclawFallback: true }
+            : {}),
+        }
+      : {};
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
     if (text) {
       if (statusNotice) {
-        content.push({ type: "text", text, openclawStatusNotice: true });
+        content.push({ type: "text", text, ...statusNoticeFields });
       } else {
         const previousBlock = content.at(-1);
         if (Array.isArray(previousBlock)) {
@@ -228,7 +221,7 @@ export async function buildAssistantReplyContentFromInputs(
       persistedContent.push({
         type: "text",
         text: transcriptText,
-        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+        ...statusNoticeFields,
       });
     }
     if (params.includeSensitiveDisplay === true) {
@@ -257,6 +250,7 @@ export async function buildAssistantReplyContentFromInputs(
       ...(params.agentId ? { agentId: params.agentId } : {}),
       items: prepareOutgoingMediaFromReplyPayload(payload, metadataSource),
       localRoots: params.managedMediaLocalRoots,
+      mediaAccess: params.mediaAccess,
       continueOnPrepareError: true,
       onPrepared: (item, blocks) => {
         for (const url of [item.url, ...(sourceMedia.get(item.url.trim()) ?? [])]) {

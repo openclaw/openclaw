@@ -6,7 +6,16 @@ export function buildAgentWorkspaceInstructionSnapshot(
   contextFiles: readonly EmbeddedContextFile[],
   workspaceDir: string,
 ): { files: EmbeddedContextFile[]; instructions: string } {
-  const files = selectAgentWorkspaceInstructionFiles(contextFiles, workspaceDir).filter(
+  return renderAgentWorkspaceInstructionSnapshot(
+    selectAgentWorkspaceInstructionFiles(contextFiles, workspaceDir),
+  );
+}
+
+/** Internal renderer for root documents selected before execution-path projection. */
+export function renderAgentWorkspaceInstructionSnapshot(
+  selectedFiles: readonly EmbeddedContextFile[],
+): { files: EmbeddedContextFile[]; instructions: string } {
+  const files = selectedFiles.filter(
     (file) =>
       !file.content.trimStart().startsWith("[MISSING] Expected at:") &&
       file.content.trim().length > 0,

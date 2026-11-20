@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
-import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
-import { coercePdfAssistantText, parsePageRange } from "./pdf-tool.helpers.js";
+import { parsePageRange } from "./pdf-tool.helpers.js";
 
 it("sorts and deduplicates overlapping selections without false truncation", () => {
   expect(parsePageRange("5,,3-5,1-4,2-3", 5)).toEqual({
@@ -18,14 +17,4 @@ it("bounds large selections only after sorting their ranges", () => {
 
 it.each(["5-3", "1-9007199254740992"])("rejects invalid range %s", (range) => {
   expect(() => parsePageRange(range, 20)).toThrow("Invalid page range");
-});
-
-it("reports failed model output with its provider and model", () => {
-  expect(() =>
-    coercePdfAssistantText({
-      provider: "google",
-      model: "gemini-2.5-pro",
-      message: makeAssistantMessageFixture({ errorMessage: "bad request", content: [] }),
-    }),
-  ).toThrow("PDF model failed (google/gemini-2.5-pro): bad request");
 });

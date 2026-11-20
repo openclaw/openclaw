@@ -24,11 +24,9 @@ function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
     },
     cancel: onCancel,
   });
-  Object.defineProperty(response, "json", {
-    value: async () => {
-      throw new Error("unbounded json reader was used");
-    },
-  });
+  response.json = async () => {
+    throw new Error("unbounded json reader was used");
+  };
   return response;
 }
 

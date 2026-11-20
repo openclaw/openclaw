@@ -7,6 +7,7 @@ import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createBroadcastPeer } from "./server-broadcast.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
 it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
@@ -26,13 +27,10 @@ it.each(["operator.sessions.read", "operator.sessions.write"] as const)(
       const connected = Object.assign(f.bobClient, {
         socket: peer.client.socket,
         usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: f.bob.id,
+        authenticatedUserProfile: dispatchProfile(f.bob.id, {
           displayName: "Bob",
-          hasAvatar: false,
-          avatarRevision: "1",
           updatedAt: f.bob.updatedAt,
-        },
+        }),
       });
       const broadcaster = createGatewayBroadcaster({
         clients: new GatewayClientRegistry([connected]),

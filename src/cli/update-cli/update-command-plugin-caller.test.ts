@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
@@ -25,6 +24,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import * as configPreparation from "./update-command-config.js";
 import {
   releaseUpdateCommandPreflightForHandoff,
@@ -56,7 +56,10 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 // Doctor transports are inert; plugin/config persistence and executor custody are real.
 vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
-  inspectUpdateDoctorChildSupport: async () => true,
+  inspectUpdateDoctorChildSupport: async () => ({
+    doctorConfigWrites: true,
+    doctorRetirementOnly: true,
+  }),
   withUpdateDoctorChild: async (
     params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
     operation: Parameters<
@@ -120,14 +123,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
   const peerLink = path.join(peerPackageDir, "node_modules", "openclaw");
   if (scenario === "host-link-recovery") {
     await fs.mkdir(path.dirname(peerLink), { recursive: true });
-    await fs.writeFile(
-      path.join(peerPackageDir, "package.json"),
-      JSON.stringify({
-        name: "peer-plugin",
-        version: "1.0.0",
-        peerDependencies: { openclaw: "*" },
-      }),
-    );
+    await writeFixtureJson(path.join(peerPackageDir, "package.json"), {
+      name: "peer-plugin",
+      version: "1.0.0",
+      peerDependencies: { openclaw: "*" },
+    });
     await fs.symlink(state.root, peerLink, "junction");
   }
   const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
@@ -230,11 +230,11 @@ async function exercisePersistence(state: OpenClawTestState, scenario: (typeof s
           preUpdatePluginInstallRecords,
           updateStepTimeoutMs: 1_000,
         });
-        const unlink = fsSync.unlinkSync.bind(fsSync);
+        const unlink = fs.unlink.bind(fs);
         const unlinkSpy =
           scenario === "host-link-recovery" && !recovering
-            ? vi.spyOn(fsSync, "unlinkSync").mockImplementation((file) => {
-                unlink(file);
+            ? vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+                await unlink(file);
                 if (file === peerLink) {
                   captureBoundary();
                   releaseUpdateCommandPreflightForHandoff(fence);

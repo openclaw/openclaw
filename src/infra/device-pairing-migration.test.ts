@@ -47,22 +47,33 @@ async function listDeviceFiles(devicesDir: string): Promise<string[]> {
   return (await fs.readdir(devicesDir)).toSorted();
 }
 
-test("imports legacy paired records and archives all legacy files", async () => {
-  const nodeSurface = {
-    displayName: "Living Room iPad",
-    caps: ["camera"],
-    ...timestamps,
-  };
+test("imports usable legacy rows, omits invalid fields, and archives all legacy files", async () => {
+  const nodeSurface = { displayName: "Living Room iPad", caps: ["camera"], ...timestamps };
   const devicesDir = await writeLegacyFiles({
     paired: {
       "device-a": legacyDevice("device-a", { nodeSurface }),
       "device-b": legacyDevice("device-b"),
+      "request-a": {
+        requestId: "request-a",
+        deviceId: "device-a",
+        publicKey: "pk-device-a",
+        ts: 1,
+      },
+      "bad-time": legacyDevice("bad-time", { createdAtMs: 1e100 }),
+      "bad-seen": legacyDevice("bad-seen", { lastSeenAtMs: 1e100 }),
+      "bad-text": { ...legacyDevice("bad-text"), displayName: { value: "Device" } },
     },
     pending: { "req-1": { requestId: "req-1", deviceId: "device-c", ts: Date.now() } },
     bootstrap: { token: { token: "tok", ts: Date.now(), issuedAtMs: Date.now() } },
   });
 
-  await expectMigration(2);
+  const warnings: string[] = [];
+  expect(
+    await migrate({
+      baseDir,
+      log: { info: () => {}, warn: (message) => warnings.push(message) },
+    }),
+  ).toEqual({ imported: 4, skippedExisting: 0 });
 
   const imported = await getDevice("device-a", baseDir);
   expect(imported).toMatchObject({
@@ -74,6 +85,16 @@ test("imports legacy paired records and archives all legacy files", async () => 
   });
 
   expect((await listDevicePairing(baseDir)).pending).toEqual([]);
+  const normalizedLastSeen = await getDevice("bad-seen", baseDir);
+  expect(normalizedLastSeen?.publicKey).toBe("pk-bad-seen");
+  expect(normalizedLastSeen?.lastSeenAtMs).toBeUndefined();
+  const normalizedText = await getDevice("bad-text", baseDir);
+  expect(normalizedText?.publicKey).toBe("pk-bad-text");
+  expect(normalizedText?.displayName).toBeUndefined();
+  expect(warnings).toEqual([
+    "device pairing store migration skipped 2 invalid paired record(s)",
+    "device pairing store migration omitted 2 invalid optional field(s)",
+  ]);
 
   expect(await listDeviceFiles(devicesDir)).toEqual([
     "bootstrap.json.migrated",
@@ -90,46 +111,6 @@ test("keeps existing SQLite records over legacy rows for the same device id", as
 
   await expectMigration(0, 1);
   expect((await getDevice("device-a", baseDir))?.publicKey).toBe("test-key-device-a");
-});
-
-test("imports usable paired rows while omitting invalid optional fields", async () => {
-  const devicesDir = await writeLegacyFiles({
-    paired: {
-      "device-a": legacyDevice("device-a"),
-      "request-a": {
-        requestId: "request-a",
-        deviceId: "device-a",
-        publicKey: "pk-device-a",
-        ts: 1,
-      },
-      "bad-time": legacyDevice("bad-time", { createdAtMs: 1e100 }),
-      "bad-seen": legacyDevice("bad-seen", { lastSeenAtMs: 1e100 }),
-      "bad-text": {
-        ...legacyDevice("bad-text"),
-        displayName: { value: "Device" },
-      },
-    },
-  });
-  const warnings: string[] = [];
-
-  const result = await migrate({
-    baseDir,
-    log: { info: () => {}, warn: (message) => warnings.push(message) },
-  });
-
-  expect(result).toEqual({ imported: 3, skippedExisting: 0 });
-  expect((await getDevice("device-a", baseDir))?.publicKey).toBe("pk-device-a");
-  const normalizedLastSeen = await getDevice("bad-seen", baseDir);
-  expect(normalizedLastSeen?.publicKey).toBe("pk-bad-seen");
-  expect(normalizedLastSeen?.lastSeenAtMs).toBeUndefined();
-  const normalizedText = await getDevice("bad-text", baseDir);
-  expect(normalizedText?.publicKey).toBe("pk-bad-text");
-  expect(normalizedText?.displayName).toBeUndefined();
-  expect(warnings).toEqual([
-    "device pairing store migration skipped 2 invalid paired record(s)",
-    "device pairing store migration omitted 2 invalid optional field(s)",
-  ]);
-  expect(await listDeviceFiles(devicesDir)).toEqual(["paired.json.migrated"]);
 });
 
 test("throws on an unreadable paired store and leaves the files in place", async () => {

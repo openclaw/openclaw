@@ -7,6 +7,7 @@ import {
   prepareChannelCommandUserTurn,
 } from "./channel-command-user-turn.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import { withRequesterNativeSubagents } from "./request-native-subagent.js";
 
@@ -116,13 +117,7 @@ export async function runWithReplyNativeSubagents<T>(
 
 export const runWithCommandNativeSubagents = async <T>(
   state: NativeSubagentDispatchState & { getDispatchAbortSignal: () => AbortSignal | undefined },
-  binding: {
-    agentId: string;
-    sessionKey: string;
-    entry: import("../../config/sessions/types.js").SessionEntry;
-    storePath?: string;
-    commandBody?: string;
-  },
+  binding: Parameters<NonNullable<InternalGetReplyOptions["withCommandNativeSubagents"]>>[0],
   run: (
     create:
       | import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory

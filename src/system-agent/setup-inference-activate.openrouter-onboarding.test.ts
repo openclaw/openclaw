@@ -6,11 +6,11 @@ import * as embeddedAgent from "../agents/embedded-agent.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import * as configIO from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import * as probes from "./probes.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 // mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
 vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
@@ -20,28 +20,6 @@ let configPath: string;
 
 const nativeReadSnapshot = readConfigFileSnapshot;
 const readSnapshot = () => nativeReadSnapshot({ observe: false, pluginValidation: "core-only" });
-
-async function routeFor(
-  primary: string,
-  provider: string,
-  models?: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"],
-) {
-  const config = {
-    agents: { defaults: { model: { primary }, ...(models ? { models } : {}) } },
-    models: { providers: { [provider]: { apiKey: `synthetic-${provider}-key` } } },
-  };
-  await fs.writeFile(configPath, JSON.stringify(config));
-  const snapshot = await readSnapshot();
-  expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(
-    snapshot.runtimeConfig,
-    undefined,
-    {},
-    snapshot,
-  );
-  expect(route).not.toBeNull();
-  return route!.modelLabel;
-}
 
 beforeEach(async () => {
   temp = await createTempHomeEnv("openclaw-openrouter-onboarding-");
@@ -55,41 +33,21 @@ afterEach(async () => {
   await temp?.restore();
 });
 
-// Preserve raw catalog namespaces, but resolve bare and qualified aliases.
 it.each([
-  ["openrouter/moonshotai/kimi-k2.6", "openrouter", "openrouter/moonshotai/kimi-k2.6", undefined],
-  ["anthropic/claude-sonnet-4-6", "anthropic", "anthropic/claude-sonnet-4-6", undefined],
-  ["OpenRouter", "openrouter", "openrouter/auto", { "openrouter/auto": { alias: "OpenRouter" } }],
-  ["openai/Fast", "openai", "openai/gpt-5.4-mini", { "openai/gpt-5.4-mini": { alias: "Fast" } }],
+  ["openrouter/auto", "openrouter/auto", undefined],
+  ["openrouter/auto@openrouter:default", "openrouter/auto", undefined],
+  ["openrouter/openrouter/fusion", "openrouter/openrouter/fusion", undefined],
+  ["OpenRouter", "openrouter/auto", { "openrouter/auto": { alias: "OpenRouter" } }],
+  ["openrouter/Fast", "openrouter/auto", { "openrouter/auto": { alias: "Fast" } }],
 ] as const)(
-  "resolves %s to its canonical route label",
-  async (primary, provider, expected, models) => {
-    expect(await routeFor(primary, provider, models)).toBe(expected);
-  },
-);
-
-it.each([
-  {
-    name: "a saved openrouter/auto primary",
-    primary: "openrouter/auto",
-    expected: "openrouter/auto",
-  },
-  {
-    name: "a saved primary with its auth-profile suffix",
-    primary: "openrouter/auto@openrouter:default",
-    expected: "openrouter/auto",
-  },
-  {
-    name: "a literal Fusion catalog namespace",
-    primary: "openrouter/openrouter/fusion",
-    expected: "openrouter/openrouter/fusion",
-  },
-])(
-  "activates the discovered Current model for $name without a changed-model rejection",
-  async ({ primary, expected }) => {
+  "activates the discovered Current model for %s without a changed-model rejection",
+  async (primary, expected, models) => {
     // Discovery and activation must agree, including literal catalog namespaces.
     const config = {
-      agents: { defaults: { model: { primary } }, entries: { main: {} } },
+      agents: {
+        defaults: { model: { primary }, ...(models ? { models } : {}) },
+        entries: { main: {} },
+      },
       models: { providers: { openrouter: { apiKey: "synthetic-openrouter-key" } } },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
@@ -113,7 +71,6 @@ it.each([
       {},
       snapshot,
     );
-    expect(route?.modelLabel).toBe(discovered?.modelRef);
     expect(route?.modelLabel).toBe(expected);
 
     const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async () => ({
@@ -129,13 +86,7 @@ it.each([
       kind: "existing-model",
       modelRef: discovered?.modelRef,
       surface: "gateway",
-      runtime: {
-        log() {},
-        error() {},
-        exit() {
-          throw new Error("Unexpected exit");
-        },
-      },
+      runtime: createSystemAgentTestRuntime().runtime,
     });
     if (!result.ok) {
       expect(result.error).not.toContain("configured default model changed");

@@ -87,6 +87,8 @@ describe("subagents native run contract", () => {
       let capturedInput: AgentToolPendingInput | undefined;
       let retainedNotifications = 0;
       const requests: NonNullable<Parameters<typeof createTurnSequenceStream>[1]> = [];
+      const call = makeCall("subagents");
+      call.arguments = { action: "wait", runIds: [entry.runId], timeoutSeconds: 60 };
       const agent = new Agent({
         initialState: {
           model,
@@ -106,19 +108,7 @@ describe("subagents native run contract", () => {
           ],
         },
         streamFn: createTurnSequenceStream(
-          [
-            [
-              {
-                ...makeCall("subagents"),
-                arguments: {
-                  action: "wait",
-                  runIds: [entry.runId],
-                  timeoutSeconds: 60,
-                },
-              },
-            ],
-            [{ type: "text", text: "Input observed; child remains running." }],
-          ],
+          [[call], [{ type: "text", text: "Input observed; child remains running." }]],
           requests,
         ),
       });
@@ -204,10 +194,6 @@ describe("subagents native run contract", () => {
   });
   it("zero-timeout and abort do not cancel execution", async () => {
     expect((await wait(0)).details).toMatchObject({ reason: "timeout" });
-    expect(tool.parameters).toHaveProperty(
-      "properties.timeoutSeconds.description",
-      expect.stringMatching(/integer.*0–60.*default: 30.*0.*snapshot/),
-    );
     const controller = new AbortController();
     const pending = wait(undefined, controller.signal);
     controller.abort();

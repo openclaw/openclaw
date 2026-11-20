@@ -13,6 +13,7 @@ import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-tes
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import {
   createSlackHttpTestDispatcher,
   installSlackHttpTestRegistry,
@@ -84,11 +85,9 @@ async function startSlackLoopback() {
     connections.push({ url: request.url, authorization: request.headers.authorization });
     socket.send(JSON.stringify({ type: "hello" }));
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   return {
-    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: `http://127.0.0.1:${port}`,
     requests,
     connections,
     registry,
@@ -155,6 +154,12 @@ describe("Slack transport credential activation", () => {
                 authorization: "Bearer loopback-relay-token",
               });
             } else {
+              expect(loopback.registry.httpRoutes[0]).toMatchObject({
+                path: "/slack/events",
+                auth: "plugin",
+                pluginId: "slack",
+                source: "slack-webhook",
+              });
               const body = JSON.stringify({ type: "url_verification", challenge: "connected" });
               const timestamp = String(Math.floor(Date.now() / 1_000));
               const sign = (secret: string) =>

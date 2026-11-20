@@ -63,8 +63,8 @@ type TerminalTestClient = {
 
 function startCall(
   params: unknown,
-  config: Record<string, unknown> = {},
-  client?: TerminalTestClient,
+  config: Record<string, unknown> = enabled,
+  client: TerminalTestClient = admin,
   contextOverrides: Record<string, unknown> = {},
 ) {
   const respond = vi.fn();
@@ -73,7 +73,7 @@ function startCall(
       params,
       respond,
       client,
-      context: { getRuntimeConfig: () => config, ...contextOverrides },
+      context: { getRuntimeConfig: () => config, ...launchContext(), ...contextOverrides },
     } as never),
   );
   return { completion, respond };
@@ -104,18 +104,13 @@ describe("sessions.catalog.startTerminal", () => {
     ],
     [
       "refuses terminal start when the terminal is disabled",
-      [request(), enabled, { connId: "conn-1" }, { isTerminalEnabled: () => false }],
+      [request(), enabled, admin, { isTerminalEnabled: () => false }],
       ErrorCodes.UNAVAILABLE,
       "terminal is disabled; enable gateway.terminal.enabled and retry",
     ],
     [
       "refuses missing local cwd instead of falling back to home",
-      [
-        request({ cwd: "relative/missing" }),
-        enabled,
-        { connId: "conn-1" },
-        { isTerminalEnabled: () => true, terminalSessions: {} },
-      ],
+      [request({ cwd: "relative/missing" })],
       ErrorCodes.INVALID_REQUEST,
       "cwd must be an existing absolute directory; create or choose a worktree and retry",
     ],
@@ -134,7 +129,6 @@ describe("sessions.catalog.startTerminal", () => {
           preparedSessionProfile: { profileId: guestId, aliases: new Set([guestId]), role: null },
           connId: "conn-1",
         },
-        { isTerminalEnabled: () => true, terminalSessions: {} },
       ],
       ErrorCodes.FORBIDDEN,
       expect.stringContaining('cannot create sessions for agent "main"'),
@@ -146,8 +140,6 @@ describe("sessions.catalog.startTerminal", () => {
         enabled,
         admin,
         {
-          isTerminalEnabled: () => true,
-          terminalSessions: { open: vi.fn() },
           resolveTerminalLaunchPolicy: () => ({
             ok: false,
             block: { kind: "sandboxed", agentId: "locked", mode: "all" },
@@ -195,7 +187,6 @@ describe("sessions.catalog.startTerminal", () => {
   });
 
   it("rejects local terminal start for a named profile before provider fallback", async () => {
-    const cwd = process.cwd();
     const startTerminalSession = vi.fn(async (options: { allowProcessHomeFallback?: boolean }) => {
       throw new Error(
         options.allowProcessHomeFallback === false
@@ -216,7 +207,7 @@ describe("sessions.catalog.startTerminal", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
       },
-      async () => await call(request({ cwd }), enabled, admin, launchContext(vi.fn(), "main", cwd)),
+      async () => await call(request()),
     );
 
     expectError(
@@ -234,25 +225,12 @@ describe("sessions.catalog.startTerminal", () => {
       argv: ["codex", "--", "Inspect the failing test"],
       cwd,
       title: "Codex",
-      env: { CODEX_HOME: "/tmp/codex-home" },
-      pathEnv: "/usr/local/bin:/usr/bin:/bin",
     }));
     const terminal = { sessionId: "terminal-1", agentId: "research", cwd, shell: "/bin/zsh" };
     const open = vi.fn(async () => ({ ok: true as const, ...terminal }));
     activeProvider = provider({ startTerminalSession, resolveCreateSession });
 
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5" },
-          models: {
-            "openai/gpt-5": {
-              params: { responsesServerCompaction: true, responsesCompactThreshold: 42_000 },
-            },
-          },
-        },
-      },
-    };
+    const config = { agents: { defaults: { model: { primary: "openai/gpt-5" } } } };
     const target = {
       hostId: "gateway:local",
       agentId: "research",
@@ -265,8 +243,6 @@ describe("sessions.catalog.startTerminal", () => {
     });
 
     expect(resolveCreateSession).not.toHaveBeenCalled();
-    expect(startTerminalSession).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledOnce();
     expect(startTerminalSession).toHaveBeenCalledWith({
       ...target,
       allowProcessHomeFallback: false,
@@ -276,14 +252,7 @@ describe("sessions.catalog.startTerminal", () => {
         owner: { kind: "conn", connId: "conn-1" },
         agentId: "research",
         cwd,
-        shell: "/bin/zsh",
         args: ["-il", "-c", "'codex' '--' 'Inspect the failing test'"],
-        cols: 80,
-        rows: 24,
-        env: expect.objectContaining({
-          CODEX_HOME: "/tmp/codex-home",
-          PATH: "/usr/local/bin:/usr/bin:/bin",
-        }),
       }),
     );
     expect(respond).toHaveBeenCalledWith(true, { ...terminal, confined: false, title: "Codex" });

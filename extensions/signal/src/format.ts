@@ -10,12 +10,10 @@ import {
   sliceMarkdownIR,
 } from "openclaw/plugin-sdk/text-chunking";
 
-type SignalTextStyle = "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
-
 export type SignalTextStyleRange = {
   start: number;
   length: number;
-  style: SignalTextStyle;
+  style: "BOLD" | "ITALIC" | "STRIKETHROUGH" | "MONOSPACE" | "SPOILER";
 };
 
 export type SignalFormattedText = {
@@ -56,7 +54,19 @@ const SIGNAL_FORMAT_PROFILE = FormatCapabilityProfile.define({
   chunk: { limit: 4_000, unit: "chars" },
 });
 
-function stripEquivalentSignalLinks(ir: MarkdownIR): MarkdownIR {
+// Parsers percent-encode non-ASCII destinations, while labels keep the authored characters.
+function decodeLinkHref(href: string): string {
+  try {
+    // "%25" stays encoded: "%2541" (a literal "%41") and "%41" ("A") are different targets.
+    const decoded = decodeURI(href.replace(/%25/gi, "%2525"));
+    // A decoded space or control would no longer read as one URL, so keep the suffix.
+    return /[\s\p{Cc}]/u.test(decoded) ? href : decoded;
+  } catch {
+    return href;
+  }
+}
+
+function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const normalize = (value: string, preserveSuffixCase: boolean) => {
     const normalized = value
       .trim()
@@ -67,24 +77,22 @@ function stripEquivalentSignalLinks(ir: MarkdownIR): MarkdownIR {
       ? normalized.replace(/^[^/?#]+/, (host) => host.toLowerCase())
       : normalizeLowercaseStringOrEmpty(normalized);
   };
-  // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
-  return {
-    ...ir,
-    links: ir.links.filter((link) => {
-      const label = ir.text.slice(link.start, link.end);
-      const href = link.href.trim();
-      const preserveSuffixCase = /^https?:\/\//i.test(href);
-      return (
-        normalize(label, preserveSuffixCase) !==
-        normalize(href.replace(/^mailto:/, ""), preserveSuffixCase)
-      );
-    }),
-  };
-}
-
-function renderSignalText(ir: MarkdownIR): SignalFormattedText {
   const rendered = renderMarkdownWithAttributedRanges(
-    stripEquivalentSignalLinks(ir),
+    // Core owns link suffixes; Signal retains its established normalized-URL de-duplication.
+    {
+      ...ir,
+      links: ir.links.filter((link) => {
+        const label = ir.text.slice(link.start, link.end);
+        const href = link.href.trim();
+        const preserveSuffixCase = /^https?:\/\//i.test(href);
+        const comparableHref = href.replace(/^mailto:/, "");
+        const normalizedLabel = normalize(label, preserveSuffixCase);
+        return (
+          normalize(comparableHref, preserveSuffixCase) !== normalizedLabel &&
+          normalize(decodeLinkHref(comparableHref), preserveSuffixCase) !== normalizedLabel
+        );
+      }),
+    },
     {
       styleMap: SIGNAL_STYLE_MAP,
       annotationStyleMap: { assistant_transcript_role: "MONOSPACE" },

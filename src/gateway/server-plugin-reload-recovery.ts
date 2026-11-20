@@ -1,3 +1,4 @@
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import type { PluginRuntimeRecovery } from "../plugins/loader-types.js";
 import { PluginSourceRecoveryUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -26,7 +27,7 @@ export function createPluginReloadRecovery(
     get unavailablePluginIds(): ReadonlySet<string> {
       return new Set([...selectedUnavailableIds].filter((id) => !previouslyUnavailableIds.has(id)));
     },
-    capture(pluginIds: ReadonlySet<string>) {
+    async capture(pluginIds: ReadonlySet<string>) {
       const warnings: string[] = [];
       for (const record of previousRegistry.plugins) {
         if (!pluginIds.has(record.id)) {
@@ -38,7 +39,7 @@ export function createPluginReloadRecovery(
         }
         previousHookIds.add(record.id);
         try {
-          const recovery = capturePluginRuntimeRecovery(record);
+          const recovery = await capturePluginRuntimeRecovery(record);
           if (recovery) {
             moduleRecoveries.set(record.id, recovery);
           }
@@ -103,15 +104,7 @@ export function createPluginReloadRecovery(
         [...moduleRecoveries.values()].map((recovery) => recovery.module.dispose()),
       );
       moduleRecoveries.clear();
-      const errors = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Plugin reload recovery cleanup failed");
-      }
+      throwIfSettledRejected(results, "Plugin reload recovery cleanup failed");
     },
   };
 }

@@ -22,6 +22,9 @@ const require = createRequire(path.join(packageDir, "package.json"));
 const { GatewayClient } = await import(
   pathToFileURL(require.resolve("openclaw/plugin-sdk/gateway-runtime"))
 );
+const { listDirectoryTreeStrictSync } = await import(
+  pathToFileURL(require.resolve("openclaw/plugin-sdk/file-access-runtime"))
+);
 const JSZip = require("jszip");
 const root = process.argv[3]
   ? path.resolve(process.argv[3])
@@ -242,10 +245,12 @@ try {
   assert(fs.readFileSync(path.join(target, "SKILL.md"), "utf8").includes("original"));
   const snapshot = () =>
     Object.fromEntries(
-      fs
-        .readdirSync(target, { recursive: true })
-        .filter((p) => fs.statSync(path.join(target, p)).isFile())
-        .map((p) => [p, fs.readFileSync(path.join(target, p)).toString("base64")]),
+      listDirectoryTreeStrictSync(target)
+        .filter(({ dirent }) => dirent.isFile())
+        .map(({ relativePath: p }) => [
+          p,
+          fs.readFileSync(path.join(target, p)).toString("base64"),
+        ]),
     );
   const metadata = () =>
     Object.fromEntries(

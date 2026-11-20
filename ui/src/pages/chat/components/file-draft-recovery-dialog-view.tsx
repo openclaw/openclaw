@@ -1,5 +1,4 @@
 import { For, createSignal, createStore, untrack } from "solid-js";
-import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { downloadTextFile } from "../../../lib/download.ts";
@@ -8,7 +7,7 @@ import type { FileSidebarContent } from "./chat-sidebar-content-types.ts";
 
 registerFilePreviewEnglish();
 
-type FileDraft = {
+export type FileDraft = {
   name: string;
   path: string;
   context: FileSidebarContent["draftContext"];
@@ -17,19 +16,7 @@ type FileDraft = {
   discard: () => boolean;
 };
 
-export function reviewFileDrafts(drafts: readonly FileDraft[]): Promise<void> {
-  return withPromiseModalHost<void>(undefined, (modal) => {
-    modal.render(() => (
-      <FileDraftRecoveryDialog
-        drafts={drafts}
-        settled={() => modal.settled}
-        finish={modal.finish}
-      />
-    ));
-  });
-}
-
-function FileDraftRecoveryDialog(props: {
+export function FileDraftRecoveryDialog(props: {
   drafts: readonly FileDraft[];
   settled: () => boolean;
   finish: () => void;
@@ -75,69 +62,78 @@ function FileDraftRecoveryDialog(props: {
           </div>
         </div>
         <For each={remaining}>
-          {(entry) => (
-            <section
-              role="group"
-              style={{ "overflow-wrap": "anywhere" }}
-              aria-label={[
-                entry.path,
-                entry.context?.sessionTitle,
-                entry.context?.paneLabel,
-                entry.context?.sessionKey,
-              ]
-                .filter(Boolean)
-                .join(" — ")}
-            >
-              {entry.context ? (
-                <>
-                  <div class="exec-approval-title">{entry.context.sessionTitle}</div>
-                  <div class="exec-approval-sub">{entry.context.paneLabel}</div>
-                  <div class="exec-approval-sub">{entry.context.sessionKey}</div>
-                </>
-              ) : undefined}
-              <label class="field">
-                <span>{entry.path}</span>
-                <textarea readonly rows="6" value={entry.content} />
-              </label>
-              <div class="exec-approval-actions">
-                <button type="button" class="btn" onClick={() => void copyDraft(entry)}>
-                  {copied() === entry
-                    ? t("common.copied")
-                    : t("chat.detailPanel.draftRecovery.copy", { name: entry.name })}
-                </button>
-                <button
-                  type="button"
-                  class="btn"
-                  onClick={() => {
-                    if (current(entry)) {
-                      downloadTextFile(entry.name, entry.content);
-                    }
-                  }}
-                >
-                  {t("chat.detailPanel.draftRecovery.download", { name: entry.name })}
-                </button>
-                <button
-                  type="button"
-                  class="btn danger"
-                  onClick={() => {
-                    if (!current(entry) || !entry.discard()) {
-                      return;
-                    }
-                    const last = remaining.length === 1;
-                    setRemaining((drafts) => {
-                      drafts.splice(drafts.indexOf(entry), 1);
-                    });
-                    setError("");
-                    if (last) {
-                      props.finish();
-                    }
-                  }}
-                >
-                  {t("chat.detailPanel.draftRecovery.discard", { name: entry.name })}
-                </button>
-              </div>
-            </section>
-          )}
+          {(entry) => {
+            let group!: HTMLElement;
+            return (
+              <section
+                ref={(element) => {
+                  group = element;
+                }}
+                role="group"
+                style={{ "overflow-wrap": "anywhere" }}
+                aria-label={[
+                  entry.path,
+                  entry.context?.sessionTitle,
+                  entry.context?.paneLabel,
+                  entry.context?.sessionKey,
+                ]
+                  .filter(Boolean)
+                  .join(" — ")}
+              >
+                {entry.context ? (
+                  <>
+                    <div class="exec-approval-title">{entry.context.sessionTitle}</div>
+                    <div class="exec-approval-sub">{entry.context.paneLabel}</div>
+                    <div class="exec-approval-sub">{entry.context.sessionKey}</div>
+                  </>
+                ) : undefined}
+                <label class="field">
+                  <span>{entry.path}</span>
+                  <textarea readonly rows="6" value={entry.content} />
+                </label>
+                <div class="exec-approval-actions">
+                  <button type="button" class="btn" onClick={() => void copyDraft(entry)}>
+                    {copied() === entry
+                      ? t("common.copied")
+                      : t("chat.detailPanel.draftRecovery.copy", { name: entry.name })}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn"
+                    onClick={() => {
+                      if (current(entry)) {
+                        downloadTextFile(entry.name, entry.content);
+                      }
+                    }}
+                  >
+                    {t("chat.detailPanel.draftRecovery.download", { name: entry.name })}
+                  </button>
+                  <button
+                    type="button"
+                    class="btn danger"
+                    onClick={() => {
+                      if (!current(entry) || !entry.discard()) {
+                        return;
+                      }
+                      const last = remaining.length === 1;
+                      if (!last && group.contains(document.activeElement)) {
+                        keepButton.focus();
+                      }
+                      setRemaining((drafts) => {
+                        drafts.splice(drafts.indexOf(entry), 1);
+                      });
+                      setError("");
+                      if (last) {
+                        props.finish();
+                      }
+                    }}
+                  >
+                    {t("chat.detailPanel.draftRecovery.discard", { name: entry.name })}
+                  </button>
+                </div>
+              </section>
+            );
+          }}
         </For>
         {error() ? <p role="alert">{error()}</p> : undefined}
         <openclaw-modal-actions class="exec-approval-actions">

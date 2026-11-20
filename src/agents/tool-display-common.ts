@@ -11,10 +11,18 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
+export { defaultTitle, normalizeToolDisplayName } from "./tool-display-name.js";
+
+type ToolDisplayProgressSpec = {
+  label: string;
+  detailKeys: string[];
+  referenceKey?: string;
+};
 
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
+  progress?: ToolDisplayProgressSpec;
 };
 
 export type ToolDisplaySpec = {
@@ -22,26 +30,13 @@ export type ToolDisplaySpec = {
   label?: string;
   detailKeys?: string[];
   actions?: Record<string, ToolDisplayActionSpec>;
+  /** Concise operation context; diagnostic detail keys stay available separately. */
+  progress?: ToolDisplayProgressSpec;
 };
 
 type CoerceDisplayValueOptions = {
   includeFalsy?: boolean;
 };
-
-export function normalizeToolDisplayName(name?: string): string {
-  return (name ?? "tool").trim();
-}
-
-export function defaultTitle(name: string): string {
-  const cleaned = name.replace(/_/g, " ").trim();
-  if (!cleaned) {
-    return "Tool";
-  }
-  return cleaned
-    .split(/\s+/)
-    .map((part) => `${part.at(0)?.toUpperCase() ?? ""}${part.slice(1)}`)
-    .join(" ");
-}
 
 /** Beyond this nesting depth, a value does not contribute to the compact display preview. */
 const TOOL_DISPLAY_ARRAY_DEPTH_LIMIT = 64;
@@ -105,9 +100,6 @@ function coerceDisplayValue(
 }
 
 function lookupValueByPath(args: unknown, path: string): unknown {
-  if (!args || typeof args !== "object") {
-    return undefined;
-  }
   let current: unknown = args;
   for (const segment of path.split(".")) {
     if (!segment) {

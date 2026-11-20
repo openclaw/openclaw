@@ -82,6 +82,7 @@ export function resetSessionEntryInWorker(
             target: params.target,
             prepared,
             nextEntry,
+            creationOperation: params.creationOperation,
             resetBoundary: params.resetBoundary,
           },
         }),

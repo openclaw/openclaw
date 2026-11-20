@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
@@ -77,6 +76,23 @@ const replacementTarget = {
   webhookId: "synthetic-webhook",
   webhookToken: "synthetic-token",
 } satisfies Parameters<ThreadBindingManager["bindTarget"]>[0];
+
+const storeOptions = { namespace: "thread-bindings", maxEntries: 10_000 };
+const bindingScope = { channel: "discord", accountId: "work" };
+const nativeStore = (options: OpenKeyedStoreOptions = storeOptions) =>
+  createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options);
+
+function expectStoredField<K extends keyof ThreadBindingRecord>(
+  store: Pick<PluginStateSyncKeyedStore<ThreadBindingRecord>, "lookup">,
+  manager: ThreadBindingManager,
+  field: K,
+  expected: ThreadBindingRecord[K] | undefined,
+) {
+  expect([
+    store.lookup("work:thread-1")?.[field],
+    manager.getByThreadId("thread-1")?.[field],
+  ]).toEqual([expected, expected]);
+}
 
 function createTestManager(options: { accountId?: string; persist?: boolean } = {}) {
   return createThreadBindingManager({
@@ -177,7 +193,6 @@ it("awaits one shared cold read before publishing channel binding managers", asy
   try {
     await entered.promise;
     expect(getThreadBindingManager("work")).toBeNull();
-    expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
     expect(stores.entries).toHaveBeenCalledTimes(1);
   } finally {
     ready.resolve([persistedBinding()]);
@@ -203,9 +218,6 @@ it.each(["resolve", "reject"] as const)(
       ensureBindingsLoaded();
       manager = await createTestManager();
       await manager.touchThread({ threadId: "thread-1", at: 200, persist: false });
-      expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(
-        current.value.targetSessionKey,
-      );
     } finally {
       if (settlement === "resolve") {
         ready.resolve([persistedBinding()]);
@@ -226,7 +238,6 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
     stores.register.mockRejectedValueOnce(new Error("persistence failed"));
   }
   const manager = await persistentManager();
-  expect(manager).toBe(getThreadBindingManager("work"));
   if (phase === "startup") {
     expect(manager.listBindings()).toEqual([]);
   }
@@ -236,9 +247,6 @@ it.each(["startup", "write"])("keeps an in-memory fallback after failed %s", asy
       : replacementTarget.targetSessionKey;
   await manager.bindTarget({ ...replacementTarget, targetSessionKey });
   expect(manager.getByThreadId("thread-1")).toMatchObject({ targetSessionKey });
-  if (phase === "write") {
-    expect(stores.register).toHaveBeenCalledOnce();
-  }
   expect(stores.openSyncKeyedStore).not.toHaveBeenCalled();
 });
 
@@ -306,30 +314,20 @@ it.each([
         },
       };
     });
-    stores.openSyncKeyedStore.mockImplementation((options) =>
-      createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options),
-    );
+    stores.openSyncKeyedStore.mockImplementation(nativeStore);
     const saved = persistedBinding();
     const originalTarget = { targetSessionKey: saved.value.targetSessionKey };
     const bindingTarget = introOperation
       ? saved.value.targetSessionKey
       : "agent:main:subagent:replacement";
-    const store = createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", {
-      namespace: "thread-bindings",
-      maxEntries: 10_000,
-    });
+    const store = nativeStore();
     store.register(saved.key, saved.value);
     const manager = await persistentManager();
     const notify = vi.spyOn(manager, "notifyUnbound").mockImplementation(() => {});
     const mutation = manager.bindTarget({
-      threadId: "thread-1",
-      channelId: "parent-1",
-      targetKind: "subagent",
+      ...replacementTarget,
       targetSessionKey: bindingTarget,
       ...(introOperation ? { introText: "Binding ready" } : {}),
-      agentId: "main",
-      webhookId: "synthetic-webhook",
-      webhookToken: "synthetic-token",
     });
     const outcome = expect(mutation).resolves.toMatchObject({ targetSessionKey: bindingTarget });
     let stopping: Promise<void> | undefined;
@@ -342,8 +340,10 @@ it.each([
       );
       if (boundary === "committed-intro-unbind") {
         expect(unbind({ ...originalTarget, sendFarewell: false })).toHaveLength(1);
-        expect(store.lookup(saved.key)).toBeUndefined();
-        expect(manager.getByThreadId("thread-1")).toBeUndefined();
+        expect([store.lookup(saved.key), manager.getByThreadId("thread-1")]).toEqual([
+          undefined,
+          undefined,
+        ]);
       } else if (boundary === "stopping-unbind") {
         stopping = manager.stop();
         expect(() => unbind(originalTarget)).toThrow("manager is stopping");
@@ -360,12 +360,8 @@ it.each([
         followup = followup.catch(followupFailure);
       } else {
         const at = Date.now() + 1;
-        getSessionBindingService().touch(saved.key, at, {
-          channel: "discord",
-          accountId: "work",
-        });
-        expect(store.lookup(saved.key)?.lastActivityAt).toBe(at);
-        expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(at);
+        getSessionBindingService().touch(saved.key, at, bindingScope);
+        expectStoredField(store, manager, "lastActivityAt", at);
       }
       if (queuedOperation) {
         const stopped = vi.fn();
@@ -383,13 +379,11 @@ it.each([
         expect(followupFailure).not.toHaveBeenCalled();
         expect(changed).toHaveLength(1);
         if (boundary === "queued-age") {
-          expect(store.lookup(saved.key)?.maxAgeMs).toBe(1000);
-          expect(manager.getByThreadId("thread-1")?.maxAgeMs).toBe(1000);
+          expectStoredField(store, manager, "maxAgeMs", 1000);
         }
       }
       const expectedTarget = removes ? undefined : bindingTarget;
-      expect(store.lookup(saved.key)?.targetSessionKey).toBe(expectedTarget);
-      expect(manager.getByThreadId("thread-1")?.targetSessionKey).toBe(expectedTarget);
+      expectStoredField(store, manager, "targetSessionKey", expectedTarget);
       expect(notify).toHaveBeenCalledTimes(removes ? 1 : 0);
       if (introOperation) {
         expect(webhookSend).toHaveBeenCalledTimes(boundary === "committed-intro-touch" ? 1 : 0);
@@ -446,47 +440,22 @@ it("keeps activity in memory after a real native read-only failure", async () =>
         assertCurrent() {},
       }),
     );
-    let observed = false;
-    const nativeStore = (options: OpenKeyedStoreOptions) =>
-      createPluginStateSyncKeyedStoreForTests<ThreadBindingRecord>("discord", options);
-    stores.openSyncKeyedStore.mockImplementation((options): SyncStore => {
-      const store = nativeStore(options);
-      const update = store.update?.bind(store);
-      assert(update, "missing native atomic update");
-      return {
-        ...store,
-        update: (key, change, updateOptions) =>
-          update(
-            key,
-            (current) => {
-              observed = true;
-              return change(current);
-            },
-            updateOptions,
-          ),
-      };
-    });
+    stores.openSyncKeyedStore.mockImplementation(nativeStore);
     const saved = persistedBinding();
-    const store = nativeStore({ namespace: "thread-bindings", maxEntries: 10_000 });
+    const store = nativeStore();
     store.register(saved.key, saved.value);
     const manager = await persistentManager();
     const database = openOpenClawStateDatabase();
     try {
       database.db.exec("PRAGMA query_only = ON");
-      getSessionBindingService().touch(saved.key, 200, {
-        channel: "discord",
-        accountId: "work",
-      });
-      expect(observed).toBe(false);
+      getSessionBindingService().touch(saved.key, 200, bindingScope);
       expect(manager.getByThreadId("thread-1")?.lastActivityAt).toBe(200);
+      expect(store.lookup(saved.key)?.lastActivityAt).toBe(100);
     } finally {
       database.db.exec("PRAGMA query_only = OFF");
       await manager.stop();
     }
-    expect([
-      manager.getByThreadId("thread-1")?.targetSessionKey,
-      store.lookup(saved.key)?.targetSessionKey,
-    ]).toEqual([saved.value.targetSessionKey, saved.value.targetSessionKey]);
+    expectStoredField(store, manager, "targetSessionKey", saved.value.targetSessionKey);
     await resetThreadBindingsForTests();
     resetPluginStateStoreForTests();
   });

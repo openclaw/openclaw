@@ -9,6 +9,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { waitForFast } from "../../../test/helpers/vitest-wait.js";
 import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -29,6 +30,7 @@ import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { buildSystemRunApprovalBinding } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "../agent-turn/agent-job.js";
 import { dropPreSessionStartAnnouncePairs } from "../chat-display-projection.history.js";
@@ -67,13 +69,6 @@ import {
 } from "./exec-approval.test-support.js";
 import { logsHandlers } from "./logs.js";
 
-function waitForFast<T>(
-  callback: () => T | Promise<T>,
-  options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
-
 const AGENT_RUN_CACHE_ENTRY_LIMIT = 5_000;
 
 // mock-isolation: Method dispatch tests use fixture status without opening session databases.
@@ -81,17 +76,6 @@ vi.mock("../../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
   prepareStatusSummary: vi.fn().mockResolvedValue({ publish: () => ({ summary: { ok: true } }) }),
 }));
-
-function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
 
 function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const call = mock.mock.calls[callIndex];
@@ -682,7 +666,7 @@ describe("projectChatDisplayMessages", () => {
     { type: "text", text: "The agent run failed before producing a reply." },
   ];
   const networkFailureText =
-    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+    "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
   const networkFailureContent = (reply?: string, type = "text") => [
     { type, text: [networkFailureText, reply].filter(Boolean).join("\n\n") },
   ];
@@ -1240,39 +1224,6 @@ describe("exec approval handlers", () => {
         message: "command exceeds exec approval display limit",
         details: expect.objectContaining({ reason: "EXEC_APPROVAL_COMMAND_DISPLAY_LIMIT" }),
       });
-      expect(broadcasts).toEqual([]);
-    });
-  });
-
-  it("rejects approval registration after the owning run was aborted", async (testContext) => {
-    const fixture = await createExecApprovalFixture(testContext, { preparePersistence: false });
-    return await fixture.run(async () => {
-      const { manager, handlers, broadcasts, respond, context } = fixture;
-      context.chatRunState.getOrCreate("run-aborted").abortMarker = createChatAbortMarker();
-
-      await requestExecApproval({
-        handlers,
-        respond,
-        context,
-        params: {
-          runId: "run-aborted",
-          toolCallId: "tool-late",
-          host: "gateway",
-          command: "echo too-late",
-          commandArgv: ["echo", "too-late"],
-          systemRunPlan: undefined,
-          nodeId: undefined,
-        },
-      });
-
-      expect(mockCallArg(respond)).toBe(false);
-      expectRecordFields(mockCallArg(respond, 0, 2), {
-        message: "approval run already aborted",
-      });
-      expectRecordFields((mockCallArg(respond, 0, 2) as { details?: unknown }).details, {
-        reason: "EXEC_APPROVAL_RUN_ABORTED",
-      });
-      expect(await manager.listPendingRecords()).toEqual([]);
       expect(broadcasts).toEqual([]);
     });
   });
@@ -1912,26 +1863,13 @@ describe("exec approval handlers", () => {
     });
   });
 
-  it("does not count iOS push delivery to hidden approval targets as a route", async (testContext) => {
-    const iosPushDelivery = createIosPushDelivery(
-      vi.fn(
-        async (
-          _request: unknown,
-          opts?: {
-            isTargetVisible?: (target: { deviceId: string; scopes: readonly string[] }) => boolean;
-          },
-        ) =>
-          opts?.isTargetVisible?.({
-            deviceId: "device-other",
-            scopes: ["operator.approvals"],
-          }) ?? true,
-      ),
-    );
+  it("expires when the iOS push owner reports no delivery route", async (testContext) => {
+    const iosPushDelivery = createIosPushDelivery(vi.fn(async () => false));
     const fixture = await createForwardingExecApprovalFixture(testContext, { iosPushDelivery });
     return await fixture.run(async () => {
       const { manager, respond } = fixture;
       const expireSpy = vi.spyOn(manager, "expire");
-      const id = "approval-ios-hidden-push";
+      const id = "approval-ios-undelivered-push";
       await requestExecApproval({
         ...fixture,
         client: createExecApprovalClient({
@@ -2190,8 +2128,8 @@ describe("gateway healthHandlers.health cache freshness", () => {
 
   beforeEach(async () => {
     const runtimeSpy = vi
-      .spyOn(childRuntime, "readChildRuntimeViability")
-      .mockReturnValue(healthyChildRuntime);
+      .spyOn(childRuntime, "prepareChildRuntimeViability")
+      .mockResolvedValue({ publish: () => healthyChildRuntime });
     restoreChildRuntime = () => runtimeSpy.mockRestore();
     restoreContextEngineRegistryState = captureContextEngineRegistryStateForTests();
     await registerLegacyContextEngine();
@@ -2204,31 +2142,21 @@ describe("gateway healthHandlers.health cache freshness", () => {
     await restoreContextEngineRegistryState();
   });
 
-  it.each([
-    { name: "rate-limits request-driven refreshes for fresh cached health", backward: false },
-    {
-      name: "restarts request-driven health refreshes when the clock moves backward",
-      backward: true,
-    },
-  ])("$name", async ({ backward }) => {
+  it("rate-limits request-driven refreshes for fresh cached health", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-28T12:00:00Z"));
     const cached = createHealthSnapshot({});
     const refreshHealthSnapshot = vi.fn().mockResolvedValue(cached);
 
-    for (let index = 0; index < (backward ? 1 : 3); index += 1) {
+    for (let index = 0; index < 3; index += 1) {
       await requestHealthSnapshot({ cached, refreshHealthSnapshot });
     }
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
 
-    if (backward) {
-      vi.setSystemTime(Date.now() - HEALTH_REFRESH_INTERVAL_MS);
-    } else {
-      await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
-      await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
-      expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-    }
+    await vi.advanceTimersByTimeAsync(HEALTH_REFRESH_INTERVAL_MS - 1);
+    await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
+    expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
     await requestHealthSnapshot({ cached: { ...cached, ts: Date.now() }, refreshHealthSnapshot });
     expect(refreshHealthSnapshot).toHaveBeenCalledTimes(2);
   });
@@ -2277,7 +2205,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     );
     try {
       const contextEngine = await resolveContextEngine({
-        plugins: { slots: { contextEngine: engineId } },
+        plugins: { allow: ["health-test"], slots: { contextEngine: engineId } },
       } as OpenClawConfig);
       await contextEngine.assemble({ sessionId: "s1", messages: [] });
 

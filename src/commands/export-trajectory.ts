@@ -8,7 +8,7 @@ import {
   resolveConfiguredAgentId,
 } from "../agents/agent-scope-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -147,7 +147,6 @@ export async function exportTrajectoryCommand(
   }
   let summary;
   try {
-    const outputPath = resolvedOpts.output;
     const exportTarget = {
       agentId: sessionTarget.agentId ?? targetAgentId,
       sessionId: sessionTarget.sessionId,
@@ -168,7 +167,7 @@ export async function exportTrajectoryCommand(
       throw prepared.diagnostic ?? new Error(prepared.error);
     }
     const baseDir = path.join(workspaceDir, relativeBase);
-    const raw = outputPath?.trim();
+    const raw = readNonBlankString(resolvedOpts.output);
     let outputDir: string;
     if (!raw) {
       const defaultDir = resolveDefaultTrajectoryExportDir({ workspaceDir, sessionId });

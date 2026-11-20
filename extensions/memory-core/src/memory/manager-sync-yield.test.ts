@@ -21,8 +21,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
     ...actual,
-    buildSessionEntry: buildSessionEntryMock,
-    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+    streamSessionEntry: buildSessionEntryMock,
+    streamSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
       Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
@@ -40,7 +40,7 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import { SessionSyncHarness } from "./manager-sync-ops.startup-catchup.test-support.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 function createDb(): DatabaseSync {
   const { DatabaseSync: NodeDatabaseSync } = requireNodeSqlite();
@@ -49,7 +49,7 @@ function createDb(): DatabaseSync {
   return db;
 }
 
-class SessionSyncYieldHarness extends SessionSyncHarness {
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly cfg = {} as OpenClawConfig;
   protected readonly settings = {
     sync: { sessions: { deltaBytes: 100_000, deltaMessages: 50, postCompactionForce: true } },
@@ -139,7 +139,9 @@ describe("session sync responsiveness", () => {
           mtimeMs: 1,
           size: 1,
           hash: `hash-${name}`,
-          content: `user message for ${name}`,
+          lineCount: 1,
+          lineOriginClasses: ["untrusted"],
+          sessionKind: "unknown",
         };
       });
       const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);

@@ -3,13 +3,11 @@ import type {
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import { applyExecAuthorizationCommit } from "./exec-approvals-authorization.kernel.js";
-import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type {
   ExecAuthorizationCommitInput,
   ExecAuthorizationCommitOutcome,
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
-import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
 import { execPolicyMutationOperations } from "./exec-approvals-mutation.worker.js";
 import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import { execApprovalsPublication } from "./exec-approvals-publication.js";
@@ -63,7 +61,7 @@ function applyAuthorizationBatch(
         current = snapshotFromExecApprovalsRow({ path: current.path, row: { raw_json: raw } });
       }
     }
-    return { ok: true, snapshot: current };
+    return { ok: true, file: current.file };
   });
   return { snapshot: current, outcomes };
 }
@@ -73,8 +71,6 @@ export function commitExecAuthorizationsInWorker(
   context: WorkerWriteOperationContext,
 ): ExecAuthorizationCommitOutcome[] {
   const options = context.stateOptions();
-  assertNoPendingLegacyExecApprovals({ env: options.env });
-  const displayPath = resolveExecApprovalsDisplayPath(options.env);
   const mayWrite = input.items.some(
     (item) =>
       item.matches.length > 0 ||
@@ -85,7 +81,7 @@ export function commitExecAuthorizationsInWorker(
     const { db } = context.open();
     return applyAuthorizationBatch(
       db,
-      snapshotFromExecApprovalsDatabase(db, displayPath),
+      snapshotFromExecApprovalsDatabase(db, options.env),
       input.items,
     ).outcomes;
   }
@@ -93,7 +89,7 @@ export function commitExecAuthorizationsInWorker(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const captured = execApprovalsPublication.capture(db, () => {
-        const current = snapshotFromExecApprovalsDatabase(db, displayPath);
+        const current = snapshotFromExecApprovalsDatabase(db, options.env);
         const committed = applyAuthorizationBatch(db, current, input.items);
         if (committed.snapshot.raw !== current.raw) {
           writeExecApprovalsConfigRow({

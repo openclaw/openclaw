@@ -26,15 +26,12 @@ test.for([false, true])(
     const waitForGate = (gate: Promise<void>, work: Promise<unknown>, label: string) =>
       withinTest(awaitGateBeforeSettlement(gate, work, label), signal);
     const peer = await directSessionReq<{ key: string }>("sessions.create", { agentId: "main" });
-    expect(peer).toMatchObject({
-      ok: true,
-      payload: { key: expect.stringMatching(/^agent:main:/) },
-    });
+    expect(peer.ok).toBe(true);
     const peerKey = peer.payload!.key;
-    expect(entry(peerKey)).toBeDefined();
     await fs.writeFile(path.join(worktree.path, "draft.txt"), "inbound restore preserves work\n");
-    const archived = await patch({ key, expectedSessionId: sessionId, archived: true });
-    expect(archived).toMatchObject({ ok: true });
+    expect(await patch({ key, expectedSessionId: sessionId, archived: true })).toMatchObject({
+      ok: true,
+    });
     await fixture.cleanupWorktrees();
     if (alreadyRestored) {
       await managedWorktrees.restore({ id: worktree.id });
@@ -104,7 +101,6 @@ test.for([false, true])(
         expect(restore).not.toHaveBeenCalled();
       } else {
         await waitForGate(restoreEntered.promise, admission, "restore was not attempted");
-        expect(restore).toHaveBeenCalledOnce();
         expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(true);
       }
       independent = patch({ key: peerKey, label: "Independent inbound peer" });

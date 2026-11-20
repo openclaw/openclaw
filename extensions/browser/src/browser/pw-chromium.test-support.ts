@@ -6,7 +6,7 @@ import { getFreePort } from "./test-port.js";
 
 export type ChromiumTarget = { cdpUrl: string; targetId: string };
 
-async function readTargetId(page: Page): Promise<string> {
+export async function readTargetId(page: Page): Promise<string> {
   const session = await page.context().newCDPSession(page);
   try {
     return (await session.send("Target.getTargetInfo")).targetInfo.targetId;
@@ -19,6 +19,8 @@ export async function launchChromium(
   rootDir: string,
   options: Pick<BrowserContextOptions, "viewport" | "deviceScaleFactor"> & {
     ignoreDefaultArgs?: string[];
+    /** "chromium" runs full Chromium headless instead of the headless shell, for chrome:// pages. */
+    channel?: "chromium";
   } = {},
 ) {
   const port = await getFreePort();

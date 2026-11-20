@@ -11,6 +11,7 @@ import {
 } from "../../agents/reply-completion.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import { resolveDeferredLifecycleTerminal } from "./agent-lifecycle-terminal.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 import { resolveSourceReplyPolicy } from "./agent-runner-core.js";
 import { markAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
@@ -44,12 +45,6 @@ export async function settleAgentFallbackCycle(params: {
       ? cycle.state.pendingLifecycleTerminal.backstop
       : undefined;
   cycle.state.pendingLifecycleTerminal = undefined;
-  if (
-    !resolveReplyOperationAbortReason(turn.replyOperation) &&
-    (await turn.isRestartRecoveryArmed?.())
-  ) {
-    turn.replyOperation?.abortForRestart();
-  }
   const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
@@ -76,9 +71,14 @@ export async function settleAgentFallbackCycle(params: {
   const hostMissingReplyError = isHostMissingReplyNoticeText(embeddedError?.message)
     ? embeddedError?.message
     : undefined;
+  const deferredTerminal = resolveDeferredLifecycleTerminal(
+    runResult,
+    deferredLifecycleError,
+    terminalMetadata,
+  );
   // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
-    deferredLifecycleError ??
+    deferredTerminal.error ??
     (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
     hostMissingReplyError ??
     (embeddedError ? "Agent run failed" : undefined);
@@ -170,7 +170,7 @@ export async function settleAgentFallbackCycle(params: {
     ) {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
-    emitSettledLifecycleError(terminalError, terminalMetadata);
+    emitSettledLifecycleError(terminalError, deferredTerminal.metadata);
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

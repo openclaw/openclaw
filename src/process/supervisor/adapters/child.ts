@@ -89,6 +89,7 @@ function resolveChildInvocation(params: {
 type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 type WorkerChildAdapter = ChildAdapter & {
+  readonly jobKillOnClose?: true;
   closeStartGate?: () => void;
   openStartGate?: () => Promise<void>;
 };
@@ -99,6 +100,8 @@ const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
+  /** A tree owner hands off descendants after the root exits normally. */
+  releaseOnRootExit?: true;
   terminateOnHostLoss?: true;
   /** Preserve an owner-materialized Windows shell invocation without parsing it again. */
   windowsShell?: true;
@@ -113,6 +116,7 @@ type ChildAdapterInput = ProcessAdapterConstruction & {
   windowsVerbatimArguments?: boolean;
   input?: string;
   prepareInput?: () => void | Promise<void>;
+  prepareTargetSpawn?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   stderrDestination?: Writable;
@@ -132,6 +136,8 @@ export async function createChildAdapter(
 ): Promise<ProcessAdapterStartup<WorkerChildAdapter>> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
       initiateSpawn: params.initiateSpawn,
@@ -174,8 +180,11 @@ export async function createChildAdapter(
     (params.ownProcessTree === true || process.env.OPENCLAW_SERVICE_MARKER?.trim())
   ) {
     return await createServiceChildRelayAdapter({
+      executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       assertCurrent: params.assertCurrent,
       beforeSpawn: params.beforeSpawn,
+      prepareTargetSpawn: params.prepareTargetSpawn,
       initiateSpawn: params.initiateSpawn,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
@@ -192,6 +201,7 @@ export async function createChildAdapter(
       stderrDestination: params.stderrDestination,
       stdoutConsumption: params.stdoutConsumption,
       terminateOnHostLoss: params.terminateOnHostLoss,
+      releaseOnRootExit: params.releaseOnRootExit,
     });
   }
 
@@ -227,8 +237,11 @@ export async function createChildAdapter(
   const launchGate = createDeferredCore();
   let windowsFallback: WindowsJobExtinction = { status: "uncertain", reason: "job-unavailable" };
   let tryWindowsJob = true;
-  const spawnChild = () =>
-    spawnAndWait({
+  const spawnChild = async () => {
+    if (params.prepareTargetSpawn) {
+      await params.prepareTargetSpawn();
+    }
+    return spawnAndWait({
       ...(process.platform === "win32"
         ? {
             spawnImpl: (command, args, spawnOptions, initiateSpawn) => {
@@ -242,6 +255,9 @@ export async function createChildAdapter(
                 { ...spawnOptions, signal: params.abortSignal },
                 async (launch) => {
                   await launchGate.promise;
+                  if (params.prepareTargetSpawn) {
+                    await params.prepareTargetSpawn();
+                  }
                   assertCurrent();
                   params.beforeSpawn?.();
                   if (initiateSpawn) {
@@ -276,8 +292,11 @@ export async function createChildAdapter(
       },
       initiateSpawn: params.initiateSpawn,
       argv: [preparedSpawn.command, ...preparedSpawn.args],
+      executionIntent: params.executionIntent,
+      executionScopeKey: params.executionScopeKey,
       options,
     });
+  };
 
   let spawned: Awaited<ReturnType<typeof spawnChild>>;
   try {
@@ -520,13 +539,9 @@ export async function createChildAdapter(
     // the tracked root (libuv owns that ChildProcess).
     scheduleAdoptedChildZombieReapAfterExit(child, useDetached);
   };
-  const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
-    signalProcessTree(pid, signal, { detached: useDetached });
-    scheduleAdoptedReapForChild();
-  };
-  const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
+  const signalProcessTreeForChildAndWait = (pid: number) =>
     new Promise<void>((resolve) => {
-      signalProcessTree(pid, signal, {
+      signalProcessTree(pid, "SIGKILL", {
         detached: useDetached,
         onComplete: () => {
           scheduleAdoptedReapForChild();
@@ -556,6 +571,14 @@ export async function createChildAdapter(
     if (processClosed) {
       return;
     }
+    if (
+      process.platform === "win32" &&
+      (childExitState !== null || child.exitCode !== null || child.signalCode !== null)
+    ) {
+      // A descendant can retain output after root exit, but taskkill must not target its reusable PID.
+      scheduleForceKillWaitFallback(signal ?? "SIGKILL");
+      return;
+    }
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       hardKillRequested = true;
@@ -567,7 +590,7 @@ export async function createChildAdapter(
         const previousSignal = treeSignaling;
         treeSignaling = (async () => {
           try {
-            await signalProcessTreeForChildAndWait(pid, "SIGKILL");
+            await signalProcessTreeForChildAndWait(pid);
             signalChild("SIGKILL");
             windowsTreeKillCompleted = true;
             if (childCloseState) {
@@ -591,7 +614,8 @@ export async function createChildAdapter(
       return;
     }
     if (signal === "SIGTERM" && pid) {
-      signalProcessTreeForChild(pid, "SIGTERM");
+      signalProcessTree(pid, "SIGTERM", { detached: useDetached });
+      scheduleAdoptedReapForChild();
       return;
     }
     signalChild(signal);
@@ -617,6 +641,7 @@ export async function createChildAdapter(
 
   let startGateOpened = false;
   const adapter: WorkerChildAdapter = {
+    ...(windowsJob ? { jobKillOnClose: true as const } : {}),
     get pid() {
       return windowsJob?.commandPid ?? child.pid;
     },

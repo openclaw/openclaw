@@ -1,13 +1,10 @@
-// @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
-import {
-  createRealtimeTalkConversationState,
-  orderRealtimeTalkConversation,
-  updateRealtimeTalkConversation,
-} from "./conversation.ts";
+// @vitest-environment jsdom
+import { createRealtimeTalkConversationState } from "./conversation-state.ts";
+import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { useRealtimeTalkMicrophoneFixture } from "./input.test-support.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { RealtimeTalkTranscript } from "./shared.ts";

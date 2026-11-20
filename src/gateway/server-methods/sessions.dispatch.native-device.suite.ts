@@ -184,7 +184,8 @@ export function registerNativeDeviceDispatchTests({
           undefined,
           expect.objectContaining({
             code: ErrorCodes.FORBIDDEN,
-            details: expect.objectContaining({ missingScope: "operator.admin" }),
+            message:
+              "Your operator role cannot dispatch to this cloud profile; choose your own session and an allowed profile, or ask a gateway administrator to update your role.",
           }),
         );
         expect(dispatch).not.toHaveBeenCalled();
@@ -248,7 +249,7 @@ export function registerNativeDeviceDispatchTests({
         },
       }),
       expect.any(Function),
-      undefined,
+      expect.any(Function),
       undefined,
     );
     expect(respond).toHaveBeenCalledWith(

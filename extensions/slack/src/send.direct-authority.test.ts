@@ -1,3 +1,5 @@
+import type { ServerResponse } from "node:http";
+import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createOutboundTestPlugin,
@@ -9,6 +11,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createSlackActions } from "./channel-actions.js";
 import { slackOutbound } from "./outbound-adapter.js";
 import { sendMessageSlack } from "./send.js";
 import { clearSlackThreadParticipationCache } from "./sent-thread-cache.js";
@@ -25,9 +28,9 @@ function directOptions(cfg: OpenClawConfig, live = () => true) {
   return { cfg, assertDirectAdapterHandoff };
 }
 function withSlackApi(
-  respond: (url: string, attempt: number) => object | Promise<object>,
+  respond: (url: string, attempt: number, response: ServerResponse) => object | Promise<object>,
   run: (cfg: OpenClawConfig, paths: string[]) => Promise<void>,
-  textChunkLimit?: number,
+  slack: NonNullable<OpenClawConfig["channels"]>["slack"] = {},
 ) {
   const paths: string[] = [];
   for (const key of ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"]) {
@@ -39,16 +42,14 @@ function withSlackApi(
       const url = request.url ?? "";
       paths.push(url);
       request.resume();
-      void Promise.resolve(respond(url, paths.length)).then((payload) => {
-        response
-          .writeHead(200, { "content-type": "application/json" })
-          .end(JSON.stringify(payload));
+      void Promise.resolve(respond(url, paths.length, response)).then((payload) => {
+        response.setHeader("content-type", "application/json");
+        response.end(JSON.stringify(payload));
       });
     },
     async (baseUrl) => {
       vi.stubEnv("SLACK_API_URL", `${baseUrl}/api/`);
-      const slack = { botToken: "xoxb-direct-authority", textChunkLimit };
-      await run({ channels: { slack } }, paths);
+      await run({ channels: { slack: { botToken: "xoxb-direct-authority", ...slack } } }, paths);
     },
   );
 }
@@ -99,7 +100,7 @@ it.each(["core", "DM", "native"])("rechecks authority after %s preparation", asy
       }
       expect(paths).toEqual([dm ? OPEN : POST]);
     },
-    stage === "core" ? 5 : undefined,
+    stage === "core" ? { textChunkLimit: 5 } : undefined,
   );
 });
 
@@ -145,3 +146,77 @@ it("reuses the credential-scoped DM cache across direct sends", async () => {
     },
   );
 });
+function interactiveAction(
+  cfg: OpenClawConfig,
+  action: ChannelMessageActionContext["action"],
+  params: Record<string, unknown>,
+  assertDirectAdapterHandoff?: () => void,
+) {
+  return createSlackActions("slack").handleAction!({
+    channel: "slack",
+    action,
+    cfg,
+    accountId: "default",
+    requesterAccountId: "default",
+    params,
+    toolContext: { currentChannelProvider: "slack", currentChannelId: "channel:C_CURRENT" },
+    assertDirectAdapterHandoff,
+  });
+}
+
+it.each(["authorized lookup", "revoked lookup", "revoked retry", "accepted mutation"] as const)(
+  "%s preserves the request authority boundary",
+  async (scenario) => {
+    let live = true;
+    const accepted = scenario === "accepted mutation";
+    const retry = scenario === "revoked retry";
+    await withSlackApi(
+      (path, attempt, response) => {
+        if (scenario !== "authorized lookup") {
+          live = false;
+        }
+        if (retry) {
+          response.statusCode = 429;
+          response.setHeader("retry-after", "0");
+          return { ok: false, error: "ratelimited" };
+        }
+        return path === "/api/conversations.info"
+          ? { ok: true, channel: { id: "C_TARGET", name: "allowed" } }
+          : { ok: true, channel: accepted ? "C_CURRENT" : "C_TARGET", ts: `171234.${attempt}` };
+      },
+      async (cfg, paths) => {
+        const authority = directOptions(cfg, () => live);
+        const params = accepted
+          ? { to: "C_CURRENT", message: "accepted" }
+          : { channelId: "C_TARGET", messageId: "171234.1", message: "Updated" };
+        const action = interactiveAction(
+          cfg,
+          accepted ? "send" : "edit",
+          params,
+          authority.assertDirectAdapterHandoff,
+        );
+        if (scenario.startsWith("revoked")) {
+          await expect(action).rejects.toThrow(REVOKED);
+          expect(paths).toEqual(["/api/conversations.info"]);
+          return;
+        }
+        await expect(action).resolves.toMatchObject({ details: { ok: true } });
+        if (accepted) {
+          await expect(
+            interactiveAction(cfg, "send", { to: "C_CURRENT", message: "ordinary" }),
+          ).resolves.toMatchObject({ details: { ok: true } });
+        }
+        expect(paths).toEqual(
+          accepted ? [POST, POST] : ["/api/conversations.info", "/api/chat.update"],
+        );
+      },
+      {
+        actions: { messages: true },
+        groupPolicy: "allowlist",
+        ...(!accepted
+          ? { channels: { "#allowed": { enabled: true } }, dangerouslyAllowNameMatching: true }
+          : {}),
+      },
+    );
+  },
+);

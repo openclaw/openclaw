@@ -47,7 +47,7 @@ import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
-  resolveDaemonInstallRuntimeInputs,
+  resolveDaemonInstallPlanInputs,
   resolveDaemonServicePathDirs,
   type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
@@ -110,6 +110,7 @@ function* configSecretRefsForService(config: OpenClawConfig) {
 const PRESERVED_OPENCLAW_OPERATOR_OPT_IN_ENV_KEYS = new Set([
   "OPENCLAW_CLI_CONTAINER_BYPASS",
   "OPENCLAW_CONFIG_READONLY",
+  "OPENCLAW_CONFIG_READONLY_NOTICE",
   "OPENCLAW_CONTAINER_HINT",
   "OPENCLAW_GATEWAY_STARTUP_TRACE",
 ]);
@@ -183,7 +184,7 @@ async function buildGatewayInstallEnvironment(params: {
   const containsConfigSecretRef =
     hasSecretRefCandidate(params.config, params.config?.secrets?.defaults) ||
     collectEnvSecretRefIds(params.config).size > 0;
-  const configEnvKeys = new Set<string>();
+  const secretRefEnvKeys = new Set<string>();
   const configSecretRefEnvironment: Record<string, string> = {};
   {
     const { env, config, warn } = params;
@@ -216,11 +217,11 @@ async function buildGatewayInstallEnvironment(params: {
           const surface =
             gatewayAuthSurfaceStates[target.entry.id as keyof typeof gatewayAuthSurfaceStates];
           if (surface?.active) {
-            configEnvKeys.add(key.toUpperCase());
+            secretRefEnvKeys.add(key.toUpperCase());
           }
           continue;
         }
-        configEnvKeys.add(key.toUpperCase());
+        secretRefEnvKeys.add(key.toUpperCase());
         if (Object.hasOwn(stateDirDotEnvEnvironment, key)) {
           continue;
         }
@@ -232,7 +233,6 @@ async function buildGatewayInstallEnvironment(params: {
       }
     }
   }
-  const configSecretRefKeys = [...configEnvKeys];
   let authStore = params.authStore;
   if (!authStore) {
     // Keep the daemon install cold path cheap when there is no auth store to read.
@@ -355,6 +355,9 @@ async function buildGatewayInstallEnvironment(params: {
         "Auth profile",
       );
       continue;
+    }
+    if (params.platform === "linux") {
+      secretRefEnvKeys.add(key.toUpperCase());
     }
     const value = params.env[key]?.trim();
     if (!value) {
@@ -493,25 +496,19 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(ambientProviderApiKeyEnvironment, { valueSource: "file" });
   addServiceEnvPlanEntries(stateDirDotEnvEnvironment, {});
   addServiceEnvPlanEntries(configEnvironment, {});
-  addServiceEnvPlanEntries(configSecretRefEnvironment, {});
   addServiceEnvPlanEntries(execSecretRefPassEnvEnvironment, {});
-  addServiceEnvPlanEntries(authProfileEnvironment, {});
-  const configSecretRefKeyEnvironment = Object.fromEntries(
-    configSecretRefKeys.map((key) => [key, "1"]),
+  const secretRefKeyEnvironment = Object.fromEntries(
+    [...secretRefEnvKeys].map((key) => [key, "1"]),
   );
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
       ...durableEnvironment,
-      ...configSecretRefKeyEnvironment,
-      ...configSecretRefEnvironment,
+      ...secretRefKeyEnvironment,
     },
     { omitKeys: Object.keys(params.serviceEnvironment) },
   );
-  const configSecretRefKeySet = new Set(configSecretRefKeys);
   const existingSecretRefRenderEnvironment = omitEnvironmentEntriesShadowedBy(
-    collectExistingServiceEnvVars(params.existingEnvironment, (key) =>
-      configSecretRefKeySet.has(key),
-    ),
+    collectExistingServiceEnvVars(params.existingEnvironment, (key) => secretRefEnvKeys.has(key)),
     [
       stateDirDotEnvRenderEnvironment,
       configSecretRefEnvironment,
@@ -526,6 +523,10 @@ async function buildGatewayInstallEnvironment(params: {
   if (environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
   }
+  // Managed-key replacement clears values; publish credentials after that cleanup.
+  addServiceEnvPlanEntries(authProfileEnvironment, {
+    valueSource: platform === "linux" ? "file" : "inline",
+  });
   const managedKeys = readManagedServiceEnvKeysFromEnvironment({
     OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedServiceEnvKeys,
   });
@@ -582,7 +583,12 @@ export async function buildGatewayInstallPlan(params: {
   runtimePath?: string;
   pinnedRuntimePath?: string;
   /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
-  serviceCli?: { executable: string; entrypoint: string };
+  serviceCli?: { executable: string; entrypoint: string | null };
+  /**
+   * Plan for an install that runs the durable copy of a disposable CLI; the plan's durableCliReplacement
+   * goes to installDurableServiceCli, which reuses or replaces it. Comparisons and Doctor omit it.
+   */
+  installDurableCli?: boolean;
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -624,16 +630,14 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env,
-    runtime: params.runtime,
-    runtimeExplicit: params.runtimeExplicit,
-    devMode: params.serviceCli ? false : params.devMode,
-    runtimePath: params.runtimePath,
-    pinnedRuntimePath: params.pinnedRuntimePath,
-    wrapperPath,
-    warn: params.warn,
-  });
+  // The normalized wrapper decides whether the service runs the CLI entrypoint at all.
+  const { devMode, runtime, runtimePath, cliEntrypoint, durableCliReplacement } =
+    await resolveDaemonInstallPlanInputs({
+      ...params,
+      service: "gateway",
+      env,
+      wrapperPath,
+    });
   const serviceInputEnv = { ...env };
   if (wrapperPath) {
     serviceInputEnv[OPENCLAW_WRAPPER_ENV_KEY] = wrapperPath;
@@ -652,7 +656,7 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     runtimePath,
     wrapperPath,
-    cliEntrypoint: params.serviceCli?.entrypoint,
+    cliEntrypoint,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
@@ -676,9 +680,13 @@ export async function buildGatewayInstallPlan(params: {
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
       runtimePath,
-      argv: params.serviceCli && [params.serviceCli.executable, params.serviceCli.entrypoint],
+      argv: params.serviceCli && [
+        params.serviceCli.executable,
+        ...(params.serviceCli.entrypoint ? [params.serviceCli.entrypoint] : []),
+      ],
       env: serviceInputEnv,
       platform,
+      durableCliPlanned: durableCliReplacement !== undefined,
     }),
   });
 
@@ -702,6 +710,7 @@ export async function buildGatewayInstallPlan(params: {
       (platform === "darwin" ? resolveGatewayStateDir(serviceInputEnv) : undefined),
     environment,
     ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
+    ...(durableCliReplacement ? { durableCliReplacement } : {}),
   };
 }
 

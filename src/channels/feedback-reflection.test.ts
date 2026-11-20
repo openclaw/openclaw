@@ -1,5 +1,4 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runChannelFeedbackReflection } from "./feedback-reflection.js";
 import {
   consumeChannelAdmissionEvidence,
@@ -19,7 +18,16 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
 }));
 vi.mock("./turn/lifecycle.js", () => ({ dispatchRoutedChannelTurn }));
 
-const cfg = {} as OpenClawConfig;
+const cfg = {};
+const learning = "Answer the direct question first.";
+const complete = {
+  status: "complete",
+  learning,
+  storePath: "/state/main/sessions.json",
+  followUp: false,
+  userMessage: undefined,
+  responseLength: 33,
+};
 function reflectionParams(id: string) {
   return {
     cfg,
@@ -34,6 +42,9 @@ function reflectionParams(id: string) {
 
 function deliverReflection(text: string) {
   dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
+    expect(
+      consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(plan.ctxPayload)),
+    ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
     await plan.delivery.deliver({ text });
     return { admission: { kind: "dispatch" }, dispatched: true };
   });
@@ -41,22 +52,10 @@ function deliverReflection(text: string) {
 
 beforeEach(() => vi.clearAllMocks());
 
-it("classifies internal reflection as explicitly unsupported provenance", async () => {
-  dispatchRoutedChannelTurn.mockImplementationOnce(async (plan) => {
-    expect(
-      consumeChannelAdmissionEvidence(
-        readChannelContextAdmissionEvidence(plan.ctxPayload as object),
-      ),
-    ).toMatchObject({ ingressState: "unsupported", decisionCoverage: "unsupported" });
-    return { admission: { kind: "dispatch" }, dispatched: false };
-  });
-  await runChannelFeedbackReflection(reflectionParams("unsupported"));
-});
-
 it("runs reflection in the original session and enforces cooldown", async () => {
   deliverReflection(
     JSON.stringify({
-      learning: "Answer the direct question first.",
+      learning,
       followUp: true,
       userMessage: "Want a shorter version?",
     }),
@@ -69,9 +68,7 @@ it("runs reflection in the original session and enforces cooldown", async () => 
   };
 
   await expect(runChannelFeedbackReflection(params)).resolves.toEqual({
-    status: "complete",
-    learning: "Answer the direct question first.",
-    storePath: "/state/main/sessions.json",
+    ...complete,
     followUp: true,
     userMessage: "Want a shorter version?",
     responseLength: 104,
@@ -91,22 +88,12 @@ it("runs reflection in the original session and enforces cooldown", async () => 
   expect(dispatchRoutedChannelTurn).toHaveBeenCalledTimes(1);
 });
 
-it("preserves a plain-text reflection as internal learning", async () => {
-  deliverReflection("Answer the direct question first.");
-
-  await expect(runChannelFeedbackReflection(reflectionParams("plain"))).resolves.toEqual({
-    status: "complete",
-    learning: "Answer the direct question first.",
-    storePath: "/state/main/sessions.json",
-    followUp: false,
-    userMessage: undefined,
-    responseLength: 33,
-  });
-});
-
-it("does not treat structured follow-up values as directives", async () => {
-  deliverReflection(JSON.stringify({ learning: "Be concise.", followUp: ["yes"] }));
-
-  const result = await runChannelFeedbackReflection(reflectionParams("structured"));
-  expect(result).toMatchObject({ status: "complete", followUp: false });
+const structured = JSON.stringify({ learning, followUp: ["yes"] });
+it.each([
+  ["plain", learning, complete],
+  ["empty", "", { status: "empty" }],
+  ["structured", structured, { ...complete, responseLength: structured.length }],
+] as const)("parses %s reflection without inventing directives", async (id, text, expected) => {
+  deliverReflection(text);
+  await expect(runChannelFeedbackReflection(reflectionParams(id))).resolves.toEqual(expected);
 });

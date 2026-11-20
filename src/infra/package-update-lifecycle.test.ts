@@ -194,13 +194,12 @@ async function writeUncertainLock(
 
 describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
   it.each([
-    ["legacy", undefined, 1000, false],
-    ["unbounded", null, undefined, false],
-    ["explicit", 5000, 5000, false],
-    ["selected Node", undefined, 1000, true],
+    ["legacy", undefined, 1000],
+    ["unbounded", null, undefined],
+    ["explicit", 5000, 5000],
   ] as const)(
-    "carries %s admission settings to both lifecycle scripts",
-    async (_, workTimeoutMs, expectedTimeout, selectNode) => {
+    "carries %s admission settings and the selected Node to both lifecycle scripts",
+    async (_, workTimeoutMs, expectedTimeout) => {
       fixture.params.workTimeoutMs = workTimeoutMs;
       const scriptTimeouts: Array<number | undefined> = [];
       const selectedNode = path.join(fixture.globalRoot, "selected-node");
@@ -210,23 +209,19 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         async () => {},
         async (step) => {
           scriptTimeouts.push(step.timeoutMs);
-          if (selectNode) {
-            expect(admitted).toBe(true);
-            expect(step.argv[0]).toBe(selectedNode);
-            expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
-          }
+          expect(admitted).toBe(true);
+          expect(step.argv[0]).toBe(selectedNode);
+          expect(step.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(selectedNode));
           return completeLifecycleStep(step);
         },
-        selectNode
-          ? {
-              beforeVerifyCandidate: async (root) => {
-                await expect(readText(root, pendingName)).resolves.toBe(pendingBytes);
-                nodeRunner = selectedNode;
-                admitted = true;
-              },
-              resolveLifecycleNodeRunner: () => nodeRunner,
-            }
-          : {},
+        {
+          beforeVerifyCandidate: async (root) => {
+            await expect(readText(root, pendingName)).resolves.toBe(pendingBytes);
+            nodeRunner = selectedNode;
+            admitted = true;
+          },
+          resolveLifecycleNodeRunner: () => nodeRunner,
+        },
       );
       expect(result).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
       expect(lifecycleCalls).toEqual(["npm-package-preinstall", "npm-package-postinstall"]);

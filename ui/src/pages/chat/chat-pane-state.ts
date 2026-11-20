@@ -1,3 +1,5 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
@@ -8,25 +10,100 @@ import {
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
+import type {
+  SessionCapability,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatProps } from "./chat-view.tsx";
+import { dismissChatRunError, hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 
 registerChatSessionEnglish();
+
+export function createSessionObservationRefresh(
+  sessions: Pick<SessionCapability, "describe" | "canonicalListRevision">,
+  target: { key: string; agentId: string },
+  client: GatewayBrowserClient,
+  current: () => boolean,
+  observation: () => SessionRowObservation | null,
+  retryAfterList = false,
+) {
+  let reading: Promise<void> | null = null;
+  let pending = false;
+  let failedListRevision: number | undefined;
+  const refresh = () => {
+    if (!current()) {
+      return;
+    }
+    pending = true;
+    const selected = observation();
+    if (reading || !selected?.isCurrent()) {
+      return;
+    }
+    pending = false;
+    failedListRevision = undefined;
+    const reconcile = selected.captureReconcile();
+    reading = sessions
+      .describe(target, { client })
+      .then(({ session }) => {
+        if (current()) {
+          reconcile(session ?? undefined);
+        }
+      })
+      .catch(() => {
+        failedListRevision = sessions.canonicalListRevision;
+      })
+      .finally(() => {
+        reading = null;
+        if (pending) {
+          refresh();
+        }
+      });
+  };
+  return {
+    refresh,
+    retryFailedRead: () => {
+      if (
+        failedListRevision !== undefined &&
+        (!retryAfterList || sessions.canonicalListRevision > failedListRevision)
+      ) {
+        refresh();
+      }
+    },
+  };
+}
 
 export function createChatPaneRunRecoveryActions(
   state: Pick<
     ChatPageHost,
-    "sessionKey" | "connected" | "chatRunId" | "chatSending" | "handleSendChat"
+    | "sessionKey"
+    | "connected"
+    | "chatRunId"
+    | "chatSending"
+    | "handleSendChat"
+    | "chatMessages"
+    | "chatMessage"
+    | "chatAttachments"
+    | "chatMentions"
+    | "chatReplyTarget"
+    | "chatGoalDraftMode"
+    | "chatRunError"
+    | "chatDismissedRunErrorId"
   >,
   options: {
     canSend: boolean;
     isCurrent: () => boolean;
     latestFailedRunId: () => string | undefined;
+    onRewindMessage?: ChatProps["onRewindMessage"];
+    onStartNewSession?: (summary: string) => Promise<boolean>;
   },
-): Pick<ChatProps, "onRetryRun"> {
+): Pick<
+  ChatProps,
+  "onRetryRun" | "onStartNewSession" | "failedMessageEditSource" | "onDismissRunError"
+> {
   const sessionKey = state.sessionKey;
   const ownsFailure = (runId: string) =>
     options.isCurrent() &&
@@ -35,7 +112,19 @@ export function createChatPaneRunRecoveryActions(
     !state.chatRunId &&
     !state.chatSending &&
     options.latestFailedRunId() === runId;
+  const failedRunId = options.latestFailedRunId();
+  const rewind = options.onRewindMessage;
   return {
+    failedMessageEditSource:
+      rewind && failedRunId
+        ? {
+            state,
+            runId: failedRunId,
+            isCurrent: () => ownsFailure(failedRunId),
+            readIdentity: readSessionMessageIdentity,
+            rewind,
+          }
+        : undefined,
     onRetryRun: options.canSend
       ? (runId) => {
           if (ownsFailure(runId)) {
@@ -45,6 +134,16 @@ export function createChatPaneRunRecoveryActions(
           }
         }
       : undefined,
+    onStartNewSession:
+      options.canSend && options.onStartNewSession
+        ? (runId, summary) => {
+            if (ownsFailure(runId)) {
+              void options.onStartNewSession?.(summary);
+            }
+          }
+        : undefined,
+    // Reply failures can be dismissed; placement failures keep their recovery action.
+    onDismissRunError: state.chatRunError ? () => dismissChatRunError(state) : undefined,
   };
 }
 
@@ -85,15 +184,13 @@ export function createChatPaneSendActions(
   };
 }
 
-type SelectedSessionProjectionState = {
-  chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
-  chatQueueModeOverride?: GatewaySessionRow["queueMode"];
-  selectedChatSessionArchived: boolean;
-  selectedChatSessionIncognito: boolean;
-};
-
 export function applySelectedSessionProjection(
-  state: SelectedSessionProjectionState,
+  state: {
+    chatEffectiveQueueMode?: GatewaySessionRow["effectiveQueueMode"];
+    chatQueueModeOverride?: GatewaySessionRow["queueMode"];
+    selectedChatSessionArchived: boolean;
+    selectedChatSessionIncognito: boolean;
+  },
   session: GatewaySessionRow | undefined,
 ): session is GatewaySessionRow {
   if (!session) {
@@ -159,7 +256,7 @@ export function dismissChatError(state: { chatError?: string | null; lastError: 
 }
 
 export function chatSubmitState(
-  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange">,
+  state: ChatState & Pick<ChatPageHost, "handleChatDraftChange" | "sessionsResult">,
   unavailable: boolean,
   nativeChat: boolean,
 ) {
@@ -172,6 +269,13 @@ export function chatSubmitState(
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
   return {
+    initialSubmission:
+      nativeChat &&
+      state.chatMessages.length === 1 &&
+      Boolean(
+        state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
+      ),
+    goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
     ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
     submitDisabledReason:
       pendingReason ?? (routePending || unavailable ? (failure ?? t("chat.thread.loading")) : null),

@@ -457,6 +457,70 @@ describe("oxlint config", () => {
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
+  it("keeps release line limits advisory and suppression checks strict", () => {
+    const { root, write } = makeFixture("release-limits", {
+      categories: { correctness: "off" },
+      overrides: [
+        {
+          files: ["*.ts"],
+          rules: {
+            "max-lines": ["error", { max: 1 }],
+            "max-lines-per-function": ["error", { max: 1 }],
+            "max-params": ["error", 1],
+            "no-var": "error",
+          },
+        },
+      ],
+    });
+    linkDependencies(root);
+    write(
+      "fixture.ts",
+      "export function f(a: number, b: number) {\n  var c = a;\n  return c + b;\n}\n",
+    );
+    const env = { GITHUB_ACTIONS: "false", OPENCLAW_RELEASE_CONTEXT_REF: "release/2026.11.4" };
+    const suppressed =
+      "/* oxlint-disable max-lines, max-lines-per-function -- retained size exception */\nexport function f(a: number) {\n  return a;\n}\n";
+    write("suppressed.ts", suppressed);
+    const strictSuppressions = () =>
+      runTool(
+        root,
+        [
+          oxlintRunner,
+          "--openclaw-focused-config",
+          "--report-unused-disable-directives-severity",
+          "error",
+          "--format=json",
+          "suppressed.ts",
+        ],
+        { env: { ...process.env, ...env } },
+      );
+    expect(parseReport(checked(strictSuppressions(), 0)).diagnostics).toEqual([]);
+    write(
+      "suppressed.ts",
+      suppressed + "/* oxlint-disable no-var -- unused correctness exception */\n",
+    );
+    expect(parseReport(checked(strictSuppressions(), 1)).diagnostics).toMatchObject([
+      { severity: "error" },
+    ]);
+    const report = parseReport(checked(runFocused(root, ["fixture.ts"], env), 1));
+    expect(
+      report.diagnostics
+        .map(({ code, severity }) => ({ code, severity }))
+        .toSorted((left, right) => left.code.localeCompare(right.code)),
+    ).toEqual([
+      { code: "eslint(max-lines-per-function)", severity: "warning" },
+      { code: "eslint(max-lines)", severity: "warning" },
+      { code: "eslint(max-params)", severity: "error" },
+      { code: "eslint(no-var)", severity: "error" },
+    ]);
+    write("fixture.ts", "export function f(a: number) {\n  const c = a;\n  return c;\n}\n");
+    expect(
+      parseReport(checked(runFocused(root, ["fixture.ts"], env), 0)).diagnostics.map(
+        ({ severity }) => severity,
+      ),
+    ).toEqual(["warning", "warning"]);
+  });
+
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
     const { root, write, json } = makeFixture(
@@ -748,6 +812,7 @@ describe("oxlint config", () => {
         const result = runTool(root, [oxlintRunner, "--openclaw-focused-config", "fixture.ts"], {
           env: {
             ...process.env,
+            CI: github ? "true" : "false",
             GITHUB_ACTIONS: github ? "true" : "false",
             OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
             OPENCLAW_CI_STATIC_EVIDENCE: "1",
@@ -755,7 +820,7 @@ describe("oxlint config", () => {
           },
         });
         checked(result, 1);
-        expect(result.stdout + result.stderr).toContain("Failed to parse");
+        expect(result.stdout + result.stderr).toMatch(/Failed to (?:parse|load)[^\n]*config/u);
         expect(result.stdout).not.toContain("[ci-static:oxlint:leaf]");
       }
     }

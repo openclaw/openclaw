@@ -814,6 +814,11 @@ describe("bundled provider refresh composition", () => {
   });
 
   for (const owner of ["model manager", "SDK AuthStorage"] as const) {
+    // Exercise each adapter failure through SDK storage; native keeps builtin, facade, and plugin paths.
+    const failureRoutes =
+      owner === "SDK AuthStorage"
+        ? routes
+        : routes.filter((route) => !route.plugin || route.provider === "xai");
     describe(owner + " real bundled refresh composition", () => {
       it.each(routes)("$name serializes, parses and durably publishes rotation", async (route) => {
         await run(route, "success");
@@ -824,7 +829,7 @@ describe("bundled provider refresh composition", () => {
           await run(route, "omitted-refresh");
         },
       );
-      it.each(routes)(
+      it.each(failureRoutes)(
         "$name fences a malformed returned rotation rather than retaining the old token",
         async (route) => {
           await run(route, "invalid-refresh");
@@ -836,13 +841,13 @@ describe("bundled provider refresh composition", () => {
           await run(route, "identity-failure");
         },
       );
-      it.each(routes)(
+      it.each(failureRoutes)(
         "$name quarantines a consumed grant despite a transient-looking lost response",
         async (route) => {
           await run(route, "socket");
         },
       );
-      it.each(routes)(
+      it.each(failureRoutes)(
         "$name preserves structured rejection on HTTP 200 without replay",
         async (route) => {
           await run(route, "rejected");

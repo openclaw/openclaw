@@ -47,45 +47,25 @@ async function explain(opts: Omit<Parameters<typeof sandboxExplainCommand>[0], "
 }
 
 describe("sandbox explain command", () => {
+  const direct = "agent:builder:telegram:direct:peer";
+  const slash = "telegram:slash:123";
+  const unknown = "unregistered-channel:slash:123";
+  const slashKey = `agent:builder:${slash}`;
+  const operatorKey = "agent:builder:operator";
   it.each([
-    {
-      label: "canonical delivery before legacy key",
-      session: "agent:builder:telegram:direct:peer",
-      delivery: "slack",
-      channel: "slack",
-      mainKey: "main",
-    },
-    {
-      label: "internal delivery without registration",
-      session: "agent:builder:telegram:direct:peer",
-      delivery: "webchat",
-      channel: "webchat",
-      mainKey: "main",
-    },
-    {
-      label: "unknown delivery falls back to legacy key",
-      session: "agent:builder:telegram:direct:peer",
-      delivery: "unregistered-channel",
-      channel: "telegram",
-      mainKey: "main",
-    },
-    {
-      label: "short configured main is not a channel",
-      session: "telegram",
-      delivery: undefined,
-      channel: undefined,
-      mainKey: "telegram",
-    },
-    {
-      label: "blank session selects configured main",
-      session: "   ",
-      delivery: undefined,
-      channel: undefined,
-      mainKey: "operator",
-    },
-  ])(
-    "reports $label through the stored session",
-    async ({ session, delivery, channel, mainKey }) => {
+    ["canonical delivery", direct, direct, "slack", "slack", "main"],
+    ["internal delivery", direct, direct, "webchat", "webchat", "main"],
+    ["unknown delivery", direct, direct, "unregistered-channel", "telegram", "main"],
+    ["short main", "telegram", "agent:builder:telegram", undefined, undefined, "telegram"],
+    ["blank session", "   ", operatorKey, undefined, undefined, "operator"],
+    ["main alias", "main", operatorKey, undefined, undefined, "operator"],
+    ["unscoped slash", slash, slashKey, undefined, "telegram", "main"],
+    ["scoped slash", slashKey, slashKey, undefined, "telegram", "main"],
+    ["stored slash delivery", slash, slashKey, "slack", "slack", "main"],
+    ["unknown alias", unknown, `agent:builder:${unknown}`, undefined, undefined, "main"],
+  ] as const)(
+    "reports %s through the stored session",
+    async (_label, session, sessionKey, delivery, channel, mainKey) => {
       const previousRegistry = captureActivePluginRegistrySnapshot();
       try {
         setActivePluginRegistry(
@@ -99,9 +79,6 @@ describe("sandbox explain command", () => {
         );
         await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
           const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
-          const sessionKey = session.includes(":")
-            ? session
-            : `agent:builder:${session.trim() || mainKey}`;
           if (delivery) {
             await replaceSessionEntry(
               { storePath, sessionKey },
@@ -125,7 +102,7 @@ describe("sandbox explain command", () => {
               tools: { elevated: { allowFrom: { telegram: ["*"], slack: ["*"], webchat: ["*"] } } },
             },
           );
-          const result = await explain({ agent: "builder", session });
+          const result = await explain({ session });
           expect(result.sessionKey).toBe(sessionKey);
           expect(result.elevated.channel).toBe(channel);
           expect(result.elevated.allowedByConfig).toBe(channel !== undefined);
@@ -140,18 +117,88 @@ describe("sandbox explain command", () => {
     },
   );
 
+  it("resolves the channel from a slash alias when the CLI registry has no channel plugins", async () => {
+    // `openclaw sandbox explain` loads plugins with the sandbox-backends scope,
+    // which activates an empty registry for stock docker/podman configs. Channel
+    // inference must not depend on runtime channel plugin registration.
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      setActivePluginRegistry(createTestRegistry([]));
+      await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+        const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+        mockCfg = config(
+          { mode: "off" },
+          { builder: { workspace: state.workspaceDir } },
+          {
+            session: { store: storePath, mainKey: "main" },
+            tools: { elevated: { allowFrom: { telegram: ["123456"] } } },
+          },
+        );
+
+        const result = await explain({ session: "telegram:slash:123456" });
+        expect(result.sessionKey).toBe("agent:builder:telegram:slash:123456");
+        expect(result.elevated.channel).toBe("telegram");
+        expect(result.elevated.allowedByConfig).toBe(true);
+        expect(result.elevated.allowFrom.global).toEqual(["123456"]);
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
+
+  it("resolves stored delivery channel when the CLI registry has no channel plugins", async () => {
+    const previousRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      setActivePluginRegistry(createTestRegistry([]));
+      await withOpenClawTestState({ label: "sandbox-explain-channel" }, async (state) => {
+        const storePath = path.join(state.sessionsDir("builder"), "sessions.json");
+        // The key carries no channel, so only the stored delivery context can
+        // supply telegram. This fails if the stored-delivery fallback is removed.
+        const sessionKey = "agent:builder:main";
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          {
+            sessionId: "explain-session",
+            updatedAt: 1,
+            delivery: {
+              kind: "external",
+              route: { channel: "telegram", target: { to: "123456" } },
+              context: { channel: "telegram", to: "123456" },
+              origin: { provider: "telegram" },
+            },
+          },
+        );
+        mockCfg = config(
+          { mode: "off" },
+          { builder: { workspace: state.workspaceDir } },
+          {
+            session: { store: storePath, mainKey: "main" },
+            tools: { elevated: { allowFrom: { telegram: ["123456"] } } },
+          },
+        );
+
+        const result = await explain({ session: sessionKey });
+        expect(result.elevated.channel).toBe("telegram");
+        expect(result.elevated.allowedByConfig).toBe(true);
+        expect(result.elevated.allowFrom.global).toEqual(["123456"]);
+      });
+    } finally {
+      restoreActivePluginRegistrySnapshot(previousRegistry);
+    }
+  });
   it.each([
     [
-      "unknown",
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
     ],
-    ["blank", "", "--agent must not be blank"],
-  ])("rejects an explicit %s agent", async (_label, agent, message) => {
+    [" ", "--agent must not be blank"],
+  ])("rejects an explicit agent %j", async (agent, message) => {
     mockCfg = config({ mode: "off" }, { main: {} });
-    await expect(explain({ agent })).rejects.toThrow(message);
+    await expect(explain({ agent })).rejects.toMatchObject({
+      message,
+      name: agent.trim() ? "Error" : "ExpectedCliError",
+    });
   });
-
   it("reads a missing session without creating or registering an agent database", async () => {
     await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
       const agentDatabasePath = path.join(state.agentDir("readonly"), "openclaw-agent.sqlite");
@@ -283,6 +330,6 @@ describe("sandbox explain command", () => {
   it("rejects a fully qualified session from a different agent", async () => {
     mockCfg = config({ mode: "non-main" }, { main: {}, builder: {} });
     const execution = explain({ agent: "builder", session: "agent:main:main" });
-    await expect(execution).rejects.toThrow('agent "builder" does not match session agent "main"');
+    await expect(execution).rejects.toThrow('belongs to "main", not "builder"');
   });
 });

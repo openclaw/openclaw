@@ -1,23 +1,12 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
-const mocks = vi.hoisted(() => {
-  const logs: string[] = [];
-  const runtime = {
-    log: vi.fn((value: unknown) => logs.push(String(value))),
-    error: vi.fn(),
-    writeJson: vi.fn((value: unknown, space = 2) =>
-      logs.push(JSON.stringify(value, null, space > 0 ? space : undefined)),
-    ),
-    writeStdout: vi.fn((value: string) =>
-      logs.push(value.endsWith("\n") ? value.slice(0, -1) : value),
-    ),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  const { runtimeLogs: logs, defaultRuntime: runtime } = createCliRuntimeMock(vi);
   return { logs, runtime, searchClawHubPackages: vi.fn() };
 });
 
@@ -55,10 +44,26 @@ describe("plugins search command", () => {
     mocks.searchClawHubPackages.mockReset();
   });
 
+  it.each(["before", "result", "error"])("cancels search: %s", async (mode) => {
+    const scope = new AsyncWorkScope();
+    mocks.searchClawHubPackages.mockImplementation(() => {
+      scope.beginClose();
+      return mode === "error" ? Promise.reject(new Error("late")) : Promise.resolve([]);
+    });
+    if (mode === "before") {
+      scope.beginClose();
+    }
+    await scope.run(() => runPluginsSearchCommand("calendar", { json: true }, mocks.runtime));
+    expect(mocks.searchClawHubPackages).toHaveBeenCalledTimes(mode === "before" ? 0 : 2);
+    expect(mocks.logs).toEqual([]);
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.exit).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["openclaw-calendar", "work", undefined, " --profile work", "openclaw-calendar@latest"],
     ["@openclaw/diffs", undefined, undefined, "", "@openclaw/diffs"],
-    ["discord", undefined, undefined, "", "discord@latest"],
     ["@composio/composio", "work", "staging", " --container staging", "@composio/composio"],
   ] satisfies [string, string | undefined, string | undefined, string, string][])(
     "searches ClawHub plugin families for %s",
@@ -79,23 +84,18 @@ describe("plugins search command", () => {
         () => runPluginsSearchCommand(["calendar"], { limit: 5 }, mocks.runtime),
       );
 
-      for (const family of ["code-plugin", "bundle-plugin"]) {
-        expect(mocks.searchClawHubPackages).toHaveBeenCalledWith({
-          query: "calendar",
-          family,
-          limit: 5,
-        });
-      }
-      expect(mocks.logs.join("\n")).toContain(packageName);
-      expect(mocks.logs.join("\n")).toContain(
-        `Install: openclaw${context} plugins install ${spec}`,
-      );
+      // catalog-search.test.ts owns family/query/limit forwarding; assert rendered results here.
+      const output = mocks.logs.join("\n");
+      expect(output).toContain("openclaw-calendar-bundle");
+      expect(output).toContain(packageName);
+      expect(output).toContain(`Install: openclaw${context} plugins install ${spec}`);
     },
   );
 
   it("formats catalog version labels while preserving raw JSON values", async () => {
-    const results = ["1.2.3", "v1.2.3", "V1.2.3", "canary", "  v1.2.3  ", undefined].map(
-      (latestVersion, index) => result(`plugin-${index}`, { latestVersion }),
+    // Version normalization variants are owned by skills-search-cli.test.ts.
+    const results = ["1.2.3", undefined].map((latestVersion, index) =>
+      result(`plugin-${index}`, { latestVersion }),
     );
     mocks.searchClawHubPackages.mockResolvedValue(results);
 
@@ -103,16 +103,8 @@ describe("plugins search command", () => {
     registerPluginsCli(program);
     await program.parseAsync(["plugins", "search", "version"], { from: "user" });
     const output = mocks.logs.join("\n");
-    for (const line of [
-      "plugin-0  bundle-plugin | community | v1.2.3\n",
-      "plugin-1  bundle-plugin | community | v1.2.3\n",
-      "plugin-2  bundle-plugin | community | V1.2.3\n",
-      "plugin-3  bundle-plugin | community | canary\n",
-      "plugin-4  bundle-plugin | community | v1.2.3\n",
-      "plugin-5  bundle-plugin | community\n",
-    ]) {
-      expect(output).toContain(line);
-    }
+    expect(output).toContain("plugin-0  bundle-plugin | community | v1.2.3\n");
+    expect(output).toContain("plugin-1  bundle-plugin | community\n");
     await program.parseAsync(["plugins", "search", "version", "--json"], { from: "user" });
     expect(mocks.runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ results }, 2);
   });

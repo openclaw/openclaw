@@ -17,7 +17,57 @@ const originalBytes = Buffer.from("unchanged native companion\n");
 const changedBytes = Buffer.from("different native companion\n");
 const modifiedAt = new Date("2020-01-01T00:00:00Z");
 
-function namespaceFixture() {
+it.each([
+  { recapture: false, swap: false },
+  { recapture: true, swap: false },
+  { recapture: false, swap: true },
+  { recapture: true, swap: true },
+])(
+  "verifies copy-like links (recapture: $recapture, source swap: $swap)",
+  ({ recapture, swap }) => {
+    const root = dirs.make("plugin-copying-link-");
+    const sourceDirectory = path.join(root, "source");
+    fs.mkdirSync(sourceDirectory);
+    const source = path.join(sourceDirectory, "addon.node");
+    fs.writeFileSync(source, originalBytes);
+    const capture = (name: string, previous?: PluginNativeNamespaceFact) => {
+      const capturedRoot = path.join(root, name);
+      fs.mkdirSync(capturedRoot);
+      const result = capturePluginNativeNamespace({
+        sourceDirectory,
+        boundary: sourceDirectory,
+        capturedRoot,
+        managed: true,
+        copyOnly: false,
+        previous,
+      });
+      finishPluginNativeNamespace(result.fact);
+      return result;
+    };
+    const previous = recapture ? capture("previous").fact : undefined;
+    const link = vi.spyOn(fs, "linkSync").mockImplementation((from, to) => {
+      fs.copyFileSync(from, to);
+      if (swap) {
+        fs.renameSync(from, `${String(from)}.original`);
+        fs.writeFileSync(from, changedBytes);
+      }
+    });
+    if (swap) {
+      expect(() => capture("next", previous)).toThrow(/Native plugin .*changed/);
+    } else {
+      const { fact, changed } = capture("next", previous);
+      const captured = path.join(fact.capturedRoot, "content", "addon.node");
+      expect(fs.readFileSync(captured)).toEqual(originalBytes);
+      expect(fs.readFileSync(captured)).toEqual(fs.readFileSync(source));
+      expect(fs.statSync(captured).ino).not.toBe(fs.statSync(source).ino);
+      expect(changed.size).toBe(0);
+      expect(pluginNativeNamespaceIsCurrent(fact, sourceDirectory)).toBe(true);
+    }
+    expect(link).toHaveBeenCalled();
+  },
+);
+
+function namespaceFixture(phase: "fresh-copy" | "dormant-finish" | "recapture") {
   const root = dirs.make("plugin-native-namespace-");
   const sourceDirectory = path.join(root, "source");
   fs.mkdirSync(sourceDirectory);
@@ -25,7 +75,7 @@ function namespaceFixture() {
   fs.writeFileSync(sourceFile, originalBytes);
   // An exactly representable mtime lets the rewrite control restore it without rounding drift.
   fs.utimesSync(sourceFile, modifiedAt, modifiedAt);
-  return {
+  const fixture = {
     sourceDirectory,
     sourceFile,
     capturedFile: (name: string) => path.join(root, name, "content", "LICENSE.md"),
@@ -40,6 +90,22 @@ function namespaceFixture() {
         copyOnly: true,
         previous,
       }).fact;
+    },
+  };
+  const previous = phase === "fresh-copy" ? undefined : fixture.capture("first");
+  if (phase === "recapture") {
+    finishPluginNativeNamespace(previous!);
+  }
+  const name = phase === "recapture" ? "second" : "first";
+  return {
+    ...fixture,
+    previousFile: fixture.capturedFile("first"),
+    capturedFile: fixture.capturedFile(name),
+    observedFile: phase === "fresh-copy" ? sourceFile : fixture.capturedFile(name),
+    finish() {
+      const fact = phase === "dormant-finish" ? previous! : fixture.capture(name, previous);
+      finishPluginNativeNamespace(fact);
+      return fact;
     },
   };
 }
@@ -87,77 +153,46 @@ function changeOnRead(filename: string, change: "ctime" | "mtime" | "bytes") {
   return () => changed !== undefined;
 }
 
-it.each(["fresh-copy", "dormant-finish", "recapture"] as const)(
-  "admits unchanged companion bytes after a first-read ctime stamp during %s (#179923)",
-  (phase) => {
-    const fixture = namespaceFixture();
-    const previous = phase === "fresh-copy" ? undefined : fixture.capture("first");
-    if (phase === "recapture") {
-      finishPluginNativeNamespace(previous!);
-    }
-    const name = phase === "recapture" ? "second" : "first";
-    const capturedFile = fixture.capturedFile(name);
-    const observed = changeOnRead(
-      phase === "fresh-copy" ? fixture.sourceFile : capturedFile,
-      "ctime",
-    );
-
-    const fact = phase === "dormant-finish" ? previous! : fixture.capture(name, previous);
-    finishPluginNativeNamespace(fact);
-
-    expect(observed()).toBe(true);
-    expect(fs.readFileSync(capturedFile)).toEqual(originalBytes);
-    expect(fact.members["LICENSE.md"]).toMatchObject({
-      sizeBytes: originalBytes.length,
-      contentHash: createHash("sha256").update(originalBytes).digest("hex"),
-    });
-    // Accepted read-side metadata must be recorded, or the very next reuse invalidates itself.
-    expect(pluginNativeNamespaceIsCurrent(fact, fixture.sourceDirectory)).toBe(true);
-  },
-);
-
 it.each([
+  { phase: "fresh-copy", change: "ctime" },
+  { phase: "dormant-finish", change: "ctime" },
+  { phase: "recapture", change: "ctime" },
   { phase: "fresh-copy", change: "bytes" },
   { phase: "recapture", change: "previous-bytes" },
   { phase: "fresh-copy", change: "mtime" },
   { phase: "dormant-finish", change: "mtime" },
   { phase: "recapture", change: "mtime" },
-] as const)(
-  "rejects changed companion bytes or non-ctime metadata during $phase ($change)",
-  ({ phase, change }) => {
-    const fixture = namespaceFixture();
-    const previous = phase === "fresh-copy" ? undefined : fixture.capture("first");
-    if (phase === "recapture") {
-      finishPluginNativeNamespace(previous!);
-    }
-    const name = phase === "recapture" ? "second" : "first";
-    let observed: (() => boolean) | undefined;
-    if (change === "previous-bytes") {
-      // A real completed receipt supplies the digest; recapture must not bless edited retained bytes.
-      fs.writeFileSync(fixture.capturedFile("first"), changedBytes);
-    } else {
-      observed = changeOnRead(
-        phase === "fresh-copy" ? fixture.sourceFile : fixture.capturedFile(name),
-        change,
-      );
-    }
-
-    expect(() => {
-      const fact = phase === "dormant-finish" ? previous! : fixture.capture(name, previous);
-      finishPluginNativeNamespace(fact);
-    }).toThrow(/Native plugin (?:directory|companion) changed/);
-
-    if (observed) {
-      expect(observed()).toBe(true);
-    }
-    if (change === "bytes") {
-      // The copy retained the old read while the unmanaged source changed with size/mtime intact.
-      expect(fs.readFileSync(fixture.capturedFile(name))).toEqual(originalBytes);
-      expect(fs.readFileSync(fixture.sourceFile)).toEqual(changedBytes);
-      expect(fs.statSync(fixture.sourceFile, { bigint: true })).toMatchObject({
-        size: BigInt(originalBytes.length),
-        mtimeNs: BigInt(modifiedAt.getTime()) * 1_000_000n,
-      });
-    }
-  },
-);
+] as const)("admits only unchanged bytes during $phase ($change, #179923)", ({ phase, change }) => {
+  const fixture = namespaceFixture(phase);
+  let observed: (() => boolean) | undefined;
+  if (change === "previous-bytes") {
+    // A completed receipt must not bless edited retained bytes.
+    fs.writeFileSync(fixture.previousFile, changedBytes);
+  } else {
+    observed = changeOnRead(fixture.observedFile, change);
+  }
+  if (change === "ctime") {
+    const fact = fixture.finish();
+    expect(fs.readFileSync(fixture.capturedFile)).toEqual(originalBytes);
+    expect(fact.members["LICENSE.md"]).toMatchObject({
+      sizeBytes: originalBytes.length,
+      contentHash: createHash("sha256").update(originalBytes).digest("hex"),
+    });
+    // Accepted metadata must be recorded, or the next reuse invalidates itself.
+    expect(pluginNativeNamespaceIsCurrent(fact, fixture.sourceDirectory)).toBe(true);
+  } else {
+    expect(() => fixture.finish()).toThrow(/Native plugin (?:directory|companion) changed/);
+  }
+  if (observed) {
+    expect(observed()).toBe(true);
+  }
+  if (change === "bytes") {
+    // The copy retained the old read despite the same-size/mtime source rewrite.
+    expect(fs.readFileSync(fixture.capturedFile)).toEqual(originalBytes);
+    expect(fs.readFileSync(fixture.sourceFile)).toEqual(changedBytes);
+    expect(fs.statSync(fixture.sourceFile, { bigint: true })).toMatchObject({
+      size: BigInt(originalBytes.length),
+      mtimeNs: BigInt(modifiedAt.getTime()) * 1_000_000n,
+    });
+  }
+});

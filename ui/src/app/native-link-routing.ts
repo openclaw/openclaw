@@ -20,10 +20,6 @@ export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
   "openclaw:native-update-availability-changed";
 let nativeUpdatePosted: (() => void) | undefined;
 
-type NativeLinkRouting = {
-  dispose(): void;
-};
-
 type NativeLinkRoutingOptions = {
   signal?: AbortSignal;
   prepareNativeUpdateFallback?: () => { isCurrent: () => boolean; run: () => void };
@@ -90,28 +86,29 @@ function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; 
   return url && (url.protocol === "mailto:" || url.protocol === "tel:") ? { anchor, url } : null;
 }
 
-function postNativeLink(postMessage: NativeLinkPoster, url: URL): boolean {
+function postNativeLink(postMessage: NativeLinkPoster, url: URL | string): boolean {
   try {
-    postMessage({ type: "open-link", url: url.href, target: "external" });
+    postMessage({
+      type: "open-link",
+      url: typeof url === "string" ? new URL(url).href : url.href,
+      target: "external",
+    });
     return true;
   } catch {
     return false;
   }
 }
 
-export function postNativeExternalLink(url: string): boolean {
-  const poster = getNativeLinkPoster();
-  if (!poster) {
-    return false;
-  }
-  try {
-    return postNativeLink(poster, new URL(url));
-  } catch {
-    return false;
-  }
+export function hasNativeExternalLink(): boolean {
+  return getNativeLinkPoster() !== undefined;
 }
 
-export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
+export function postNativeExternalLink(url: string): boolean {
+  const poster = getNativeLinkPoster();
+  return poster ? postNativeLink(poster, url) : false;
+}
+
+export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}) {
   if (options.signal?.aborted || typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
   }

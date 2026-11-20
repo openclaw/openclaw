@@ -6,6 +6,7 @@ import {
   installMockGateway,
   requireRecord,
 } from "./chat-flow.test-support.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 export { textMessage };
@@ -35,12 +36,9 @@ export async function chatFixture(
 export const composer = (page: Page) => page.locator(".agent-chat__composer-combobox textarea");
 export const transcript = (page: Page) => page.locator(".chat-thread-inner");
 
-export const expectCount = (locator: Locator, count: number, options?: { timeout: number }) =>
-  expect.poll(() => locator.count(), options).toBe(count);
+export { expectCount, expectText as expectTextContains } from "./session-page.test-support.ts";
 export const expectText = (locator: Locator, text: string, options?: { timeout: number }) =>
   expect.poll(() => locator.textContent(), options).toBe(text);
-export const expectTextContains = (locator: Locator, text: string) =>
-  expect.poll(() => locator.textContent()).toContain(text);
 
 export async function sendMessage(page: Page, text: string, button = "Send message") {
   await composer(page).fill(text);
@@ -113,12 +111,8 @@ export const sessionState = (activeRunIds: string[], hasActiveRun: boolean, stat
 });
 
 export const configResponse = (runtimeConfig: Fields, hash: string) => ({
-  config: runtimeConfig,
-  hash,
-  issues: [],
-  raw: JSON.stringify(runtimeConfig),
+  ...configSnapshot(runtimeConfig, hash),
   runtimeConfig,
-  valid: true,
 });
 
 export const sessionRow = (key: string, label: string, updatedAt: number, fields: Fields = {}) => ({

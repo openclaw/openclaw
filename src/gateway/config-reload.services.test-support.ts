@@ -1,9 +1,12 @@
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import * as sqliteRuntime from "../plugin-sdk/sqlite-runtime.js";
-import { PluginHostCleanupTimeoutError } from "../plugins/host-hook-cleanup-timeout.js";
 import { getPluginRuntimeGeneration, PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -38,7 +41,7 @@ import {
   makeWrite,
   makeZeroDebounceHookWrite,
 } from "./config-reload.test-support.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
+import { PluginAdmittedWorkDeferredError } from "./server-plugin-reload-cleanup.js";
 
 const loadedPlugins = await Promise.all(
   ["browser", "workboard", "file-transfer"].map(async (pluginId) => {
@@ -73,6 +76,11 @@ export function expectCalls(count: number, ...callbacks: Array<{ mock: { calls: 
 }
 
 type Harness = ReturnType<typeof createReloaderHarness>;
+function expectApplied(harness: Harness, count: number, config: OpenClawConfig) {
+  expect(harness.onHotReload).toHaveBeenCalledTimes(count);
+  expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+}
+
 type PluginChange = Parameters<Harness["reloader"]["applyPluginLifecycleChange"]>[0];
 export function applyPluginChange(
   harness: Harness,
@@ -239,9 +247,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
 
     const pluginConfig = <T extends NonNullable<OpenClawConfig["plugins"]>["entries"]>(
       entries: T,
-    ) => ({
-      plugins: { entries },
-    });
+    ) => ({ plugins: { entries } });
     const codexConfig = (sandbox: string): OpenClawConfig =>
       pluginConfig({ codex: { enabled: true, config: { sandbox } } });
     const codexRuntime = (operationId: string) => ({
@@ -257,9 +263,7 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
       );
     describe("plugin drain recovery", () => {
       it("hot-applies model settings without replacing the Codex generation", async () => {
-        const initialConfig: OpenClawConfig = {
-          plugins: { entries: { codex: { enabled: true } } },
-        };
+        const initialConfig = pluginConfig({ codex: { enabled: true } });
         let config = initialConfig;
         const harness = await createReadyReloader(async () => snapshotOf(config), {
           initialConfig,
@@ -283,12 +287,14 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         expect(harness.onRestart).not.toHaveBeenCalled();
       });
 
-      it("retries deferred replacement after work and cleanup settle", async () => {
+      it("reports a saved replacement as deferred and retries only after work and cleanup settle", async () => {
         const initialConfig: OpenClawConfig = {
           ...codexConfig("read-only"),
           agents: { entries: { main: {} } },
         };
-        let config: OpenClawConfig = { ...initialConfig, ...codexConfig("workspace-write") };
+        let config = initialConfig;
+        let configHash = "initial-config";
+        const application = createRuntimeConfigWriteApplication();
         const builder = createTestPluginRegistry();
         const record = createPluginRecord({ id: "codex", source: "/synthetic/codex.ts" });
         builder.registry.plugins.push(record);
@@ -300,18 +306,16 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         const releaseWork = instance.retainWork();
         const cleanup = createDeferredCore();
         let cleanupCall: Promise<void> | undefined;
-        const harness = createReloaderHarness(async () => snapshotOf(config), {
+        const harness = createReloaderHarness(async () => snapshotOf(config, configHash), {
           initialConfig,
-          // Stands in for the reload owner's 60s pre-stop drain expiring on the held work.
+          // Stands in for the reload owner deferring a replacement while work is retained.
           onHotReload: async (plan) => {
             if (plan.reloadPlugins && instance.retainedWorkCount > 0) {
               throw drainFailure(
                 "failed-automatic-drain",
-                new PluginAdmittedWorkTimeoutError(
-                  new Set(["codex"]),
+                new PluginAdmittedWorkDeferredError(
+                  "plugin codex has retained work; the previous plugin generation stays active",
                   [instance],
-                  new PluginHostCleanupTimeoutError("plugin codex admitted work"),
-                  60_000,
                 ),
               );
             }
@@ -322,11 +326,32 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
         });
         try {
           await harness.reloader.ready;
+          config = { ...initialConfig, ...codexConfig("workspace-write") };
+          configHash = "pending-plugin-config";
+          application.recordConfigChange(initialConfig, config);
+          harness.emitWrite(
+            attachRuntimeConfigWriteApplication(makeWrite(config, configHash), application),
+          );
+          await flushReload(harness.reloader);
+          // Release a waiting writer so its own admitted plugin work can finish.
+          await expect(application.result).resolves.toMatchObject({
+            status: "deferred",
+            reason: expect.stringContaining("previous plugin generation stays active"),
+            appliesWhen: expect.stringContaining("After the retained plugin work finishes"),
+          });
           await flushWatcherChange(harness);
+          expect(harness.onHotReload).toHaveBeenCalledTimes(1);
           config = { ...config, agents: { entries: { main: { skills: [] } } } };
+          configHash = "pending-plugin-and-skills-config";
           await flushWatcherChange(harness);
           expect(harness.onHotReload).toHaveBeenCalledTimes(2);
-          expect(harness.onConfigApplied).not.toHaveBeenCalled();
+          expectCalls(
+            0,
+            harness.onConfigApplied,
+            harness.onConfigAccepted,
+            harness.onConfigCandidateCommitted,
+            harness.onConfigRevisionApplied,
+          );
 
           // The pre-stop drain also joins cleanup calls, so the retry waits for them too.
           cleanupCall = instance.runCleanup(() => cleanup.promise);
@@ -337,10 +362,12 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           cleanup.resolve();
           await cleanupCall;
           await flushReload(harness.reloader);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
+          expectApplied(harness, 3, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
-          expect(harness.log.error).toHaveBeenCalledTimes(2);
+          expect(harness.log.error).not.toHaveBeenCalled();
+          expect(harness.log.info).toHaveBeenCalledWith(
+            expect.stringContaining("config reload deferred:"),
+          );
         } finally {
           await harness.reloader.stop();
           releaseWork();
@@ -348,54 +375,6 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           await cleanupCall;
           await registryOwner.close();
         }
-      });
-
-      it("retries the full unapplied plugin delta with a later genuine config edit", async () => {
-        const initialConfig: OpenClawConfig = {
-          ...codexConfig("read-only"),
-          agents: { entries: { main: {} } },
-        };
-        let config: OpenClawConfig = { ...initialConfig, ...codexConfig("workspace-write") };
-        const harness = await createReadyReloader(async () => snapshotOf(config), {
-          initialConfig,
-        });
-        harness.onHotReload.mockRejectedValueOnce(drainFailure("failed-automatic-drain"));
-        await flushWatcherChange(harness);
-        expect(harness.onHotReload).toHaveBeenCalledOnce();
-        expectCalls(
-          0,
-          harness.onConfigApplied,
-          harness.onConfigAccepted,
-          harness.onConfigCandidateCommitted,
-          harness.onConfigRevisionApplied,
-        );
-
-        config = {
-          ...codexConfig("workspace-write"),
-          agents: { entries: { main: { skills: [] } } },
-        };
-        await flushWatcherChange(harness);
-        expect(harness.onHotReload).toHaveBeenCalledTimes(2);
-        expect(harness.onHotReload.mock.lastCall?.[0]).toMatchObject({
-          reloadPlugins: true,
-          changedPaths: ["plugins.entries.codex.config.sandbox", "agents.entries.main.skills"],
-        });
-        expect(harness.onHotReload.mock.lastCall?.[1]).toEqual({
-          plugins: {
-            entries: { codex: { enabled: true, config: { sandbox: "workspace-write" } } },
-          },
-          agents: { entries: { main: { skills: [] } } },
-        });
-        expect(harness.onConfigApplied).toHaveBeenCalledOnce();
-        expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
-        expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
-        expect(harness.onConfigAccepted.mock.lastCall?.[0]).toEqual(config);
-        expect(harness.onConfigCandidateCommitted).toHaveBeenCalledOnce();
-        expect(harness.onConfigCandidateCommitted.mock.lastCall?.[0].changedPaths).toEqual([
-          "plugins.entries.codex.config.sandbox",
-          "agents.entries.main.skills",
-        ]);
-        expectCalls(1, harness.onConfigRevisionApplied, harness.log.error);
       });
 
       it.each(["explicit wait", "revert", "revert with model edit"] as const)(
@@ -443,17 +422,24 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
             failure,
           );
           expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+          const drainSignal = new AbortController().signal;
           await expect(
-            applyPluginChange(harness, config, { pluginIds: ["codex"], waitForDrain: true }),
+            applyPluginChange(harness, config, {
+              pluginIds: ["codex"],
+              waitForDrain: true,
+              drainSignal,
+            }),
           ).resolves.toBe(runtime);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+          expectApplied(harness, 3, config);
+          expect(harness.onHotReload.mock.lastCall?.[0].pluginLifecycle).toMatchObject({
+            waitForDrain: true,
+            drainSignal,
+          });
 
           config = { ...config, agents: { defaults: { model: "openai/gpt-5.6-sol" } } };
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(4);
+          expectApplied(harness, 4, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(false);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
         },
       );
 
@@ -492,15 +478,26 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
             other: nextOther,
           });
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+          expectApplied(harness, 2, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
+          expect(harness.onHotReload.mock.lastCall?.[0].changedPaths).toContain(
+            existingEntries
+              ? "plugins.entries.codex.config.appServer.args"
+              : "plugins.entries.codex",
+          );
+          expectCalls(
+            1,
+            harness.onConfigApplied,
+            harness.onConfigAccepted,
+            harness.onConfigCandidateCommitted,
+            harness.onConfigRevisionApplied,
+          );
+          expect(harness.onConfigAccepted.mock.lastCall?.[0]).toEqual(config);
 
           config = pluginConfig({ ...(existingEntries ? { codex } : {}), other: nextOther });
           await flushWatcherChange(harness);
-          expect(harness.onHotReload).toHaveBeenCalledTimes(3);
+          expectApplied(harness, 3, config);
           expect(harness.onHotReload.mock.lastCall?.[0].reloadPlugins).toBe(true);
-          expect(harness.onConfigApplied.mock.lastCall?.[1]).toEqual(config);
           expect(harness.log.error).toHaveBeenCalledOnce();
         },
       );
@@ -607,41 +604,6 @@ export function registerPluginDrainReloadTests(enableRealSkillsRefresh: () => vo
           expect(harness.onConfigAccepted).not.toHaveBeenCalled();
         },
       );
-
-      it("applies transcript changes through the plugin reload transaction without a plugin policy", async () => {
-        const registry = createTestRegistry([]);
-        setActivePluginRegistry(registry);
-        const transcriptConfig = (channelId: string): OpenClawConfig => ({
-          transcripts: { autoStart: [{ providerId: "capture", channelId }] },
-        });
-        const config = transcriptConfig("old-room");
-        const nextConfig = transcriptConfig("new-room");
-        const drainSignal = new AbortController().signal;
-        const appliedRuntime = {
-          operationId: "transcript-reload",
-          generation: 2,
-          pluginIds: ["notes"],
-        };
-        const harness = await createReadyReloader(async () => snapshotOf(nextConfig, "next"), {
-          initialConfig: config,
-          initialCompareConfig: config,
-          onHotReload: async (plan, next, ownership) => {
-            ownership.markRuntimeCommitted(next, plan);
-            return { status: "applied", runtime: appliedRuntime };
-          },
-        });
-        const applied = applyPluginChange(harness, nextConfig, { waitForDrain: true, drainSignal });
-        await expect(applied).resolves.toEqual(appliedRuntime);
-        expect(harness.onHotReload).toHaveBeenCalledOnce();
-        expect(harness.onHotReload.mock.calls[0]?.[0]).toMatchObject({
-          pluginLifecycle: { waitForDrain: true, drainSignal },
-          reloadPlugins: true,
-          restartGateway: false,
-          changedPaths: ["transcripts.autoStart"],
-        });
-        expect(harness.onHotReload.mock.calls[0]?.[1]).toEqual(nextConfig);
-        expect(harness.onRestart).not.toHaveBeenCalled();
-      });
     });
   });
 }

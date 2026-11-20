@@ -35,12 +35,6 @@ export type GatewayStartupOutcomeRecorder = {
   snapshot: () => GatewayStartupOutcome[];
 };
 
-type GatewayStartupOutcomeRecorderParams = {
-  cfg: OpenClawConfig;
-  gatewayStartHooks: boolean;
-  internalHooksConfigured: boolean;
-};
-
 function skipped(
   subsystem: GatewayStartupSubsystem,
   reason: GatewayStartupSkippedReason,
@@ -49,9 +43,11 @@ function skipped(
 }
 
 /** Create the complete initial outcome set; awaited startup work may replace entries later. */
-export function createGatewayStartupOutcomeRecorder(
-  params: GatewayStartupOutcomeRecorderParams,
-): GatewayStartupOutcomeRecorder {
+export function createGatewayStartupOutcomeRecorder(params: {
+  cfg: OpenClawConfig;
+  gatewayStartHooks: boolean;
+  internalHooksConfigured: boolean;
+}): GatewayStartupOutcomeRecorder {
   const internalHooks =
     params.cfg.hooks?.internal?.enabled === false
       ? "hooks-disabled"

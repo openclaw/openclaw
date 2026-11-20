@@ -1,5 +1,6 @@
 // System-agent session tests cover caller ownership and response projection.
 
+import "./system-agent-transcript.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
@@ -10,36 +11,18 @@ import {
 } from "../../infra/agent-run-registry.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { SystemAgentWizardAnswerError } from "../../system-agent/chat-engine.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
+const { transcriptStoreMocks } = await import("./system-agent-transcript.mocks.test-support.js");
 const inferenceFallbackMocks = vi.hoisted(() => ({
   verifySystemAgentInferenceWithFallback: vi.fn(),
-}));
-const transcriptStoreMocks = vi.hoisted(() => ({
-  appendReset: vi.fn(),
-  appendTurn: vi.fn(),
-  readTranscriptTailAsync: vi
-    .fn<typeof import("../../system-agent/transcript-store.js").readTranscriptTailAsync>()
-    .mockResolvedValue([]),
 }));
 
 vi.mock("../../system-agent/inference-fallback.js", () => ({
   verifySystemAgentInferenceWithFallback:
     inferenceFallbackMocks.verifySystemAgentInferenceWithFallback,
-}));
-// mock-isolation: Keep machine-wide audit state outside caller-identity and session-routing tests.
-vi.mock("../../system-agent/transcript-store.js", () => ({
-  readTranscriptTailAsync: transcriptStoreMocks.readTranscriptTailAsync,
-  createSystemAgentTranscriptStore: () => ({
-    assertCurrent: () => undefined,
-    appendTurn: transcriptStoreMocks.appendTurn,
-    appendReset: transcriptStoreMocks.appendReset,
-    readTail: (limit: number, afterLastReset = false) =>
-      afterLastReset
-        ? transcriptStoreMocks.readTranscriptTailAsync(limit, { afterLastReset })
-        : transcriptStoreMocks.readTranscriptTailAsync(limit),
-  }),
 }));
 // Ownership tests exercise fresh-session creation; keep the caretaker greeting
 // deterministic so identity behavior is the only variable under test.
@@ -133,12 +116,7 @@ function makeClient(params: {
     ...(params.authenticatedUserId ? { authenticatedUserId: params.authenticatedUserId } : {}),
     ...(params.profileId
       ? {
-          authenticatedUserProfile: {
-            profileId: params.profileId,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(params.profileId),
         }
       : {}),
     ...(params.githubSyncPending
@@ -350,12 +328,7 @@ describe("openclaw.chat session ownership", () => {
     });
     expect(sessions.has("github-pending")).toBe(false);
 
-    pendingClient.authenticatedUserProfile = {
-      profileId: "profile-canonical",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 2,
-    };
+    pendingClient.authenticatedUserProfile = gatewayProfile("profile-canonical", null, 2);
     const attached = await callChat(context, { sessionId: "github-pending" }, pendingClient);
 
     expect(attached.ok).toBe(true);

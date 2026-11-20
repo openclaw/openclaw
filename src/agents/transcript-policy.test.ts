@@ -1,8 +1,4 @@
-/**
- * Regression coverage for transcript replay policy resolution.
- * Exercises provider-family fallbacks and plugin replay hooks.
- */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import {
   shouldAllowProviderOwnedThinkingReplay,
@@ -10,6 +6,7 @@ import {
   validateAnthropicTurns,
 } from "./embedded-agent-helpers/turns.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { resolveTranscriptPolicy } from "./transcript-policy.js";
 
 // mock-isolation: Keep synthetic replay policies independent of plugin runtime discovery.
@@ -61,29 +58,10 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
       },
     ],
     [
-      "minimax",
-      (context) =>
-        context.modelApi === "openai-completions"
-          ? {
-              sanitizeToolCallIds: true,
-              toolCallIdMode: "strict",
-              applyAssistantFirstOrderingFix: true,
-              validateGeminiTurns: true,
-              validateAnthropicTurns: true,
-            }
-          : {
-              ...fullReplay,
-              sanitizeToolCallIds: true,
-              toolCallIdMode: "strict",
-              ...(anthropic(context).dropThinkingBlocks ? { dropThinkingBlocks: true } : {}),
-            },
-    ],
-    [
       "github-copilot",
       ({ modelApi }) =>
         modelApi === "anthropic-messages" ? { ...fullReplay, dropThinkingBlocks: true } : undefined,
     ],
-    ["mistral", () => ({ sanitizeToolCallIds: true, toolCallIdMode: "strict9" })],
   ];
   return {
     resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) => {
@@ -97,10 +75,6 @@ vi.mock("../plugins/provider-hook-runtime.js", async () => {
 });
 
 describe("resolveTranscriptPolicy", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   function resolve(
     provider: string,
     modelId: string,
@@ -128,19 +102,13 @@ describe("resolveTranscriptPolicy", () => {
   function makeOpenAiCompatibleReasoningModel(
     overrides: Partial<ProviderRuntimeModel> = {},
   ): ProviderRuntimeModel {
-    return {
+    return makeProviderModelFixture({
       id: "qwen3.6-27b",
-      name: "Qwen3.6 27B",
       provider: "custom-openai-proxy",
       api: "openai-completions",
       baseUrl: "https://example.invalid",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 16_384,
       ...overrides,
-    };
+    });
   }
 
   it("resolves replay policy from each supplied environment", () => {
@@ -161,19 +129,6 @@ describe("resolveTranscriptPolicy", () => {
 
   it.each([
     [
-      "mistral",
-      "mistral-large-latest",
-      undefined,
-      { sanitizeToolCallIds: true, toolCallIdMode: "strict9" },
-    ],
-    [
-      "custom-openai-proxy",
-      "qwen3.6-27b",
-      "openai-completions",
-      { dropReasoningFromHistory: true },
-    ],
-    ["custom-openai-proxy", "qwen3.6-27b", "openai-responses", { dropReasoningFromHistory: false }],
-    [
       "custom-openai-proxy",
       "demo-model",
       "openai-completions",
@@ -184,6 +139,7 @@ describe("resolveTranscriptPolicy", () => {
         validateGeminiTurns: true,
         validateAnthropicTurns: true,
         appendOnlyRuntimeContext: true,
+        dropReasoningFromHistory: true,
       },
     ],
     [
@@ -197,7 +153,12 @@ describe("resolveTranscriptPolicy", () => {
         validateGeminiTurns: false,
       },
     ],
-    ["custom-openai-proxy", "gpt-5.4", "openai-responses", { validateAnthropicTurns: false }],
+    [
+      "custom-openai-proxy",
+      "gpt-5.4",
+      "openai-responses",
+      { validateAnthropicTurns: false, dropReasoningFromHistory: false },
+    ],
     ["ollama", "llama3.2", "ollama", { preserveSignatures: false, appendOnlyRuntimeContext: true }],
     [
       "vllm",
@@ -215,17 +176,8 @@ describe("resolveTranscriptPolicy", () => {
 
   it.each([
     "deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "kimi-for-coding",
     "moonshotai/kimi-k2.6",
-    "moonshot/kimi-k2.7-code",
-    "moonshot/kimi-k2.7-code-highspeed",
-    "moonshot/kimi-k3",
-    "kimi-k2-thinking",
     "hf:moonshotai/kimi-k2-thinking",
-    "xiaomi/mimo-v2.6-flash",
-    "xiaomi/mimo-v2.6-pro",
-    "xiaomi/mimo-v2.6-pro-ultraspeed",
     "xiaomi/mimo-v2.6-pro:cloud",
   ])(
     "preserves historical reasoning for %s replay-required OpenAI-compatible models",
@@ -237,7 +189,6 @@ describe("resolveTranscriptPolicy", () => {
   );
 
   it("gates in-history updates by authenticated route", () => {
-    const config = {};
     const model = makeOpenAiCompatibleReasoningModel({
       id: "claude-opus-5",
       provider: "anthropic",
@@ -253,7 +204,7 @@ describe("resolveTranscriptPolicy", () => {
       [true, "microsoft-foundry", "anthropic-messages", model.baseUrl, false],
     ] as const) {
       const policy = resolveTranscriptPolicy({
-        config,
+        config: {},
         directApiKey,
         provider,
         modelApi: api,
@@ -261,18 +212,17 @@ describe("resolveTranscriptPolicy", () => {
         model: { ...model, provider, api, baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
   it("uses the supplied environment for in-history route eligibility", () => {
-    const config = {};
     for (const [baseUrl, expected] of [
       ["https://proxy.example.test", false],
       ["https://api.anthropic.com", true],
     ] as const) {
       const policy = resolveTranscriptPolicy({
-        config,
+        config: {},
         directApiKey: true,
         provider: "anthropic",
         modelApi: "anthropic-messages",
@@ -280,12 +230,11 @@ describe("resolveTranscriptPolicy", () => {
         env: { ANTHROPIC_BASE_URL: baseUrl },
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
   it("limits OpenAI prompt updates to native Responses routes", () => {
-    const config = {};
     for (const [provider, api, baseUrl, expected] of [
       ["openai", "openai-responses", "https://api.openai.com/v1", true],
       ["openai", "openai-responses", "https://proxy.example.test/v1", false],
@@ -296,7 +245,7 @@ describe("resolveTranscriptPolicy", () => {
     ] as const) {
       const model = makeOpenAiCompatibleReasoningModel({ provider, api, baseUrl });
       const policy = resolveTranscriptPolicy({
-        config,
+        config: {},
         provider,
         modelApi: api,
         modelId: model.id,
@@ -304,7 +253,7 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin(provider),
       });
       expect(policy.inHistorySystemUpdates).toBe(expected);
-      expect(policy.appendOnlyRuntimeContext).toBe(api === "openai-completions" || expected);
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     }
   });
 
@@ -320,25 +269,22 @@ describe("resolveTranscriptPolicy", () => {
         runtimeHandle: updatingPlugin("anthropic", false),
       });
       expect(policy.inHistorySystemUpdates).toBe(directApiKey);
+      // An explicit provider opt-out holds unless in-history updates need retained carriers.
       expect(policy.appendOnlyRuntimeContext).toBe(directApiKey);
     },
   );
 
   it("resolves unowned Anthropic policy from reasoning compatibility", () => {
-    const config = {};
     const model = makeOpenAiCompatibleReasoningModel({
       id: "moonshotai/kimi-k2.5",
-      name: "Kimi K2.5",
       provider: "qiniu",
       api: "anthropic-messages",
       baseUrl: "https://api.qnaigc.com",
-      input: ["text", "image"],
-      contextWindow: 256_000,
     });
     for (const supportsReasoningEffort of [undefined, false]) {
       expect(
         resolve(model.provider, model.id, model.api, {
-          config,
+          config: {},
           model:
             supportsReasoningEffort === undefined
               ? model
@@ -358,39 +304,39 @@ describe("resolveTranscriptPolicy", () => {
     }
   });
 
-  it.each([
-    ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", false],
-    ["claude-fable-5", false],
-  ])("scopes persisted context and consecutive-turn merging for %s", (modelId, appendOnly) => {
-    const messages: AgentMessage[] = [
-      { role: "user", content: "First request", timestamp: 1 },
-      { role: "user", content: "Second request", timestamp: 2 },
-    ];
-    for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
-      for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
-        const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
-        expect(policy.appendOnlyRuntimeContext).toBe(appendOnly);
-        const replay = validateAnthropicTurns(messages, {
-          mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
-        });
-        expect(replay).toEqual(
-          appendOnly && modelApi === "anthropic-messages"
-            ? messages
-            : [
-                {
-                  role: "user",
-                  content: [
-                    { type: "text", text: "First request" },
-                    { type: "text", text: "Second request" },
-                  ],
-                  timestamp: 2,
-                },
-              ],
-        );
+  // Every route keeps earlier runtime context; only Bedrock Converse still merges consecutive turns.
+  it.each(["claude-fable-5-1", "claude-mythos-5-1", "claude-fable-5"])(
+    "scopes persisted context and consecutive-turn merging for %s",
+    (modelId) => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "First request", timestamp: 1 },
+        { role: "user", content: "Second request", timestamp: 2 },
+      ];
+      for (const modelApi of ["anthropic-messages", "bedrock-converse-stream"]) {
+        for (const provider of ["anthropic", "amazon-bedrock", "custom-proxy"]) {
+          const policy = resolveTranscriptPolicy({ provider, modelId, modelApi });
+          expect(policy.appendOnlyRuntimeContext).toBe(true);
+          const replay = validateAnthropicTurns(messages, {
+            mergeConsecutiveTurns: shouldMergeConsecutiveTurns(policy, modelApi),
+          });
+          expect(replay).toEqual(
+            modelApi === "anthropic-messages"
+              ? messages
+              : [
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: "First request" },
+                      { type: "text", text: "Second request" },
+                    ],
+                    timestamp: 2,
+                  },
+                ],
+          );
+        }
       }
-    }
-  });
+    },
+  );
 
   it.each(["claude-fable-5-1", "claude-mythos-5-1"])(
     "uses canonical deployment identity for unowned %s replay",
@@ -401,12 +347,12 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
+      expect(policy.appendOnlyRuntimeContext).toBe(true);
     },
   );
 
   it.each([
-    ["minimax", "MiniMax-M2.7", "anthropic-messages", true],
+    ["anthropic", "claude-opus-4-6", "anthropic-messages", true],
     ["amazon-bedrock", "us.anthropic.claude-opus-4-6-v1", "bedrock-converse-stream", true],
     ["github-copilot", "claude-sonnet-4", "anthropic-messages", false],
     ["vllm", "gemma-3-27b", "openai-completions", false],

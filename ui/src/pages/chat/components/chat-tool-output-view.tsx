@@ -1,20 +1,20 @@
 import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
+import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import {
-  isLegacyToolOutputUnavailable,
-  toolOutputSourceLabel,
-  formatToolOutput,
-} from "../../../lib/chat/tool-output.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
+import { toolOutputSourceLabel, formatToolOutput } from "../../../lib/chat/tool-output.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
 } from "./chat-sidebar-content-types.ts";
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
+
+registerEnglishCatalog(registerChatToolContentEnglish);
 
 type OutputLoadState = "idle" | "loading" | "loaded" | "unavailable" | "error";
 type OutputResult = { state: OutputLoadState; card: ToolCard | null };
@@ -66,7 +66,10 @@ export function ChatToolOutput(props: Props) {
   function Output(view: { result: OutputResult }) {
     const card = () => view.result.card ?? props.content?.card;
     const text = () => card()?.outputText ?? "";
-    const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
+    const displayText = createMemo(() => {
+      const current = card();
+      return current ? (formatToolOutput(current) ?? "") : "";
+    });
     return (
       <Show when={card()}>
         <section
@@ -96,7 +99,7 @@ export function ChatToolOutput(props: Props) {
               <pre>{card()!.inputText}</pre>
             </details>
           </Show>
-          <Show when={view.result.state !== "loading"}>
+          <Show when={view.result.state !== "loading" && text().length > 0}>
             <div class="chat-tool-output__actions">
               <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
               <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
@@ -110,6 +113,9 @@ export function ChatToolOutput(props: Props) {
           <pre class="chat-tool-output__text">
             <code>{displayText()}</code>
           </pre>
+          <Show when={card()!.catalogTruncated}>
+            <p role="status">{t("chat.catalogOutputTruncated")}</p>
+          </Show>
           <Show when={displayText() !== text()}>
             <RawOutputToggle text={text()} />
           </Show>
@@ -144,7 +150,7 @@ export function ChatToolOutput(props: Props) {
             )
           : [];
       const loadedCard = matches.length === 1 ? matches[0] : undefined;
-      if (!loadedCard || loadedCard.outputText === undefined) {
+      if (!loadedCard) {
         return { state: "unavailable", card: null };
       }
       return {

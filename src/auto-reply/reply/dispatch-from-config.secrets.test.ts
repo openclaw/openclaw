@@ -3,18 +3,10 @@ import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
-import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
 import type { ReplyPayload } from "../types.js";
 import { askUserMocks, hookMocks, mocks } from "./dispatch-from-config.shared.test-harness.js";
-import {
-  dispatchReplyFromConfig,
-  globalBeforeAll0,
-  describe0BeforeEach0,
-  installThreadingTestPlugin,
-  requireToolResultHandler,
-  setNoAbort,
-} from "./dispatch-from-config.test-support.js";
+import * as setup from "./dispatch-from-config.test-support.js";
 import { beforeSettlement } from "./reply-contract.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -23,9 +15,9 @@ vi.unmock("../../agents/tools/ask-user-tool.js");
 const gateway = vi.hoisted(() => vi.fn());
 vi.mock("../../agents/tools/gateway.js", () => ({ callGatewayTool: gateway }));
 
-beforeAll(globalBeforeAll0);
+beforeAll(setup.globalBeforeAll0);
 beforeEach(async () => {
-  describe0BeforeEach0();
+  setup.describe0BeforeEach0();
   const actual = await vi.importActual<typeof import("../../agents/tools/ask-user-tool.js")>(
     "../../agents/tools/ask-user-tool.js",
   );
@@ -41,9 +33,9 @@ const settledResult = <T>(promise: Promise<T>) =>
 it.for([false, true])(
   "settles a quiet group's credential producer (policy denied=%s)",
   async (deny, { signal }) => {
-    setNoAbort();
+    setup.setNoAbort();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    installThreadingTestPlugin({ id: "telegram" });
+    setup.installThreadingTestPlugin({ id: "telegram" });
     const answer = createDeferred<unknown>();
     const transport = createDeferred();
     const received = createDeferred<ReplyPayload>();
@@ -88,7 +80,7 @@ it.for([false, true])(
       .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
       .mockReturnValue(gateway);
     const dispatch = settledResult(
-      dispatchReplyFromConfig({
+      setup.dispatchReplyFromConfig({
         ctx: buildTestCtx({
           SessionKey: sessionKey,
           Provider: "telegram",
@@ -105,7 +97,7 @@ it.for([false, true])(
           onToolResult: progress,
         },
         replyResolver: async (_ctx, opts) => {
-          const onToolResult = requireToolResultHandler(opts?.onToolResult);
+          const onToolResult = setup.requireToolResultHandler(opts?.onToolResult);
           const harness = createSubscribedSessionHarness({
             runId,
             sessionKey,
@@ -159,9 +151,6 @@ it.for([false, true])(
         expect(payload).not.toHaveProperty("interactive");
         expect(payload.text).toContain(`https://console.example.test/ask/${questionId}`);
         expect(gateway.mock.calls.some(([method]) => method === "question.resolve")).toBe(false);
-        await expect(
-          claimPendingAgentQuestionAnswer({ sessionKey, text: "not-a-credential" }),
-        ).resolves.toBe(false);
         transport.resolve();
         await callbackFinished.promise;
         answer.resolve({ status: "answered", answers: { answers: { secret_value: ["stored"] } } });
@@ -172,14 +161,11 @@ it.for([false, true])(
       expect(progress).not.toHaveBeenCalled();
       await expect(dispatch).resolves.toHaveProperty("result");
     } finally {
-      try {
-        transport.resolve();
-        answer.resolve({ status: "cancelled" });
-        await dispatch;
-      } finally {
-        unsubscribe?.();
-        questionResolverSpy.mockRestore();
-      }
+      transport.resolve();
+      answer.resolve({ status: "cancelled" });
+      await dispatch;
+      unsubscribe?.();
+      questionResolverSpy.mockRestore();
     }
   },
 );

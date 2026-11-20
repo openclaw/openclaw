@@ -14,13 +14,13 @@ import {
   expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { listReservedChatSlashCommandNames } from "../commands-registry.data.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,
@@ -131,8 +131,6 @@ export async function handleInlineActions(
     skillFilter?: string[];
   },
 ): Promise<InlineActionResult> {
-  // Native directive results also carry turn-local fast mode; commands resolve their own status.
-  const commandParams = { ...params, resolvedFastMode: undefined };
   const {
     ctx,
     sessionCtx,
@@ -305,12 +303,6 @@ export async function handleInlineActions(
     if (dispatch?.kind === "tool") {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await skillToolDispatchRuntimeLoader.load();
-      const { hasAnyAuthProfileStoreSourceAsync } =
-        await import("../../agents/auth-profiles/source-check.js");
-      const authSourceAgentDir = agentDir?.trim();
-      const authProfileStoreSource = authSourceAgentDir
-        ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
-        : false;
       const authorizedTools = await resolveSkillDispatchTools({
         message: {
           surface: ctx.Surface,
@@ -329,7 +321,6 @@ export async function handleInlineActions(
         cfg,
         agentId,
         agentDir,
-        authProfileStoreSource,
         sessionEntry: targetSessionEntry,
         sessionKey,
         workspaceDir,
@@ -490,7 +481,8 @@ export async function handleInlineActions(
   if (handleInlineStatus) {
     const { buildStatusReply } = await commandsRuntimeLoader.load();
     const inlineStatusReply = await buildStatusReply({
-      ...commandParams,
+      ...params,
+      resolvedFastMode: undefined,
       sessionEntry: targetSessionEntry,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       ...(await resolveModelLevels()),
@@ -509,7 +501,9 @@ export async function handleInlineActions(
     opts?.operatorAuthority?.assertCurrent();
     commandInput.assertOwnerCurrent?.();
     const result = await handleCommands({
-      ...commandParams,
+      ...params,
+      // Native directive results carry turn-local fast mode; commands resolve their own status.
+      resolvedFastMode: undefined,
       // Command handlers mutate the continuation context and retain the dispatch context.
       ctx: sessionCtx,
       rootCtx: ctx,

@@ -131,13 +131,7 @@ function parseTarget(raw: string): SignalTarget {
   return { type: "recipient", recipient: value };
 }
 
-type SignalTargetParams = {
-  recipient?: string[];
-  groupId?: string;
-  username?: string[];
-};
-
-function buildTargetParams(target: SignalTarget): SignalTargetParams {
+function buildTargetParams(target: SignalTarget) {
   if (target.type === "recipient") {
     return { recipient: [target.recipient] };
   }
@@ -145,6 +139,13 @@ function buildTargetParams(target: SignalTarget): SignalTargetParams {
     return { groupId: target.groupId };
   }
   return { username: [target.username] };
+}
+
+// signal-cli answers a media send only after the upload finishes, so the default 10 s RPC deadline
+// reports a failure for a send that still completes (and a retry would deliver it twice). Allow the
+// largest permitted attachment to upload at a conservative 256 KiB/s on top of a 30 s base.
+function resolveSignalMediaSendTimeoutMs(maxBytes: number): number {
+  return 30_000 + Math.ceil(maxBytes / (256 * 1024)) * 1000;
 }
 
 export async function sendMessageSignal(
@@ -236,7 +237,9 @@ export async function sendMessageSignal(
       : undefined;
   const sendOpts = {
     baseUrl,
-    timeoutMs: opts.timeoutMs,
+    timeoutMs:
+      opts.timeoutMs ??
+      (attachments?.length ? resolveSignalMediaSendTimeoutMs(maxBytes) : undefined),
     transportKind: opts.transportKind ?? accountInfo.transport.kind,
     maxAttachmentBytes: maxBytes,
     assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,

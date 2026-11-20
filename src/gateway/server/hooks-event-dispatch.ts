@@ -10,7 +10,7 @@ import {
 import { getRuntimeConfig } from "../../config/io.js";
 import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DeferredHookWake } from "../../cron/service/wake.js";
+import type { DeferredHookWake } from "../../cron/wake-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import {

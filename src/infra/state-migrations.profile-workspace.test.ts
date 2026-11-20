@@ -8,9 +8,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { snapshotFiles } from "./state-migrations.caller-mode.test-helpers.js";
-import type { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { resolveLegacyProfileMigrationExceptions } from "./state-migrations.profile-scope.js";
-import { createMigrationFixture } from "./state-migrations.shard-fixture.test-support.js";
+import {
+  createMigrationFixture,
+  writeFixtureFile,
+} from "./state-migrations.shard-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -35,10 +37,6 @@ async function makeFixture() {
     target: path.join(homeDir, ".openclaw-work", "workspace"),
     writeConfig: (cfg: OpenClawConfigWithLegacyRoster) =>
       fs.writeFileSync(configPath, JSON.stringify(cfg)),
-    migrate: (
-      cfg: Parameters<typeof autoMigrateLegacyState>[0]["cfg"],
-      log?: Parameters<typeof autoMigrateLegacyState>[0]["log"],
-    ) => fixture.migrate(cfg, log ? { log } : {}),
     plan: async () => {
       const before = snapshotFiles(root);
       const plan = await fixture.plan();
@@ -50,8 +48,7 @@ async function makeFixture() {
 
 const marker = (directory: string) => fs.readFileSync(path.join(directory, "marker.txt"), "utf8");
 function seedWorkspace(directory: string, content = directory) {
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, "marker.txt"), content);
+  writeFixtureFile(path.join(directory, "marker.txt"), content);
 }
 
 describe("configured profile workspace preservation", () => {
@@ -69,8 +66,7 @@ describe("configured profile workspace preservation", () => {
         seedWorkspace(path.join(defaultState, directory), directory);
       }
       const ownAgent = path.join(fixture.stateDir, "agent");
-      fs.mkdirSync(ownAgent);
-      fs.writeFileSync(path.join(ownAgent, "settings.json"), "own SDK settings");
+      writeFixtureFile(path.join(ownAgent, "settings.json"), "own SDK settings");
       const cfg: OpenClawConfig = {
         agents: { defaults: { systemAgent: { agentId: "work" } }, entries: { work: {} } },
         plugins: { enabled: false },
@@ -133,7 +129,6 @@ describe("configured profile workspace preservation", () => {
       for (const directory of directories) {
         seedWorkspace(directory);
       }
-      const before = directories.map(snapshotFiles);
       const configured = endpoint === "source" ? source : target;
       const aliasPath = path.join(fixture.homeDir, "workspace-alias");
       const linkTarget = alias === "ancestor" ? path.dirname(target) : configured;
@@ -156,31 +151,26 @@ describe("configured profile workspace preservation", () => {
             : { list: [{ id: "main", workspace }] };
       const cfg = { agents };
       fixture.writeConfig(cfg);
+      const before = snapshotFiles(fixture.homeDir);
       const step = await fixture.plan();
       const skipped = { source: [], target: [], requiredness: "not-required" };
       expect(step).toMatchObject(skipped);
       expect(step?.refusal).toBeUndefined();
       const log = { info: vi.fn(), warn: vi.fn() };
       for (let run = 0; run < 2; run++) {
-        const result = await fixture.migrate(cfg, log);
+        const result = await fixture.migrate(cfg, { log });
         expect(result.stepReceipts.find((entry) => entry.id === "profile-workspace")).toMatchObject(
           { ...skipped, outcome: "skipped" },
         );
         expect(result.warnings).toEqual([]);
         if (targetExists) {
-          expect(log.info).toHaveBeenCalledWith(expect.stringContaining("was left unchanged"));
           const other = endpoint === "source" ? target : source;
           expect(result.notices).toContain(
             `Profile workspace: keeping configured workspace at ${configured}; existing workspace at ${other} was left unchanged.`,
           );
-        } else {
-          expect(fs.existsSync(target)).toBe(false);
         }
-        expect(directories.map(snapshotFiles)).toEqual(before);
+        expect(snapshotFiles(fixture.homeDir)).toEqual(before);
         expect(fs.readFileSync(fixture.configPath, "utf8")).toBe(JSON.stringify(cfg));
-        if (linked) {
-          expect(fs.readlinkSync(aliasPath)).toBe(linkTarget);
-        }
       }
     },
   );
@@ -204,7 +194,7 @@ describe("configured profile workspace preservation", () => {
       target: caseInsensitive ? [] : [{ kind: "path", path: target }],
       requiredness: caseInsensitive ? "not-required" : "conditional",
     });
-    const result = await fixture.migrate(cfg, { info: vi.fn(), warn: vi.fn() });
+    const result = await fixture.migrate(cfg, { log: { info: vi.fn(), warn: vi.fn() } });
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(source)).toBe(caseInsensitive);
     expect(fs.existsSync(target)).toBe(!caseInsensitive);

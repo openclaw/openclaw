@@ -279,22 +279,12 @@ function hasSensitiveConfigValue(
   if (isUnknownDynamicOwnerPath(path, metadata)) {
     return true;
   }
-  const { uiHints } = metadata;
-  const canonicalPath = path.join(".");
-  const sensitiveHint = resolveConfigUiHint(
-    path,
-    uiHints,
-    true,
-    (candidate) => candidate.sensitive !== undefined,
-  );
-  if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
-    return true;
-  }
-  const hint = resolveConfigUiHint(path, uiHints);
+  const sensitivity = classifyConfigPath(path, metadata);
   if (
-    typeof value === "string" &&
-    (hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)) &&
-    redactSensitiveUrlLikeString(value) !== value
+    sensitivity === "always" ||
+    (sensitivity === "url" &&
+      typeof value === "string" &&
+      redactSensitiveUrlLikeString(value) !== value)
   ) {
     return true;
   }
@@ -330,10 +320,10 @@ export function isSystemAgentSensitiveConfigValue(path: string, value: unknown):
   );
 }
 
-function isSensitiveConfigPathParts(
+function classifyConfigPath(
   path: string[],
   metadata: SystemAgentConfigRedactionMetadata,
-): boolean {
+): "always" | "url" | undefined {
   const { uiHints } = metadata;
   const canonicalPath = path.join(".");
   const sensitiveHint = resolveConfigUiHint(
@@ -343,10 +333,12 @@ function isSensitiveConfigPathParts(
     (candidate) => candidate.sensitive !== undefined,
   );
   if (sensitiveHint?.sensitive === true || isSensitiveConfigPath(canonicalPath)) {
-    return true;
+    return "always";
   }
   const hint = resolveConfigUiHint(path, uiHints);
-  return hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath);
+  return hasSensitiveUrlHintTag(hint) || isSensitiveUrlConfigPath(canonicalPath)
+    ? "url"
+    : undefined;
 }
 
 function hasSensitiveSegmentPrefix(
@@ -395,7 +387,7 @@ export function redactSystemAgentConfigPath(path: string): string {
               hasSensitiveSegmentPrefix(parsedPath, index, metadata)))) ||
         (index > 0 &&
           !SENSITIVE_CONFIG_CONTAINER_KEYS.has(parsedPath[index - 1] ?? "") &&
-          isSensitiveConfigPathParts(parsedPath.slice(0, index), metadata)),
+          classifyConfigPath(parsedPath.slice(0, index), metadata) !== undefined),
     );
     return isUnknownDynamicOwnerPath(parsedPath, metadata) || hasSensitivePathData
       ? "<redacted path>"

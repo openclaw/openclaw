@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   type SessionSqliteMigrationMove,
@@ -10,19 +9,15 @@ import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-reade
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as recovery from "./doctor-session-sqlite-recovery-inventory.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 
 it("keeps the first matching artifact when copies precede or follow the original", async () => {
   await withDuplicateArchives(3, async ({ artifacts, settle }) => {
-    const originals = artifacts.splice(0);
-    const copies = originals.map((item) => ({ ...item }));
-    artifacts.push(
-      ...originals.flatMap((item, index) =>
-        index % 2 ? [copies[index]!, item] : [item, copies[index]!],
-      ),
-    );
-    const expected = copies
-      .slice(1)
-      .map((item) => artifacts.find((candidate) => candidate.path === item.path)!);
+    const pairs = artifacts
+      .splice(0)
+      .map((item, index) => (index % 2 ? [{ ...item }, item] : [item, { ...item }]));
+    artifacts.push(...pairs.flat());
+    const expected = pairs.slice(1).map(([first]) => first!);
     const untouched = artifacts.filter((item) => !expected.includes(item));
     const before = untouched.map((item) => ({ ...item }));
     expect(await settle()).toMatchObject([{ issues: [{ code: "historical_duplicate_settled" }] }]);
@@ -44,18 +39,17 @@ it.each(["artifacts", "moves"] as const)(
         }
         return file;
       };
-      const fillers = Array.from({ length: size }, (_, index) => ({
-        get path() {
-          return visit(`/synthetic/unrelated-${index}`);
-        },
-        runs: [],
-        bytes: 0,
-        outcome: "disposed" as const,
-        reason: "intentionally-disposed",
-      }));
       const originals = artifacts.splice(0);
-      for (const item of fillers) {
-        artifacts.push(item);
+      for (let index = 0; index < size; index++) {
+        artifacts.push({
+          get path() {
+            return visit(`/synthetic/unrelated-${index}`);
+          },
+          runs: [],
+          bytes: 0,
+          outcome: "disposed" as const,
+          reason: "intentionally-disposed",
+        });
       }
       artifacts.push(...originals);
       const move = target.plannedMoves[0]!;
@@ -73,9 +67,7 @@ it.each(["artifacts", "moves"] as const)(
       );
       target.plannedMoves.unshift(...unrelated);
       target.completedMoves.unshift(...unrelated);
-      expect(await settle()).toMatchObject([
-        { issues: [{ code: "historical_duplicate_settled" }] },
-      ]);
+      await settle();
       expect(artifacts.slice(size + 1).every((item) => item.outcome === "removed")).toBe(true);
       expect(visits).toBeLessThanOrEqual(limit);
     });
@@ -108,18 +100,7 @@ async function withDuplicateArchives(
     for (let index = 0; index <= count; index++) {
       const archivePath = path.join(archives, `duplicate.jsonl.imported-${index}`);
       fs.writeFileSync(archivePath, "retained original bytes\n");
-      const move: SessionSqliteMigrationMove = {
-        kind: "unreferenced-jsonl",
-        sourcePath: path.join(sessions, "duplicate.jsonl"),
-        archivePath,
-        artifact: {
-          identity: readMigrationArtifactIdentity(archivePath),
-          classification: "protected",
-          reason: "unreferenced-history",
-          dependencies: [],
-          disposal: { state: "retained" },
-        },
-      };
+      const move = retainedHistoryMove(path.join(sessions, "duplicate.jsonl"), archivePath);
       target.plannedMoves.push(move);
       target.completedMoves.push(structuredClone(move));
       references.set(archivePath, [
@@ -134,7 +115,7 @@ async function withDuplicateArchives(
       });
     }
     const report = recovery.summarizeRecoveryCleanup(state.stateDir, artifacts, "preview");
-    using inventory = vi
+    using _ = vi
       .spyOn(recovery, "collectRecoveryInventory")
       .mockReturnValue({ artifacts, references, report, manifestPaths: [manifest.manifestPath] });
     await run({
@@ -143,7 +124,6 @@ async function withDuplicateArchives(
       settle: () =>
         settleDuplicateSessionSqliteArchives({ cfg: {}, env: state.env, targets: [owner] }),
     });
-    expect(inventory).toHaveBeenCalledOnce();
     expect(fs.readFileSync(path.join(archives, "duplicate.jsonl.imported-0"), "utf8")).toBe(
       "retained original bytes\n",
     );

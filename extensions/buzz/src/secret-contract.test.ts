@@ -1,7 +1,12 @@
 import { createResolverContext } from "openclaw/plugin-sdk/secret-ref-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { BuzzConfigInput } from "./config-schema.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
+
+// mock-isolation: credential metadata must not evaluate the Nostr execution runtime.
+vi.mock("nostr-tools", () => {
+  throw new Error("Buzz secret metadata must not load the Nostr runtime");
+});
 
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
 

@@ -13,9 +13,9 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { scanCanonicalSqliteSessionEntries } from "./session-canonical-key.js";
+import { admitCanonicalSessionEntry } from "./session-entry-json.js";
 import { attachSessionEntrySnapshots } from "./session-entry-snapshot-values.js";
 import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
-import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
 type CanonicalRepairRow = InferResult<ReturnType<typeof canonicalRepairQuery>>[number];
@@ -92,7 +92,7 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
           },
         })
       : undefined;
-  const entry = projectCanonicalSessionEntryShape({
+  const entry = admitCanonicalSessionEntry({
     ...record,
     ...(row.status ? { status: row.status } : {}),
     ...(row.current_started_at !== null ? { startedAt: row.current_started_at } : {}),

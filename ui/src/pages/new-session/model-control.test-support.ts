@@ -3,6 +3,7 @@ import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
@@ -68,7 +69,10 @@ export function contextWith(
       snapshot: {
         phase: "connected",
         client: { request },
-        hello: { features: { methods: featureMethods } },
+        hello: {
+          features: { methods: featureMethods },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+        },
       },
     },
     sessions: {
@@ -89,6 +93,7 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
+  installModelPickerLayout();
   const props: ViewProps = {
     control,
     options: { ...(agent ? { agent } : {}), agentId, context, sending: false },
@@ -125,5 +130,5 @@ export async function waitForModelControl(...params: Parameters<typeof renderCon
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
-  return container;
+  return renderControl(...params);
 }

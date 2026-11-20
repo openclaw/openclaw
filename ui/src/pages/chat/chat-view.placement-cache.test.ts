@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, renderChatInto, renderChatPropsInto } from "./chat-view.test-helpers.ts";
@@ -23,12 +24,7 @@ describe("chat transcript cache", () => {
     let messageReads = 0;
     let historyBuildReads = 0;
     const loaded = new Proxy(
-      {
-        role: "assistant",
-        content: "Loaded history",
-        timestamp: 1,
-        __openclaw: { id: "loaded", seq: 1 },
-      },
+      nativeMessage("assistant", "Loaded history", 1, { id: "loaded", seq: 1 }),
       {
         get(target, key, receiver) {
           messageReads += 1;
@@ -80,7 +76,7 @@ describe("chat transcript cache", () => {
     expect(historyBuildReads).toBeGreaterThan(0);
   });
 
-  it("keeps multi-part run usage current when only output tokens change", () => {
+  it("keeps multi-part run usage current when only output tokens change", async () => {
     const runId = "run-composed";
     const group = (id: string, role: string, timestamp: number, content: string) => ({
       kind: "group",
@@ -128,7 +124,7 @@ describe("chat transcript cache", () => {
       });
     const tokens = () => container.querySelector(".chat-working-indicator__tokens")?.textContent;
     drawUsage(5_500, 1);
-    expect(tokens()).toContain("5.5k");
+    await expect.poll(tokens).toContain("5.5k");
     drawUsage(7_200, 2);
     expect(tokens()).toContain("7.2k");
   });

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
@@ -66,6 +67,32 @@ it("keeps explicit dev update progress and errors visible", () => {
   context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
   expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
 });
+
+it.each([
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "keeps only current failed-run attention: %s",
+  (_name, installed, version, recorded, historical) => {
+    const context = contextWithGitStatus("current");
+    context.overlays.snapshot.updateRun = createUpdateRunFixture({
+      status: "failed",
+      before: { version: installed },
+      verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
+      finishedAtMs: Date.now(),
+    });
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      server: { version },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: [] },
+    };
+    expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);
+  },
+);
 
 it.each([
   ["stable admin update", "operator.admin", false, true],

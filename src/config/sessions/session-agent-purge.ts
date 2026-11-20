@@ -19,7 +19,7 @@ import {
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   prepareCommittedSessionEntryRemovals,
-  publishCommittedSessionIdentity,
+  createSessionIdentityResultPublisher,
 } from "./session-accessor.sqlite-identity.js";
 import {
   applySessionEntryMaintenance,
@@ -111,6 +111,7 @@ export async function purgeDeletedAgentSessionEntries(
         const native = !execution;
         const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
           native,
+          env: resolved.env,
         });
         const assertCurrent = () => {
           execution?.assertCurrent();
@@ -183,25 +184,14 @@ export async function purgeDeletedAgentSessionEntries(
             assertPrepared: () => {
               preservation.capture();
             },
-            assertCandidate: (candidate) =>
+            assertCandidate: (candidate, retained) =>
               assertMaintenancePreservationCompatible(
                 sentPreservation,
-                preservation.capture(),
+                preservation.capture(retained),
                 candidate.result.maintenancePlans,
               ),
             candidateKind: "session-agent-purge",
-            onCommitted(candidate, published, identity) {
-              if (published) {
-                publishCommittedSessionIdentity(
-                  resolved.agentId,
-                  identity,
-                  published.previous,
-                  published.current,
-                  published.prepared,
-                );
-              }
-              return candidate.result;
-            },
+            onCommitted: createSessionIdentityResultPublisher(resolved),
           };
           const captured = captureNativeSessionWorkerDeletion(entries);
           return captured

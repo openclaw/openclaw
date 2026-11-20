@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -25,17 +26,7 @@ const QUESTION = "Calendar tomorrow?";
 function readMessageTexts(scope: Parameters<typeof loadEvents>[0]): string[] {
   return loadEvents(scope).flatMap((event) => {
     const content = (event as { message?: { content?: unknown } } | null)?.message?.content;
-    if (typeof content === "string") {
-      return [content];
-    }
-    if (!Array.isArray(content)) {
-      return [];
-    }
-    return content.flatMap((block) =>
-      block && typeof block === "object" && "text" in block
-        ? [String((block as { text: unknown }).text)]
-        : [],
-    );
+    return typeof content === "string" ? [content] : collectTextContentBlocks(content);
   });
 }
 

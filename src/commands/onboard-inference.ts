@@ -40,11 +40,6 @@ export {
  * presence are detection evidence; explicit setup verifies the selected login.
  */
 
-type DetectInferenceBackendsOptions = {
-  config?: OpenClawConfig;
-  agentId?: string;
-};
-
 // ChatGPT.app is the current desktop owner; keep Codex stable/beta as fallbacks.
 const CODEX_MACOS_APP_NAMES = ["ChatGPT.app", "Codex.app", "Codex Beta.app"] as const;
 const CODEX_MACOS_APP_PROBE_TIMEOUT_MS = 3_000;
@@ -80,7 +75,10 @@ async function probeCodexCommand(): Promise<LocalCommandProbe> {
  * Native CLI discovery stays passive; environment credentials precede unverified CLIs.
  */
 export async function detectInferenceBackends(
-  options: DetectInferenceBackendsOptions = {},
+  options: {
+    config?: OpenClawConfig;
+    agentId?: string;
+  } = {},
 ): Promise<InferenceBackendCandidate[]> {
   const candidates: InferenceBackendCandidate[] = [];
   const defaultAgentId = options.config

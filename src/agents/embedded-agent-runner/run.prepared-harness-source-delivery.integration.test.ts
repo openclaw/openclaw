@@ -105,10 +105,11 @@ describe("prepared harness source delivery", () => {
     openOpenClawAgentDatabase({ agentId });
     const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
     setRuntimeConfigSnapshot({});
-    // Dispatch and the real runner share the database admitted above.
-    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(
-      path.join(state.sessionsDir(agentId), "sessions.json"),
-    );
+    // Both mocked session modules must use the database admitted above.
+    const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(storePath);
+    const sessions = await import("../../config/sessions.js");
+    vi.mocked(sessions.resolveSessionStorePathCore).mockReturnValue(storePath);
     return loaded;
   }
   afterEach(async () => {
@@ -229,12 +230,12 @@ describe("prepared harness source delivery", () => {
     };
     let forbiddenSdkAuthorityObserved = false;
     let modelVisiblePrompt = "";
-    const recordModelVisiblePrompt = (attemptParams: {
+    const recordModelVisiblePrompt = async (attemptParams: {
       extraSystemPrompt?: string;
       forceMessageTool?: boolean;
       sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     }) => {
-      modelVisiblePrompt = buildConfiguredAgentSystemPrompt({
+      modelVisiblePrompt = await buildConfiguredAgentSystemPrompt({
         workspaceDir: followupRun.run.workspaceDir,
         reasoningTagHint: false,
         extraSystemPrompt: attemptParams.extraSystemPrompt,
@@ -255,7 +256,7 @@ describe("prepared harness source delivery", () => {
       forgedTtsDelivery || genuineTtsDelivery ? [] : [{ text: finalText }],
     );
     mockedRunEmbeddedAttempt.mockImplementation(async (attemptParams) => {
-      recordModelVisiblePrompt(attemptParams);
+      await recordModelVisiblePrompt(attemptParams);
       await emitStreaming(attemptParams);
       return makeAttemptResult({ assistantTexts: [finalText] });
     });
@@ -344,7 +345,7 @@ describe("prepared harness source delivery", () => {
               ? { supported: true, priority: 200 }
               : { supported: false, reason: "prepared OpenAI route only" },
           runAttempt: vi.fn(async (attemptParams) => {
-            recordModelVisiblePrompt(attemptParams);
+            await recordModelVisiblePrompt(attemptParams);
             await emitStreaming(attemptParams);
             const result = makeAttemptResult({
               assistantTexts: [],

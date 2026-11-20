@@ -7,6 +7,7 @@ import {
 import { readActiveTranscriptEntryAnchorAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { captureOwnedTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
+import { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
 import { isUserMessage, resolvePersistedUserTurnMessage } from "./user-turn-transcript.message.js";
 import { preparePersistedUserTurnMessageForTranscriptWrite } from "./user-turn-transcript.metadata.js";
 import type {
@@ -47,8 +48,10 @@ export async function resolveCommittedUserTurnTranscript(
 ): Promise<UserTurnTranscriptPersistResult | undefined> {
   let committed = originalCommit;
   if (!committed.anchor) {
+    using phase = observeDiagnosticsTimelinePhases("persist.transcript.projection");
     const assertCurrent = captureOwnedTranscriptWriteAssertion(params);
     await waitForSessionTranscriptProjection(params);
+    phase.mark("persist.transcript.anchor");
     const anchor = await readActiveTranscriptEntryAnchorAsync({
       ...params,
       entryId: committed.messageId,
@@ -122,6 +125,12 @@ export async function persistUserTurnTranscript(
           idempotencyLookup: "scan",
           workerPreparation: {
             beforeFreshMessageCommit: params.beforeFreshMessageCommit,
+            prepareMentionInvitation: params.prepareMentionInvitation
+              ? (candidate) =>
+                  isUserMessage(candidate)
+                    ? params.prepareMentionInvitation?.(candidate)
+                    : undefined
+              : undefined,
             prepareMessageAfterIdempotencyCheck: (candidate) =>
               preparePersistedUserTurnMessageForTranscriptWrite(
                 // SAFETY: Preparation receives the typed user message above; goal preparation only adds metadata.

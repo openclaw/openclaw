@@ -5,10 +5,6 @@ import { detectBinary } from "./detect-binary.js";
 import { getWindowsSystem32ExePath } from "./windows-install-roots.js";
 import { isWSL } from "./wsl.js";
 
-type BrowserOpenSupport = {
-  ok: boolean;
-};
-
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */
 async function resolveBrowserOpenCommand(): Promise<string[] | null> {
   const platform = process.platform;
@@ -49,7 +45,7 @@ async function resolveBrowserOpenCommand(): Promise<string[] | null> {
 }
 
 /** Report whether browser opening is currently available. */
-export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
+export async function detectBrowserOpenSupport(): Promise<{ ok: boolean }> {
   return { ok: Boolean(await resolveBrowserOpenCommand()) };
 }
 

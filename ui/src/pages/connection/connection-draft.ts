@@ -10,6 +10,7 @@ import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { useGatewayPage, GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
@@ -18,11 +19,31 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  CONNECTION_PING_SAMPLE_LIMIT,
-  summarizeConnectionPing,
-  type ConnectionPingSummary,
-} from "./latency.ts";
+
+const CONNECTION_PING_SAMPLE_LIMIT = 100;
+
+type ConnectionPingSummary = {
+  count: number;
+  averageMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+};
+
+function summarizeConnectionPing(samples: readonly number[]): ConnectionPingSummary | null {
+  if (samples.length === 0) {
+    return null;
+  }
+  const sorted = samples.toSorted((a, b) => a - b);
+  const percentile = (fraction: number) => sorted[Math.ceil(sorted.length * fraction) - 1]!;
+  return {
+    count: samples.length,
+    averageMs: samples.reduce((total, sample) => total + sample, 0) / samples.length,
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+  };
+}
 
 type DiagnosticRequest = {
   controller: AbortController;
@@ -37,6 +58,9 @@ export class ConnectionDraft {
   systemInfoUnavailable = false;
   ping: ConnectionPingSummary | null = null;
   pingFailed = false;
+  pingUnavailable = false;
+  private diagnosticHello: ApplicationContext["gateway"]["snapshot"]["hello"] = null;
+  private deniedDiagnostics = new Set<"ping" | "system-info">();
   pingSamples: readonly SparklineSample[] = [];
   pingRequest: DiagnosticRequest | null = null;
   statusHistory: readonly GatewayStatusSample[] = [];
@@ -77,6 +101,11 @@ export class ConnectionDraft {
 
   handleGatewaySnapshot({ snapshot, initial, sourceChanged, clientChanged }: GatewayPageChange) {
     const wasSystemInfoUnavailable = this.systemInfoUnavailable;
+    const wasPingUnavailable = this.pingUnavailable;
+    if (snapshot.hello !== this.diagnosticHello) {
+      this.diagnosticHello = snapshot.hello;
+      this.deniedDiagnostics.clear();
+    }
     if (initial || sourceChanged || clientChanged) {
       this.resetDiagnostics();
       this.resetConnectionDraft();
@@ -93,13 +122,23 @@ export class ConnectionDraft {
       this.gatewaySecretVisible = false;
       this.systemInfo = null;
     }
-    if (snapshot.phase === "connected" && snapshot.hello) {
-      this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
+    if (snapshot.phase === "connected") {
+      this.pingUnavailable =
+        this.deniedDiagnostics.has("ping") ||
+        !canCallGatewayMethod(snapshot, "last-heartbeat", "operator.read");
+      if (this.pingUnavailable) {
+        this.cancelDiagnostic("pingRequest");
+        this.ping = null;
+        this.pingSamples = [];
+        this.pingFailed = false;
+      }
+      this.systemInfoUnavailable =
+        this.deniedDiagnostics.has("system-info") || !canReadSystemInfo(snapshot);
       if (this.systemInfoUnavailable) {
-        this.gateway.invalidate();
         this.cancelDiagnostic("systemInfoRequest");
         this.systemInfo = null;
-        this.statusFailed = true;
+        this.statusHistory = [];
+        this.statusFailed = false;
       }
     }
     if (this.settings.sessionKey === this.sessionKeyBaseline) {
@@ -107,6 +146,9 @@ export class ConnectionDraft {
     }
     this.sessionKeyBaseline = snapshot.sessionKey;
     this.syncDiagnosticsPolling();
+    if (wasPingUnavailable && !this.pingUnavailable) {
+      void this.loadDiagnostic("ping");
+    }
     if (wasSystemInfoUnavailable && !this.systemInfoUnavailable) {
       void this.loadDiagnostic("system-info");
     }
@@ -123,6 +165,8 @@ export class ConnectionDraft {
     this.pingSamples = [];
     this.ping = null;
     this.pingFailed = false;
+    this.pingUnavailable = false;
+    this.deniedDiagnostics.clear();
     this.statusHistory = [];
     this.statusFailed = false;
   }
@@ -133,7 +177,8 @@ export class ConnectionDraft {
       !this.isActive ||
       document.visibilityState === "hidden" ||
       snapshot.phase !== "connected" ||
-      !snapshot.client
+      !snapshot.client ||
+      (this.pingUnavailable && this.systemInfoUnavailable)
     ) {
       this.stopDiagnosticsPolling();
       return;
@@ -157,7 +202,10 @@ export class ConnectionDraft {
       !gatewaySource ||
       gatewaySource !== this.context.gateway ||
       !scope ||
-      (!isPing && this.systemInfoUnavailable) ||
+      (isPing
+        ? this.pingUnavailable ||
+          !canCallGatewayMethod(gatewaySource.snapshot, "last-heartbeat", "operator.read")
+        : this.systemInfoUnavailable) ||
       this[requestKey] ||
       document.visibilityState === "hidden"
     ) {
@@ -225,12 +273,24 @@ export class ConnectionDraft {
       if (!isCurrent()) {
         return;
       }
+      // A denied read is settled, not a transient failure to retry on every poll.
+      // Retain it for this hello; reconnect or refreshed authority may admit it again.
+      const denied = isMissingOperatorReadScopeError(error);
+      if (denied) {
+        this.deniedDiagnostics.add(kind);
+      }
       if (isPing) {
-        this.pingFailed = true;
+        this.pingFailed = !denied;
+        if (denied) {
+          this.pingUnavailable = true;
+          this.ping = null;
+          this.pingSamples = [];
+        }
       } else {
-        this.statusFailed = true;
-        if (isMissingOperatorReadScopeError(error)) {
+        this.statusFailed = !denied;
+        if (denied) {
           this.systemInfo = null;
+          this.statusHistory = [];
           this.systemInfoUnavailable = true;
         }
       }
@@ -238,6 +298,7 @@ export class ConnectionDraft {
       if (this[requestKey] === request) {
         this[requestKey] = null;
         request.completion?.resolve(this.statusFailed);
+        this.syncDiagnosticsPolling();
         this.changed();
       } else {
         request.completion?.resolve(null);
@@ -321,6 +382,7 @@ export class ConnectionDraft {
       systemInfoUnavailable: this.systemInfoUnavailable,
       ping: this.ping,
       pingFailed: this.pingFailed,
+      pingUnavailable: this.pingUnavailable,
       pingSamples: this.pingSamples,
       statusHistory: this.statusHistory,
       statusFailed: this.statusFailed,

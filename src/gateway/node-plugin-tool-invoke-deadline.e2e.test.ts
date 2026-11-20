@@ -8,7 +8,6 @@ import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-regist
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
-import { replaceConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
 import { installConnectedControlUiServerSuite } from "./test-with-server.js";
@@ -93,19 +92,14 @@ it(
     const gatewayUrlEnv = captureEnv(["OPENCLAW_GATEWAY_URL"]);
 
     try {
-      replaceConnectedNodePluginTools({
-        nodeId,
-        displayName: NODE_DISPLAY_NAME,
+      await node.request("node.pluginTools.update", {
         tools: [
           {
-            descriptor: {
-              pluginId: "remote-demo",
-              name: "remote_echo",
-              description: "Echo through a remote node",
-              parameters: { type: "object", properties: { text: { type: "string" } } },
-              command: NODE_COMMAND,
-            },
-            registered: false,
+            pluginId: "remote-demo",
+            name: "remote_echo",
+            description: "Echo through a remote node",
+            parameters: { type: "object", properties: { text: { type: "string" } } },
+            command: NODE_COMMAND,
           },
         ],
       });

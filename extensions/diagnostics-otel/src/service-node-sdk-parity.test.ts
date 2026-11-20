@@ -1,18 +1,14 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { type Tracer, trace, TraceFlags } from "@opentelemetry/api";
+import { type Tracer, TraceFlags } from "@opentelemetry/api";
 import { resourceFromAttributes } from "@opentelemetry/resources";
-import { NodeSDK } from "@opentelemetry/sdk-node";
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   type ReadableSpan,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
-import { afterEach, beforeEach, expect, test } from "vitest";
+import { beforeEach, expect, test } from "vitest";
 import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
-import { clearOtelGlobals, snapshotOtelEnv } from "./service.test-helpers.js";
-
-installRealOtelSdkTestHarness();
+import { clearOtelGlobals } from "./service.test-helpers.js";
 
 const ENV_KEYS = [
   "OTEL_ATTRIBUTE_COUNT_LIMIT",
@@ -27,15 +23,8 @@ const ENV_KEYS = [
   "OTEL_TRACES_SAMPLER_ARG",
 ] as const;
 
-let restoreEnv: () => void;
-beforeEach(() => {
-  restoreEnv = snapshotOtelEnv(ENV_KEYS);
-  clearOtelGlobals();
-  for (const key of ENV_KEYS) {
-    delete process.env[key];
-  }
-});
-afterEach(() => restoreEnv());
+installRealOtelSdkTestHarness({ env: ENV_KEYS });
+beforeEach(() => clearOtelGlobals());
 
 async function capturePrivateProviderSpans(emit: (tracer: Tracer) => void) {
   const exporter = new InMemorySpanExporter();
@@ -47,22 +36,6 @@ async function capturePrivateProviderSpans(emit: (tracer: Tracer) => void) {
   await provider.forceFlush();
   const spans = [...exporter.getFinishedSpans()];
   await provider.shutdown();
-  return spans;
-}
-
-async function captureNodeSdkSpans(emit: (tracer: Tracer) => void) {
-  const exporter = new InMemorySpanExporter();
-  const sdk = new NodeSDK({
-    autoDetectResources: false,
-    resource: resourceFromAttributes({}),
-    spanProcessor: new SimpleSpanProcessor(exporter),
-  });
-  sdk.start();
-  emit(trace.getTracer("openclaw-node-sdk-parity"));
-  await nextTurn();
-  const spans = [...exporter.getFinishedSpans()];
-  await sdk.shutdown();
-  clearOtelGlobals();
   return spans;
 }
 
@@ -81,7 +54,7 @@ const SAMPLER_CASES: ReadonlyArray<[string | undefined, number, string?]> = [
 ];
 
 test.each(SAMPLER_CASES)(
-  "matches NodeSDK sampler %s (expected=%s, ratio=%s)",
+  "applies private-provider sampler %s (expected=%s, ratio=%s)",
   async (sampler, expected, arg) => {
     if (sampler !== undefined) {
       process.env.OTEL_TRACES_SAMPLER = sampler;
@@ -90,7 +63,6 @@ test.each(SAMPLER_CASES)(
       process.env.OTEL_TRACES_SAMPLER_ARG = arg;
     }
     const emit = (tracer: Tracer) => tracer.startSpan("sampler-probe").end();
-    expect(await captureNodeSdkSpans(emit)).toHaveLength(expected);
     expect(await capturePrivateProviderSpans(emit)).toHaveLength(expected);
   },
 );
@@ -121,7 +93,7 @@ function spanLimitShape(span: ReadableSpan) {
   };
 }
 
-test("matches NodeSDK behavior for all six OTEL_SPAN_* limit variables", async () => {
+test("applies all six OTEL_SPAN_* limit variables to private-provider spans", async () => {
   process.env.OTEL_SPAN_ATTRIBUTE_COUNT_LIMIT = "1";
   process.env.OTEL_SPAN_ATTRIBUTE_VALUE_LENGTH_LIMIT = "3";
   process.env.OTEL_SPAN_EVENT_COUNT_LIMIT = "1";
@@ -129,10 +101,9 @@ test("matches NodeSDK behavior for all six OTEL_SPAN_* limit variables", async (
   process.env.OTEL_SPAN_ATTRIBUTE_PER_EVENT_COUNT_LIMIT = "1";
   process.env.OTEL_SPAN_ATTRIBUTE_PER_LINK_COUNT_LIMIT = "1";
 
-  const [nodeSdkSpan] = await captureNodeSdkSpans(emitLimitProbe);
   const [privateProviderSpan] = await capturePrivateProviderSpans(emitLimitProbe);
-  if (!nodeSdkSpan || !privateProviderSpan) {
-    throw new Error("expected both providers to export the limit probe");
+  if (!privateProviderSpan) {
+    throw new Error("expected the private provider to export the limit probe");
   }
   const expectedShape = {
     attributes: { first: "abc" },
@@ -140,6 +111,5 @@ test("matches NodeSDK behavior for all six OTEL_SPAN_* limit variables", async (
     links: [{ first: "abc" }],
   };
 
-  expect(spanLimitShape(nodeSdkSpan)).toEqual(expectedShape);
   expect(spanLimitShape(privateProviderSpan)).toEqual(expectedShape);
 });

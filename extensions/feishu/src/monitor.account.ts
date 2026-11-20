@@ -3,6 +3,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import {
   isRecord,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,8 +16,16 @@ import {
   type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
-import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
-import { createEventDispatcher } from "./client.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
+import {
+  buildFeishuActionCard,
+  buildFeishuCardButton,
+  buildFeishuCardInteractionContext,
+} from "./card-ux-shared.js";
+import { resolveFeishuChatType } from "./chat-type.js";
+import { getChatInfo } from "./chat.js";
+import { createEventDispatcher, createFeishuClient } from "./client.js";
 import {
   claimUnprocessedFeishuMessage,
   hasProcessedFeishuMessage,
@@ -32,10 +41,14 @@ import { botOpenIds } from "./monitor.state.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
 import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { getMessageFeishu } from "./send.js";
+import { getMessageFeishu, sendCardFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
 import { createFeishuThreadBindingManager } from "./thread-bindings.js";
 import { normalizeFeishuEventChatType, type ResolvedFeishuAccount } from "./types.js";
+
+const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
+
+const QUICK_ACTION_MENU_KEYS = new Set(["quick-actions", "quick_actions", "launcher"]);
 
 const FEISHU_REACTION_VERIFY_TIMEOUT_MS = 1_500;
 
@@ -75,15 +88,12 @@ export async function resolveReactionSyntheticEvent(
   const { resolveFeishuAccount } = await import("./accounts.js");
   const account = resolveFeishuAccount({ cfg, accountId });
   const reactionNotifications = account.config.reactionNotifications;
-  if (reactionNotifications === "off") {
-    return null;
-  }
-
-  if (event.operator_type === "app" || senderId === botOpenId) {
-    return null;
-  }
-
-  if (emoji === "Typing") {
+  if (
+    reactionNotifications === "off" ||
+    event.operator_type === "app" ||
+    senderId === botOpenId ||
+    emoji === "Typing"
+  ) {
     return null;
   }
 
@@ -96,9 +106,7 @@ export async function resolveReactionSyntheticEvent(
 
   const reactedMsg = await raceWithTimeoutAndAbort(
     getMessageFeishu({ cfg, messageId, accountId }),
-    {
-      timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS,
-    },
+    { timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS },
   )
     .then((result) => (result.status === "resolved" ? result.value : null))
     .catch(() => null);
@@ -111,7 +119,16 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  const syntheticChatIdRaw = event.chat_id?.trim() || reactedMsg.chatId?.trim();
+  let resolvedChatType = normalizeFeishuEventChatType(event.chat_type) ?? reactedMsg.chatType;
+  if (!resolvedChatType && syntheticChatIdRaw) {
+    const chatInfo = await raceWithTimeoutAndAbort(
+      getChatInfo(createFeishuClient(account), syntheticChatIdRaw),
+      { timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS },
+    ).catch(() => null);
+    resolvedChatType =
+      chatInfo?.status === "resolved" ? resolveFeishuChatType(chatInfo.value) : undefined;
+  }
   if (!resolvedChatType) {
     logger?.(
       `feishu[${accountId}]: skipping reaction ${emoji} on ${messageId} without chat type context`,
@@ -119,8 +136,6 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const syntheticChatIdRaw = event.chat_id ?? reactedMsg.chatId;
-  const syntheticChatId = syntheticChatIdRaw?.trim() ? syntheticChatIdRaw : `p2p:${senderId}`;
   return {
     sender: {
       sender_id: {
@@ -136,7 +151,7 @@ export async function resolveReactionSyntheticEvent(
       typing_target_message_id: messageId,
       ...(reactedMsg.rootId ? { root_id: reactedMsg.rootId } : {}),
       ...(reactedMsg.threadId ? { thread_id: reactedMsg.threadId } : {}),
-      chat_id: syntheticChatId,
+      chat_id: syntheticChatIdRaw || `p2p:${senderId}`,
       chat_type: resolvedChatType,
       message_type: "text",
       content: JSON.stringify({
@@ -472,36 +487,94 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
             processingClaim: claim.kind === "claimed" ? claim.handle : undefined,
           });
 
-        const promise = maybeHandleFeishuQuickActionMenu({
-          cfg,
-          eventKey,
-          operatorOpenId,
-          runtime,
-          accountId,
-        })
-          .then(async (handledMenu) => {
-            if (handledMenu) {
-              if (claim.kind === "claimed") {
-                await claim.handle.commit();
-              }
-              return;
+        const promise = (async () => {
+          let handledMenu = false;
+          if (QUICK_ACTION_MENU_KEYS.has(normalizeOptionalLowercaseString(eventKey) ?? "")) {
+            const expiresAt = Date.now() + FEISHU_QUICK_ACTION_CARD_TTL_MS;
+            try {
+              const launcherContext = buildFeishuCardInteractionContext({
+                operatorOpenId,
+                expiresAt,
+                chatType: "p2p",
+              });
+              const approvalActions = [
+                {
+                  label: "New session",
+                  type: "primary",
+                  command: "/new",
+                  prompt: "Start a fresh session? This will reset the current chat context.",
+                },
+                {
+                  label: "Reset",
+                  type: "danger",
+                  command: "/reset",
+                  prompt: "Reset this session now? Any active conversation state will be cleared.",
+                },
+              ] as const;
+              await sendCardFeishu({
+                cfg,
+                to: `user:${operatorOpenId}`,
+                card: buildFeishuActionCard({
+                  title: "Quick actions",
+                  template: "indigo",
+                  content: "Run common actions without typing raw commands.",
+                  actions: [
+                    buildFeishuCardButton({
+                      label: "Help",
+                      value: createFeishuCardInteractionEnvelope({
+                        k: "quick",
+                        a: "feishu.quick_actions.help",
+                        q: "/help",
+                        c: launcherContext,
+                      }),
+                    }),
+                    ...approvalActions.map(({ label, type, command, prompt }) =>
+                      buildFeishuCardButton({
+                        label,
+                        type,
+                        value: createFeishuCardInteractionEnvelope({
+                          k: "meta",
+                          a: FEISHU_APPROVAL_REQUEST_ACTION,
+                          m: { command, prompt },
+                          c: launcherContext,
+                        }),
+                      }),
+                    ),
+                  ],
+                }),
+                accountId,
+              });
+              handledMenu = true;
+            } catch (err) {
+              runtime?.log(
+                `feishu[${accountId ?? "default"}]: failed to open quick-action launcher for ${operatorOpenId}: ${String(err)}`,
+              );
             }
-            if (!context.isAccountActive()) {
-              if (claim.kind === "claimed") {
-                claim.handle.release({
-                  error: new Error("feishu account stopped before menu dispatch"),
-                });
-              }
-              return;
-            }
-            return handleLegacyMenu();
-          })
-          .catch(async (err: unknown) => {
+          }
+          if (handledMenu) {
+            runtime?.log(
+              `feishu[${accountId ?? "default"}]: opened quick-action launcher for ${operatorOpenId}`,
+            );
             if (claim.kind === "claimed") {
               await claim.handle.commit();
             }
-            throw err;
-          });
+            return;
+          }
+          if (!context.isAccountActive()) {
+            if (claim.kind === "claimed") {
+              claim.handle.release({
+                error: new Error("feishu account stopped before menu dispatch"),
+              });
+            }
+            return;
+          }
+          return handleLegacyMenu();
+        })().catch(async (err: unknown) => {
+          if (claim.kind === "claimed") {
+            await claim.handle.commit();
+          }
+          throw err;
+        });
         context.trackTask(promise);
         if (fireAndForget) {
           promise.catch((err: unknown) => {

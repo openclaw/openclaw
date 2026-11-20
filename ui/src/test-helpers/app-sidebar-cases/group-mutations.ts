@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../lib/toast-host.tsx";
 import * as groupDefaultsDialog from "../../components/session-group-defaults-dialog.tsx";
+import "../../lib/toast-host.tsx";
+import { editSessionGroupDefaults } from "../../components/session-organizer-menu.runtime.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -120,7 +121,7 @@ describe("AppSidebar group mutation collapsed state", () => {
 
   function confirmButton() {
     return waitForFast(() =>
-      requiredElement(document.body, "openclaw-modal-dialog .exec-approval-actions .btn.danger"),
+      requiredElement(document.body, "openclaw-modal-dialog openclaw-modal-actions .btn.danger"),
     );
   }
 
@@ -290,7 +291,7 @@ describe("AppSidebar group mutation collapsed state", () => {
       } else {
         const cancel = await waitForFast(() => {
           const buttons = document.body.querySelectorAll<HTMLButtonElement>(
-            "openclaw-modal-dialog .exec-approval-actions .btn",
+            "openclaw-modal-dialog openclaw-modal-actions .btn",
           );
           expect(buttons).toHaveLength(2);
           return buttons[1]!;
@@ -310,9 +311,11 @@ describe("AppSidebar group mutation collapsed state", () => {
         });
         await waitForFast(() =>
           expect(toast.querySelector(".app-toast__message")?.textContent).toBe(
-            'Gateway connection replaced before "Alpha" was deleted. Try again.',
+            "The connection changed before “Alpha” was deleted.",
           ),
         );
+        expect(toast.querySelector(".app-toast__description")?.textContent).toBe("Try again.");
+        expect(toast.querySelector('.app-toast[role="alert"]')).not.toBeNull();
         toast.remove();
       }
     },
@@ -347,7 +350,7 @@ describe("AppSidebar group mutation collapsed state", () => {
           opened.resolve(options);
         },
       );
-      await sidebar.sessionOrganizer.editSessionGroupDefaults("Alpha");
+      await editSessionGroupDefaults(sidebar.sessionOrganizer, "Alpha");
       const options = await opened.promise;
       const pending =
         kind === "folders"

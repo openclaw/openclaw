@@ -416,23 +416,6 @@ export function createCopilotAgentHarness(
     return poolPromise;
   }
 
-  function trackDeferredCompactionCleanup(params: {
-    abort: () => void;
-    cleanup: Promise<DeferredCompactionCleanupOutcome>;
-    sessionId: string;
-    sdkSessionId: string;
-  }): void {
-    const cleanups =
-      deferredCompactionCleanups.get(params.sessionId) ??
-      new Map<Promise<DeferredCompactionCleanupOutcome>, DeferredCompactionCleanup>();
-    cleanups.set(params.cleanup, { abort: params.abort, sdkSessionId: params.sdkSessionId });
-    deferredCompactionCleanups.set(params.sessionId, cleanups);
-    void params.cleanup.then(
-      () => removeDeferredCompactionCleanup(params.sessionId, params.cleanup),
-      () => removeDeferredCompactionCleanup(params.sessionId, params.cleanup),
-    );
-  }
-
   function removeDeferredCompactionCleanup(
     sessionId: string,
     cleanup: Promise<DeferredCompactionCleanupOutcome>,
@@ -609,12 +592,15 @@ export function createCopilotAgentHarness(
                     return outcome;
                   }),
                 );
-                trackDeferredCompactionCleanup({
-                  abort,
-                  cleanup: bindingCleanup,
-                  sessionId: openclawSessionId,
-                  sdkSessionId,
-                });
+                const cleanups =
+                  deferredCompactionCleanups.get(openclawSessionId) ??
+                  new Map<Promise<DeferredCompactionCleanupOutcome>, DeferredCompactionCleanup>();
+                cleanups.set(bindingCleanup, { abort, sdkSessionId });
+                deferredCompactionCleanups.set(openclawSessionId, cleanups);
+                void bindingCleanup.then(
+                  () => removeDeferredCompactionCleanup(openclawSessionId, bindingCleanup),
+                  () => removeDeferredCompactionCleanup(openclawSessionId, bindingCleanup),
+                );
               })
           : undefined,
       });

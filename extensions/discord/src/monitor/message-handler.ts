@@ -20,6 +20,7 @@ export function createDiscordMessageHandler(
         abortSignal: lifecycle.abortSignal,
         turnAdoptionLifecycle: lifecycle,
       }),
+    onDeadLetter: (event, signal) => dispatcher.notifyDeadLetter(event, params.client, signal),
   });
   ingress.start();
   const activeAdmissions = new Set<Promise<void>>();

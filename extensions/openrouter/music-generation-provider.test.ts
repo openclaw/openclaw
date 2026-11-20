@@ -9,12 +9,8 @@ import { expectExplicitMusicGenerationCapabilities } from "openclaw/plugin-sdk/p
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
-} = getProviderHttpMocks();
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveApiKeyForProviderMock } =
+  getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
 
@@ -98,12 +94,6 @@ function resetOpenRouterMusicMocks() {
   assertOkOrThrowHttpErrorMock.mockResolvedValue(undefined);
   postJsonRequestMock.mockReset();
   resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
-  resolveProviderHttpRequestConfigMock.mockImplementation((params) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  }));
 }
 
 describe("openrouter music generation provider", () => {

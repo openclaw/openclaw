@@ -11,6 +11,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUserPath } from "../../infra/home-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import {
   resolveUpdateStateContentVersion,
@@ -20,6 +24,7 @@ import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalizat
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -51,15 +56,27 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-/** Inspect private state copies without reopening migrated state through the previous runtime. */
+/**
+ * Inspect private state copies without reopening migrated state through the previous runtime.
+ *
+ * Data at risk needs positive evidence: a changed schema, or an unreadable store after a
+ * candidate Doctor or boot may have written it. Before any candidate opened state, an
+ * unreadable store still holds the previous version's state; that read is a warning.
+ *
+ * A Git release switches only the release link: the previous Gateway keeps serving and
+ * writing, no Doctor runs, and the Gateway that starts from the release migrates at boot.
+ * Its inspection reads the live stores directly, as the pre-activation baseline does.
+ */
 export async function inspectActivatedUpdateState(
   params: Pick<
     FinishUpdateParams,
-    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner"
+    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner" | "gitRelease"
   > & {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     candidateSchemaVersions?: OpenClawSchemaVersions;
+    /** Omitted means a candidate may have written state. */
+    candidateOpenedState?: boolean;
     timeoutMs?: number;
   },
 ): Promise<FinishUpdateParams["rollbackBlockedReason"]> {
@@ -67,6 +84,7 @@ export async function inspectActivatedUpdateState(
   if (!schemaVersions) {
     return undefined;
   }
+  const gitRelease = params.gitRelease === true;
   const agentPaths = new Set(
     [env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
       directory?.trim()
@@ -84,6 +102,9 @@ export async function inspectActivatedUpdateState(
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
       includeRetainedAgentPaths: true,
+      // Preserved artifacts keep the final Doctor's captured generation valid. A Git
+      // release captures none, and a full copy of a live store never stabilizes.
+      preserveSourceArtifacts: !gitRelease,
       onInventory: (files) => {
         for (const database of files.values()) {
           if (
@@ -108,6 +129,7 @@ export async function inspectActivatedUpdateState(
       : [];
     if (
       result.status === "ok" &&
+      !gitRelease &&
       candidateSchemaVersions &&
       (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
     ) {
@@ -141,6 +163,16 @@ export async function inspectActivatedUpdateState(
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
+    // An owner that already recorded data at risk keeps its route.
+    const recordedRisk =
+      result.recovery?.serviceRestartSafe === false && result.recovery.dataAtRisk;
+    if (params.candidateOpenedState === false && result.root && !recordedRisk) {
+      // No candidate has opened live state, so an unreadable store is no evidence of change.
+      result.steps.push(
+        inconclusiveInspectionStep(result.root, error, gitRelease, result.status === "ok"),
+      );
+      return undefined;
+    }
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
@@ -157,6 +189,32 @@ export async function inspectActivatedUpdateState(
     result.recovery = unsafeUpdateRecovery(result.recovery, blocked);
   }
   return blocked;
+}
+
+function inconclusiveInspectionStep(
+  cwd: string,
+  cause: unknown,
+  gitRelease: boolean,
+  continues: boolean,
+): UpdateStepResult {
+  const state = "No data was changed because no new-version process had opened the state.";
+  const outcome = !continues
+    ? ""
+    : gitRelease
+      ? " The update continues; the new release migrates state when it starts."
+      : " The update continues.";
+  return {
+    name: "state-schema-verification",
+    command: "openclaw update",
+    cwd,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: {
+      kind: "recoverable-maintenance",
+      // Warnings render as one line.
+      message: `State schema check was inconclusive (${formatErrorMessage(cause).replace(/\s+/g, " ")}). ${state}${outcome}`,
+    },
+  };
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */
@@ -186,9 +244,13 @@ export async function continueMigratedUpdateInFreshProcess(
     if (!root) {
       throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
+    const workerRuntime = params.packageUpdateNodeRunner ?? resolveNodeRunner();
     const workerCommand = [
-      params.packageUpdateNodeRunner ?? resolveNodeRunner(),
-      path.join(root, "dist", runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath),
+      workerRuntime,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl({ ...runtimeProcessEntrypoints.updateMigratedFinalize, root }),
+        workerRuntime,
+      ),
     ];
     const workerOptions = {
       cwd: root,
@@ -295,12 +357,13 @@ export async function continueMigratedUpdateInFreshProcess(
       deadline: _deadline,
       ...runIdentity
     } = run;
+    const { onResult: _onResult, ...serializableOptions } = params.opts;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
         ...serializable,
         opts: {
-          ...params.opts,
+          ...serializableOptions,
           timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
@@ -348,13 +411,22 @@ export async function continueMigratedUpdateInFreshProcess(
     if (pendingStderr.byteLength > 0) {
       process.stderr.write(pendingStderr);
     }
-    const response = JSON.parse(
-      await fs.readFile(resultPath, "utf8"),
-    ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    const unconfirmed = "Update finalization did not confirm the admitted run's terminal outcome";
+    // A failed worker may never write its result; report its exit, not the missing file.
+    if (child.termination !== "exit" || child.code !== 0 || child.cleanup !== "normal") {
+      throw new Error(
+        `${unconfirmed}: worker termination=${child.termination}, code=${child.code}, signal=${child.signal}, cleanup=${child.cleanup ?? "unknown"}.`,
+      );
+    }
+    let response: MigratedUpdateFinalizationResult;
+    try {
+      response = JSON.parse(
+        await fs.readFile(resultPath, "utf8"),
+      ) as MigratedUpdateFinalizationResult; // SAFETY: Only the candidate worker launched above writes this private artifact.
+    } catch (cause) {
+      throw new Error(`${unconfirmed}: the worker exited without a readable result.`, { cause });
+    }
     if (
-      child.termination !== "exit" ||
-      child.code !== 0 ||
-      child.cleanup !== "normal" ||
       (executorFence && response.executorDelegation !== "pid-start-v1") ||
       (response.terminalRunId !== run.runId &&
         !(
@@ -366,7 +438,7 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
-      throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
+      throw new Error(`${unconfirmed}.`);
     }
     const finalization = {
       result: response.result,

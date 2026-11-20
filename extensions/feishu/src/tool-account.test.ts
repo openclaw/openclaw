@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveFeishuToolAccount } from "./tool-account.js";
+import type { FeishuConfig } from "./types.js";
 
 describe("resolveFeishuToolAccount", () => {
   const requiredTool = { family: "wiki", label: "Wiki" } as const;
@@ -25,77 +26,8 @@ describe("resolveFeishuToolAccount", () => {
   function resolveAccount(overrides: Partial<Parameters<typeof resolveFeishuToolAccount>[0]> = {}) {
     return resolveFeishuToolAccount({ cfg, requiredTool, ...overrides });
   }
-  const config = (overrides: Partial<typeof cfg.channels.feishu>) => ({
+  const config = (overrides: Partial<FeishuConfig>) => ({
     channels: { feishu: { ...cfg.channels.feishu, ...overrides } },
-  });
-
-  it("prefers the active contextual account over configured defaultAccount", () => {
-    expect(resolveAccount({ defaultAccountId: "work" }).accountId).toBe("work");
-  });
-
-  it("matches a mixed-case configured contextual account before fallback", () => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
-            },
-          },
-        },
-        defaultAccountId: "ops",
-        requiredTool,
-      }),
-    ).toThrow('Feishu Wiki tools are disabled for account "ops"');
-  });
-
-  it("keeps a mixed-case restricted configured default fail-closed", () => {
-    expect(() =>
-      resolveFeishuToolAccount({
-        cfg: {
-          channels: {
-            feishu: {
-              enabled: true,
-              defaultAccount: "Ops",
-              accounts: {
-                Ops: {
-                  enabled: true,
-                  appId: "ops-app-id",
-                  appSecret: "ops-app-secret", // pragma: allowlist secret
-                  tools: { wiki: false },
-                },
-                admin: {
-                  enabled: true,
-                  appId: "admin-app-id",
-                  appSecret: "admin-app-secret", // pragma: allowlist secret
-                  tools: { wiki: true },
-                },
-              },
-            },
-          },
-        },
-        defaultAccountId: "ops",
-        requiredTool,
-      }),
-    ).toThrow('Feishu Wiki tools are disabled for account "ops"');
-  });
-
-  it("falls back to configured defaultAccount when there is no contextual account", () => {
-    expect(resolveAccount().accountId).toBe("ops");
   });
 
   it("skips a disabled configured defaultAccount", () => {
@@ -111,20 +43,9 @@ describe("resolveFeishuToolAccount", () => {
     );
   });
 
-  it("allows an explicit configured account", () => {
-    expect(resolveAccount({ executeParams: { accountId: "WORK" } }).accountId).toBe("work");
-  });
-
   it("allows the explicit unlisted default backed by top-level credentials", () => {
     const resolved = resolveAccount({
-      cfg: {
-        channels: {
-          feishu: {
-            defaultAccount: "ops",
-            ...credentials("base"),
-          },
-        },
-      },
+      cfg: config({ accounts: {} }),
       executeParams: { accountId: "OPS" },
     });
 

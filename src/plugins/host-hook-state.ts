@@ -144,7 +144,7 @@ async function drainPluginNextTurnInjections(
   ) {
     return [];
   }
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const updated = await updateResolvedSessionEntry(scope, (entry) => {
     if (!entry?.pluginNextTurnInjections) {
       return [];
@@ -188,7 +188,6 @@ export async function drainPluginNextTurnInjectionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
-  now?: number;
 }): Promise<PluginAgentTurnPrepareResult & { queuedInjections: PluginNextTurnInjectionRecord[] }> {
   const queuedInjections = await drainPluginNextTurnInjections(params);
   return {

@@ -21,11 +21,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "../plugin
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
 import { omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
-import {
-  buildStableCachePrefix,
-  logLiveCache,
-  type LiveResolvedModel,
-} from "./live-cache-test-support.js";
+import { buildStableCachePrefix, type LiveResolvedModel } from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
 
 export function buildEmbeddedCachePrompt(suffix: string, sections = 48): string {
@@ -155,16 +151,12 @@ export async function runEmbeddedReleasePrefixScenario(
     probe: (config: OpenClawConfig, suffix: string) => Promise<AssistantMessage["usage"]>;
     readTraceEvents: () => Promise<
       Array<{
-        runId?: string;
         stage?: string;
         options?: {
           input?: number;
           cacheRead?: number;
           cacheWrite?: number;
-          requestIndex?: number;
-          requestGapMs?: number;
-          providerPrefix?: string;
-          changes?: Array<{ code?: string; detail?: string }>;
+          changes?: Array<{ code?: string }>;
         };
       }>
     >;
@@ -405,27 +397,9 @@ export async function runEmbeddedReleasePrefixScenario(
     const results = events.filter((event) => event.stage === "cache:result");
     expect(results, "one cache diagnostic per provider request").toHaveLength(4 * requestsPerTurn);
     let previousPromptTokens: number | undefined;
-    for (const [index, result] of results.entries()) {
+    for (const result of results) {
       const usage = result.options;
       const promptTokens = (usage?.input ?? 0) + (usage?.cacheRead ?? 0) + (usage?.cacheWrite ?? 0);
-      logLiveCache(
-        JSON.stringify({
-          scenario: "release-prefix-diagnostic",
-          provider,
-          turn: Math.floor(index / requestsPerTurn) + 1,
-          request: index + 1,
-          runId: result.runId,
-          input: usage?.input,
-          cacheRead: usage?.cacheRead,
-          cacheWrite: usage?.cacheWrite,
-          output: runs[Math.floor(index / requestsPerTurn)]?.output,
-          promptTokens,
-          cachedTokenRatio: promptTokens > 0 ? (usage?.cacheRead ?? 0) / promptTokens : 0,
-          requestGapMs: result.options?.requestGapMs,
-          providerPrefix: result.options?.providerPrefix ?? "no-cache-drop",
-          changes: result.options?.changes?.map((change) => change.code) ?? [],
-        }),
-      );
       if (previousPromptTokens !== undefined) {
         expect(
           usage?.cacheRead,

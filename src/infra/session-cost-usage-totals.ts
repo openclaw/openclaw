@@ -13,12 +13,12 @@ export function createEmptyCostUsageTotals(): CostUsageTotals {
     cacheReadCost: 0,
     cacheWriteCost: 0,
     missingCostEntries: 0,
+    cacheUnmeasuredInput: 0,
   };
 }
 
 export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
   return {
-    ...(totals.usageReport ? { usageReport: { ...totals.usageReport } } : {}),
     input: totals.input,
     output: totals.output,
     cacheRead: totals.cacheRead,
@@ -30,14 +30,12 @@ export function cloneCostUsageTotals(totals: CostUsageTotals): CostUsageTotals {
     cacheReadCost: totals.cacheReadCost,
     cacheWriteCost: totals.cacheWriteCost,
     missingCostEntries: totals.missingCostEntries,
+    cacheUnmeasuredInput: totals.cacheUnmeasuredInput,
     ...(totals.missingCostByModel ? { missingCostByModel: { ...totals.missingCostByModel } } : {}),
   };
 }
 
 export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTotals): void {
-  if (source.usageReport?.state === "unavailable") {
-    target.usageReport = { state: "unavailable" };
-  }
   target.input += source.input;
   target.output += source.output;
   target.cacheRead += source.cacheRead;
@@ -49,6 +47,7 @@ export function addCostUsageTotals(target: CostUsageTotals, source: CostUsageTot
   target.cacheReadCost += source.cacheReadCost;
   target.cacheWriteCost += source.cacheWriteCost;
   target.missingCostEntries += source.missingCostEntries;
+  target.cacheUnmeasuredInput += source.cacheUnmeasuredInput;
   if (source.missingCostByModel) {
     target.missingCostByModel ??= {};
     for (const [model, count] of Object.entries(source.missingCostByModel)) {

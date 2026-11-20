@@ -9,23 +9,6 @@ import type { TuiBackend } from "./tui-backend.js";
 import { sanitizeRenderableText } from "./tui-formatters.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
 
-type TaskSuggestionControllerDeps = {
-  client: Pick<
-    TuiBackend,
-    | "getTaskSuggestionActionCapabilities"
-    | "listTaskSuggestions"
-    | "acceptTaskSuggestion"
-    | "dismissTaskSuggestion"
-  >;
-  chatLog: { addSystem: (line: string) => void };
-  getAgentId: () => string;
-  getSessionKey: () => string;
-  openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle: OverlayHandle) => void;
-  requestRender: () => void;
-  onAccepted: (sessionKey: string) => Promise<void> | void;
-};
-
 const TASK_BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 type TaskAction = SelectItem & { value: "accept" | "dismiss" };
 
@@ -76,7 +59,22 @@ function parseTuiTaskSuggestion(value: unknown): TaskSuggestion | null {
   };
 }
 
-export function createTuiTaskSuggestionController(deps: TaskSuggestionControllerDeps) {
+export function createTuiTaskSuggestionController(deps: {
+  client: Pick<
+    TuiBackend,
+    | "getTaskSuggestionActionCapabilities"
+    | "listTaskSuggestions"
+    | "acceptTaskSuggestion"
+    | "dismissTaskSuggestion"
+  >;
+  chatLog: { addSystem: (line: string) => void };
+  getAgentId: () => string;
+  getSessionKey: () => string;
+  openOverlay: (component: Component) => OverlayHandle;
+  closeOverlay: (handle: OverlayHandle) => void;
+  requestRender: () => void;
+  onAccepted: (sessionKey: string) => Promise<void> | void;
+}) {
   const suggestions = new Map<string, TaskSuggestion>();
   const hiddenIds = new Set<string>();
   const resolvingIds = new Set<string>();

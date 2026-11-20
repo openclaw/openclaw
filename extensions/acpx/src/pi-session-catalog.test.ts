@@ -7,9 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 type ResolveAcpSessionAvailability =
   (typeof import("openclaw/plugin-sdk/acp-runtime"))["resolveAcpSessionAvailability"];
 
-const nodeHostMocks = vi.hoisted(() => ({
-  runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),
-}));
+const nodeHostMocks = await vi.hoisted(async () => {
+  const { createNodeHostMocks } = await import("../../test-support/node-host.test-support.js");
+  return createNodeHostMocks();
+});
 const acpRuntimeMocks = vi.hoisted(() => ({
   resolveAcpSessionAvailability: vi.fn<ResolveAcpSessionAvailability>(() => ({ available: true })),
 }));
@@ -19,29 +20,8 @@ vi.mock("openclaw/plugin-sdk/acp-runtime", async (importOriginal) => ({
   resolveAcpSessionAvailability: acpRuntimeMocks.resolveAcpSessionAvailability,
 }));
 
-vi.mock("openclaw/plugin-sdk/node-host", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/node-host")>();
-  return {
-    ...actual,
-    runNodePtyCommand: nodeHostMocks.runNodePtyCommand,
-    resolveNodeHostExecutable: (
-      command: string,
-      options: {
-        env?: NodeJS.ProcessEnv;
-        pathEnv?: string;
-        includeExtensionless?: boolean;
-      },
-    ) => {
-      const env = options.env ?? process.env;
-      return actual.resolveNodeHostExecutable(command, {
-        env,
-        pathEnv: options.pathEnv ?? env.PATH ?? env.Path ?? "",
-        includeExtensionless: options.includeExtensionless,
-        strategy: "direct",
-      });
-    },
-  };
-});
+// mock-isolation: Shared owner preserves real exports with fresh command-resolution mocks.
+vi.mock("openclaw/plugin-sdk/node-host", nodeHostMocks.mockRuntime);
 
 import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
 import { listLocalPiSessionPage, readLocalPiTranscriptPage } from "./pi-session-catalog.js";
@@ -80,10 +60,13 @@ const header = (id = "pi-session", version = 3) =>
   piSessionHeader({ id, version, timestamp: "2026-07-13T10:00:00Z" });
 
 function usePiCandidateCacheClock(): () => void {
-  let now = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => now);
+  let now = performance.now();
+  let wallClock = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => wallClock);
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   return () => {
     now += 32_001;
+    wallClock -= 60_000;
   };
 }
 
@@ -246,7 +229,7 @@ describe("Pi session catalog", () => {
         const file = path.join(directory, `session-${String(index)}.jsonl`);
         const entries = [
           header(`pi-session-${String(index)}`),
-          sessionInfo(`info-${String(index)}`, `Pi history ${String(index)}`),
+          sessionInfo(`info-${String(index)}`, `Cafe\u0301 history ${String(index)}`),
         ];
         await fs.writeFile(file, piJsonl(entries));
         await fs.utimes(file, baseTime + index, baseTime + index);
@@ -260,7 +243,7 @@ describe("Pi session catalog", () => {
     expect(second.sessions).toHaveLength(5);
     expect(second.nextCursor).toBeUndefined();
     await expect(
-      listLocalPiSessionPage({ limit: 20, searchTerm: "Pi history 0" }),
+      listLocalPiSessionPage({ limit: 20, searchTerm: "CAFÉ history 0" }),
     ).resolves.toMatchObject({
       sessions: [expect.objectContaining({ threadId: "pi-session-0" })],
     });

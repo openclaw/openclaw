@@ -1,9 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ProviderUsageCostDaily } from "../../../../src/infra/provider-usage.types.js";
+import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ProviderUsagePanel } from "./provider-usage.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  providerUsageAttention,
+  type ProviderUsageDetails,
+  ProviderUsagePanel,
+} from "./provider-usage.tsx";
 
 function dailyUsage(
   date: string,
@@ -29,6 +36,62 @@ const rowValues = (container: HTMLElement) =>
   ]);
 
 describe("ProviderUsagePanel", () => {
+  it("retains usage rows across fresh snapshots and updates their visible values", () => {
+    const initial: ProviderUsageDetails = {
+      windows: [
+        { label: "5h", groupLabel: "Account A", usedPercent: 25 },
+        { label: "5h", groupLabel: "Account A", usedPercent: 30 },
+        { label: "5h", groupLabel: "Account B", usedPercent: 40 },
+      ],
+      billing: [
+        { type: "balance", amount: 12, unit: "credits" },
+        { type: "balance", amount: 8, unit: "credits" },
+      ],
+      costHistory: {
+        unit: "USD",
+        periodDays: 30,
+        daily: [dailyUsage(new Date().toISOString().slice(0, 10), 2)],
+        models: [],
+        categories: [],
+      },
+    };
+    const [usage, setUsage] = createSignal(initial);
+    const view = mountSolid(() => <ProviderUsagePanel usage={usage()} />);
+    const rows = () => [
+      ...view.container.querySelectorAll(
+        ".provider-usage__group, .provider-usage__window, .provider-usage__row",
+      ),
+    ];
+    const before = rows();
+    expect(before).toHaveLength(10);
+
+    setUsage(structuredClone(initial));
+    flush();
+    expect(rows().filter((row) => !before.includes(row))).toHaveLength(0);
+
+    const changed = structuredClone(initial);
+    changed.windows[0]!.usedPercent = 90;
+    changed.billing![0] = { type: "balance", amount: 14, unit: "credits" };
+    changed.costHistory!.daily[0]!.amount = 4;
+    setUsage(changed);
+    flush();
+    expect(rows()).toEqual(before);
+    expect(view.container.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe(
+      "10",
+    );
+    expect(view.container.querySelector(".provider-usage__window")?.getAttribute("data-tone")).toBe(
+      "error",
+    );
+    expect(providerUsageAttention(changed)).toEqual({ kind: "danger", label: "5h 10% left" });
+    expect(rowValues(view.container)).toEqual([
+      ["Balance", "14 credits"],
+      ["Balance", "8 credits"],
+      ["Today", "$4.00"],
+      ["7 days", "$4.00"],
+      ["30 days", "$4.00"],
+    ]);
+  });
+
   it("groups windows in rank order and presents remaining headroom accessibly", () => {
     const view = mountSolid(() => (
       <ProviderUsagePanel
@@ -75,12 +138,62 @@ describe("ProviderUsagePanel", () => {
         }}
       />
     ));
-    const alert = view.container.querySelector('.provider-usage__alert[role="status"]');
-    expect(alert?.textContent).toMatch(/^Premium is used up until .+\.$/u);
+    const premium = view.container.querySelector(".provider-usage__window");
+    expect(premium?.getAttribute("data-tone")).toBe("error");
+    expect(premium?.querySelector(".provider-usage__window-value")?.textContent).toBe("0% left");
     const reset = view.container.querySelector(".provider-usage__window .provider-usage__reset");
     expect(reset?.textContent).toMatch(/^Resets .+ · in 3h$/u);
     // A window with no reported reset says nothing rather than guessing.
     expect(view.container.querySelectorAll(".provider-usage__reset")).toHaveLength(1);
+  });
+
+  it("reports only the tightest limit running out, then a failed check", () => {
+    const window = (label: string, usedPercent: number) => ({ label, usedPercent });
+    expect(providerUsageAttention({ windows: [window("5h", 40)] })).toBeUndefined();
+    expect(
+      providerUsageAttention({
+        windows: [window("5h", 80), window("Week", 95), window("Day", 10)],
+      }),
+    ).toEqual({ kind: "danger", label: "Week 5% left" });
+    expect(providerUsageAttention({ windows: [window("Week", 80)] })).toEqual({
+      kind: "warn",
+      label: "Week 20% left",
+    });
+    expect(providerUsageAttention({ windows: [], error: "Rate limited" })).toEqual({
+      kind: "warn",
+      label: "Couldn’t check usage",
+    });
+  });
+
+  it("keeps billed cost to its total and trend when compact", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const view = mountSolid(() => (
+      <ProviderUsagePanel
+        compact
+        usage={{
+          windows: [],
+          billing: [{ type: "balance", label: "Credits", amount: 4, unit: "USD" }],
+          costHistory: {
+            unit: "USD",
+            periodDays: 30,
+            daily: [dailyUsage(today, 2)],
+            models: [{ ...dailyUsage(today, 2), name: "gpt-5.5" }],
+            categories: [{ name: "Responses", amount: 2 }],
+          },
+        }}
+      />
+    ));
+    expect(view.container.querySelector(".provider-usage__rows")).toBeNull();
+    const facts = [...view.container.querySelectorAll(".provider-usage__fact")];
+    expect(
+      facts.map((fact) => fact.querySelector(".provider-usage__window-label")?.textContent),
+    ).toEqual(["Credits", "30 days"]);
+    expect(facts[1]?.querySelector(".provider-usage__window-value")?.textContent).toBe("$2.00");
+    expect(facts[1]?.querySelector(".provider-usage__reset")?.textContent).toBe(
+      "Today $2.00 · 7 days $2.00",
+    );
+    expect(facts[1]?.querySelector(".oc-sparkline-line")).not.toBeNull();
+    expect(view.container.textContent).not.toContain("gpt-5.5");
   });
 
   it.each([
@@ -174,4 +287,49 @@ describe("ProviderUsagePanel", () => {
       vi.useRealTimers();
     }
   });
+});
+
+it("uses UI locale for amounts, request counts, and reset dates", () => {
+  const locale = vi.spyOn(i18n, "getLocale").mockReturnValue("de");
+  onTestFinished(() => locale.mockRestore());
+  const resetAt = Date.now() + 86400000;
+  const view = mountSolid(() => (
+    <ProviderUsagePanel
+      usage={{
+        windows: [{ label: "5h", usedPercent: 20, resetAt }],
+        billing: [
+          { type: "balance", unit: "credits", amount: 1234.5 },
+          { type: "balance", unit: "USD", amount: 1234.5 },
+        ],
+        costHistory: {
+          unit: "USD",
+          periodDays: 30,
+          daily: [dailyUsage("2026-01-01", 1234.5, { requests: 12345 })],
+          models: [],
+          categories: [],
+        },
+      }}
+    />
+  ));
+  onTestFinished(view.unmount);
+  const text = view.container.textContent;
+  expect(text).toContain(
+    new Intl.NumberFormat("de", { maximumFractionDigits: 2 }).format(1234.5) + " credits",
+  );
+  expect(text).toContain(
+    new Intl.NumberFormat("de", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 2,
+    }).format(1234.5),
+  );
+  expect(text).toContain(new Intl.NumberFormat("de").format(12345));
+  expect(text).toContain(
+    new Intl.DateTimeFormat("de", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }).format(resetAt),
+  );
 });

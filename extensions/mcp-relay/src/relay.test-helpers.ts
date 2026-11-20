@@ -102,6 +102,7 @@ export function createStateFixture(now = () => 0) {
   };
   return {
     effects,
+    runtime,
     open: (url = "https://mcp.openclaw.ai") => new RelayState(runtime, url, () => {}),
     seed: (value: unknown, key = "identity") => {
       rows.set(key, JSON.stringify(value));
@@ -129,6 +130,7 @@ export function grantFixture(overrides: Partial<RelayGrant> = {}): RelayGrant {
     clientId: CLIENT.id,
     clientName: CLIENT.name,
     createdAt: 0,
+    issuanceId: "fixture-issuance",
     principal: { kind: "owner" },
     ceiling: ["operator.read", "operator.write"],
     ...overrides,
@@ -144,10 +146,9 @@ function parseFrame(text: string): Record<string, unknown> {
 }
 
 class FakeRelaySocket extends EventEmitter implements RelaySocket {
-  readonly frames: Record<string, unknown>[] = [];
+  readonly #messages = new Mailbox<Record<string, unknown>>();
+  readonly frames = this.#messages.values;
   readonly closes: { code?: number; reason?: string }[] = [];
-  readonly #queue: Record<string, unknown>[] = [];
-  readonly #readers: ((frame: Record<string, unknown>) => void)[] = [];
   terminated = false;
   bufferedAmount = 0;
 
@@ -156,13 +157,7 @@ class FakeRelaySocket extends EventEmitter implements RelaySocket {
       throw new Error("The Gateway must send text frames");
     }
     const frame = parseFrame(data);
-    this.frames.push(frame);
-    const reader = this.#readers.shift();
-    if (reader) {
-      reader(frame);
-    } else {
-      this.#queue.push(frame);
-    }
+    this.#messages.push(frame);
   }
 
   close(code?: number, reason?: string | Buffer): void {
@@ -180,12 +175,7 @@ class FakeRelaySocket extends EventEmitter implements RelaySocket {
   }
 
   nextFrame(): Promise<Record<string, unknown>> {
-    const frame = this.#queue.shift();
-    return frame
-      ? Promise.resolve(frame)
-      : new Promise((resolve) => {
-          this.#readers.push(resolve);
-        });
+    return this.#messages.next();
   }
 
   acknowledge(frame: Record<string, unknown>, result: Record<string, unknown> = {}): void {
@@ -272,7 +262,7 @@ export async function createTransportFixture(
       return socket;
     },
   });
-  service.start();
+  await service.start();
   await clock.advanceBy(0);
   const socket = sockets[0];
   if (!socket) {

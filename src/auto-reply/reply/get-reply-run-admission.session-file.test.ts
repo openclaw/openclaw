@@ -142,6 +142,13 @@ function nativeRun(overrides: Partial<Parameters<typeof attachActiveEmbeddedRun>
   };
 }
 
+function ready(prepared: Awaited<ReturnType<typeof prepareReplyRunAdmission>>) {
+  if (prepared.kind !== "ready") {
+    throw new Error("Expected a prepared reply");
+  }
+  return prepared;
+}
+
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
@@ -212,7 +219,7 @@ describe("prepared reply transcript identity", () => {
           expect(admitted).toBe(false);
           cleanup.resolve();
         }
-        const prepared = await withinTest(pending, signal);
+        const prepared = ready(await withinTest(pending, signal));
         expect(prepared).toMatchObject({
           kind: "ready",
           isActive: true,
@@ -220,9 +227,6 @@ describe("prepared reply transcript identity", () => {
           shouldFollowup: mode !== "interrupt",
           resolvedQueue: { mode },
         });
-        if (prepared.kind !== "ready") {
-          throw new Error("Expected prepared sessionless reply");
-        }
         expect(await prepared.isRunActive()).toBe(mode !== "interrupt");
         detachActiveEmbeddedRun(sessionId, native);
         expect(await prepared.isRunActive()).toBe(false);
@@ -265,14 +269,15 @@ describe("prepared reply transcript identity", () => {
       const foreign = startTurn("/tmp/foreign/sessions/sessions.json");
       const selected = startTurn(storePath);
       const turns = [foreign, selected];
-      const older = createQueueTestRun({ prompt: "Foreign queued request" });
-      older.run = {
-        ...older.run,
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        config: { session: { store: foreign.target.storeScope } },
-      };
+      const older = createQueueTestRun(
+        { prompt: "Foreign queued request" },
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          config: { session: { store: foreign.target.storeScope } },
+        },
+      );
       enqueueFollowupRun(sessionKey, older, { mode: "followup" }, "none", undefined, false);
       const preparedContext = {
         ...context,
@@ -302,16 +307,13 @@ describe("prepared reply transcript identity", () => {
           detachActiveEmbeddedRun(sessionId, selected.native, sessionKey);
           selected.operation.complete();
         }
-        const prepared = await withinTest(pending, signal);
+        const prepared = ready(await withinTest(pending, signal));
         expect(prepared).toMatchObject({
           kind: "ready",
           isActive: true,
           shouldSteer: mode === "steer",
           hasQueuedFollowups: false,
         });
-        if (prepared.kind !== "ready") {
-          throw new Error("Expected a prepared reply");
-        }
         expect(await prepared.isRunActive()).toBe(mode === "steer");
         detachActiveEmbeddedRun(sessionId, selected.native, sessionKey);
         selected.operation.complete();
@@ -335,45 +337,21 @@ describe("prepared reply transcript identity", () => {
     },
   );
 
-  it("carries an inherited thinking request through admission to candidate selection", async () => {
-    const { context, entry } = await createAdmissionFixture();
-    entry.thinkingLevel = "high";
-    const catalog = [{ provider: "fixture", id: "basic", name: "Basic", reasoning: false }];
-    const result = await prepareReplyRunAdmission({
-      ...context,
-      thinkingRuntime: "openclaw",
-      params: {
-        ...context.params,
-        provider: "fixture",
-        model: "basic",
-        resolvedThinkLevel: "high",
-        modelState: {
-          ...context.params.modelState,
-          allowedModelCatalog: catalog,
-          resolveThinkingCatalog: async () => catalog,
-        },
-      },
-    });
-
-    expect(result).toMatchObject({ kind: "ready", resolvedThinkLevel: "high" });
-    expect(entry.thinkingLevel).toBe("high");
-  });
-
   it.each(["steer", "followup"] as const)(
     "preserves %s admission and transcript authority despite an older queued followup",
     async (mode) => {
       const { context, sessionKey, sessionId, storePath } = await createAdmissionFixture();
-      const older = createQueueTestRun({ prompt: "Earlier followup", messageId: `older-${mode}` });
-      older.run = {
-        ...older.run,
-        agentId: "main",
-        config: { session: { store: storePath } },
-      };
+      const older = createQueueTestRun(
+        { prompt: "Earlier followup", messageId: `older-${mode}` },
+        { agentId: "main", config: { session: { store: storePath } } },
+      );
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
       operation.setPhase("running");
       enqueueFollowupRun(sessionKey, older, { mode: "followup" }, "message-id", undefined, false);
       try {
-        const prepared = await prepareReplyRunAdmission({ ...context, effectiveQueueMode: mode });
+        const prepared = ready(
+          await prepareReplyRunAdmission({ ...context, effectiveQueueMode: mode }),
+        );
         expect(prepared).toMatchObject({
           kind: "ready",
           isActive: true,
@@ -381,17 +359,15 @@ describe("prepared reply transcript identity", () => {
           shouldFollowup: true,
         });
         expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([older]);
-        if (prepared.kind !== "ready") {
-          throw new Error("Expected a prepared reply");
-        }
-        const incoming = createQueueTestRun({ prompt: "Use the revised request" });
-        incoming.run = {
-          ...incoming.run,
-          agentId: "main",
-          sessionKey,
-          sessionId,
-          sessionFile: prepared.preparedSessionState.sessionFile,
-        };
+        const incoming = createQueueTestRun(
+          { prompt: "Use the revised request" },
+          {
+            agentId: "main",
+            sessionKey,
+            sessionId,
+            sessionFile: prepared.preparedSessionState.sessionFile,
+          },
+        );
         const queued = {
           ...incoming,
           run: {

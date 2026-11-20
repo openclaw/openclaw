@@ -50,7 +50,7 @@ function touchCurrentConversationBindingInDatabase(
   const conversation = input.conversation;
   return updateCurrentConversationBindingRecordInDatabase(db, conversation, (current) => {
     if (current?.bindingId !== input.bindingId) {
-      return current;
+      return current ? undefined : null;
     }
     if (!input.accountPolicy) {
       return { ...current, metadata: { ...current.metadata, lastActivityAt: input.at } };

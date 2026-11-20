@@ -4,9 +4,11 @@ import type {
   WorkboardDiagnostic,
   WorkboardEvent,
   WorkboardLaunchState,
+  WorkboardVerification,
   WorkboardWorkspace,
   WorkboardWorkspaceAccess,
 } from "@openclaw/workboard-contract";
+import type { WorkboardOwnerSlot } from "./persistence-types.js";
 
 type WorkboardCardInput = {
   title?: unknown;
@@ -45,12 +47,14 @@ export type WorkboardOwnedCardPatch = WorkboardCardPatch & {
 };
 export type WorkboardUpdateCardOptions = {
   automationLaunch?: WorkboardLaunchState;
+  /** Replaces automation.verifications; built only by workboard_verify. */
+  automationVerifications?: WorkboardVerification[];
   allowMetadataDependencyLinks?: boolean;
   enforceStatusHolds?: boolean;
   event?: Omit<WorkboardEvent, "id" | "at">;
   eventAt?: number;
   expectedUpdatedAt?: number;
-  ownerSlot?: { ownerId: string; now: number };
+  ownerSlot?: WorkboardOwnerSlot;
   preserveProofId?: string;
   preserveNotificationId?: string;
 };
@@ -81,20 +85,14 @@ export type WorkboardAttachmentInput = {
   mimeType?: unknown;
   note?: unknown;
 };
-export type WorkboardWorkerLogInput = {
+export type WorkboardWorkerLogInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
   level?: unknown;
   message?: unknown;
-  sessionKey?: unknown;
-  runId?: unknown;
 };
-export type WorkboardProtocolViolationInput = {
+export type WorkboardProtocolViolationInput = Pick<WorkboardCardInput, "sessionKey" | "runId"> & {
   detail?: unknown;
-  sessionKey?: unknown;
-  runId?: unknown;
 };
-export type WorkboardClaimInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardClaimInput = WorkboardMutationScope & {
   ttlSeconds?: unknown;
 };
 export type WorkboardClaimOptions = {
@@ -110,9 +108,7 @@ export type WorkboardClaimOptions = {
   /** Trusted legacy-card adoption; applied only while expectedAuthority still matches. */
   adoptWorkspaceAccess?: WorkboardWorkspaceAccess;
 };
-export type WorkboardHeartbeatInput = {
-  token?: unknown;
-  ownerId?: unknown;
+export type WorkboardHeartbeatInput = WorkboardMutationScope & {
   note?: unknown;
 };
 export type WorkboardBulkInput = {
@@ -120,18 +116,23 @@ export type WorkboardBulkInput = {
   patch?: unknown;
   archived?: unknown;
 };
-export type WorkboardCompleteInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardCompleteInput = WorkboardMutationScope & {
   summary?: unknown;
   proof?: unknown;
   proofId?: unknown;
   artifacts?: unknown;
   createdCardIds?: unknown;
 };
-export type WorkboardBlockInput = {
-  ownerId?: unknown;
-  token?: unknown;
+export type WorkboardVerifyInput = {
+  scope?: unknown;
+  outcome?: unknown;
+  proofId?: unknown;
+  artifactId?: unknown;
+  runId?: unknown;
+  note?: unknown;
+  url?: unknown;
+};
+export type WorkboardBlockInput = WorkboardMutationScope & {
   reason?: unknown;
 };
 export type WorkboardDispatchResult = {
@@ -162,10 +163,7 @@ export type WorkboardReassignInput = {
   resetFailures?: unknown;
   reason?: unknown;
 };
-export type WorkboardReclaimInput = {
-  status?: unknown;
-  reason?: unknown;
-};
+export type WorkboardReclaimInput = Pick<WorkboardReassignInput, "status" | "reason">;
 export type WorkboardBoardInput = {
   id?: unknown;
   kind?: unknown;
@@ -187,9 +185,7 @@ export type WorkboardDecomposeInput = {
   children?: unknown;
   completeParent?: unknown;
 };
-export type WorkboardNotificationSubscribeInput = {
-  boardId?: unknown;
-  cardId?: unknown;
+export type WorkboardNotificationSubscribeInput = WorkboardNotificationListOptions & {
   sessionKey?: unknown;
   runId?: unknown;
   target?: unknown;
@@ -206,6 +202,8 @@ export type WorkboardNotificationEventsInput = WorkboardNotificationListOptions 
 export type WorkboardMutationScope = {
   ownerId?: unknown;
   token?: unknown;
+  /** Host run id of the calling agent turn; refuses writes from a superseded attempt. */
+  runId?: unknown;
 };
 
 export type WorkboardDiagnosticsResult = {

@@ -1,6 +1,8 @@
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import {
@@ -84,6 +86,7 @@ describe("update.run handoff refusal diagnostics", () => {
     const root = tempDirs.make("openclaw-handoff-missing-runtime-");
     const tmp = await import("../../infra/tmp-openclaw-dir.js");
     const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+    const leaseWorker = installPrivateUpdateHandoffWorker(root);
     const handoff = await vi.importActual<
       typeof import("../../infra/update-managed-service-handoff.js")
     >("../../infra/update-managed-service-handoff.js");
@@ -110,8 +113,79 @@ describe("update.run handoff refusal diagnostics", () => {
       expectServing();
     } finally {
       coordinator.mockRestore();
+      leaseWorker.mockRestore();
     }
   });
+
+  it.each([
+    [
+      "engine incompatibility",
+      "Node 24.21.0 is unsupported; OpenClaw requires >=24.22.1 <25 || >=26.12.1.\nnpm can finish installing without its preinstall check.\nRe-run the installer.\nOn Windows, use the PowerShell installer.\nOr with nvm: nvm install 26 && nvm use 26.\nThen retry openclaw update.",
+      "Node 24.21.0 is unsupported",
+    ],
+    [
+      "oversized crash output",
+      `${"discarded startup noise".repeat(500)}\nError: helper startup failed: EACCES token=fixture-private-token\nRetry after correcting file permissions.`,
+      "helper startup failed: EACCES",
+    ],
+  ])(
+    "retains bounded, redacted diagnostics from a real helper's %s",
+    async (_kind, output, expected) => {
+      const root = tempDirs.make("openclaw-handoff-startup-failure-");
+      const tmp = await import("../../infra/tmp-openclaw-dir.js");
+      const coordinator = vi.spyOn(tmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+      const leaseWorker = installPrivateUpdateHandoffWorker(root);
+      const prepare = expectDefined(leaseWorker.getMockImplementation(), "private lease worker");
+      leaseWorker.mockImplementation(async (options) => {
+        const store = await prepare(options);
+        const stage = store.stageRuntime.bind(store);
+        store.stageRuntime = async (directory) => {
+          const files = await stage(directory);
+          writeFileSync(
+            expectDefined(files[0], "staged handoff runtime"),
+            `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
+          );
+          return files;
+        };
+        return store;
+      });
+      const handoff = await vi.importActual<
+        typeof import("../../infra/update-managed-service-handoff.js")
+      >("../../infra/update-managed-service-handoff.js");
+      startHandoff.mockImplementationOnce((params) =>
+        handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          env: { ...process.env },
+          execPath: process.execPath,
+          argv1: path.join(root, "openclaw.cjs"),
+          supervisor: "launchd",
+        }),
+      );
+      try {
+        const payload = expectDefined(await captureUpdateRunPayload(), "update response");
+        const run = readRun(payload);
+        const localReport = renderUpdateRunReport(run).markdown;
+        expect(payload.ok).toBe(false);
+        expect(localReport).toContain(expected);
+        expect(localReport).not.toContain("fixture-private-token");
+        expect(localReport).not.toContain("discarded startup noise");
+        expect(JSON.stringify(run.steps)).not.toContain("fixture-private-token");
+        expect(
+          run.steps
+            .flatMap((step) => step.failureFacts ?? [])
+            .every((fact) => (fact.message?.length ?? 0) <= 200),
+        ).toBe(true);
+        const report = await failureReport(run);
+        expect(report.body).toContain("handoff-helper-exited");
+        expect(report.body).not.toContain("fixture-private-token");
+        expectServing();
+      } finally {
+        coordinator.mockRestore();
+        leaseWorker.mockRestore();
+      }
+    },
+  );
 
   it.each([
     ["helper-start-failed", Object.assign(new Error("spawn node EAGAIN"), { code: "EAGAIN" })],
@@ -305,22 +379,16 @@ describe("update.run handoff refusal diagnostics", () => {
         expect(report.body).not.toContain("Recovery outcome: Gateway kept serving");
         expect.soft(report.body).toContain(`Failed phase requested: ${message}`);
       }
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts: expect.arrayContaining(failureFacts),
-        }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
       expect(payload?.result).toMatchObject({
-        steps: expect.arrayContaining([
-          expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) }),
-        ]),
+        steps: expect.arrayContaining([expect.objectContaining(failedStep)]),
       });
       expect(sendNotice).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message:
-            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          message: `⚠️ OpenClaw couldn't finish updating.\nThe current version (${run.before.version}) is still running.\nUpdate failed before the update started (managed-service-handoff-failed).\nFor details, open Settings → Updates in the OpenClaw app or run \`openclaw update status\` in your terminal.`,
         }),
         expect.any(Object),
       );
@@ -381,20 +449,13 @@ describe("update.run handoff refusal diagnostics", () => {
       expect.soft(report.body).not.toContain("exit unknown");
       const failureFacts =
         error instanceof UpdatePreMutationError ? error.failureFacts : [errorFact(message)];
+      const failedStep = { failureFacts: expect.arrayContaining(failureFacts) };
       expect(run.steps).toContainEqual(
-        expect.objectContaining({
-          step: "requested",
-          status: "failed",
-          failureFacts: expect.arrayContaining(failureFacts),
-        }),
+        expect.objectContaining({ step: "requested", status: "failed", ...failedStep }),
       );
-      expect(payload?.result).toMatchObject({
-        steps: [expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) })],
-      });
+      expect(payload?.result).toMatchObject({ steps: [expect.objectContaining(failedStep)] });
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
-      expect(sentinel.stats?.steps).toContainEqual(
-        expect.objectContaining({ failureFacts: expect.arrayContaining(failureFacts) }),
-      );
+      expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining(failedStep));
       expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
       expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",

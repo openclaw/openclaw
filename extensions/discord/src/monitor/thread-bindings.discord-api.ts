@@ -1,9 +1,13 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { createDiscordRestClient } from "../client.js";
-import { createChannelWebhook, getChannel } from "../internal/discord.js";
+import { getChannel, Routes } from "../internal/discord.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
 import { DiscordError } from "../internal/rest.js";
 import { canFallbackDiscordWebhookSend } from "../retry.js";
@@ -52,17 +56,11 @@ export function normalizeDiscordBindingChannelId(raw?: string | null): string | 
 }
 
 export function summarizeDiscordError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
   if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
+    err instanceof Error ||
+    (err != null && typeof err !== "object" && typeof err !== "function")
   ) {
-    return String(err);
+    return coerceErrorMessage(err);
   }
   return "error";
 }
@@ -145,16 +143,17 @@ export async function createWebhookForChannel(params: {
       accountId: params.accountId,
       token: params.token,
     }).rest;
-    const created = await withDiscordRequestAuthority(assertCreateAllowed, () => {
+    const rawCreated = await withDiscordRequestAuthority(assertCreateAllowed, () => {
       assertCreateAllowed?.();
-      return createChannelWebhook(rest, params.channelId, {
+      return rest.post(Routes.channelWebhooks(params.channelId), {
         body: {
           name: "OpenClaw Agents",
         },
       });
     });
-    const webhookId = normalizeOptionalString(created?.id) ?? "";
-    const webhookToken = normalizeOptionalString(created?.token) ?? "";
+    const created = asNonArrayRecord(rawCreated);
+    const webhookId = normalizeOptionalString(created.id) ?? "";
+    const webhookToken = normalizeOptionalString(created.token) ?? "";
     if (!webhookId || !webhookToken) {
       return {};
     }

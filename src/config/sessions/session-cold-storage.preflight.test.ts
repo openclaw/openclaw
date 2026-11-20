@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import {
@@ -10,26 +11,20 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.entry.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import type { SessionColdReadPreparation } from "./session-cold-storage-read.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { restoreSessionColdTranscript as restore } from "./session-cold-storage.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
 type Metadata = Awaited<ReturnType<SessionHistoryWorkerDatabase["readColdMetadata"]>>;
 type ColdReader = Pick<SessionHistoryWorkerDatabase, "assertCurrent" | "readColdMetadata">;
 const observed = vi.hoisted(() => ({
-  nativeRead: vi.fn(),
   readMetadata: vi.fn<SessionHistoryWorkerDatabase["readColdMetadata"]>(),
   assertOwner: vi.fn(),
   release: vi.fn(),
   options: vi.fn<(options: OpenClawAgentDatabaseOptions) => void>(),
 }));
 
-vi.mock("../../state/openclaw-agent-db-readonly.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-db-readonly.js")>()),
-  withOpenClawAgentDatabaseReadOnly: observed.nativeRead,
-}));
 // mock-isolation: control queued metadata admission without native worker resources.
 vi.mock("./session-transcript-worker-runtime.js", () => ({
   withSessionHistoryWorkerDatabase: async (
@@ -61,9 +56,6 @@ const archive: Omit<SessionColdArchive, "archive_blob"> = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  observed.nativeRead.mockImplementation(() => {
-    throw new Error("SQLite metadata ran on the calling thread");
-  });
   observed.readMetadata.mockResolvedValue({ kind: "cold-metadata", archive: undefined });
 });
 
@@ -81,13 +73,23 @@ function scope() {
 
 function preparedRestore(
   target: ReturnType<typeof scope>,
-  readMetadata: SessionColdReadPreparation["readMetadata"],
+  readMetadata: (
+    phase: "initial" | "queued",
+  ) => Promise<Omit<SessionColdArchive, "archive_blob"> | undefined>,
   signal?: AbortSignal,
 ) {
+  const readIdentity = readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target));
   return restore(
     target,
     undefined,
-    { target: { ...target, path: resolveOpenClawAgentSqlitePath(target) }, readMetadata },
+    {
+      target: { ...target, path: resolveOpenClawAgentSqlitePath(target) },
+      readMetadata: async (phase) => ({
+        kind: "cold-metadata",
+        archive: await readMetadata(phase),
+        source: { readIdentity },
+      }),
+    },
     undefined,
     signal,
   );
@@ -109,7 +111,13 @@ it("retains the captured source through queued worker metadata", async () => {
     target.env.OPENCLAW_STATE_DIR = path.join(originalStateDir, "replacement");
     expect(observed.release).not.toHaveBeenCalled();
   } finally {
-    initial.resolve({ kind: "cold-metadata", archive });
+    initial.resolve({
+      kind: "cold-metadata",
+      archive,
+      source: {
+        readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+      },
+    });
     await expect(pending).resolves.toBeUndefined();
   }
   expect(observed.readMetadata).toHaveBeenCalledTimes(2);
@@ -117,7 +125,6 @@ it("retains the captured source through queued worker metadata", async () => {
     expect(request.env.OPENCLAW_STATE_DIR).toBe(originalStateDir);
   }
   expect(observed.options.mock.calls[0]?.[0].path).toBe(originalPath);
-  expect(observed.nativeRead).not.toHaveBeenCalled();
   expect(observed.release).toHaveBeenCalledOnce();
 });
 
@@ -142,12 +149,24 @@ it.each([
     }
   };
   if (phase === "queued") {
-    observed.readMetadata.mockResolvedValueOnce({ kind: "cold-metadata", archive });
+    observed.readMetadata.mockResolvedValueOnce({
+      kind: "cold-metadata",
+      archive,
+      source: {
+        readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+      },
+    });
   }
   if (phase !== "preparation") {
     observed.readMetadata.mockImplementationOnce(async () => {
       revoke();
-      return { kind: "cold-metadata", archive };
+      return {
+        kind: "cold-metadata",
+        archive,
+        source: {
+          readIdentity: readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(target)),
+        },
+      };
     });
   }
   const pending = restore(target, assertCurrent);
@@ -160,7 +179,6 @@ it.each([
   expect(observed.readMetadata).toHaveBeenCalledTimes(
     phase === "queued" ? 2 : phase === "initial" ? 1 : 0,
   );
-  expect(observed.nativeRead).not.toHaveBeenCalled();
   expect(observed.release).toHaveBeenCalledTimes(phase === "preparation" ? 0 : 1);
 });
 
@@ -193,7 +211,6 @@ it("skips cold storage for an unbound memory session without recreating a closed
       }),
     ).resolves.toBeUndefined();
     expect(memorySessionActorOwners.read(namespace)).toBeUndefined();
-    expect(observed.nativeRead).not.toHaveBeenCalled();
     expect(observed.readMetadata).not.toHaveBeenCalled();
   } finally {
     memorySessionActorOwners.closeDatabase(namespace);

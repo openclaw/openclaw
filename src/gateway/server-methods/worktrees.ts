@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -8,13 +10,18 @@ import {
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
   validateWorktreesListParams,
+  validateWorktreesRecoverFileParams,
   validateWorktreesRecoverRemovalParams,
   validateWorktreesRemoveParams,
   validateWorktreesRestoreParams,
   validateWorktreesRetireSnapshotParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readLiveRegistryWorktreeByPath } from "../../agents/worktrees/registry-read.js";
+import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runGitReadOperation } from "../../infra/git-read-cache.js";
 import { resolveRecordedProjectRoot } from "../../projects/project-registry.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { requestGatewayWorktreeMaintenance } from "../worktree-maintenance.js";
@@ -22,6 +29,7 @@ import {
   captureLocalStateMutationGuard,
   localStateOwnerChangedError,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -41,13 +49,9 @@ function publicWorktreeRecord(
 }
 
 function invalidParams(respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"]): void {
-  respond(
-    false,
-    undefined,
-    errorShape(ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
-      details: { mutationAccepted: false },
-    }),
-  );
+  respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid worktrees parameters", {
+    details: { mutationAccepted: false },
+  });
 }
 
 function captureWorktreeMutationGuard(
@@ -82,6 +86,37 @@ function captureWorktreeMutationGuard(
   }
 }
 
+/** Repository roots a write-scoped client may name; other host paths need operator.admin. */
+async function resolveWriteScopedRepoRoot(
+  repoRoot: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const containment = await resolveWorkspacePathContainment(repoRoot, cfg);
+  // A stored project row authorizes its canonical repo root for write-scoped clients.
+  return containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
+}
+
+/**
+ * Admits a live managed worktree as a source checkout for a write-scoped client that could
+ * create one from the same repository. Session-owned worktrees stay with their conversation,
+ * so naming a path never borrows another chat's work.
+ */
+export async function resolveWriteScopedManagedWorktree(
+  requestedPath: string,
+  cfg: OpenClawConfig,
+): Promise<string | undefined> {
+  const canonicalPath = path.isAbsolute(requestedPath)
+    ? await fs.realpath(requestedPath).catch(() => undefined)
+    : undefined;
+  const record = canonicalPath
+    ? await readLiveRegistryWorktreeByPath(captureWorktreeRunEndContext(process.env), canonicalPath)
+    : undefined;
+  if (!record || record.ownerKind === "session") {
+    return undefined;
+  }
+  return (await resolveWriteScopedRepoRoot(record.repoRoot, cfg)) ? record.path : undefined;
+}
+
 async function resolveAuthorizedRepoRoot(
   repoRoot: string,
   opts: Parameters<GatewayRequestHandlers[string]>[0],
@@ -90,12 +125,10 @@ async function resolveAuthorizedRepoRoot(
   if (scopes.includes(ADMIN_SCOPE)) {
     return repoRoot;
   }
-  const containment = await resolveWorkspacePathContainment(
+  const authorizedRoot = await resolveWriteScopedRepoRoot(
     repoRoot,
     opts.context.getRuntimeConfig(),
   );
-  // A stored project row authorizes its canonical repo root for write-scoped clients.
-  const authorizedRoot = containment?.path ?? (await resolveRecordedProjectRoot(repoRoot));
   if (authorizedRoot) {
     return authorizedRoot;
   }
@@ -125,10 +158,14 @@ function worktreeHandler<T>(
 }
 
 export const worktreesHandlers: GatewayRequestHandlers = {
-  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond }) => {
+  "worktrees.list": worktreeHandler(validateWorktreesListParams, async ({ respond, client }) => {
     respond(
       true,
-      { worktrees: (await managedWorktrees.list()).map((record) => publicWorktreeRecord(record)) },
+      {
+        worktrees: (await managedWorktrees.list()).map((record) =>
+          publicWorktreeRecord(record, client?.connect.scopes?.includes(ADMIN_SCOPE)),
+        ),
+      },
       undefined,
     );
   }),
@@ -175,7 +212,10 @@ export const worktreesHandlers: GatewayRequestHandlers = {
   }),
   "worktrees.remove": worktreeHandler(validateWorktreesRemoveParams, async (opts, params) => {
     const { respond } = opts;
-    if ([params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1) {
+    if (
+      [params.force, params.ifLossless, params.exactState].filter(Boolean).length > 1 ||
+      (params.ifLossless && params.retryPreserved)
+    ) {
       invalidParams(respond);
       return;
     }
@@ -199,6 +239,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         id,
         reason: "manual-delete",
         allowSnapshotLoss: params.force,
+        retryPreserved: params.retryPreserved,
         ...(params.exactState ? { exactState: params.exactState } : {}),
         ...guard,
       });
@@ -209,6 +250,7 @@ export const worktreesHandlers: GatewayRequestHandlers = {
           ? result
           : {
               removed: result.removed,
+              ...(result.preserved ? { preserved: result.preserved } : {}),
               ...(result.snapshotRef ? { snapshotRef: result.snapshotRef } : {}),
               ...(result.snapshotError ? { snapshotError: result.snapshotError } : {}),
             },
@@ -221,16 +263,12 @@ export const worktreesHandlers: GatewayRequestHandlers = {
         respond(true, { removed: false, snapshotError: error.snapshotError }, undefined);
         return;
       }
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, String(error), {
-          ...(error instanceof WorktreeSnapshotError
-            ? { details: { snapshotError: error.snapshotError } }
-            : {}),
-          retryable: false,
-        }),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, String(error), {
+        ...(error instanceof WorktreeSnapshotError
+          ? { details: { snapshotError: error.snapshotError } }
+          : {}),
+        retryable: false,
+      });
     }
   }),
   "worktrees.restore": worktreeHandler(validateWorktreesRestoreParams, async (opts, params) => {
@@ -254,11 +292,30 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     if (!repoRoot) {
       return;
     }
-    const result = params.includeRepositoryStatus
-      ? await managedWorktrees.listRepositoryBranches(repoRoot, {
-          includeRepositoryStatus: true,
-        })
-      : await managedWorktrees.listRepositoryBranches(repoRoot);
+    const cfg = opts.context.getRuntimeConfig();
+    const result = await runGitReadOperation(
+      {
+        type: "repository.branches",
+        input: { repoRoot, includeRepositoryStatus: params.includeRepositoryStatus },
+      },
+      {
+        snapshot: true,
+        signal: opts.signal,
+        onRefresh: () => {
+          if (
+            opts.client?.connId &&
+            opts.hasCurrentClientAuthority?.() !== false &&
+            opts.context.getRuntimeConfig() === cfg
+          ) {
+            opts.context.broadcastToConnIds(
+              "worktrees.branches.changed",
+              { repoRoot: params.repoRoot },
+              new Set([opts.client.connId]),
+            );
+          }
+        },
+      },
+    );
     respond(true, result, undefined);
   }),
   "worktrees.gc": worktreeHandler(validateWorktreesGcParams, async (opts, params) => {
@@ -274,6 +331,25 @@ export const worktreesHandlers: GatewayRequestHandlers = {
     });
     respond(true, receipt, undefined);
   }),
+  "worktrees.recoverFile": worktreeHandler(
+    validateWorktreesRecoverFileParams,
+    async (opts, params) => {
+      const commitGuard = captureWorktreeMutationGuard(params.expectedOwnerId, opts);
+      if (!commitGuard) {
+        return;
+      }
+      const { recoverLocalWorkspaceFile } =
+        await import("../worker-environments/local-workspace-recovery.js");
+      const result = await recoverLocalWorkspaceFile({
+        ...params,
+        cfg: opts.context.getRuntimeConfig(),
+        signal: opts.signal,
+        assertCurrent: commitGuard,
+      });
+      commitGuard();
+      opts.respond(true, result, undefined);
+    },
+  ),
   "worktrees.recoverRemoval": worktreeHandler(
     validateWorktreesRecoverRemovalParams,
     async (opts, params) => {

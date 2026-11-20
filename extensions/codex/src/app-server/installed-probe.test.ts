@@ -5,27 +5,23 @@ import path from "node:path";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { commandResult } from "../../../test-support/command-result.test-support.js";
 import { probeCodexAppServerHandshake } from "./installed-probe.js";
 
 const fixture = vi.hoisted(() => ({ blockedPath: "" }));
 const originalPlatform = process.platform;
 const portablePlatform = originalPlatform === "darwin" ? "linux" : originalPlatform;
-const missingPreferences = {
-  stdout: "",
+const missingPreferences = commandResult({
   stderr: "Error: Domain 'com.openai.codex' not found.",
   code: 1,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
+});
 const programData = { ...missingPreferences, stdout: "C:\\ProgramData", stderr: "", code: 0 };
-function mockCommand(result = missingPreferences) {
-  return vi.spyOn(processRuntime, "runUtf8CommandWithTimeout").mockResolvedValue(result);
-}
 function setPlatform(platform: string) {
   Object.defineProperty(process, "platform", { value: platform });
   if (platform === "win32" || platform === "darwin") {
-    return mockCommand(platform === "win32" ? programData : missingPreferences);
+    return vi
+      .spyOn(processRuntime, "runUtf8CommandWithTimeout")
+      .mockResolvedValue(platform === "win32" ? programData : missingPreferences);
   }
   return undefined;
 }
@@ -60,13 +56,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([
-  ["environment", portablePlatform],
-  ["system configuration", portablePlatform],
-  ...(originalPlatform === "win32" ? [] : [["an absent macOS preferences domain", "darwin"]]),
-])(
-  "isolates Codex SQLite state from %s during the selection handshake",
-  async (source, platform) => {
+it.each([portablePlatform, ...(originalPlatform === "win32" ? [] : ["darwin"])])(
+  "isolates environment and system-configured SQLite state during the %s handshake",
+  async (platform) => {
     setPlatform(platform);
     await withTempDir("openclaw-installed-probe-", async (root) => {
       const existingHome = path.join(root, "existing-codex-state");
@@ -79,7 +71,7 @@ it.each([
 const path = require("node:path");
 const readline = require("node:readline");
 const home = process.env.CODEX_HOME;
-const configured = ${source === "system configuration" ? JSON.stringify(existingHome) : "undefined"};
+const configured = ${JSON.stringify(existingHome)};
 const overrideIndex = process.argv.indexOf("-c");
 const override = overrideIndex < 0 ? undefined : process.argv[overrideIndex + 1];
 const sqlite = override?.startsWith("sqlite_home=")

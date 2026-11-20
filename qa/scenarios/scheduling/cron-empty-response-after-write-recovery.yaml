@@ -25,7 +25,7 @@ scenario:
       requiredProviderMode: mock-openai
       channelId: qa-room
       promptSnippet: Empty response after write recovery QA check
-      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step."
       expectedMarker: CRON-EMPTY-WRITE-RECOVERED-OK
 
 flow:

@@ -66,7 +66,7 @@ async function reportDeferredLegacyState(ctx: DoctorHealthFlowContext): Promise<
     cfg: ctx.cfg,
     doctorOnlyStateMigrations: true,
     ...(ctx.env ? { env: ctx.env } : {}),
-    legacySessionSurfaces: prepareLegacySessionSurfaces({ config: ctx.cfg }),
+    legacySessionSurfaces: await prepareLegacySessionSurfaces({ config: ctx.cfg }),
   });
   const pendingDetails = [
     ...legacyState.warnings.map((warning) => (warning.startsWith("- ") ? warning : `- ${warning}`)),
@@ -220,7 +220,10 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
   // legacy-state detect/migrate pair reads the config.
-  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  await runCoreContributionHealth(ctx, [
+    "core/doctor/removed-workspaces-state",
+    "core/doctor/session-archive-read-cache",
+  ]);
   const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   if (
     !doctorOnlyStateMigrations ||
@@ -229,7 +232,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     const { detectLegacyStateMigrations, runLegacyStateMigrations } =
       await import("../infra/state-migrations.doctor.js");
     const { prepareLegacySessionSurfaces } = await import("../plugins/legacy-session-surfaces.js");
-    const legacySessionSurfaces = prepareLegacySessionSurfaces({ config: ctx.cfg });
+    const legacySessionSurfaces = await prepareLegacySessionSurfaces({ config: ctx.cfg });
     const legacyState = await detectLegacyStateMigrations({
       cfg: ctx.cfg,
       ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
@@ -256,7 +259,6 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
           detected: legacyState,
           integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
           config: ctx.cfg,
-          ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
           legacySessionSurfaces,
         });
         recordDoctorHealthWarnings(
@@ -512,6 +514,7 @@ async function runDoctorHealthContributionList(
   contributions: readonly DoctorHealthContribution[],
 ): Promise<void> {
   const signal = resolveCommandProcessSignal(getAsyncWorkSignal());
+  const retirementOnly = ctx.retirementOnly === true;
   signal?.throwIfAborted();
   const runWithPluginMetadataSnapshot = ctx.runWithPluginMetadataSnapshot;
   throwIfDoctorStateMigrationRefused(ctx.configResult.stateMigrationStepReceipts);
@@ -620,9 +623,16 @@ async function runDoctorHealthContributionList(
           ctx.options.json !== true,
         );
         signal?.throwIfAborted();
+        if (retirementOnly && (ctx.healthFindings?.length || ctx.updateWarnings?.length)) {
+          ctx.retirementOnly = false;
+        }
         if (ctx.configWriteRefusal) {
           // Later repairs consume the candidate. Stop before they persist state
           // derived from config that the writer deliberately left non-durable.
+          return;
+        }
+        if (retirementOnly && !ctx.retirementOnly) {
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}`);
           return;
         }
       } catch (error) {
@@ -647,6 +657,11 @@ async function runDoctorHealthContributionList(
           },
         ]);
         recordDoctorHealthWarnings(ctx, [], [message]);
+        if (retirementOnly) {
+          ctx.retirementOnly = false;
+          ctx.runtime.error(`Retirement-only Doctor widened: ${contribution.id}.failed`);
+          return;
+        }
       }
     }
   } finally {
@@ -676,7 +691,44 @@ async function runDoctorHealthContributionList(
 }
 
 export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext): Promise<void> {
-  await runDoctorHealthContributionList(ctx, resolveDoctorHealthContributions());
+  const contributions = resolveDoctorHealthContributions();
+  if (ctx.retirementOnly) {
+    const blockers = [
+      ...(ctx.configResult.retirementOnly !== true
+        ? (ctx.configResult.retirementOnlyBlockers ?? ["preparation"]).map(
+            (reason) => `config.${reason}`,
+          )
+        : []),
+      Boolean(ctx.agentDatabaseRefusals?.length) && "agent-admission",
+      Boolean(ctx.healthFindings?.length) && "startup-findings",
+      Boolean(ctx.updateWarnings?.length) && "startup-warnings",
+    ].filter((blocker): blocker is string => Boolean(blocker));
+    if (blockers.length > 0) {
+      ctx.retirementOnly = false;
+      for (const blocker of blockers) {
+        ctx.runtime.error(`Retirement-only Doctor widened: ${blocker}`);
+      }
+    }
+  }
+  if (ctx.retirementOnly) {
+    const retained = new Set([
+      "doctor:write-config-migrations",
+      "doctor:auth-profile-migration",
+      "doctor:session-transcripts",
+      "doctor:codex-session-routes",
+      "doctor:write-config",
+      "doctor:final-config-validation",
+    ]);
+    await runDoctorHealthContributionList(
+      ctx,
+      contributions.filter((entry) => retained.has(entry.id)),
+    );
+    if (ctx.retirementOnly || ctx.configWriteRefusal) {
+      return;
+    }
+    // Late discovery reuses the same admitted context and committed-write receipts.
+  }
+  await runDoctorHealthContributionList(ctx, contributions);
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {

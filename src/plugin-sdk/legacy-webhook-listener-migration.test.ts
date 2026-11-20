@@ -96,10 +96,9 @@ it.each([
   if (message) {
     expect(result.changes[0]).toContain(message);
   }
-  expect(contract.normalizeCompatibilityConfig({ cfg: result.config })).toEqual({
-    config: result.config,
-    changes: [],
-  });
+  const unchanged = contract.normalizeCompatibilityConfig({ cfg: result.config });
+  expect(unchanged.config).toBe(result.config);
+  expect(unchanged.changes).toEqual([]);
   expect(match(result.config)).toBe(false);
 });
 

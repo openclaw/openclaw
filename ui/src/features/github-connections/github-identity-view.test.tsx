@@ -3,11 +3,12 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { mountRouterOutlet, settleRouterOutlet } from "../../app/router-outlet.test-support.tsx";
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   authorizationCode,
@@ -22,10 +23,7 @@ import {
   GitHubConnectionSetup,
   GitHubIdentity,
 } from "./github-identity-view.tsx";
-import {
-  createGitHubIdentityForTest,
-  githubIdentityViewFixture,
-} from "./github-identity.test-support.ts";
+import { githubIdentityViewFixture } from "./github-identity.test-support.ts";
 
 const writeText = vi.fn<(text: string) => Promise<void>>();
 const fallback = vi.fn(() => true);
@@ -43,19 +41,46 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("GitHub identity view", () => {
+  it.each([
+    ["personal", false, false, "You need read access to view this GitHub account."],
+    ["system", false, false, "You need admin access to change this GitHub account."],
+    ["personal", true, false, "Sign in with a personal profile to change My GitHub."],
+    ["agent", true, false, "You need admin access to change this GitHub account."],
+  ] as const)(
+    "explains %s account access without internal scopes",
+    (scope, statusReadable, authorizable, message) => {
+      const identity = githubIdentityViewFixture({
+        connectionReady: true,
+        scope,
+        statusReadable,
+        authorizable,
+      });
+      const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+      expect(view.getByText(message)).toBeTruthy();
+      expect(view.container.textContent).not.toContain("operator.");
+    },
+  );
+
+  it("keeps a failed sign-in summary separate from the raw detail", () => {
+    const identity = githubIdentityViewFixture({
+      connectionReady: true,
+      authorizable: true,
+      statusReadable: true,
+      authorization: { phase: "failed", message: "Synthetic provider detail" },
+    });
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    const summary = view.getByText("Couldn’t sign in to GitHub. Try again.");
+    expect(summary.textContent).not.toContain("Synthetic provider detail");
+    const details = view.container.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic provider detail");
+  });
+
   it("shows device request and cancellation progress before the server settles", async () => {
     const start = createDeferred<typeof authorizationCode>();
     const cancel = createDeferred<{ cancelled: boolean }>();
@@ -125,13 +150,15 @@ describe("GitHub identity view", () => {
     ));
     const reading = identity.verify();
     flush();
-    expect(view.getByText("Checking connection…")).toBeTruthy();
+    expect(view.getByText("Loading account status…")).toBeTruthy();
     first.reject(new Error("Synthetic GitHub status unavailable"));
     await expect(reading).rejects.toThrow("Synthetic GitHub status unavailable");
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByRole("alert").textContent).toContain("Synthetic GitHub status unavailable");
-    expect(view.getByText("Connection status unavailable")).toBeTruthy();
+    expect(view.getByText("Couldn’t load account status. Try again.")).toBeTruthy();
+    expect(view.queryByText("No verified account")).toBeNull();
+    expect(view.queryByText("Uses the shared agent account")).toBeNull();
     identity.showPatFallback();
     await identity.configure();
     flush();
@@ -142,12 +169,52 @@ describe("GitHub identity view", () => {
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.queryByRole("alert")).toBeNull();
-    expect(view.getByText("Checking connection…")).toBeTruthy();
+    expect(view.getByText("Loading account status…")).toBeTruthy();
     retry.resolve(availableStatus("system"));
     await vi.advanceTimersByTimeAsync(0);
     flush();
     expect(view.getByText("@managed-user")).toBeTruthy();
     expect(view.getByText("Verified")).toBeTruthy();
+  });
+
+  it("shows account absence only after a successful status read and retires it on access loss", async () => {
+    const pending = createDeferred<ToolsGitHubStatusResult>();
+    const { identity, sync } = setupRequest(() => pending.promise, { context: { scope: "agent" } });
+    const view = mountSolid(() => (
+      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+    ));
+    const expectUnknown = () => {
+      expect(view.queryByText("No verified account")).toBeNull();
+      expect(view.queryByText("Uses the shared agent account")).toBeNull();
+    };
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
+    const reading = identity.verify();
+    flush();
+    expectUnknown();
+    expect(view.getByText("Loading account status…")).toBeTruthy();
+    const empty = {
+      ...availableStatus().effective,
+      source: "system-detected" as const,
+      credentialState: "unavailable" as const,
+      account: null,
+    };
+    pending.resolve({
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective: empty,
+    });
+    await reading;
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(view.getByText("No verified account")).toBeTruthy();
+    expect(view.getByText("Uses the shared agent account")).toBeTruthy();
+    sync({ statusReadable: false, configurable: false, authorizable: false });
+    flush();
+    expectUnknown();
+    expect(view.getByText("Status not loaded")).toBeTruthy();
   });
 
   it("shows one shared error when the other identity read is still pending", async () => {
@@ -186,9 +253,7 @@ describe("GitHub identity view", () => {
     );
     identity.showPatFallback();
     identity.setDraft("token", "synthetic-first-token");
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const oldSaving = identity.configure();
     await vi.advanceTimersByTimeAsync(0);
     flush();
@@ -230,7 +295,13 @@ describe("GitHub identity view", () => {
               identity = createGitHubIdentityView({
                 runExternalMutation: createMutationRunner(client),
               });
-              return <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />;
+              // Profile shows the account summary with its setup beneath it.
+              return (
+                <>
+                  <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
+                  <GitHubConnectionSetup identity={identity} />
+                </>
+              );
             },
           }),
         }),
@@ -278,7 +349,7 @@ describe("GitHub identity view", () => {
     input.value = "synthetic-navigation-token";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    routed.getByRole("button", { name: "Save Identity" }).click();
+    routed.getByRole("button", { name: "Save account" }).click();
     await vi.advanceTimersByTimeAsync(0);
     flush();
     let destination: HTMLElement | undefined;
@@ -315,12 +386,9 @@ describe("GitHub identity view", () => {
     let updateAuthorization: (patch: Partial<AuthorizationCode>) => void = () => {};
     const view = mountSolid(() => {
       const [authorization, setAuthorization] = createSignal<AuthorizationCode>({
+        ...authorizationCode,
         phase: "code",
-        requestId: "github-device-test",
         userCode: "first",
-        verificationUri: "https://github.com/login/device",
-        expiresInMs: 60_000,
-        pollAfterMs: 5_000,
         displayExpiresAtMs: 70_000,
       });
       updateAuthorization = (patch) => setAuthorization((value) => ({ ...value, ...patch }));
@@ -355,41 +423,47 @@ describe("GitHub identity view", () => {
     expect(current.dataset.copyState).toBe("copied");
   });
 
+  it("announces authorization-code copy outcomes in a status region", async () => {
+    const authorization: Extract<GitHubAuthorizationState, { userCode: string }> = {
+      ...authorizationCode,
+      phase: "code",
+      displayExpiresAtMs: 70_000,
+    };
+    const fixture = githubIdentityViewFixture({ authorizable: true, connectionReady: true });
+    const identity = { ...fixture, read: () => ({ ...fixture.read(), authorization }) };
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    const statusText = () =>
+      [...view.container.querySelectorAll('.github-device-code ~ [role="status"]')].map(
+        (node) => node.textContent,
+      );
+    const button = view.container.querySelector<HTMLButtonElement>(".github-device-code + button")!;
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Copied"]);
+
+    await vi.advanceTimersByTimeAsync(1500);
+    writeText.mockRejectedValueOnce(new Error("Synthetic clipboard rejection"));
+    fallback.mockReturnValueOnce(false);
+    button.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(statusText()).toEqual(["Couldn’t copy. Try again."]);
+  });
+
   it("keeps the focused PAT field across draft and mutation updates", async () => {
     const stored = createDeferred<unknown>();
-    // SAFETY: this view test exercises only the browser client's request boundary.
-    const client = {
-      request: vi.fn(async (method: string) =>
-        method === "secrets.store.set" ? stored.promise : { ok: true },
-      ),
-    } as unknown as GatewayBrowserClient;
-    const identity = createGitHubIdentityForTest({
-      runExternalMutation: async () => ({
-        ok: false,
-        reason: "unavailable",
-        error: "Not dispatched in this view test.",
-      }),
-    });
-    identity.sync({
-      client,
-      connected: true,
-      permissionsReady: true,
-      clientRevision: 1,
-      target: {
-        kind: "shared",
-        scope: "agent",
-        agentId: "main",
-        config: {},
-        profileId: "profile-a",
+    const { identity } = setupRequest(
+      async (method) => (method === "secrets.store.set" ? stored.promise : { ok: true }),
+      {
+        context: { scope: "agent" },
+        runExternalMutation: async () => ({
+          ok: false,
+          reason: "unavailable",
+          error: "Not dispatched in this view test.",
+        }),
       },
-      statusReadable: true,
-      configurable: true,
-      authorizable: true,
-    });
+    );
     identity.showPatFallback();
-    const view = mountSolid(() => (
-      <GitHubIdentity identity={identity} onOpenConnections={vi.fn()} />
-    ));
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
     const input = view.container.querySelector<HTMLInputElement>(".settings-secret input")!;
     input.focus();
     input.value = "synthetic-pat";

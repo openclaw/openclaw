@@ -8,10 +8,8 @@ import { getGatewayProcessInstanceId } from "../gateway/process-instance.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
-import type { PluginServiceRegistration } from "./registry-types.js";
 import {
   createRegistry,
-  createServiceRegistration,
   startPluginServices,
   type PluginServicesHandle,
 } from "./services.test-support.js";
@@ -53,20 +51,20 @@ async function createScheduler() {
 function capturingRegistry(
   pluginId: string,
   id = "maintenance",
-  origin: PluginServiceRegistration["origin"] = "workspace",
+  origin: Parameters<typeof createRegistry>[2] = "workspace",
 ) {
-  const registry = createRegistry([]);
   let context: OpenClawPluginServiceContext | undefined;
-  registry.services.push(
-    createServiceRegistration(
+  const registry = createRegistry(
+    [
       {
         id,
         start: (started) => {
           context = started;
         },
       },
-      { pluginId, origin },
-    ),
+    ],
+    pluginId,
+    origin,
   );
   return { registry, getContext: () => expectDefined(context, "started service context") };
 }

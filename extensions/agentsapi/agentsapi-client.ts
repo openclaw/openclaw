@@ -11,6 +11,7 @@ import type { EventCreateParams } from "openai/resources/beta/agents/sessions/ev
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -182,7 +183,7 @@ export class AgentsApiClient {
         });
         const guarded = await fetchWithSsrFGuard({
           url,
-          init: { ...init, headers },
+          init: { ...init, headers: omitNullRequestHeaders(headers) },
           signal: init?.signal ?? undefined,
           beforeRequest: assertRequestCurrent,
         });

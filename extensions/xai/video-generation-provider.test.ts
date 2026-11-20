@@ -4,84 +4,55 @@ import {
   oversizedJsonResponse,
   streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import type {
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
 const {
-  postJsonRequestMock,
-  fetchWithTimeoutGuardedMock,
-  fetchWithTimeoutMock,
-  resolveApiKeyForProviderMock,
-  resolveProviderHttpRequestConfigMock,
+  postJsonRequestMock: post,
+  fetchWithTimeoutGuardedMock: guarded,
+  fetchWithTimeoutMock: fetchMock,
+  resolveApiKeyForProviderMock: auth,
+  resolveProviderHttpRequestConfigMock: policy,
 } = getProviderHttpMocks();
-
-let buildXaiVideoGenerationProvider: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
-
+let build: typeof import("./video-generation-provider.js").buildXaiVideoGenerationProvider;
 beforeAll(async () => {
-  ({ buildXaiVideoGenerationProvider } = await import("./video-generation-provider.js"));
+  ({ buildXaiVideoGenerationProvider: build } = await import("./video-generation-provider.js"));
 });
-
 installProviderHttpMockCleanup();
 
-type PostJsonCall = {
-  url?: string;
-  body?: Record<string, unknown>;
-  headers?: Headers;
-  allowPrivateNetwork?: boolean;
-  dispatcherPolicy?: unknown;
-};
-
-function requirePostJsonCall(index = 0): PostJsonCall {
-  const params = (postJsonRequestMock.mock.calls as unknown as Array<[PostJsonCall]>)[index]?.[0];
-  if (!params) {
-    throw new Error(`Expected postJsonRequest call ${index}`);
+function request(index = 0) {
+  const call = (post.mock.calls as Array<[{ url: string; body: Record<string, unknown> }]>)[
+    index
+  ]?.[0];
+  if (!call) {
+    throw new Error(`Missing video submission ${index}`);
   }
-  return params;
+  return call;
 }
-
-function mockSubmit(response: Response) {
-  postJsonRequestMock.mockImplementation(async () => ({
-    response,
-    release: vi.fn(async () => {}),
-  }));
+function submit(response = Response.json({ request_id: "req" })) {
+  post.mockResolvedValue({ response, release: vi.fn(async () => {}) });
 }
-
-function mockXaiVideoRequest(requestId = "req") {
-  mockSubmit(Response.json({ request_id: requestId }));
+beforeEach(() => submit());
+function poll(payload: Record<string, unknown>) {
+  fetchMock.mockResolvedValueOnce(Response.json(payload));
 }
-beforeEach(() => mockXaiVideoRequest());
-
-function mockPoll(payload: Record<string, unknown>) {
-  fetchWithTimeoutMock.mockResolvedValueOnce(Response.json({ request_id: "req", ...payload }));
+const video = { url: "https://cdn.x.ai/video.mp4" };
+const videoHeaders = { "content-type": "video/mp4" };
+function complete() {
+  submit();
+  poll({ status: "done", video });
+  fetchMock.mockResolvedValueOnce(new Response("video-bytes", { headers: videoHeaders }));
 }
-
-function asset(
-  name: string,
-  role?: VideoGenerationSourceAsset["role"],
-): VideoGenerationSourceAsset {
+function asset(name: string, role?: VideoGenerationSourceAsset["role"]) {
   return { url: `https://example.com/${name}`, ...(role ? { role } : {}) };
 }
-
-const models15 = [
-  "grok-imagine-video-1.5",
-  "grok-imagine-video-1.5-preview",
-  "grok-imagine-video-1.5-2026-05-30",
-];
-
-function mockXaiVideoTask() {
-  mockXaiVideoRequest();
-  mockPoll({ status: "done", video: { url: "https://cdn.x.ai/video.mp4" } });
-  fetchWithTimeoutMock.mockResolvedValueOnce({
-    headers: new Headers({ "content-type": "video/mp4" }),
-    arrayBuffer: async () => Buffer.from("video-bytes"),
-  });
-}
-
 function generate(overrides: Partial<VideoGenerationRequest> = {}) {
-  return buildXaiVideoGenerationProvider().generateVideo({
+  return build().generateVideo({
     provider: "xai",
     model: "grok-imagine-video",
     prompt: "a lobster",
@@ -89,281 +60,206 @@ function generate(overrides: Partial<VideoGenerationRequest> = {}) {
     ...overrides,
   });
 }
+const model15 = "grok-imagine-video-1.5";
+const models15 = [model15, `${model15}-preview`, `${model15}-2026-05-30`];
 
-function expectRequest(
-  body: Record<string, unknown>,
-  absent: string[] = [],
-  endpoint = "generations",
-) {
-  const request = requirePostJsonCall();
-  expect(request.url).toBe(`https://api.x.ai/v1/videos/${endpoint}`);
-  for (const [field, value] of Object.entries(body)) {
-    expect(request.body?.[field]).toEqual(value);
-  }
-  for (const field of absent) {
-    expect(request.body).not.toHaveProperty(field);
-  }
-}
-
-describe("xai video generation provider", () => {
-  it("rejects a duration that rounds to zero before submission", async () => {
-    await expect(generate({ durationSeconds: 0.4 })).rejects.toThrow(
-      "durationSeconds must be a positive duration",
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("advertises canonical 1.5 and resolves capabilities for all API aliases", async () => {
-    const provider = buildXaiVideoGenerationProvider();
-    const capabilities15 = {
-      imageToVideo: {
-        enabled: true,
-        maxInputImages: 1,
-        maxDurationSeconds: 15,
-        resolutions: ["480P", "720P", "1080P"],
+it("releases submission before polling, waits on pending, then downloads", async () => {
+  vi.useFakeTimers();
+  try {
+    const events: string[] = [];
+    post.mockResolvedValue({
+      response: Response.json({ request_id: "req" }),
+      release: async () => {
+        events.push("release");
       },
-      videoToVideo: { enabled: false },
-    };
-
-    expect(provider).toMatchObject({
-      defaultModel: "grok-imagine-video",
-      models: ["grok-imagine-video", "grok-imagine-video-1.5"],
     });
-    expect(provider.catalogByModel?.["grok-imagine-video-1.5"]).toMatchObject({
-      modes: ["imageToVideo"],
-      capabilities: capabilities15,
-    });
-
-    for (const model of models15) {
-      const capabilities = await provider.resolveModelCapabilities?.({
-        provider: "xai",
-        model,
-        cfg: {},
+    for (const status of ["pending", "done"]) {
+      fetchMock.mockImplementationOnce(async () => {
+        events.push(status);
+        return Response.json({ status, video });
       });
-      expect(capabilities).toMatchObject(capabilities15);
     }
-  });
-
-  it("uses the 1.5 default while preserving aliases, 1080p, and source aspect ratio", async () => {
-    for (const [index, model] of models15.entries()) {
-      mockXaiVideoTask();
-
-      const result = await generate({
-        model,
-        durationSeconds: 20,
-        resolution: index === 0 ? undefined : "1080P",
-        inputImages: [asset("first-frame.png", index === 0 ? undefined : "first_frame")],
-      });
-
-      const body = requirePostJsonCall(index).body ?? {};
-      expect(body.image).toEqual({ url: "https://example.com/first-frame.png" });
-      expect(body).toMatchObject({
-        model,
-        duration: 15,
-        resolution: index === 0 ? "480p" : "1080p",
-      });
-      expect(body).not.toHaveProperty("aspect_ratio");
-      expect(result.model).toBe(model);
-    }
-  });
-
-  it.each<[Partial<VideoGenerationRequest>, string]>([
-    [{}, "requires exactly one first-frame image."],
-    [
-      { model: models15[1], inputImages: [asset("reference.png", "reference_image")] },
-      "supports only an ordinary or first_frame image.",
-    ],
-    [
-      { model: models15[2], inputImages: [asset("first.png"), asset("second.png", "first_frame")] },
-      "requires exactly one first-frame image.",
-    ],
-    [{ inputVideos: [asset("input.mp4")] }, "does not support video inputs."],
-  ])("rejects unsupported 1.5 input %j before auth and submission", async (request, error) => {
-    await expect(generate({ model: models15[0], ...request })).rejects.toThrow(
-      `xAI grok-imagine-video-1.5 ${error}`,
-    );
-    expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("applies configured xAI request policy to video generation requests", async () => {
-    const dispatcherPolicy = { proxyUrl: "http://proxy.example:3128" };
-    const requestPolicy = {
-      proxy: { mode: "env-proxy" as const },
-      allowPrivateNetwork: true,
-    };
-    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => ({
-      baseUrl: params.baseUrl ?? params.defaultBaseUrl,
-      allowPrivateNetwork: true,
-      headers: new Headers(params.defaultHeaders),
-      dispatcherPolicy: dispatcherPolicy as never,
-    }));
-    mockXaiVideoTask();
-
-    await generate({
-      cfg: {
-        models: { providers: { xai: { request: requestPolicy } } },
-      } as never,
+    fetchMock.mockImplementationOnce(async () => {
+      events.push("download");
+      return new Response("video-bytes", { headers: videoHeaders });
     });
-
-    expect(resolveProviderHttpRequestConfigMock.mock.calls[0]?.[0]).not.toHaveProperty(
-      "allowPrivateNetwork",
-    );
-    expect(requirePostJsonCall()).toMatchObject({ allowPrivateNetwork: true, dispatcherPolicy });
-    expect(fetchWithTimeoutGuardedMock.mock.calls.map((call) => call[4])).toMatchObject([
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-        auditContext: "xai-video-status",
-      },
-      {
-        ssrfPolicy: { allowPrivateNetwork: true },
-        dispatcherPolicy,
-        auditContext: "xai-video-download",
-      },
-    ]);
-  });
-
-  it("rejects generated video downloads that exceed the configured media cap", async () => {
-    mockPoll({
-      status: "done",
-      video: { url: "https://cdn.x.ai/too-large.mp4" },
+    const pending = generate({ durationSeconds: 6, aspectRatio: "9:16", resolution: "720P" });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(events).toEqual(["release", "pending"]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await pending).toMatchObject({
+      videos: [{ mimeType: "video/mp4" }],
+      metadata: { requestId: "req" },
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response("too-large", {
-        headers: { "content-type": "video/mp4" },
-      }),
-    );
+    expect(events).toEqual(["release", "pending", "done", "download"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
-    await expect(
-      generate({
-        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
-      }),
-    ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
-  });
-
-  it("bounds an unbounded successful xAI poll JSON body and cancels the stream", async () => {
-    const oversized = oversizedJsonResponse();
-    mockSubmit(streamedJsonResponse({ request_id: "req_poll_oversized" }));
-    fetchWithTimeoutMock.mockResolvedValueOnce(oversized.response);
-
-    await expect(generate()).rejects.toThrow(
-      "xAI video generation response: JSON response exceeds 16777216 bytes",
-    );
-    expect(oversized.state.canceled).toBe(true);
-    expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
-  });
-
-  it.each(["[]", "<html>Unexpected token < in JSON</html>"])(
-    "wraps invalid create body %s",
-    async (body) => {
-      mockSubmit(new Response(body));
-      await expect(generate()).rejects.toThrow("xAI video generation response malformed");
+it("advertises 1.5 capabilities and preserves aliases, resolution and source aspect ratio", async () => {
+  const provider = build();
+  const capabilities = {
+    imageToVideo: {
+      enabled: true,
+      maxInputImages: 1,
+      maxDurationSeconds: 15,
+      resolutions: ["480P", "720P", "1080P"],
     },
-  );
-
-  it.each([
-    [{ status: "cancelled" }, "xAI video generation cancelled"],
-    [{ status: "done", video: {} }, "xAI video generation response malformed"],
-  ] as const)("rejects terminal poll payload %j", async (payload, error) => {
-    mockPoll(payload);
-    await expect(generate()).rejects.toThrow(error);
+    videoToVideo: { enabled: false },
+  };
+  expect(provider).toMatchObject({
+    defaultModel: "grok-imagine-video",
+    models: ["grok-imagine-video", model15],
   });
-
-  it("normalizes the xAI 'pending' poll status to 'processing' and keeps polling until done", async () => {
-    vi.useFakeTimers();
-    try {
-      mockPoll({ status: "pending" });
-      mockXaiVideoTask();
-
-      const pending = generate({
-        durationSeconds: 6,
-        aspectRatio: "9:16",
-        resolution: "720P",
-      });
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchWithTimeoutMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      const result = await pending;
-
-      expect((fetchWithTimeoutMock.mock.calls as unknown[]).length).toBeGreaterThanOrEqual(2);
-      expect(result).toMatchObject({
-        videos: [{ mimeType: "video/mp4" }],
-        metadata: { requestId: "req" },
-      });
-    } finally {
-      vi.useRealTimers();
-    }
+  expect(provider.catalogByModel?.[model15]).toMatchObject({
+    modes: ["imageToVideo"],
+    capabilities,
   });
-
-  it("sends a single unroled image as xAI first-frame image-to-video", async () => {
-    mockXaiVideoTask();
-
+  for (const [index, model] of models15.entries()) {
+    expect(
+      await provider.resolveModelCapabilities?.({ provider: "xai", model, cfg: {} }),
+    ).toMatchObject(capabilities);
+    complete();
     const result = await generate({
-      inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+      model,
+      durationSeconds: 20,
+      resolution: index ? "1080P" : undefined,
+      inputImages: [asset("first.png", index ? "first_frame" : undefined)],
     });
+    const body = request(index).body;
+    expect(body.image).toEqual(asset("first.png"));
+    expect(body).toMatchObject({ model, duration: 15, resolution: index ? "1080p" : "480p" });
+    expect(body).not.toHaveProperty("aspect_ratio");
+    expect(result.model).toBe(model);
+  }
+});
 
-    expectRequest(
-      { image: { url: expect.stringMatching(/^data:image\/png;base64,/u) }, resolution: "480p" },
-      ["reference_images", "aspect_ratio"],
-    );
-    expect(result.metadata?.mode).toBe("generate");
-  });
+const error15 = `xAI ${model15}`;
+it.each<[Partial<VideoGenerationRequest>, string]>([
+  [{ durationSeconds: 0.4 }, "durationSeconds must be a positive duration"],
+  [
+    { inputImages: [asset("ref.png", "reference_image"), asset("first.png", "first_frame")] },
+    "xAI reference-image video generation requires every image role to be reference_image.",
+  ],
+  [{ model: model15 }, `${error15} requires exactly one first-frame image.`],
+  [
+    { model: models15[1], inputImages: [asset("ref.png", "reference_image")] },
+    `${error15} supports only an ordinary or first_frame image.`,
+  ],
+  [
+    { model: models15[2], inputImages: [asset("first.png"), asset("second.png", "first_frame")] },
+    `${error15} requires exactly one first-frame image.`,
+  ],
+  [
+    { model: model15, inputVideos: [asset("input.mp4")] },
+    `${error15} does not support video inputs.`,
+  ],
+])("rejects unsupported input %j before auth and submission", async (input, error) => {
+  await expect(generate(input)).rejects.toThrow(error);
+  expect(auth).not.toHaveBeenCalled();
+  expect(post).not.toHaveBeenCalled();
+});
 
-  it("sends reference_image roles through xAI reference_images mode", async () => {
-    mockXaiVideoTask();
+it("carries configured private-network and dispatcher policy through submit, poll and download", async () => {
+  const dispatcherPolicy = { proxyUrl: "http://proxy.example:3128" };
+  policy.mockImplementationOnce((params) => ({
+    baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+    allowPrivateNetwork: true,
+    headers: new Headers(omitNullRequestHeaders(params.defaultHeaders)),
+    dispatcherPolicy: dispatcherPolicy as never,
+  }));
+  complete();
+  await generate({ cfg: createProxyRequestModelProviderConfig("xai") });
+  expect(policy.mock.calls[0]?.[0]).not.toHaveProperty("allowPrivateNetwork");
+  expect(request()).toMatchObject({ allowPrivateNetwork: true, dispatcherPolicy });
+  expect(guarded.mock.calls.map((call) => call[4])).toMatchObject(
+    ["xai-video-status", "xai-video-download"].map((auditContext) => ({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy,
+      auditContext,
+    })),
+  );
+});
 
-    const result = await generate({
+it("rejects generated video downloads above the configured media cap", async () => {
+  poll({ status: "done", video });
+  fetchMock.mockResolvedValueOnce(new Response("too-large", { headers: videoHeaders }));
+  await expect(
+    generate({ cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } } }),
+  ).rejects.toThrow("xAI generated video download exceeds 1 bytes");
+});
+it("bounds an unbounded poll JSON body and cancels the stream", async () => {
+  const oversized = oversizedJsonResponse();
+  submit(streamedJsonResponse({ request_id: "req_poll_oversized" }));
+  fetchMock.mockResolvedValueOnce(oversized.response);
+  await expect(generate()).rejects.toThrow(
+    "xAI video generation response: JSON response exceeds 16777216 bytes",
+  );
+  expect(oversized.state.canceled).toBe(true);
+  expect(oversized.state.enqueuedBytes).toBeLessThan(64 * 1024 * 1024);
+});
+it.each(["[]", "<html>Unexpected token < in JSON</html>"])(
+  "wraps invalid create body %s",
+  async (body) => {
+    submit(new Response(body));
+    await expect(generate()).rejects.toThrow("xAI video generation response malformed");
+  },
+);
+it.each([
+  [{ status: "cancelled" }, "xAI video generation cancelled"],
+  [{ status: "done", video: {} }, "xAI video generation response malformed"],
+] as const)("rejects terminal poll payload %j", async (payload, error) => {
+  poll(payload);
+  await expect(generate()).rejects.toThrow(error);
+});
+
+it.each<[string, Partial<VideoGenerationRequest>, Record<string, unknown>, string[], string]>([
+  [
+    "generate",
+    { inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }] },
+    { image: { url: expect.stringMatching(/^data:image\/png;base64,/u) }, resolution: "480p" },
+    ["reference_images", "aspect_ratio"],
+    "generations",
+  ],
+  [
+    "referenceToVideo",
+    {
       durationSeconds: 12,
       aspectRatio: "9:16",
       resolution: "720P",
       inputImages: [asset("subject.png", "reference_image"), asset("style.png", "reference_image")],
-    });
-
-    expectRequest(
-      {
-        reference_images: [
-          { url: "https://example.com/subject.png" },
-          { url: "https://example.com/style.png" },
-        ],
-        duration: 10,
-        aspect_ratio: "9:16",
-        resolution: "720p",
-      },
-      ["image"],
-    );
-    expect(result.metadata?.mode).toBe("referenceToVideo");
-  });
-
-  it("rejects mixed xAI first-frame and reference-image roles", async () => {
-    await expect(
-      generate({
-        inputImages: [
-          asset("subject.png", "reference_image"),
-          asset("first-frame.png", "first_frame"),
-        ],
-      }),
-    ).rejects.toThrow(
-      "xAI reference-image video generation requires every image role to be reference_image.",
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
-
-  it("routes video inputs to the extension endpoint when duration is set", async () => {
-    mockXaiVideoTask();
-
-    await generate({
+    },
+    {
+      reference_images: [asset("subject.png"), asset("style.png")],
+      duration: 10,
+      aspect_ratio: "9:16",
+      resolution: "720p",
+    },
+    ["image"],
+    "generations",
+  ],
+  [
+    "extend",
+    {
       durationSeconds: 15,
       aspectRatio: "9:16",
       resolution: "1080P",
       inputVideos: [asset("input.mp4")],
-    });
-
-    expectRequest(
-      { video: { url: "https://example.com/input.mp4" }, duration: 10 },
-      ["aspect_ratio", "resolution"],
-      "extensions",
-    );
-  });
+    },
+    { video: asset("input.mp4"), duration: 10 },
+    ["aspect_ratio", "resolution"],
+    "extensions",
+  ],
+])("sends the %s request", async (mode, input, body, absent, endpoint) => {
+  complete();
+  expect((await generate(input)).metadata?.mode).toBe(mode);
+  expect(request().url).toBe(`https://api.x.ai/v1/videos/${endpoint}`);
+  for (const [key, value] of Object.entries(body)) {
+    expect(request().body[key]).toEqual(value);
+  }
+  for (const key of absent) {
+    expect(request().body).not.toHaveProperty(key);
+  }
 });

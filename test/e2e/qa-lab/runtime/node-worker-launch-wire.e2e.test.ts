@@ -288,6 +288,9 @@ describe("node worker launch wire", () => {
             throw new Error("active worker placement did not expose a remote workspace directory");
           }
           const baseManifestRef = placement?.workspaceBaseManifestRef;
+          if (typeof baseManifestRef !== "string" || !baseManifestRef) {
+            throw new Error("Baseline workspace has no dispatched manifest reference");
+          }
           await expect(
             fs.readFile(path.join(remoteWorkspaceDir, "gateway-push.txt"), "utf8"),
           ).resolves.toBe("dirty gateway workspace\n");
@@ -328,7 +331,7 @@ describe("node worker launch wire", () => {
               `node worker turn failed: ${JSON.stringify(completed)}\n${gateway.logs().slice(-12_000)}`,
             );
           }
-          await settlement.wait(operator, SESSION_KEY, signal);
+          await settlement.wait(operator, SESSION_KEY, signal, baseManifestRef);
           markPhase("baseline node invocations");
           await workerNode.waitForInvokes();
           expect(workerNode.invokeErrors).toEqual([]);
@@ -460,8 +463,9 @@ describe("node worker launch wire", () => {
             fs.access(path.join(remoteWorkspaceDir, "worker-exec-escaped.txt")),
           ).rejects.toMatchObject({ code: "ENOENT" });
           expect(provider.outsideWriteOutput).toMatch(/escape|outside|containment|workspace/iu);
-          expect(provider.execOutput).toMatch(
-            /approval_required.*worker workspace permission mode.*run this command locally.*interactive approval.*administrator.*clear the session permission mode/isu,
+          // This redirection is refused by the shared approval binding before review.
+          expect(provider.execOutput.split("\n", 1)[0]).toBe(
+            "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this command): printf WORKER_EXEC_ESCAPED > worker-exec-escaped.txt",
           );
 
           const permissionHistory = await operator.request<{ messages?: unknown[] }>(

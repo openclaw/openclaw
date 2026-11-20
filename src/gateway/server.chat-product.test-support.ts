@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from "node:http";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { readProviderBody } from "./gateway-provider-fixture.test-support.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -49,7 +49,7 @@ export function productProvider(
   handle: (body: string, response: ServerResponse, url?: string) => void | Promise<void>,
 ) {
   return createServer((request, response) => {
-    void readProviderBody(request)
+    void readRequestText(request)
       .then((body) => handle(body, response, request.url))
       .catch((error: unknown) => {
         errors.push(error);

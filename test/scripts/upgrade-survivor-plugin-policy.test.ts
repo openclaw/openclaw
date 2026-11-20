@@ -45,20 +45,15 @@ const config = {
   channels: { telegram: { enabled: true } },
   hooks,
 };
-const baselineInventory = () => ({
+const inventory = (runtime?: { state: string | undefined }) => ({
   plugins: ["memory-core", "telegram", "device-pair"].map((id) => ({
     id,
     installed: true,
     enabled: id !== "device-pair",
+    runtime: runtime ? (id === "memory-core" ? runtime : { state: "unloaded" }) : undefined,
   })),
 });
-const candidateInventory = (active: { state: string | undefined } = { state: "active" }) => ({
-  plugins: baselineInventory().plugins.map((plugin) =>
-    Object.assign(plugin, {
-      runtime: plugin.id === "memory-core" ? active : { state: "unloaded" },
-    }),
-  ),
-});
+const candidateInventory = (state: string | undefined = "active") => inventory({ state });
 
 it("authors the isolated baseline with the existing explicit survivor model route", () => {
   const { root, source, artifacts, prefix, packageRoot, configPath } = policyPaths();
@@ -150,10 +145,10 @@ printf 'main-preserved\\n'
   );
 });
 
-it.each(["2026.9.3", "2026.9.4"])("retains %s migration ownership", (baselineVersion) => {
+it("retains non-9.2 migration ownership", () => {
   const result = runPolicyShell(
     'ARTIFACT_ROOT=unused; RUNTIME_ROOT=unused; npm_config_prefix=unused; baseline_version="$1"; node() { return 97; }; legacy_operator_plugin_policy verify',
-    [baselineVersion],
+    ["2026.9.3"],
   );
   expect(result.status, result.stdout + result.stderr).toBe(0);
 });
@@ -165,9 +160,7 @@ it("preserves channel and slot policy while rejecting retired or widened permiss
       specimen,
       baseline,
     );
-  for (const allow of [["telegram"], ["memory-core"], ["memory-core", "telegram"]]) {
-    expect(() => check({ allow })).not.toThrow();
-  }
+  expect(() => check({ allow: ["telegram"] })).not.toThrow();
   const rejects = (plugins: object, error: string, overrides = {}) =>
     expect(() => check(plugins, overrides)).toThrow(error);
   rejects({ enabled: false }, "disabled permitted channel or slot plugins");
@@ -185,9 +178,9 @@ it("preserves channel and slot policy while rejecting retired or widened permiss
 });
 
 it("reads the actual 9.2 eligibility shape and checks candidate runtime separately", () => {
-  const rejects = (inventory: unknown, error: string, state = baseline) =>
-    expect(() => assertPreservedPluginActivation(inventory, state)).toThrow(error);
-  expect(readEnabledPolicyPlugins(baselineInventory())).toEqual(baseline.enabledPlugins);
+  const rejects = (actual: unknown, error: string, state = baseline) =>
+    expect(() => assertPreservedPluginActivation(actual, state)).toThrow(error);
+  expect(readEnabledPolicyPlugins(inventory())).toEqual(baseline.enabledPlugins);
   expect(assertPreservedPluginActivation(candidateInventory(), baseline)).toEqual(["memory-core"]);
   expect(() => readEnabledPolicyPlugins({ plugins: [] })).toThrow(
     "omitted or duplicated installed plugin",
@@ -198,7 +191,7 @@ it("reads the actual 9.2 eligibility shape and checks candidate runtime separate
       enabledPlugins,
     });
   }
-  for (const id of ["memory-core", "telegram", "device-pair"]) {
+  for (const id of ["memory-core", "device-pair"]) {
     const changed = candidateInventory();
     const plugin = changed.plugins.find((entry) => entry.id === id)!;
     plugin.enabled = !plugin.enabled;
@@ -208,9 +201,9 @@ it("reads the actual 9.2 eligibility shape and checks candidate runtime separate
   widened.plugins.push({ ...candidateInventory().plugins[1]!, id: "unrelated" });
   rejects(widened, "widened or lost plugin activation");
   widened.plugins.at(-1)!.enabled = false;
-  widened.plugins.at(-1)!.runtime.state = "active";
+  widened.plugins.at(-1)!.runtime!.state = "active";
   rejects(widened, "activated forbidden plugin unrelated");
   for (const state of ["service-failed", undefined]) {
-    rejects(candidateInventory({ state }), "failed or is unknown");
+    rejects(inventory({ state }), "failed or is unknown");
   }
 });

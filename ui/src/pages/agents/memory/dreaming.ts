@@ -27,45 +27,41 @@ const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
 export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
 
-type WikiImportInsightItem = {
-  pagePath: string;
-  title: string;
-  riskLevel: "low" | "medium" | "high" | "unknown";
-  riskReasons: string[];
-  labels: string[];
-  topicKey: string;
-  topicLabel: string;
-  digestStatus: "available" | "withheld";
-  activeBranchMessages: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  firstUserLine?: string;
-  lastUserLine?: string;
-  assistantOpener?: string;
-  summary: string;
-  candidateSignals: string[];
-  correctionSignals: string[];
-  preferenceSignals: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type WikiImportInsightCluster = {
-  key: string;
-  label: string;
-  itemCount: number;
-  highRiskCount: number;
-  withheldCount: number;
-  preferenceSignalCount: number;
-  updatedAt?: string;
-  items: WikiImportInsightItem[];
-};
-
 export type WikiImportInsights = {
   sourceType: "chatgpt";
   totalItems: number;
   totalClusters: number;
-  clusters: WikiImportInsightCluster[];
+  clusters: {
+    key: string;
+    label: string;
+    itemCount: number;
+    highRiskCount: number;
+    withheldCount: number;
+    preferenceSignalCount: number;
+    updatedAt?: string;
+    items: {
+      pagePath: string;
+      title: string;
+      riskLevel: "low" | "medium" | "high" | "unknown";
+      riskReasons: string[];
+      labels: string[];
+      topicKey: string;
+      topicLabel: string;
+      digestStatus: "available" | "withheld";
+      activeBranchMessages: number;
+      userMessageCount: number;
+      assistantMessageCount: number;
+      firstUserLine?: string;
+      lastUserLine?: string;
+      assistantOpener?: string;
+      summary: string;
+      candidateSignals: string[];
+      correctionSignals: string[];
+      preferenceSignals: string[];
+      createdAt?: string;
+      updatedAt?: string;
+    }[];
+  }[];
   truncated: boolean;
 };
 
@@ -85,27 +81,23 @@ type WikiOverviewItem = {
   snippet?: string;
 };
 
-type WikiOverviewCluster = {
-  key: WikiOverviewItem["kind"];
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: WikiOverviewItem[];
-};
-
-type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
-
 export type WikiOverview = {
   totalItems: number;
   totalPages: number;
-  pageCounts: WikiOverviewPageCounts;
+  pageCounts: Record<WikiOverviewItem["kind"], number>;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
-  clusters: WikiOverviewCluster[];
+  clusters: {
+    key: WikiOverviewItem["kind"];
+    label: string;
+    itemCount: number;
+    claimCount: number;
+    questionCount: number;
+    contradictionCount: number;
+    updatedAt?: string;
+    items: WikiOverviewItem[];
+  }[];
   truncated: boolean;
 };
 
@@ -118,11 +110,13 @@ export type WikiPagePreview = {
   updatedAt?: string;
 };
 
+export type DreamingReviewPanel = "waiting" | "promotions" | "dailyLog" | "insights" | "wiki";
+
 export type DreamingViewState = {
   dreamIndex: number;
   dreamLastSwap: number;
-  activeSubTab: "scene" | "diary" | "advanced";
-  activeDiarySubTab: "dreams" | "insights" | "wiki";
+  /** Only one review list stays open, so the page stays short enough to scan. */
+  openReviewPanel: DreamingReviewPanel | null;
   advancedWaitingSort: "recent" | "signals";
   expandedInsightCards: Record<string, boolean>;
   expandedWikiCards: Record<string, boolean>;
@@ -153,8 +147,7 @@ export function createDreamingViewState(): DreamingViewState {
   return {
     dreamIndex: Math.floor(Math.random() * DREAM_PHRASE_KEYS.length),
     dreamLastSwap: 0,
-    activeSubTab: "scene",
-    activeDiarySubTab: "dreams",
+    openReviewPanel: null,
     advancedWaitingSort: "recent",
     expandedInsightCards: {},
     expandedWikiCards: {},
@@ -340,13 +333,11 @@ type DreamingResourcePayloads = {
   wikiOverview: WikiOverview;
 };
 
-type DreamingResourceSpec<Key extends DreamingResourceKey> = {
-  method: string;
-  apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
-};
-
 const DREAMING_RESOURCES: {
-  [Key in DreamingResourceKey]: DreamingResourceSpec<Key>;
+  [Key in DreamingResourceKey]: {
+    method: string;
+    apply: (state: DreamingState, payload: DreamingResourcePayloads[Key]) => void;
+  };
 } = {
   dreamingStatus: {
     method: "doctor.memory.status",
@@ -416,10 +407,13 @@ async function loadDreamingResourceSpec<Key extends DreamingResourceKey>(
     state.dreamingStatusError = null;
   }
   // The Memory owner replaces this state when its agent or connection epoch changes.
-  const promise = (async () => {
-    const payload = await client.request<DreamingResourcePayloads[Key]>(spec.method, { agentId });
-    spec.apply(state, payload);
-  })();
+  const promise = client
+    .request<DreamingResourcePayloads[Key]>(spec.method, { agentId })
+    .then((payload) => {
+      if (state.resourceReads[key]?.promise === promise) {
+        spec.apply(state, payload);
+      }
+    });
   const issued = { promise, pending: true };
   state.resourceReads[key] = issued;
   try {
@@ -455,8 +449,6 @@ export async function runDreamDiaryAction(
   }
   state.dreamDiaryActionLoading = true;
   state.dreamingStatusError = null;
-  clearSettledDreamingRead(state, "dreamingStatus");
-  clearSettledDreamingRead(state, "dreamDiary");
   state.dreamDiaryActionMessage = null;
   state.dreamDiaryActionArchivePath = null;
   try {
@@ -464,6 +456,8 @@ export async function runDreamDiaryAction(
     if (!isCurrent()) {
       return false;
     }
+    // Reads issued before this write cannot satisfy its refresh or publish stale data.
+    delete state.resourceReads.dreamingStatus;
     // Keep the confirmed receipt if a follow-up read is interrupted.
     state.dreamDiaryActionArchivePath =
       method === "doctor.memory.repairDreamingArtifacts"
@@ -477,6 +471,7 @@ export async function runDreamDiaryAction(
       method !== "doctor.memory.resetGroundedShortTerm" &&
       method !== "doctor.memory.repairDreamingArtifacts"
     ) {
+      delete state.resourceReads.dreamDiary;
       await loadDreamingResource(state, "dreamDiary");
     }
     if (!isCurrent()) {

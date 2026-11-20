@@ -22,7 +22,6 @@ export type FeishuTextMention = {
 export function normalizeMentions(
   text: string,
   mentions?: ReadonlyArray<FeishuTextMention>,
-  botStripId?: string,
 ): string {
   if (!mentions || mentions.length === 0) {
     return text;
@@ -32,12 +31,9 @@ export function normalizeMentions(
   for (const mention of mentions) {
     // Events nest open_id; message get/list return the selected identifier directly.
     const mentionId = typeof mention.id === "string" ? mention.id : mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
+    const replacement = mentionId
+      ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
+      : `@${mention.name}`;
     replacements.set(mention.key, replacement);
   }
   // Longest keys win; a single pass keeps placeholder-like display names literal.

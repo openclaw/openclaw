@@ -12,6 +12,7 @@ import {
   replaceSqliteTranscriptEventsInTransaction,
 } from "./session-accessor.sqlite-transcript-store.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
+import { timedMessageEvent } from "./transcript-message.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -20,13 +21,11 @@ afterEach(() => {
 });
 
 function message(id: string, parentId: string | null, timestamp: number) {
-  return {
-    type: "message",
-    id,
-    parentId,
-    timestamp,
-    message: { role: "user", content: id, idempotencyKey: id },
-  };
+  return timedMessageEvent(id, parentId, timestamp, {
+    role: "user",
+    content: id,
+    idempotencyKey: id,
+  });
 }
 
 function indexState(count: number, leaf: string) {

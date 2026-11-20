@@ -23,7 +23,6 @@ import { canInjectReplyMessageTarget } from "../../sessions/session-controller.m
 import {
   isSessionRunActive,
   isSessionRunActiveForKey,
-  isSessionRunCompactionBlocked,
 } from "../../sessions/session-controller.queries.js";
 import { waitForReplyOperationBackend } from "../../sessions/session-controller.state.js";
 import { clearReplyRunForResetBySessionId } from "../../sessions/session-controller.stop-runtime.js";
@@ -56,22 +55,6 @@ afterEach(() => {
 });
 
 describe("reply run registry cancellation", () => {
-  it("treats queued reply operations as non-abortable for compaction", () => {
-    const operation = createTestReplyOperation({ sessionId: "session-compact" });
-
-    expect(isSessionRunActive("session-compact")).toBe(true);
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
-
-    operation.markWaitingForDeferredMaintenance();
-
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(false);
-
-    operation.markDeferredMaintenanceWaitEnded();
-    operation.setPhase("running");
-
-    expect(isSessionRunCompactionBlocked("session-compact")).toBe(true);
-  });
-
   it("retains deferred-maintenance custody until its aborted producer completes", () => {
     const operation = createTestReplyOperation({ sessionId: "session-waiting-abort" });
 

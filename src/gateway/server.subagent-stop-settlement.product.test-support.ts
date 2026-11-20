@@ -127,7 +127,8 @@ export function createSubagentModelConfig(
     provider: "synthetic",
     api: "openai-responses",
     baseUrl: options.baseUrl ?? "https://example.invalid/v1",
-    contextWindow: 4096,
+    // Lifecycle scenarios carry the full coding tool surface and system prompt.
+    contextWindow: 128_000,
     maxTokens: 1024,
   });
   return {
@@ -163,42 +164,6 @@ export function createSubagentModelConfig(
     },
     plugins: { enabled: false, slots: { memory: "none" } },
     tools: { profile: "coding", toolSearch: false },
-  };
-}
-
-function buildSubagentStopConfig(
-  workspace: string,
-  tls: { certPath: string; keyPath: string },
-): OpenClawConfig {
-  const trustedProxy = {
-    userHeader: "x-forwarded-user",
-    requiredHeaders: ["x-forwarded-proto"],
-    allowUsers: [proxyUser],
-    allowLoopback: true,
-    deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
-  };
-  return {
-    ...createSubagentModelConfig(workspace),
-    gateway: {
-      auth: {
-        mode: "trusted-proxy",
-        trustedProxy,
-        identityScopes: { [proxyUser]: [...operatorScopes] },
-      },
-      trustedProxies: ["127.0.0.1"],
-      tls: { enabled: true, autoGenerate: false, ...tls },
-      controlUi: { allowedOrigins: ["https://control.example.com"] },
-      roles: {
-        default: "administrator",
-        definitions: {
-          administrator: {
-            agents: "*",
-            sessions: { others: "write" },
-            scopes: [...operatorScopes],
-          },
-        },
-      },
-    },
   };
 }
 
@@ -265,15 +230,40 @@ export function postSubagentKill(port: number, sessionKey: string) {
 export async function createSubagentStopFixture(label: string, modelUrl?: string) {
   const state = await createOpenClawTestState({ label });
   setUserProfileRole(ensureProfileForEmail(proxyUser).id, "administrator");
-  const cfg = buildSubagentStopConfig(state.workspaceDir, {
-    certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
-    keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
-  });
-  if (modelUrl) {
-    const provider = expectDefined(cfg.models?.providers?.synthetic, "Synthetic model provider");
-    provider.baseUrl = modelUrl;
-    provider.request = { allowPrivateNetwork: true };
-  }
+  const cfg: OpenClawConfig = {
+    ...createSubagentModelConfig(state.workspaceDir, { baseUrl: modelUrl || undefined }),
+    gateway: {
+      auth: {
+        mode: "trusted-proxy",
+        trustedProxy: {
+          userHeader: "x-forwarded-user",
+          requiredHeaders: ["x-forwarded-proto"],
+          allowUsers: [proxyUser],
+          allowLoopback: true,
+          deviceAutoApprove: { enabled: true, scopes: [...operatorScopes] },
+        },
+        identityScopes: { [proxyUser]: [...operatorScopes] },
+      },
+      trustedProxies: ["127.0.0.1"],
+      tls: {
+        enabled: true,
+        autoGenerate: false,
+        certPath: await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM),
+        keyPath: await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM),
+      },
+      controlUi: { allowedOrigins: ["https://control.example.com"] },
+      roles: {
+        default: "administrator",
+        definitions: {
+          administrator: {
+            agents: "*",
+            sessions: { others: "write" },
+            scopes: [...operatorScopes],
+          },
+        },
+      },
+    },
+  };
   return {
     state,
     cfg,

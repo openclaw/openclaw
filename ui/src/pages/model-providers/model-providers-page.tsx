@@ -27,9 +27,14 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
   const Recovery = () => <ModelProviderAccountRecovery controller={props.controller.login} />;
   const Login = () => <ModelProviderLoginView controller={props.controller.login} />;
   const cards = createMemo(() => current().cards);
+  const catalogDiscovering = createMemo(() => current().props.catalogDiscovering);
   const discoveryData = createMemo(() => current().discovery);
   const InstalledAgents = () =>
-    props.controller.installedAgents.render(cards, props.controller.retryCatalog);
+    props.controller.installedAgents.render(
+      cards,
+      props.controller.retryCatalog,
+      catalogDiscovering,
+    );
   const Discovery = () => props.controller.discovery.render(discoveryData);
   const installedAgents = <InstalledAgents />;
   return (
@@ -37,8 +42,9 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
       body={
         <ModelProviders
           {...current().props}
-          apiKeySaving={props.controller.mutations.apiKeySaving()}
           defaultsSaving={props.controller.mutations.defaultsSaving()}
+          defaultsSavingField={props.controller.mutations.defaultsSavingField()}
+          defaultsSaved={props.controller.mutations.defaultsSaved()}
           logoutSaving={props.controller.logoutSaving()}
           providerDetailsReady={showProviderDetails()}
           accountRecovery={<Recovery />}

@@ -1,6 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "./app-server/timeout.js";
-import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
+import { rememberCodexCatalogCursor } from "./session-catalog-limits.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -79,13 +79,7 @@ export async function lookupNodeCodexCatalogRecord(params: {
     if (seenCursors.has(nextCursor)) {
       return { kind: "cursor-cycle" };
     }
-    seenCursors.add(nextCursor);
-    if (seenCursors.size > CODEX_CATALOG_MAX_ROWS) {
-      const oldest = seenCursors.values().next().value;
-      if (oldest !== undefined) {
-        seenCursors.delete(oldest);
-      }
-    }
+    rememberCodexCatalogCursor(seenCursors, nextCursor);
     cursor = nextCursor;
   }
   return { kind: "missing" };

@@ -25,7 +25,6 @@ const local = createLocalApprovalPromptTestFixture({
   suppress: shouldSuppressLocalIMessageExecApprovalPrompt,
 });
 
-const DEFAULT_ACCOUNT_ID = "default";
 const DIRECT_TARGET = "+15551230000";
 const execConfig = (allowFrom?: string[]) =>
   approval.buildConfig({
@@ -37,41 +36,32 @@ const target = { channel: "imessage", to: DIRECT_TARGET, source: "target" } as c
 it("uses target-mode config for requestless availability without native runtime handling", () =>
   approval.checks.targetMode());
 
-it("renders thumbs-only reaction hints in plugin approval prompts and respects allowed decisions", () => {
-  const payload = imessageApprovalCapability.render?.plugin?.buildPendingPayload?.({
-    cfg: approval.buildConfig(),
-    request: approval.buildPluginRequest(DIRECT_TARGET, {
-      allowedDecisions: ["allow-once", "deny"],
-    }),
-    target,
-    nowMs: 0,
-  });
-
-  expect(payload?.text).toContain("👍 Allow Once");
-  expect(payload?.text).toContain("👎 Deny");
-  expect(payload?.text).not.toContain("Allow Always");
-});
-
-it("renders target-mode exec prompts with concrete thumbs-only reaction choices", () => {
+it.each(["plugin", "exec"] as const)("renders %s prompts with allowed thumbs choices", (kind) => {
+  const common = { target, nowMs: 0, cfg: approval.buildConfig() };
+  const render = imessageApprovalCapability.render;
   const text =
-    imessageApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg: approval.buildTargetModeConfig("exec", [target]),
-      request: approval.buildExecRequest(DIRECT_TARGET, {
-        ask: "always",
-        cwd: "/tmp/work",
-        host: "gateway",
-      }),
-      target,
-      nowMs: 0,
-    })?.text ?? "";
-
-  for (const hint of ["/approve exec-1 allow-once", "React with:", "👍 Allow Once", "👎 Deny"]) {
-    expect(text).toContain(hint);
+    (kind === "plugin"
+      ? render?.plugin?.buildPendingPayload?.({
+          ...common,
+          request: approval.buildPluginRequest(DIRECT_TARGET, {
+            allowedDecisions: ["allow-once", "deny"],
+          }),
+        })
+      : render?.exec?.buildPendingPayload?.({
+          ...common,
+          request: approval.buildExecRequest(DIRECT_TARGET, { ask: "always" }),
+        })
+    )?.text ?? "";
+  expect(text).toContain("👍 Allow Once");
+  expect(text).toContain("👎 Deny");
+  if (kind === "plugin") {
+    expect(text).not.toContain("Allow Always");
+  } else {
+    expect(text).toContain("/approve exec-1 allow-once");
+    expect(text).toContain("React with:");
+    expect(text).not.toMatch(/<id>|1️⃣ Allow Once|2️⃣ Allow Always|3️⃣ Deny/u);
+    expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
   }
-  for (const obsolete of ["<id>", "1️⃣ Allow Once", "2️⃣ Allow Always", "3️⃣ Deny"]) {
-    expect(text).not.toContain(obsolete);
-  }
-  expect(text.indexOf("React with:")).toBeLessThan(text.indexOf("/approve exec-1 allow-once"));
 });
 
 it.each([
@@ -84,18 +74,15 @@ it.each([
   expect(await approval.resolveExecOrigin(execConfig(), request)).toBeNull();
   expect(await approval.resolveExecOrigin(execConfig([DIRECT_TARGET]), request)).toEqual({
     to,
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId: "default",
   });
 });
-it(
-  "keeps local prompts for disabled, target-only, inactive, or non-exec cases",
-  local.checks.inactiveRoutes,
-);
+it("keeps local prompts on inactive routes", local.checks.inactiveRoutes);
 
 it.each([
   ["imessage:+15551230000", undefined, true],
-  ["imessage:direct:+15551230000", DEFAULT_ACCOUNT_ID, true],
-  ["imessage:default:direct:+15551230000", DEFAULT_ACCOUNT_ID, true],
+  ["imessage:direct:+15551230000", "default", true],
+  ["imessage:default:direct:+15551230000", "default", true],
   ["imessage:group:test-group", undefined, false],
   ["imessage:chat_id:42", undefined, false],
   ["imessage:chat_guid:iMessage;+;chat42", undefined, false],
@@ -108,7 +95,4 @@ it.each([
   );
 });
 
-it(
-  "applies top-level approval filters with agent fallback from session key",
-  local.checks.sessionFilters,
-);
+it("filters local prompts by agent and session", local.checks.sessionFilters);

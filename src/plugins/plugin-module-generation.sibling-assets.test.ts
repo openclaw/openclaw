@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/state-dir.js";
+import { listDirectoryTreeStrictSync } from "../infra/directory-walk.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
@@ -127,10 +128,9 @@ it("keeps an external optional sibling inside the captured generation", () => {
   fs.symlinkSync(external, path.join(root, "node_modules/native-platform"), "junction");
   const artifact = capturePluginGenerationArtifact(root);
   try {
-    for (const entry of fs.readdirSync(artifact.boundaryRoot, {
-      withFileTypes: true,
-      recursive: true,
-    })) {
+    for (const entry of listDirectoryTreeStrictSync(artifact.boundaryRoot).map(
+      (walkEntry) => walkEntry.dirent,
+    )) {
       const filename = path.join(entry.parentPath, entry.name);
       if (entry.isSymbolicLink()) {
         const boundary =

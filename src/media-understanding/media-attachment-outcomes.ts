@@ -1,10 +1,24 @@
-import type { MediaAttachmentDisposition, MediaUnderstandingCapability } from "./types.js";
+import { readTransportDiagnosticLabel } from "../../packages/ai/src/utils/provider-error.js";
+import type {
+  MediaAttachmentDisposition,
+  MediaUnderstandingCapability,
+} from "../../packages/media-understanding-common/src/types.js";
+import { ProviderHttpError } from "../agents/provider-http-errors.js";
 
 const MAX_SKIPPED_FILE_MARKERS = 5;
 
 // Reason-neutral because the shared overflow can mix file and media outcomes.
 function renderSkippedFileOverflowSummary(count: number): string {
   return `[${count} more attachment${count === 1 ? "" : "s"} skipped]`;
+}
+
+/** Keeps a provider HTTP failure's own status and code; other errors stay unannotated. */
+export function failedAttachmentDisposition(error: unknown): MediaAttachmentDisposition {
+  if (!(error instanceof ProviderHttpError)) {
+    return { kind: "failed" };
+  }
+  const code = readTransportDiagnosticLabel(error.code);
+  return { kind: "failed", status: error.status, ...(typeof code === "string" ? { code } : {}) };
 }
 
 export function renderMediaAttachmentDisposition(
@@ -25,7 +39,9 @@ export function renderMediaAttachmentDisposition(
     case "scope-denied":
       return `[${label} attachment not analyzed in this chat]`;
     case "failed":
-      return `[${label} attachment could not be analyzed]`;
+      return disposition.status === undefined
+        ? `[${label} attachment could not be analyzed]`
+        : `[${label} attachment could not be analyzed (HTTP ${disposition.status}${disposition.code ? ` code=${disposition.code}` : ""})]`;
     default:
       return disposition satisfies never;
   }

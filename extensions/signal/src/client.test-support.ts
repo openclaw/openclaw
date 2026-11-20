@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, expect, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 export function useSignalHttpServer() {
   const servers: http.Server[] = [];
@@ -10,9 +10,7 @@ export function useSignalHttpServer() {
     await Promise.all(
       servers.splice(0).map(async (server) => {
         server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await server[Symbol.asyncDispose]();
       }),
     );
   });
@@ -27,13 +25,8 @@ export function useSignalHttpServer() {
     });
     servers.push(server);
     server.on("clientError", () => {});
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP address");
-    }
-    return `http://127.0.0.1:${address.port}`;
+    const port = await listenOnLoopback(server);
+    return `http://127.0.0.1:${port}`;
   };
 }
 
@@ -95,6 +88,8 @@ export async function expectPreparedHandoff(
     if (!revoked) {
       await arrived.promise;
       expect(settled).toBe(false);
+      // Transmission owns settlement even if its caller closes before the reply.
+      caller.abort(failure);
       response.resolve();
     }
     expect(await sending).toEqual(revoked ? { error: failure } : { value: fixture.result });

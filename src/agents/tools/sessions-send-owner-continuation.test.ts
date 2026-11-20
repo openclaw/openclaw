@@ -52,7 +52,8 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
     run: (work: () => unknown) => work(),
   }),
 }));
-vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
+vi.mock("../../plugins/runtime/gateway-request-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/gateway-request-scope.js")>()),
   getPluginRuntimeGatewayRequestScope: () => ({
     client: {
       connect: { scopes: ["operator.admin"] },
@@ -79,9 +80,6 @@ vi.mock("../../gateway/session-sharing-policy.js", () => ({
 }));
 vi.mock("../../process/gateway-work-admission.js", () => ({
   runWithGatewayDetachedWorkContinuation: (work: () => unknown) => work(),
-}));
-vi.mock("../../config/sessions/transcript-write-context.js", () => ({
-  runWithoutOwnedSessionTranscriptWrites: (work: () => unknown) => work(),
 }));
 vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
   runOutsidePreparedModelRuntimePluginGenerationScope: (work: () => unknown) => work(),

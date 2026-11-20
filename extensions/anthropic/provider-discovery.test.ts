@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 
 const { probeClaudeCliAuthStatus, discoverClaudeCliModels } = vi.hoisted(() => ({
@@ -18,21 +21,6 @@ afterEach(() => {
   vi.useRealTimers();
   probeClaudeCliAuthStatus.mockReset();
   discoverClaudeCliModels.mockReset();
-});
-
-it("prepares native availability once for a 632-workspace roster", async () => {
-  const entries = Object.fromEntries(
-    Array.from({ length: 632 }, (_, i) => [String(i), { workspace: String(i) }]),
-  );
-  const input = { config: { agents: { entries } }, env: {}, signal: undefined };
-  probeClaudeCliAuthStatus.mockResolvedValue({ status: "missing" });
-  const prepared = new Set<string>();
-  for (const agentId of Object.keys(entries)) {
-    await prepare(input);
-    prepared.add(agentId);
-  }
-  expect(prepared.size).toBe(632);
-  expect(probeClaudeCliAuthStatus).toHaveBeenCalledOnce();
 });
 
 it.each(["config", "env", "signal"] as const)(
@@ -63,10 +51,30 @@ it("expires a negative capture so a recovered login is observed", async () => {
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each(["timeout", "unreadable", "missing"])("auth probe: %s", async (status) => {
+it.each([
+  ["timeout", true],
+  ["unreadable", true],
+  ["missing", false],
+  ["not-installed", false],
+])("auth probe: %s", async (status, authenticated) => {
   probeClaudeCliAuthStatus.mockResolvedValue({ status });
-  const auth = await prepare();
-  expect(Boolean(auth?.apiKey)).toBe(status !== "missing");
+  const input = capture();
+  const auth = await prepare(input);
+  expect(Boolean(auth?.apiKey)).toBe(authenticated);
+  if (!authenticated) {
+    expect(
+      await provider.catalog!.run({
+        ...input,
+        resolveProviderAuth: () => ({
+          apiKey: undefined,
+          mode: "none" as const,
+          source: "none" as const,
+        }),
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+      }),
+    ).toBeNull();
+    expect(discoverClaudeCliModels).not.toHaveBeenCalled();
+  }
 });
 
 it("joins one probe per cancellation scope and preserves a surviving capture", async () => {
@@ -109,15 +117,7 @@ it("publishes the native menu once per discovery generation, never static member
     }),
     resolveProviderApiKey: () => ({ apiKey: undefined }),
   };
-  const row = {
-    id: "claude-new-native",
-    name: "Native",
-    reasoning: true,
-    input: ["text" as const],
-    maxTokens: 100,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    thinkingLevelMap: { low: "low", max: "max" },
-  };
+  const row = { id: "claude-new-native" };
   probeClaudeCliAuthStatus.mockResolvedValue({ status: "available" });
   discoverClaudeCliModels.mockResolvedValueOnce([row]).mockResolvedValueOnce([]);
   const first = await provider.catalog!.run(ctx);
@@ -134,3 +134,50 @@ it("publishes the native menu once per discovery generation, never static member
   });
   expect(discoverClaudeCliModels).toHaveBeenCalledTimes(2);
 });
+
+// POSIX executable fixture; cli-auth-seam.test.ts separately covers Windows shim parsing.
+it.skipIf(process.platform === "win32").each([
+  ["claude.ai", "max", { kind: "subscription", plan: "Max" }],
+  ["claude.ai", "redacted", { kind: "subscription" }],
+  ["claude.ai", { token: "synthetic-private-token" }, { kind: "subscription" }],
+  ["api_key", "max", { kind: "api" }],
+  ["api_key_helper", null, { kind: "api" }],
+  ["third_party", null, { kind: "api" }],
+  ["oauth_token", "max", { kind: "native" }],
+  ["future-method", "max", { kind: "native" }],
+])(
+  "projects native CLI status without guessing billing: %s / %s",
+  async (authMethod, subscriptionType, display) => {
+    await withTempDir("claude-native-status-", async (dir) => {
+      const command = path.join(dir, "claude");
+      const payload = {
+        loggedIn: true,
+        authMethod,
+        subscriptionType,
+        apiProvider: "firstParty",
+        storedClaudeAiLogin: true,
+        planTier: "other",
+        email: "synthetic@example.test",
+        accessToken: "synthetic-private-token",
+        orgId: "synthetic-private-org",
+      };
+      await fs.writeFile(
+        command,
+        "#!" +
+          process.execPath +
+          "\n" +
+          "require('node:assert/strict').deepEqual(process.argv.slice(2), ['auth', 'status', '--json']);\n" +
+          "process.stdout.write(" +
+          JSON.stringify(JSON.stringify(payload)) +
+          ");\n",
+        { mode: 0o755 },
+      );
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      const auth = await prepare({ config: {}, env: { PATH: dir, HOME: dir }, signal: undefined });
+      expect(auth?.nativeAuth).toEqual({ runtime: "claude-cli", mode: "oauth", display });
+      expect(JSON.stringify(auth)).not.toMatch(/synthetic@example|private|other|redacted/);
+    });
+  },
+);

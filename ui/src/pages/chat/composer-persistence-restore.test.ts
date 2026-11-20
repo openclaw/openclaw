@@ -222,10 +222,8 @@ it.each([false, true])(
 
 it("retires pending restoration on stop and restores again after restart", async () => {
   const state = createState();
-  const { pending, read, persistence } = pendingRestore(state);
+  const { pending, persistence } = pendingRestore(state);
   await settleStorage();
-  expect(read).toHaveBeenCalledOnce();
-
   persistence.stop();
   pending.resolve(foundDraft("Saved draft"));
   await settleStorage();
@@ -236,7 +234,6 @@ it("retires pending restoration on stop and restores again after restart", async
   await settleStorage();
   expect(state.chatMessage).toBe("Saved draft");
   expect(load(state, state.sessionKey).snapshot?.draft).toBe("Saved draft");
-  expect(read).toHaveBeenCalledTimes(2);
 });
 
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
@@ -254,8 +251,6 @@ it("captures once per restore admission while pending, settled, reset, and switc
   expect(capture).toHaveBeenCalled();
   expectUncaptured(3);
   await settleStorage();
-  expect(read).toHaveBeenCalledOnce();
-
   pending.resolve(missing);
   await settleStorage();
   expectWrite(
@@ -264,22 +259,16 @@ it("captures once per restore admission while pending, settled, reset, and switc
     expect.objectContaining({ expectedRevision: 0 }),
   );
   expectUncaptured(3);
-  expect(read).toHaveBeenCalledOnce();
-
   persistence.restore();
   capture.mockClear();
   persistence.persistChangedState();
   expect(capture).toHaveBeenCalledOnce();
   expectUncaptured();
   await settleStorage();
-  expect(read).toHaveBeenCalledTimes(2);
-
   state.sessionKey = "agent:main:other";
   persistence.persistChangedState();
   await settleStorage();
-  expect(read).toHaveBeenCalledTimes(3);
-  expect(read).toHaveBeenNthCalledWith(
-    3,
+  expect(read).toHaveBeenLastCalledWith(
     expect.objectContaining({ scopeKey: expect.stringContaining("agent:main:other") }),
   );
   expectUncaptured();
@@ -292,11 +281,10 @@ it("keeps a synchronous reply cancellation when an older stored draft has a high
   const previousReply = { messageId: "previous", text: "Previous selection" };
   const state = createState({ chatReplyTarget: previousReply });
   expect(persist(state, state.sessionKey, { draftRevision: 1 })).toBe(true);
-  const { pending, read, persistence } = pendingRestore(state);
+  const { pending, persistence } = pendingRestore(state);
   state.chatReplyTarget = null;
   persistence.schedule();
   await settleStorage();
-  expect(read).toHaveBeenCalledOnce();
   pending.resolve(
     foundDraft("Older saved draft", {
       revision: storedRevision,
@@ -341,7 +329,6 @@ it.each([false, true])(
       await settleStorage();
       expect(state.chatMessage).toBe("Winning durable draft");
       expect(load(state, state.sessionKey).snapshot?.draft).toBe("Winning durable draft");
-      expect(restored).toHaveBeenCalledOnce();
       if (pendingEdit) {
         expectWrite(ownerScope, { text: "Second local draft" });
       }

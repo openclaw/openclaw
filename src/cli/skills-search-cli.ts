@@ -7,6 +7,7 @@ import {
   CLAWHUB_SKILLS_SH_TRUST_STATE,
 } from "../infra/clawhub-skills.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { searchSkillsFromClawHub } from "../skills/lifecycle/clawhub.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
@@ -25,10 +26,26 @@ export function registerSkillsSearchCli(skills: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (queryParts: string[], opts: { limit?: number; json?: boolean }) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const results = await searchSkillsFromClawHub({
-          query: normalizeOptionalString(queryParts.join(" ")),
-          limit: opts.limit,
-        });
+        const signal = getAsyncWorkSignal();
+        if (signal?.aborted) {
+          return;
+        }
+        let results: Awaited<ReturnType<typeof searchSkillsFromClawHub>>;
+        try {
+          results = await searchSkillsFromClawHub({
+            query: normalizeOptionalString(queryParts.join(" ")),
+            limit: opts.limit,
+            signal,
+          });
+        } catch (error) {
+          if (signal?.aborted) {
+            return;
+          }
+          throw error;
+        }
+        if (signal?.aborted) {
+          return;
+        }
         if (opts.json || skills.opts<{ json?: boolean }>().json) {
           defaultRuntime.writeJson({ results });
           return;

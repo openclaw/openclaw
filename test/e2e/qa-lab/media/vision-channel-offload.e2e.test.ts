@@ -51,12 +51,6 @@ describe("QA-channel vision offload", () => {
       mutateConfig: configureVisionOffload,
     });
 
-    const cursorResponse = await fetch(`${mock.baseUrl}/debug/request-cursor`);
-    const cursorBody = (await cursorResponse.json()) as { cursor?: unknown };
-    expect(cursorResponse.ok).toBe(true);
-    expect(typeof cursorBody.cursor).toBe("number");
-    const requestCursor = cursorBody.cursor as number;
-
     await transport.sendInbound({
       accountId: "default",
       conversation: CONVERSATION,
@@ -79,8 +73,8 @@ describe("QA-channel vision offload", () => {
       timeoutMs: 90_000,
     });
 
-    const scenarioRequests = (await readMockRequests(mock.baseUrl, requestCursor)).filter(
-      (request) => request.allInputText.includes(SCENARIO_MARKER),
+    const scenarioRequests = (await readMockRequests(mock.baseUrl)).filter((request) =>
+      request.allInputText.includes(SCENARIO_MARKER),
     );
     expect(
       scenarioRequests.map((request) => ({

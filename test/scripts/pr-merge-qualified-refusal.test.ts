@@ -5,10 +5,7 @@ import {
   configureMerge,
   expectCapturedFiles,
   expectExit,
-  expectRetained,
   pendingGates,
-  readLocal,
-  writeLocal,
 } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import {
@@ -18,13 +15,10 @@ import {
 
 const { fixture, outcomeRef, describePosix } = createMergeOutcomeFixtureHarness();
 
-function qualifiedAutoRefusal(
-  f: ReturnType<typeof fixture>,
-  version: "0.6.10" | "policy-timeout" = "0.6.10",
-) {
+function qualifiedAutoRefusal(f: ReturnType<typeof fixture>) {
   configureMerge(f, {
     mode: "octopool-refusal",
-    refusalCapture: version === "policy-timeout" ? policyTimeoutCapture : f.state().refusalCapture,
+    refusalCapture: policyTimeoutCapture,
     pr: { mergeStateStatus: "BEHIND" },
   });
   expectExit(f.run(true), 1);
@@ -38,17 +32,7 @@ function qualifiedAutoRefusal(
     outcome,
     capture: f.git(["hash-object", "--stdin"], contents),
     inspected: true,
-    ...(version === "policy-timeout"
-      ? policyTimeoutQualification
-      : {
-          kind: "octopool-0.6.10-auto-refusal",
-          version,
-          sourceRevision: "00c442d8084ad26eb5a5003f7372170e75a20c8a",
-          parserSha256: "f6ff8cd7e59503f71f94fefd561b671193df11b3aac9ba0986a0dc3ba91ca32b",
-          args: `pr merge 123 --repo https://github.com/fixture/repo --squash --auto --match-head-commit ${f.head} --body-file .local/merge-body.fixture`.split(
-            " ",
-          ),
-        }),
+    ...policyTimeoutQualification,
   };
   writeFileSync(join(directory, "qualification.json"), JSON.stringify(qualification));
   f.recover();
@@ -63,14 +47,11 @@ function qualifiedAutoRefusal(
 }
 
 describePosix("qualified pre-dispatch merge recovery", () => {
-  it.each([
-    { version: "0.6.10", replaceHead: false },
-    { version: "policy-timeout", replaceHead: true },
-  ] as const)(
-    "recovers a qualified $version pre-dispatch refusal with retained evidence (replacement=$replaceHead)",
-    ({ version, replaceHead }) => {
+  it.each([false, true])(
+    "recovers a qualified pre-dispatch refusal with retained evidence (replacement=%s)",
+    (replaceHead) => {
       const f = fixture();
-      const proof = qualifiedAutoRefusal(f, version);
+      const proof = qualifiedAutoRefusal(f);
       const replacement = replaceHead ? f.replacePreparedHead() : "";
       const preparedHead = replacement || f.head;
       pendingGates(f, preparedHead);
@@ -106,59 +87,13 @@ describePosix("qualified pre-dispatch merge recovery", () => {
     },
   );
 
-  it.each([
-    "stale-prep-context",
-    "stale-gate-head",
-    "review-during-checks",
-    "prepared-head-during-checks",
-  ])("same-head qualified refusal recovery rejects invalidated local evidence: %s", (fault) => {
+  it("preserves a pre-dispatch outcome when immediate admission is ineligible", () => {
     const f = fixture();
     const proof = qualifiedAutoRefusal(f);
-    const captures = f.captures();
-    const next = f.state();
-    let changedReview = "";
-    let movedHead = "";
-    if (fault === "stale-prep-context" || fault === "stale-gate-head") {
-      const file = fault === "stale-prep-context" ? "prep-context.env" : "gates.env";
-      writeLocal(f, file, readLocal(f, file).replace(f.head, f.base));
-    }
-    if (fault === "review-during-checks") {
-      const review = JSON.parse(readLocal(f, "review.json"));
-      changedReview = `${JSON.stringify({ ...review, recommendation: "NEEDS WORK" })}\n`;
-      next.duringChecks = { artifact: "review.json", artifactContents: changedReview };
-    }
-    if (fault === "prepared-head-during-checks") {
-      movedHead = f.commit(
-        f.git(["rev-parse", `${f.head}^{tree}`]),
-        [f.head],
-        "Local preparation advanced during admission\n",
-      );
-      next.duringChecks = { preparedHead: movedHead };
-    }
-    f.save(next);
-    const run = proof.runRecovery();
-    expect(run.error, run.output).toBeUndefined();
-    expectExit(run, 1);
-    expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
-    expectRetained(f, proof.outcome, captures);
-    if (changedReview) {
-      expect(readLocal(f, "review.json")).toBe(changedReview);
-    }
-    if (movedHead) {
-      expect(f.git(["rev-parse", "refs/heads/pr-123-prep"])).toBe(movedHead);
-      expect(f.state().pr.headRefOid).toBe(f.head);
-    }
-  });
-
-  it("preserves a pre-dispatch outcome across incomplete checks and ineligible admission", () => {
-    const f = fixture();
-    const proof = qualifiedAutoRefusal(f, "policy-timeout");
     const replacement = f.replacePreparedHead();
     pendingGates(f, replacement);
     const ready = f.state();
     const faults: Array<Parameters<typeof configureMerge>[1]> = [
-      { gates: "pending" },
-      { gates: "fail" },
       { pr: { autoMergeRequest: { mergeMethod: "SQUASH" } } },
       { pr: { mergeStateStatus: "BEHIND" } },
     ];

@@ -53,16 +53,50 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function createCapBatchStore(protectedOnly = false, afterPlan?: () => void | Promise<void>) {
+function createBatchFixture(maxEntries: number, pruneAfterMs = day) {
   const fixture = createSessionMaintenanceKickStore({
     storePath: path.join(tempDirs.make("session-maintenance-cap-"), "agent.sqlite"),
     key: sessionKey,
-    pruneAfterMs: 86_400_000,
+    pruneAfterMs,
     workerMaintenance: true,
     maintenanceScopes: [],
   });
-  fixture.request.maintenanceConfig.maxEntries = 100;
+  fixture.request.maintenanceConfig.maxEntries = maxEntries;
   vi.useRealTimers();
+  return fixture;
+}
+
+function recordPlans(afterPlan?: () => void | Promise<void>) {
+  const plans: SessionEntryMaintenancePlan[] = [];
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  const run = dispatch.getMockImplementation()!;
+  dispatch.mockImplementation(async (params) => {
+    const result = await run(params);
+    if (result.kind === "maintenance-plan") {
+      plans.push(result.value);
+      await afterPlan?.();
+    }
+    return result;
+  });
+  return plans;
+}
+
+async function runMaintenance(
+  fixture: Pick<ReturnType<typeof createBatchFixture>, "storePath" | "request">,
+  signal: AbortSignal,
+) {
+  const completed = observeMaintenanceCompletion(fixture.storePath);
+  kickSessionEntryMaintenanceAfterWrite(fixture.request);
+  await completed(signal);
+}
+
+const readEntry = (storePath: string, key = sessionKey) =>
+  loadSessionEntry({ storePath, sessionKey: key });
+const archivedKeys = (storePath: string, keys: string[]) =>
+  keys.filter((key) => readEntry(storePath, key)?.archivedAt);
+
+function createCapBatchStore(protectedOnly = false, afterPlan?: () => void | Promise<void>) {
+  const fixture = createBatchFixture(100);
   const keys = Array.from({ length: 179 }, (_, index) => `agent:main:cap-batch-${index}`);
   runOpenClawAgentWriteTransaction((database) => {
     if (protectedOnly) {
@@ -80,18 +114,7 @@ function createCapBatchStore(protectedOnly = false, afterPlan?: () => void | Pro
       });
     });
   }, fixture.scope);
-  const plans: SessionEntryMaintenancePlan[] = [];
-  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-  const run = dispatch.getMockImplementation()!;
-  dispatch.mockImplementation(async (params) => {
-    const result = await run(params);
-    if (result.kind === "maintenance-plan") {
-      plans.push(result.value);
-      await afterPlan?.();
-    }
-    return result;
-  });
-  return { ...fixture, keys, plans };
+  return { ...fixture, keys, plans: recordPlans(afterPlan) };
 }
 
 function createAgeBatchStore(
@@ -103,15 +126,7 @@ function createAgeBatchStore(
   } = {},
 ) {
   const pruneAfterMs = options.pruneAfterMs ?? day;
-  const fixture = createSessionMaintenanceKickStore({
-    storePath: path.join(tempDirs.make("session-maintenance-age-batch-"), "agent.sqlite"),
-    key: sessionKey,
-    pruneAfterMs,
-    workerMaintenance: true,
-    maintenanceScopes: [],
-  });
-  fixture.request.maintenanceConfig.maxEntries = count + 100;
-  vi.useRealTimers();
+  const fixture = createBatchFixture(count + 100, pruneAfterMs);
   const keys = Array.from(
     { length: count },
     (_, index) => `agent:main:age-batch-${String(index).padStart(3, "0")}`,
@@ -125,27 +140,14 @@ function createAgeBatchStore(
       });
     });
   }, fixture.scope);
-  const plans: SessionEntryMaintenancePlan[] = [];
-  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-  const run = dispatch.getMockImplementation()!;
-  dispatch.mockImplementation(async (params) => {
-    const result = await run(params);
-    if (result.kind === "maintenance-plan") {
-      plans.push(result.value);
-      await options.afterPlan?.();
-    }
-    return result;
-  });
-  return { ...fixture, keys, plans };
+  return { ...fixture, keys, plans: recordPlans(options.afterPlan) };
 }
 
 it.for([0, 70])(
   "bounds automatic age retention and drains past %s protected entries",
   async (protectedPrefix, { signal }) => {
     const { request, storePath, keys, plans } = createAgeBatchStore(500, { protectedPrefix });
-    const completed = observeMaintenanceCompletion(storePath);
-    kickSessionEntryMaintenanceAfterWrite(request);
-    await completed(signal);
+    await runMaintenance({ storePath, request }, signal);
 
     expect(plans.length).toBeGreaterThan(1);
     expect(plans.every((plan) => plan.archived <= 64)).toBe(true);
@@ -167,20 +169,30 @@ it.for([0, 70])(
   },
 );
 
-it.for(["victim", "remaining"] as const)(
-  "releases the age writer between batches and honors new protection (%s)",
-  async (protection, { signal }) => {
+it.for([
+  ["age", "victim"],
+  ["age", "remaining"],
+  ["cap", "victim"],
+  ["cap", "remaining"],
+] as const)(
+  "releases the %s writer between batches and honors new protection (%s)",
+  async ([kind, protection], { signal }) => {
     let protectedKeys: string[] = [];
     let releases = 0;
     let foreground: Promise<unknown> | undefined;
-    const { request, storePath, keys, plans } = createAgeBatchStore(150, {
-      async afterPlan() {
-        if (++releases === 1) {
-          protectedKeys = protection === "remaining" ? keys.slice(64) : [keys[64]!];
-          await withinTest(foreground!, signal);
-        }
-      },
-    });
+    const afterPlan = async (): Promise<void> => {
+      if (++releases === 1) {
+        protectedKeys =
+          protection === "remaining"
+            ? [...(kind === "cap" ? [sessionKey] : []), ...keys.slice(64)]
+            : [keys[64]!];
+        await withinTest(foreground!, signal);
+      }
+    };
+    const { request, storePath, keys, plans } =
+      kind === "age"
+        ? createAgeBatchStore(150, { afterPlan })
+        : createCapBatchStore(false, afterPlan);
     const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
       capture: () => protectedKeys,
       dispose() {},
@@ -192,7 +204,7 @@ it.for(["victim", "remaining"] as const)(
         if (result.kind === "committed" && ++commits === 1) {
           foreground = patchSessionEntryCore(
             { storePath, sessionKey },
-            () => ({ label: "foreground between age batches" }),
+            () => ({ label: "foreground between batches" }),
             { skipMaintenance: true },
           ).then(() => {
             foregroundCompleted = true;
@@ -206,20 +218,24 @@ it.for(["victim", "remaining"] as const)(
       },
     });
     try {
-      const completed = observeMaintenanceCompletion(storePath);
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await completed(signal);
+      await runMaintenance({ storePath, request }, signal);
       expect(plans.every((plan) => plan.archived <= 64)).toBe(true);
-      const archived = keys.filter(
-        (key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt,
-      );
+      if (kind === "cap") {
+        expect(
+          plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived),
+        ).toEqual(protection === "remaining" ? [64] : [64, 16]);
+        if (protection === "remaining") {
+          expect(plans.at(-1)).toMatchObject({ capped: 0, archived: 0, entryRemovals: [] });
+        }
+      }
+      const archived = archivedKeys(storePath, keys);
       expect(archived).toEqual(
-        protection === "remaining" ? keys.slice(0, 64) : keys.filter((key) => key !== keys[64]),
+        protection === "remaining"
+          ? keys.slice(0, 64)
+          : (kind === "cap" ? keys.slice(0, 81) : keys).filter((key) => key !== keys[64]),
       );
-      expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(
-        "foreground between age batches",
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: keys[64]! })?.archivedAt).toBeUndefined();
+      expect(readEntry(storePath)?.label).toBe("foreground between batches");
+      expect(readEntry(storePath, keys[64]!)?.archivedAt).toBeUndefined();
     } finally {
       unregister();
     }
@@ -245,9 +261,7 @@ it("finishes age retention before cap selection and preserves the initial model-
       writeSessionEntry(database, key, { sessionId: key, updatedAt });
     }
   }, scope);
-  const completed = observeMaintenanceCompletion(storePath);
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await completed(signal);
+  await runMaintenance({ storePath, request }, signal);
 
   expect(plans.every((plan) => plan.capArchived === 0)).toBe(true);
   expect(plans.reduce((total, plan) => total + plan.modelRunPruned, 0)).toBe(1);
@@ -263,20 +277,13 @@ it("finishes age retention before cap selection and preserves the initial model-
 it("carries referenced history into the last automatic age page before reclaiming it", async ({
   signal,
 }) => {
-  const fixture = createSessionMaintenanceKickStore({
-    storePath: path.join(tempDirs.make("session-maintenance-age-history-"), "agent.sqlite"),
-    key: sessionKey,
-    pruneAfterMs: day,
-    workerMaintenance: true,
-    maintenanceScopes: [],
-  });
-  fixture.request.maintenanceConfig.maxEntries = 1_000;
-  vi.useRealTimers();
+  const fixture = createBatchFixture(1_000);
   const keys = Array.from(
     { length: 65 },
     (_, index) => `agent:main:subagent:age-history-${String(index).padStart(3, "0")}`,
   );
   const historyId = "age-shared-history";
+  const query = (sql: string) => fixture.database.db.prepare(sql).get(historyId);
   const event = { type: "session", id: historyId, content: "retained across the first page" };
   runOpenClawAgentWriteTransaction((database) => {
     writeSessionEntry(database, keys[0]!, { sessionId: historyId, updatedAt: 1 });
@@ -300,26 +307,16 @@ it("carries referenced history into the last automatic age page before reclaimin
   dispatch.mockImplementation(async (params) => {
     if (params.plan.kind === "maintenance-plan" && plans.length === 1) {
       // The first page settled and removed its owner; the last victim still protects G.
+      expect(readEntry(fixture.storePath, keys[0]!)).toBeUndefined();
+      expect(readEntry(fixture.storePath, keys[64]!)).toBeDefined();
+      expect(query("SELECT session_key FROM session_windows WHERE session_id = ?")).toEqual({
+        session_key: keys[64],
+      });
+      expect(query("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")).toEqual({
+        n: 1,
+      });
       expect(
-        loadSessionEntry({ storePath: fixture.storePath, sessionKey: keys[0]! }),
-      ).toBeUndefined();
-      expect(
-        loadSessionEntry({ storePath: fixture.storePath, sessionKey: keys[64]! }),
-      ).toBeDefined();
-      expect(
-        fixture.database.db
-          .prepare("SELECT session_key FROM session_windows WHERE session_id = ?")
-          .get(historyId),
-      ).toEqual({ session_key: keys[64] });
-      expect(
-        fixture.database.db
-          .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")
-          .get(historyId),
-      ).toEqual({ n: 1 });
-      expect(
-        fixture.database.db
-          .prepare("SELECT session_id FROM session_transcript_archives WHERE session_id = ?")
-          .get(historyId),
+        query("SELECT session_id FROM session_transcript_archives WHERE session_id = ?"),
       ).toBeUndefined();
       retainedBetweenPages = true;
     }
@@ -329,37 +326,23 @@ it("carries referenced history into the last automatic age page before reclaimin
     }
     return result;
   });
-  const completed = observeMaintenanceCompletion(fixture.storePath);
-  kickSessionEntryMaintenanceAfterWrite(fixture.request);
-  await completed(signal);
+  await runMaintenance(fixture, signal);
 
   expect(retainedBetweenPages).toBe(true);
   expect(
     plans.filter((plan) => plan.entryRemovals.length > 0).map((plan) => plan.entryRemovals.length),
   ).toEqual([64, 1]);
   for (const key of keys) {
-    expect(loadSessionEntry({ storePath: fixture.storePath, sessionKey: key })).toBeUndefined();
+    expect(readEntry(fixture.storePath, key)).toBeUndefined();
   }
+  expect(query("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")).toEqual({
+    n: 0,
+  });
+  expect(query("SELECT session_id FROM session_windows WHERE session_id = ?")).toBeUndefined();
   expect(
-    fixture.database.db
-      .prepare("SELECT count(*) AS n FROM transcript_events WHERE session_id = ?")
-      .get(historyId),
-  ).toEqual({ n: 0 });
-  expect(
-    fixture.database.db
-      .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
-      .get(historyId),
-  ).toBeUndefined();
-  expect(
-    fixture.database.db
-      .prepare(
-        "SELECT session_id, published_at FROM session_transcript_archives WHERE session_id = ?",
-      )
-      .get(historyId),
+    query("SELECT session_id, published_at FROM session_transcript_archives WHERE session_id = ?"),
   ).toEqual({ session_id: historyId, published_at: expect.any(Number) });
-  expect(
-    loadSessionEntry({ storePath: fixture.storePath, sessionKey })?.archivedAt,
-  ).toBeUndefined();
+  expect(readEntry(fixture.storePath)?.archivedAt).toBeUndefined();
 });
 
 it.for(["automatic", "inline", "protected"] as const)(
@@ -386,88 +369,18 @@ it.for(["automatic", "inline", "protected"] as const)(
         ),
       );
     } else {
-      const completed = observeMaintenanceCompletion(storePath);
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await completed(signal);
+      await runMaintenance({ storePath, request }, signal);
     }
     // The first automatic batch leaves 116 entries, below high-water 125 but above cap 100.
     expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
       owner === "protected" ? [] : owner === "inline" ? [80] : [64, 16],
     );
-    const archived = keys.filter(
-      (key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt,
-    );
+    const archived = archivedKeys(storePath, keys);
     expect(archived).toEqual(owner === "protected" ? [] : keys.slice(0, 80));
     expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
     expect(plans.flatMap((plan) => plan.archivedEntries.map((entry) => entry.sessionKey))).toEqual(
       archived,
     );
-  },
-);
-
-it.for(["victim", "remaining"] as const)(
-  "releases the cap writer between batches and honors new protection (%s)",
-  async (protection, { signal }) => {
-    let protectedKeys: string[] = [];
-    let releases = 0;
-    let foreground: Promise<unknown> | undefined;
-    const { request, storePath, keys, plans } = createCapBatchStore(false, async () => {
-      if (++releases === 1) {
-        protectedKeys = protection === "remaining" ? [sessionKey, ...keys.slice(64)] : [keys[64]!];
-        await withinTest(foreground!, signal);
-      }
-    });
-    const protectedKey = keys[64]!;
-    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
-      capture: () => protectedKeys,
-      dispose() {},
-    }));
-    let commits = 0;
-    let foregroundCompleted = false;
-    observeSessionMaintenancePlanningWorker({
-      afterExecute(result) {
-        if (result.kind === "committed" && ++commits === 1) {
-          // Queue under the first operation; await only after its FIFO custody is released.
-          foreground = patchSessionEntryCore(
-            { storePath, sessionKey },
-            () => ({ label: "foreground between cap batches" }),
-            { skipMaintenance: true },
-          ).then(() => {
-            foregroundCompleted = true;
-          });
-        }
-      },
-      beforeExecute() {
-        if (commits > 0) {
-          expect(foregroundCompleted).toBe(true);
-        }
-      },
-    });
-    try {
-      const completed = observeMaintenanceCompletion(storePath);
-      kickSessionEntryMaintenanceAfterWrite(request);
-      await completed(signal);
-      expect(plans.filter((plan) => plan.capArchived > 0).map((plan) => plan.capArchived)).toEqual(
-        protection === "remaining" ? [64] : [64, 16],
-      );
-      if (protection === "remaining") {
-        expect(plans.at(-1)).toMatchObject({ capped: 0, archived: 0, entryRemovals: [] });
-      }
-      expect(loadSessionEntry({ storePath, sessionKey })?.label).toBe(
-        "foreground between cap batches",
-      );
-      expect(loadSessionEntry({ storePath, sessionKey: protectedKey })?.archivedAt).toBeUndefined();
-      const archived = keys.filter(
-        (key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt,
-      );
-      expect(archived).toEqual(
-        protection === "remaining"
-          ? keys.slice(0, 64)
-          : keys.slice(0, 81).filter((key) => key !== protectedKey),
-      );
-    } finally {
-      unregister();
-    }
   },
 );
 
@@ -486,8 +399,6 @@ it("keeps the first cap receipt and stops later batches when maintenance authori
   await withinTest(retired.promise, signal);
   await closeOpenClawAgentDatabaseByPathAsync(database.path);
   expect(plans.map((plan) => plan.capArchived)).toEqual([64]);
-  const archived = keys.filter(
-    (key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt,
-  );
+  const archived = archivedKeys(storePath, keys);
   expect(archived).toEqual(keys.slice(0, 64));
 });

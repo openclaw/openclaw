@@ -3,13 +3,61 @@ import { createSignal, flush, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../../src/shared/deferred.ts";
 import * as toast from "../../../lib/toast.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
+afterEach(() => restoreMocksAndGlobals());
+
+it.each(["save", "error", "retire"])("releases its download owner after %s", async (outcome) => {
+  const bytes = createDeferredCore<{ url: string; filename: string } | null>();
+  const events: string[] = [];
+  const save = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {
+    events.push("save");
+  });
+  vi.spyOn(toast, "showToast").mockImplementation(() => {
+    events.push("error");
+    return true;
+  });
+  let signal: AbortSignal | undefined;
+  const view = mountSolid(() => (
+    <FileDownloadButton
+      scopeKey="reader"
+      class="download"
+      onDownloadStart={() => {
+        events.push("start");
+        return () => events.push("release");
+      }}
+      download={(current) => {
+        signal = current;
+        events.push("request");
+        return bytes.promise;
+      }}
+    />
+  ));
+  view.getByRole("button").click();
+  expect(events).toEqual(["start", "request"]);
+  if (outcome === "retire") {
+    view.unmount();
+    expect(signal?.aborted).toBe(true);
+    expect(events).toEqual(["start", "request", "release"]);
+  }
+  if (outcome === "error") {
+    bytes.reject(new Error("Download unavailable"));
+  } else {
+    bytes.resolve({ url: "/api/artifacts/download/connection/ticket", filename: "report.md" });
+  }
+  await bytes.promise.catch(() => {});
+  await waitForSolid(() =>
+    expect(events).toEqual([
+      "start",
+      "request",
+      ...(outcome === "retire" ? [] : [outcome]),
+      "release",
+    ]),
+  );
+  expect(save).toHaveBeenCalledTimes(outcome === "save" ? 1 : 0);
 });
 
 it.each(["unmount", "session", "connection"])(
@@ -99,7 +147,10 @@ it("shows download progress, rejects duplicate clicks, and lets a failed downloa
   expect(download).toHaveBeenCalledOnce();
   bytes.reject(new Error("Download unavailable"));
   await waitForSolid(() => expect(button.hasAttribute("disabled")).toBe(false));
-  expect(report).toHaveBeenCalledWith({ message: expect.stringContaining("Download unavailable") });
+  expect(report).toHaveBeenCalledWith({
+    severity: "error",
+    message: expect.stringContaining("Download unavailable"),
+  });
   expect(save).not.toHaveBeenCalled();
   button.click();
   await waitForSolid(() => expect(save).toHaveBeenCalledOnce());

@@ -19,10 +19,6 @@ beforeEach(() => {
   mounted = undefined;
   view = document.body.appendChild(document.createElement("div"));
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation((value) => value);
-  vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation((value): [string, string] => [
-    "",
-    `<div class="streaming-markdown">${value}</div>`,
-  ]);
 });
 
 afterEach(() => {
@@ -59,10 +55,9 @@ it("omits attachment anchors for unsafe transcript URLs", async () => {
   );
 
   await waitForSolid(() => expect(view.textContent).toContain("unsafe.pdf"));
-  expect(view.querySelectorAll(".chat-assistant-attachments a")).toHaveLength(0);
   expect(
     view.querySelector(
-      "openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
+      ".chat-assistant-attachments a, openclaw-chat-audio-player, openclaw-chat-video-player, audio, video, iframe, table",
     ),
   ).toBeNull();
 });
@@ -87,18 +82,10 @@ it("renders transcript video URLs with encoded extensions as cards", async () =>
 
 it("deduplicates one SVG represented by structured and persisted media facts", async () => {
   const source = "https://cdn.example/duplicate.svg";
+  const media = { path: source, contentType: "image/svg+xml", sizeBytes: 300_000 };
   await renderMessage(
     createAssistantMessage([{ type: "image_url", image_url: { url: source } }], {
-      __openclaw: {
-        media: [
-          {
-            path: source,
-            contentType: "image/svg+xml",
-            fileName: "duplicate.svg",
-            sizeBytes: 300_000,
-          },
-        ],
-      },
+      __openclaw: { media: [media] },
     }),
   );
 

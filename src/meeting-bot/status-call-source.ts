@@ -1,6 +1,6 @@
 import { createMeetingRoutingOwnershipSource } from "./status-call-ownership-source.js";
 
-type MeetingStatusCallSourceOptions = {
+export function createMeetingStatusCallSource(options: {
   captionEnableSource: string;
   captionSettleMs?: number;
   platform: {
@@ -19,9 +19,7 @@ type MeetingStatusCallSourceOptions = {
   /** In-page statements run once audio routing settles, before captions and the status result. */
   afterAudioRoutingSource?: string;
   transcriptMaxLines?: number;
-};
-
-export function createMeetingStatusCallSource(options: MeetingStatusCallSourceOptions): string {
+}): string {
   const captionSettleMs = options.captionSettleMs ?? 1_000;
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionsGlobal = JSON.stringify(options.platform.globals.captions);
@@ -540,7 +538,6 @@ ${withLiveOwnership("  }\n")}${
     }
     const unmatchedPrevious = [...captionState.visible];
     const nextVisible = [];
-    const now = Date.now();
     let captionChanged = false;
     for (const row of parsedRows) {
       const priorIndex = unmatchedPrevious.findIndex((candidate) => sameCaptionRow(candidate, row));
@@ -557,7 +554,6 @@ ${withLiveOwnership("  }\n")}${
         prior.text = row.text;
         prior.node = row.node;
         prior.rowIdentity = row.rowIdentity || prior.rowIdentity;
-        prior.seenAt = now;
         nextVisible.push(prior);
       } else {
         captionChanged = true;
@@ -565,7 +561,6 @@ ${withLiveOwnership("  }\n")}${
           at: new Date().toISOString(),
           node: row.node,
           rowIdentity: row.rowIdentity,
-          seenAt: now,
           speaker: row.speaker,
           text: row.text,
         });

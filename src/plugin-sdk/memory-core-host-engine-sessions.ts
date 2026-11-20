@@ -5,7 +5,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent as listSessionTranscriptCorpusEntriesFromHost,
   readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
-import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/openclaw-runtime-session.js";
+import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/session-memory-authority.js";
 import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
@@ -21,14 +21,39 @@ import type {
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
 import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 export type {
   MemorySessionSelectors,
   MemorySessionTarget,
 } from "../config/sessions/session-memory-targets.types.js";
+
+/** Read only search-hit identities and their aliases through the canonical store owner. */
+export async function loadMemorySearchSessionStore(
+  cfg: OpenClawConfig,
+  options: {
+    agentId?: string;
+    sessionKeys: readonly string[];
+    sessionIds: readonly string[];
+  },
+) {
+  const { agentId, ...transcriptSelection } = options;
+  const { loadCombinedSessionStoreForGatewayCoreAsync } =
+    await import("../config/sessions/combined-store-gateway-read.js");
+  const { store, storePath } = await loadCombinedSessionStoreForGatewayCoreAsync(cfg, {
+    agentId,
+    includeIncognito: false,
+    projection: "list",
+    transcriptSelection,
+  });
+  return {
+    storePath,
+    store: Object.fromEntries(Object.entries(store).filter(([key]) => !isIncognitoSessionKey(key))),
+  };
+}
 
 /** @deprecated Await loadArchivedSessionsAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function loadArchivedSessions(
@@ -52,7 +77,6 @@ export {
   extractKeywords,
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-  matchesSessionEntryPrefixHash,
   parseUsageCountedSessionIdFromFileName,
   readTranscriptStatsBatchReadOnlyAsync,
   readTranscriptStatsBatchReadOnlySync,
@@ -60,6 +84,8 @@ export {
   sessionPathForSessionIdentity,
   statSessionEntry,
   statSessionEntrySync,
+  streamSessionEntries,
+  streamSessionEntry,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 
 // Internal actor sources are not part of the released plugin call signatures.
@@ -77,6 +103,9 @@ export const readSessionResetRecallCutoff: (
 ) => ReturnType<typeof readSessionResetRecallCutoffFromHost> = readSessionResetRecallCutoffFromHost;
 
 export type {
+  SessionEntryPage,
+  SessionEntryStream,
+  SessionEntrySummary,
   SessionFileEntry,
   SessionFileState,
   SessionTranscriptCorpusEntry,
@@ -149,7 +178,7 @@ export async function loadMemorySessionMetadataBatchAsync(params: {
       )
     : (
         await listSessionTranscriptInstancesInWorker(
-          { ...scope, projection: "list" },
+          { ...scope, projection: "list", includeParticipants: false },
           { includeAllWindows: true, sessionIds },
         )
       ).map((instance) => projectSessionMetadata(instance));

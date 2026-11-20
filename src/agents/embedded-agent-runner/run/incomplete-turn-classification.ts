@@ -24,6 +24,7 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "inputAlreadyDelivered"
   | "preparedTerminalReply"
   | "textToolCallAttempt"
   | "clientToolCalls"
@@ -108,14 +109,11 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
-/** Excludes only plain progress text; structured or tool-owned payloads remain delivery evidence. */
+/** Excludes pre-tool progress, displayed reasoning and generated failures; structured delivery remains evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
   attempt: IncompleteTurnAttempt;
 }): number {
-  const hasNoAssistantText = params.attempt.assistantTexts.every(
-    (text) => !parseReplyDirectives(text).text.trim(),
-  );
   // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
   // though it precedes the tool results that settled after it.
   const hasComposedVisibleAnswer =
@@ -128,7 +126,7 @@ export function countSettledTurnDeliveryPayloads(params: {
     const syntheticFallback =
       payload.isError === true &&
       Object.keys(payload).every((key) => key === "text" || key === "isError") &&
-      ((hasNoAssistantText && metadata?.toolErrorWarning) ||
+      ((!hasComposedVisibleAnswer && metadata?.toolErrorWarning) ||
         (canFinalizeProviderError && metadata?.terminalProviderError));
     if (syntheticFallback) {
       return false;
@@ -147,12 +145,13 @@ export function countSettledTurnDeliveryPayloads(params: {
     }
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
     const hasNonTextDelivery = Object.entries(payload).some(
-      ([key, value]) => key !== "text" && value !== undefined && value !== false,
+      ([key, value]) =>
+        key !== "text" && key !== "isReasoning" && value !== undefined && value !== false,
     );
     return (
       hasNonTextDelivery ||
-      !text ||
-      !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text)
+      (payload.isReasoning !== true &&
+        (!text || !params.attempt.assistantTexts.some((candidate) => candidate.trim() === text)))
     );
   }).length;
 }
@@ -185,11 +184,18 @@ const GEMINI_INCOMPLETE_TURN_PROVIDER_IDS = new Set([
 ]);
 const GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN = /^gemini(?:[.-]|$)/;
 // Ollama native `/api/chat` can finish with only thinking/internal blocks when constrained.
+// Match the API too: a custom provider id on it (llmman) behaves the same.
 const OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN = /^ollama(?:-|$)/;
 
-export function isOllamaIncompleteTurnProvider(provider?: string): boolean {
-  return OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
-    normalizeLowercaseStringOrEmpty(provider ?? ""),
+export function isOllamaIncompleteTurnProvider(params: {
+  provider?: string;
+  modelApi?: string;
+}): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "ollama" ||
+    OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    )
   );
 }
 // Model APIs eligible for the non-visible turn retry guard.  OpenAI Responses
@@ -225,7 +231,7 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
     ) &&
       GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
     RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
-    isOllamaIncompleteTurnProvider(params.provider)
+    isOllamaIncompleteTurnProvider(params)
   );
 }
 

@@ -1,4 +1,6 @@
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
+import type { PluginCohortRecoveryWriteBinding } from "./update-plugin-cohort-schema.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
 import type {
   InterruptedUpdateSettlement,
   InterruptedUpdateSettlementResult,
@@ -31,12 +33,13 @@ export type UpdateRunWriteInput = {
   runId: string;
   redactionFacts: UpdateRunRedactionFacts;
   requireNoRecovery?: true;
+  pluginCohort?: PluginCohortRecoveryWriteBinding;
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
 };
 
 type UpdateRunWriteResult =
-  | { kind: "recorded"; record: UpdateRunRecord }
+  | { kind: "recorded"; record: UpdateRunRecord; updateResult?: UpdateResultPayload }
   | { kind: "bookkeeping-skipped" }
   | { kind: "recovery-required"; recovery: UpdateRecoveryRecord };
 

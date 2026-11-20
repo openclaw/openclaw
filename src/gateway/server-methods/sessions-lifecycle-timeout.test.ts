@@ -11,6 +11,7 @@ import * as lifecycle from "../../sessions/session-controller.lifecycle.js";
 import * as mailbox from "../../sessions/session-controller.mailbox.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { registerChatAbortController } from "../chat-abort.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient } from "../session-sharing.test-utils.js";
@@ -82,15 +83,10 @@ it.each([
     const client = roleClient("write", "timeout-operator");
     client.connect.scopes = ["operator.admin"];
     const request = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "drain-timeout",
-        method,
-        params: {
-          key: sessionKey,
-          ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
-        },
-      },
+      req: gatewayRequest("drain-timeout", method, {
+        key: sessionKey,
+        ...(method === "sessions.patch" ? { archived: true, expectedSessionId: sessionId } : {}),
+      }),
       client,
       context: createDirectChatContext({ getRuntimeConfig }),
       respond,

@@ -608,9 +608,13 @@ function loadPluginRegistrySnapshotWithPreparedValidation(
     });
   }
 
-  preservePluginSourceAdmissions(persistedIndex, derived.index);
+  // Receipt reconciliation owns its records; shared discovery inventories stay immutable.
+  const snapshot = persistedIndex?.plugins.some((plugin) => plugin.sourceAdmissions)
+    ? { ...derived.index, plugins: derived.index.plugins.map((plugin) => ({ ...plugin })) }
+    : derived.index;
+  preservePluginSourceAdmissions(persistedIndex, snapshot);
   return {
-    snapshot: derived.index,
+    snapshot,
     source: "derived",
     diagnostics,
     discovery: derived.discovery,

@@ -4,6 +4,10 @@
 // so this module must stay resolvable without workspace package aliases.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  CHANGELOG_ATTRIBUTION_NEXT_STEP,
+  findChangelogAttributionViolations,
+} from "../check-changelog-attributions.mts";
+import {
   dedicatedSectionVersionForTag,
   extractChangelogReleaseSections,
   extractChangelogSection,
@@ -243,6 +247,25 @@ export function validateCandidateChangelogProvenance({
   };
 }
 
+// Apply the shared attribution policy only to the selected publication inputs.
+// The standalone repository checker still owns linting the complete archive.
+function validateCandidateChangelogLints(
+  releaseChangelog: ReturnType<typeof loadReleaseNotesForTag>,
+) {
+  const files = [{ path: releaseChangelog.sourcePath, content: releaseChangelog.section }];
+  if (releaseChangelog.record !== null && releaseChangelog.recordPath !== null) {
+    files.push({ path: releaseChangelog.recordPath, content: releaseChangelog.record });
+  }
+  const violations = findChangelogAttributionViolations(files);
+  if (violations.length > 0) {
+    throw new Error(
+      `Forbidden changelog thanks attribution (pnpm check:changelog-attributions): ${violations
+        .map((violation) => `${violation.path}:${violation.line} uses Thanks @${violation.handle}`)
+        .join("; ")}. ${CHANGELOG_ATTRIBUTION_NEXT_STEP}`,
+    );
+  }
+}
+
 export function validateCandidateChangelog({
   rootDir,
   repository,
@@ -251,7 +274,9 @@ export function validateCandidateChangelog({
 }: StringFields<"rootDir" | "repository" | "tag" | "targetSha">) {
   const version = releaseNotesVersionForTag(tag);
   const releaseChangelog = loadReleaseNotesForTag({ rootDir, ref: targetSha, tag, version });
+  validateCandidateChangelogLints(releaseChangelog);
   return {
+    releaseNotesText: releaseChangelog.section,
     releaseNotesCheck: validateCandidateReleaseNotes({
       changelog: releaseChangelog.section,
       repository,

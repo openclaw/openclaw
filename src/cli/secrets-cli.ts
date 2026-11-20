@@ -1,6 +1,8 @@
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -11,29 +13,6 @@ import { formatDocsHelp } from "./help-format.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { runSecretsCommand } from "./secrets-cli-output.js";
 import { registerSecretStoreCli } from "./secrets-store-cli.js";
-
-type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
-type SecretsAuditOptions = {
-  check?: boolean;
-  json?: boolean;
-  allowExec?: boolean;
-};
-type SecretsConfigureOptions = {
-  apply?: boolean;
-  yes?: boolean;
-  planOut?: string;
-  providersOnly?: boolean;
-  skipProviderSetup?: boolean;
-  agent?: string;
-  allowExec?: boolean;
-  json?: boolean;
-};
-type SecretsApplyOptions = {
-  from: string;
-  dryRun?: boolean;
-  allowExec?: boolean;
-  json?: boolean;
-};
 
 const secretsApplyLoader = createLazyImportLoader(() => import("../secrets/apply.js"));
 
@@ -80,7 +59,8 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
         `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
       );
     }
-    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
+    const bytes = await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES);
+    raw = decodeUtf8Input(bytes, `Secrets plan file ${pathname}`);
   } finally {
     await file.close();
   }
@@ -111,7 +91,7 @@ export function registerSecretsCli(program: Command): void {
       .command("reload")
       .description("Re-resolve secret references and atomically swap runtime snapshot")
       .option("--json", "Output JSON", false),
-  ).action(async (opts: SecretsReloadOptions) => {
+  ).action(async (opts: GatewayRpcOpts & { json?: boolean }) => {
     const result = await runSecretsCommand(
       opts.json,
       () =>
@@ -130,7 +110,7 @@ export function registerSecretsCli(program: Command): void {
         const detail = message ? `: ${message}` : "";
         defaultRuntime.error(
           danger(
-            `Could not reload secrets because the Gateway did not respond${detail}. Run \`${formatCliCommand(
+            terminalText`Could not reload secrets because the Gateway did not respond${detail}. Run \`${formatCliCommand(
               "openclaw gateway status --deep",
             )}\` to inspect the active Gateway.`,
           ),
@@ -161,7 +141,7 @@ export function registerSecretsCli(program: Command): void {
       false,
     )
     .option("--json", "Output JSON", false)
-    .action(async (opts: SecretsAuditOptions) => {
+    .action(async (opts: { check?: boolean; json?: boolean; allowExec?: boolean }) => {
       const { report, exitCode } = await runSecretsCommand(
         opts.json,
         async () => {
@@ -178,7 +158,7 @@ export function registerSecretsCli(program: Command): void {
         (err) => {
           defaultRuntime.error(
             danger(
-              `Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+              terminalText`Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
             ),
           );
         },
@@ -187,11 +167,11 @@ export function registerSecretsCli(program: Command): void {
       );
       if (!opts.json) {
         defaultRuntime.log(
-          `Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
+          terminalText`Secrets audit: ${report.status}. plaintext=${report.summary.plaintextCount}, unresolved=${report.summary.unresolvedRefCount}, shadowed=${report.summary.shadowedRefCount}, storeResidue=${report.summary.storeResidueCount}, legacy=${report.summary.legacyResidueCount}.`,
         );
         for (const finding of report.findings.slice(0, 20)) {
           defaultRuntime.log(
-            `- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
+            terminalText`- [${finding.code}] ${finding.file}:${finding.jsonPath} ${finding.message}`,
           );
         }
         if (report.findings.length > 20) {
@@ -230,102 +210,113 @@ export function registerSecretsCli(program: Command): void {
     )
     .option("--plan-out <path>", "Write generated plan JSON to a file (max 16 MiB)")
     .option("--json", "Output JSON", false)
-    .action(async (opts: SecretsConfigureOptions) => {
-      await runSecretsCommand(
-        opts.json,
-        async () => {
-          const { runSecretsConfigureInteractive } = await import("../secrets/configure.js");
-          const configured = await runSecretsConfigureInteractive({
-            providersOnly: Boolean(opts.providersOnly),
-            skipProviderSetup: Boolean(opts.skipProviderSetup),
-            agentId: typeof opts.agent === "string" ? opts.agent : undefined,
-            allowExecInPreflight: Boolean(opts.allowExec),
-          });
-          if (opts.planOut) {
-            const { writeFileSync } = await import("node:fs");
-            writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
-          }
-
-          let shouldApply = Boolean(opts.apply || opts.yes);
-          if (!opts.json) {
-            defaultRuntime.log(
-              `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
-            );
-            if (configured.preflight.warningCount > 0) {
-              for (const warning of configured.preflight.warnings) {
-                defaultRuntime.log(`- warning: ${warning}`);
-              }
-            }
-            if (
-              !configured.preflight.checks.resolvabilityComplete &&
-              configured.preflight.skippedExecRefs > 0
-            ) {
-              defaultRuntime.log(
-                `Preflight note: skipped ${configured.preflight.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during preflight.`,
-              );
-            }
-            const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
-            const providerDeletes = configured.plan.providerDeletes?.length ?? 0;
-            defaultRuntime.log(
-              `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
-            );
+    .action(
+      async (opts: {
+        apply?: boolean;
+        yes?: boolean;
+        planOut?: string;
+        providersOnly?: boolean;
+        skipProviderSetup?: boolean;
+        agent?: string;
+        allowExec?: boolean;
+        json?: boolean;
+      }) => {
+        await runSecretsCommand(
+          opts.json,
+          async () => {
+            const { runSecretsConfigureInteractive } = await import("../secrets/configure.js");
+            const configured = await runSecretsConfigureInteractive({
+              providersOnly: Boolean(opts.providersOnly),
+              skipProviderSetup: Boolean(opts.skipProviderSetup),
+              agentId: typeof opts.agent === "string" ? opts.agent : undefined,
+              allowExecInPreflight: Boolean(opts.allowExec),
+            });
             if (opts.planOut) {
-              defaultRuntime.log(`Plan written to ${opts.planOut}`);
+              const { writeFileSync } = await import("node:fs");
+              writeFileSync(opts.planOut, serializePlanFile(configured.plan, opts.planOut), "utf8");
             }
-          }
 
-          if (!shouldApply && !opts.json) {
-            const { confirm } = await import("@clack/prompts");
-            const approved = await confirm({
-              message: "Apply this plan now?",
-              initialValue: true,
-            });
-            if (typeof approved === "boolean") {
-              shouldApply = approved;
-            }
-          }
-          if (shouldApply) {
-            // Interactive apply needs the same one-way migration warning as --apply.
-            if (!opts.yes && !opts.json) {
-              const { confirm } = await import("@clack/prompts");
-              const confirmed = await confirm({
-                message:
-                  "This migration is one-way for migrated plaintext values. Continue with apply?",
-                initialValue: true,
-              });
-              if (confirmed !== true) {
-                defaultRuntime.log("Apply cancelled.");
-                return { plan: configured.plan, preflight: configured.preflight };
-              }
-            }
-            const { runSecretsApply } = await secretsApplyLoader.load();
-            const result = await runSecretsApply({
-              plan: configured.plan,
-              write: true,
-              allowExec: Boolean(opts.allowExec),
-            });
+            let shouldApply = Boolean(opts.apply || opts.yes);
             if (!opts.json) {
               defaultRuntime.log(
-                result.changed
-                  ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
-                  : "Secrets apply: no changes.",
+                `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
               );
+              if (configured.preflight.warningCount > 0) {
+                for (const warning of configured.preflight.warnings) {
+                  defaultRuntime.log(terminalText`- warning: ${warning}`);
+                }
+              }
+              if (
+                !configured.preflight.checks.resolvabilityComplete &&
+                configured.preflight.skippedExecRefs > 0
+              ) {
+                defaultRuntime.log(
+                  `Preflight note: skipped ${configured.preflight.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during preflight.`,
+                );
+              }
+              const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
+              const providerDeletes = configured.plan.providerDeletes?.length ?? 0;
+              defaultRuntime.log(
+                `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
+              );
+              if (opts.planOut) {
+                defaultRuntime.log(terminalText`Plan written to ${opts.planOut}`);
+              }
             }
-            return result;
-          }
 
-          return { plan: configured.plan, preflight: configured.preflight };
-        },
-        (err) => {
-          defaultRuntime.error(
-            danger(
-              `Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
-            ),
-          );
-        },
-        1,
-      );
-    });
+            if (!shouldApply && !opts.json) {
+              const { confirm } = await import("@clack/prompts");
+              const approved = await confirm({
+                message: "Apply this plan now?",
+                initialValue: true,
+              });
+              if (typeof approved === "boolean") {
+                shouldApply = approved;
+              }
+            }
+            if (shouldApply) {
+              // Interactive apply needs the same one-way migration warning as --apply.
+              if (!opts.yes && !opts.json) {
+                const { confirm } = await import("@clack/prompts");
+                const confirmed = await confirm({
+                  message:
+                    "This migration is one-way for migrated plaintext values. Continue with apply?",
+                  initialValue: true,
+                });
+                if (confirmed !== true) {
+                  defaultRuntime.log("Apply cancelled.");
+                  return { plan: configured.plan, preflight: configured.preflight };
+                }
+              }
+              const { runSecretsApply } = await secretsApplyLoader.load();
+              const result = await runSecretsApply({
+                plan: configured.plan,
+                write: true,
+                allowExec: Boolean(opts.allowExec),
+              });
+              if (!opts.json) {
+                defaultRuntime.log(
+                  result.changed
+                    ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
+                    : "Secrets apply: no changes.",
+                );
+              }
+              return result;
+            }
+
+            return { plan: configured.plan, preflight: configured.preflight };
+          },
+          (err) => {
+            defaultRuntime.error(
+              danger(
+                terminalText`Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
+              ),
+            );
+          },
+          1,
+        );
+      },
+    );
 
   secrets
     .command("apply")
@@ -334,53 +325,55 @@ export function registerSecretsCli(program: Command): void {
     .option("--dry-run", "Validate/preflight only", false)
     .option("--allow-exec", "Allow exec SecretRef checks (may execute provider commands)", false)
     .option("--json", "Output JSON", false)
-    .action(async (opts: SecretsApplyOptions) => {
-      const result = await runSecretsCommand(
-        opts.json,
-        async () => {
-          const [{ runSecretsApply }, plan] = await Promise.all([
-            secretsApplyLoader.load(),
-            readPlanFile(opts.from),
-          ]);
-          return runSecretsApply({
-            plan,
-            write: !opts.dryRun,
-            allowExec: Boolean(opts.allowExec),
-          });
-        },
-        (err) => {
-          // The missing-plan wrapper already carries a user-facing message. Keep its
-          // ENOENT cause available to diagnostics without rendering the raw filesystem error.
-          const message =
-            err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
-          defaultRuntime.error(
-            danger(
-              `Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
-            ),
+    .action(
+      async (opts: { from: string; dryRun?: boolean; allowExec?: boolean; json?: boolean }) => {
+        const result = await runSecretsCommand(
+          opts.json,
+          async () => {
+            const [{ runSecretsApply }, plan] = await Promise.all([
+              secretsApplyLoader.load(),
+              readPlanFile(opts.from),
+            ]);
+            return runSecretsApply({
+              plan,
+              write: !opts.dryRun,
+              allowExec: Boolean(opts.allowExec),
+            });
+          },
+          (err) => {
+            // The missing-plan wrapper already carries a user-facing message. Keep its
+            // ENOENT cause available to diagnostics without rendering the raw filesystem error.
+            const message =
+              err instanceof SecretsPlanFileNotFoundError ? err.message : formatErrorMessage(err);
+            defaultRuntime.error(
+              danger(
+                terminalText`Secrets apply failed: ${message}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+              ),
+            );
+          },
+          1,
+        );
+        if (opts.json) {
+          return;
+        }
+        if (opts.dryRun) {
+          defaultRuntime.log(
+            result.changed
+              ? `Secrets apply dry run: ${result.changedFiles.length} file(s) would change.`
+              : "Secrets apply dry run: no changes.",
           );
-        },
-        1,
-      );
-      if (opts.json) {
-        return;
-      }
-      if (opts.dryRun) {
+          if (!result.checks.resolvabilityComplete && result.skippedExecRefs > 0) {
+            defaultRuntime.log(
+              `Secrets apply dry-run note: skipped ${result.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
+            );
+          }
+          return;
+        }
         defaultRuntime.log(
           result.changed
-            ? `Secrets apply dry run: ${result.changedFiles.length} file(s) would change.`
-            : "Secrets apply dry run: no changes.",
+            ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
+            : "Secrets apply: no changes.",
         );
-        if (!result.checks.resolvabilityComplete && result.skippedExecRefs > 0) {
-          defaultRuntime.log(
-            `Secrets apply dry-run note: skipped ${result.skippedExecRefs} exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.`,
-          );
-        }
-        return;
-      }
-      defaultRuntime.log(
-        result.changed
-          ? `Secrets applied. Updated ${result.changedFiles.length} file(s).`
-          : "Secrets apply: no changes.",
-      );
-    });
+      },
+    );
 }

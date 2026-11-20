@@ -30,7 +30,7 @@ const button = (root: Page | Locator, name: string) =>
   root.getByRole("button", { name, exact: true });
 const exactText = (root: Page | Locator, name: string) => root.getByText(name, { exact: true });
 const remoteView = (panel: Locator) => panel.locator("[data-test-remote-desktop='true']");
-const unavailable = "The requested desktop is unavailable. Retry when the machine is ready.";
+const unavailable = "This desktop is unavailable. Try again when the device is ready.";
 const observe = (token: string, control = false) => ({
   transport: "rfb",
   wsPath: `/desktop/observe?token=${token}`,

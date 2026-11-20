@@ -74,7 +74,8 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         "gen_ai.request.model": normalizeDiagnosticValue(evt.model),
       };
 
-      const usage = evt.usage;
+      const unavailable = evt.usageReport?.state === "unavailable";
+      const usage: typeof evt.usage = unavailable ? {} : evt.usage;
       for (const [tokenType, field] of [
         ["input", "input"],
         ["output", "output"],
@@ -96,7 +97,7 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
         }
       }
 
-      if (evt.costUsd) {
+      if (!unavailable && evt.costUsd) {
         runtime.costCounter.add(evt.costUsd, attrs);
       }
       if (evt.durationMs) {
@@ -112,15 +113,23 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!runtime.tracesEnabled) {
         return;
       }
-      const genAiInputTokens =
-        usage.promptTokens ?? (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+      const genAiInputTokens = unavailable
+        ? undefined
+        : (usage.promptTokens ??
+          (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0));
       const spanAttrs: Record<string, string | number> = {
         ...attrs,
-        "openclaw.tokens.input": usage.input ?? 0,
-        "openclaw.tokens.output": usage.output ?? 0,
-        "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
-        "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
-        "openclaw.tokens.total": usage.total ?? 0,
+        ...(evt.usageReport ? { "openclaw.usage.state": evt.usageReport.state } : {}),
+        // Missing accounting is not a measured zero, including an aborted auxiliary attempt.
+        ...(!unavailable
+          ? {
+              "openclaw.tokens.input": usage.input ?? 0,
+              "openclaw.tokens.output": usage.output ?? 0,
+              "openclaw.tokens.cache_read": usage.cacheRead ?? 0,
+              "openclaw.tokens.cache_write": usage.cacheWrite ?? 0,
+              "openclaw.tokens.total": usage.total ?? 0,
+            }
+          : {}),
       };
       if (metadata.trusted && metadata.internal && hostPluginId) {
         spanAttrs["openclaw.plugin"] = normalizeDiagnosticValue(hostPluginId);
@@ -217,6 +226,10 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (!traceContext?.spanId || runtime.activeTrustedSpans.has(traceContext.spanId)) {
         return;
       }
+      // Core-logged dispatch events are untrusted and stop at the guard above, so
+      // the ordinary message span is created by the terminal message.processed
+      // event, which stamps session identity there. Never mutate `attrs` here:
+      // the metrics SDK retains the object passed to add().
       runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,

@@ -1,16 +1,25 @@
-// Shared provider usage content: plan windows, balances and provider-billed cost.
-// Surrounding headers (name, plan, icon) stay surface-owned.
-import { createMemo, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+/// <reference lib="es2024.collection" />
+import { createMemo, For, Repeat, Show } from "solid-js";
 import type {
   ProviderUsageSnapshot,
   UsageWindow,
 } from "../../../../src/infra/provider-usage.types.js";
+// Shared provider usage content: plan windows, balances and provider-billed cost.
+// Surrounding headers (name, plan, icon) stay surface-owned.
+import { registerProviderUsageEnglish } from "../../i18n/locales/en-provider-usage.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { formatRelativeTimestamp } from "../../lib/reactive/format.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import {
+  formatDateTimeMs,
+  formatNumber,
+  formatRelativeTimestamp,
+} from "../../lib/reactive/format.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/provider-usage.css";
-import { Icon } from "./icon.tsx";
+
+registerEnglishCatalog(registerProviderUsageEnglish);
 
 export type ProviderUsageDetails = Pick<
   ProviderUsageSnapshot,
@@ -74,15 +83,14 @@ function groupUsageWindows(windows: UsageWindow[]): Map<string, UsageWindow[]> {
 function createProviderAmountFormatter(unit: string): (amount: number) => string {
   const normalizedUnit = unit.trim().toUpperCase();
   if (["USD", "EUR", "GBP", "CNY", "JPY"].includes(normalizedUnit)) {
-    const formatter = new Intl.NumberFormat(undefined, {
-      style: "currency",
-      currency: normalizedUnit,
-      maximumFractionDigits: normalizedUnit === "JPY" ? 0 : 2,
-    });
-    return (amount) => formatter.format(amount);
+    return (amount) =>
+      formatNumber(amount, {
+        style: "currency",
+        currency: normalizedUnit,
+        maximumFractionDigits: normalizedUnit === "JPY" ? 0 : 2,
+      });
   }
-  const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
-  return (amount) => `${formatter.format(amount)} ${unit}`;
+  return (amount) => `${formatNumber(amount, { maximumFractionDigits: 2 })} ${unit}`;
 }
 
 /** A reset as a calendar date plus "in 3 hours", or nothing when it is unknown or past. */
@@ -91,12 +99,12 @@ function resetText(window: UsageWindow): { date?: string; relative?: string } {
     return {};
   }
   return {
-    date: new Intl.DateTimeFormat(undefined, {
+    date: formatDateTimeMs(window.resetAt, {
       month: "short",
       day: "numeric",
       hour: "numeric",
       minute: "2-digit",
-    }).format(new Date(window.resetAt)),
+    }),
     relative: formatRelativeTimestamp(window.resetAt),
   };
 }
@@ -109,6 +117,24 @@ function remainingPercent(window: UsageWindow): number {
 function remainingTone(window: UsageWindow): "warning" | "error" | undefined {
   const remaining = remainingPercent(window);
   return remaining <= 10 ? "error" : remaining <= 25 ? "warning" : undefined;
+}
+
+/** The plan limit worth a glance: the tightest window running out, or a failed check. */
+export function providerUsageAttention(
+  usage: ProviderUsageDetails | undefined,
+): { kind: "warn" | "danger"; label: string } | undefined {
+  const tightest = usage?.windows
+    .filter((window) => remainingTone(window) !== undefined)
+    .toSorted((left, right) => remainingPercent(left) - remainingPercent(right))[0];
+  if (tightest) {
+    return {
+      kind: remainingTone(tightest) === "error" ? "danger" : "warn",
+      label: `${tightest.label} ${t("usage.providerUsage.remaining", {
+        percent: String(remainingPercent(tightest)),
+      })}`,
+    };
+  }
+  return usage?.error ? { kind: "warn", label: t("usage.providerUsage.checkFailed") } : undefined;
 }
 
 const billingLabel = (entry: BillingEntry) => entry.label ?? t(`usage.providerUsage.${entry.type}`);
@@ -128,6 +154,29 @@ export function hasProviderUsageDetails(usage: ProviderUsageDetails | undefined)
       (usage.costHistory?.daily.length ?? 0) > 0 ||
       usage.error ||
       usage.summary),
+  );
+}
+
+/** One usage fact at every width: what it is, its mark and value, then when it matters. */
+function UsageFact(props: {
+  class?: string;
+  label: string;
+  value: string;
+  mark?: JSX.Element;
+  detail?: string;
+  tone?: "warning" | "error";
+}) {
+  return (
+    <div class={["provider-usage__fact", props.class]} data-tone={props.tone}>
+      <span class="provider-usage__window-label">{props.label}</span>
+      <span class="provider-usage__reading">
+        {props.mark}
+        <strong class="provider-usage__window-value">{props.value}</strong>
+      </span>
+      <Show when={props.detail}>
+        <small class="provider-usage__reset">{props.detail}</small>
+      </Show>
+    </div>
   );
 }
 
@@ -160,6 +209,33 @@ function historyAmount(history: CostHistory, days: number): number {
   }, 0);
 }
 
+/** The period total with its trend; the Usage page has the full breakdown. */
+function CostFact(props: { history: CostHistory }) {
+  const format = createMemo(() => createProviderAmountFormatter(props.history.unit));
+  const periods = () => [
+    ...(props.history.periodDays > 1
+      ? [`${t("usage.providerUsage.today")} ${format()(historyAmount(props.history, 1))}`]
+      : []),
+    ...(props.history.periodDays > 7
+      ? [`${t("usage.providerUsage.last7Days")} ${format()(historyAmount(props.history, 7))}`]
+      : []),
+  ];
+  return (
+    <UsageFact
+      label={t("usage.providerUsage.lastDays", { count: String(props.history.periodDays) })}
+      value={format()(props.history.daily.reduce((sum, day) => sum + day.amount, 0))}
+      detail={periods().join(" · ")}
+      mark={
+        <StepSparkline
+          values={props.history.daily.map((day) => day.amount)}
+          color="var(--oc-accent-secondary)"
+          label={t("usage.providerUsage.dailyCost")}
+        />
+      }
+    />
+  );
+}
+
 function BilledCost(props: { history: CostHistory }) {
   const format = createMemo(() => createProviderAmountFormatter(props.history.unit));
   const totals = createMemo(() =>
@@ -186,15 +262,15 @@ function BilledCost(props: { history: CostHistory }) {
   );
   return (
     <>
-      <For each={windows()}>
-        {([label, amount]) => (
+      <Repeat count={3}>
+        {(index) => (
           <div class="oc-menu-panel-usage-row provider-usage__row">
-            <span class="oc-menu-panel-usage-label">{label}</span>
+            <span class="oc-menu-panel-usage-label">{windows()[index]![0]}</span>
             <span />
-            <span class="oc-menu-panel-usage-value">{format()(amount)}</span>
+            <span class="oc-menu-panel-usage-value">{format()(windows()[index]![1])}</span>
           </div>
         )}
-      </For>
+      </Repeat>
       <Show when={props.history.models.length > 0}>
         <div class="oc-menu-panel-usage-row provider-usage__row">
           <span class="oc-menu-panel-usage-label">{t("usage.providerUsage.topModels")}</span>
@@ -222,14 +298,14 @@ function BilledCost(props: { history: CostHistory }) {
       <div class="provider-usage__trend">
         <StepSparkline
           values={props.history.daily.map((day) => day.amount)}
-          color="var(--oc-accent)"
+          color="var(--oc-accent-secondary)"
           label={t("usage.providerUsage.dailyCost")}
         />
         <small>
           {[
             totals().requests > 0
               ? t("usage.providerUsage.requests", {
-                  count: new Intl.NumberFormat().format(totals().requests),
+                  count: formatNumber(totals().requests),
                 })
               : null,
             t("usage.providerUsage.inputTokens", {
@@ -250,117 +326,77 @@ function BilledCost(props: { history: CostHistory }) {
   );
 }
 
-/** Every plan window with its reset, then balances, billed cost and notes. */
-export function ProviderUsagePanel(props: { usage: ProviderUsageDetails }) {
+/**
+ * Every plan window with its reset, then balances, billed cost and notes.
+ * `compact` keeps billed cost to its total and trend where the Usage page is one click away.
+ */
+export function ProviderUsagePanel(props: { usage: ProviderUsageDetails; compact?: boolean }) {
   const groups = createMemo(() => [...groupUsageWindows(props.usage.windows)]);
-  // A used-up window blocks requests until it resets; say which one and when.
-  const exhausted = createMemo(() =>
-    props.usage.windows.find((window) => remainingPercent(window) === 0),
-  );
-  const hasRows = () =>
-    (props.usage.billing?.length ?? 0) > 0 || (props.usage.costHistory?.daily.length ?? 0) > 0;
+  const history = () =>
+    props.usage.costHistory?.daily.length ? props.usage.costHistory : undefined;
+  const hasRows = () => (props.usage.billing?.length ?? 0) > 0 || Boolean(history());
   return (
     <div class="provider-usage">
       <Show when={props.usage.error}>
         {(error) => <p class="provider-usage__error">{formatUiExternalText(error())}</p>}
       </Show>
-      <Show when={exhausted()}>
-        {(window) => (
-          <p class="provider-usage__alert" role="status">
-            <Icon name="alertTriangle" />
-            {resetText(window()).date
-              ? t("usage.providerUsage.exhaustedUntil", {
-                  label: window().label,
-                  date: resetText(window()).date!,
-                })
-              : t("usage.providerUsage.exhausted", { label: window().label })}
-          </p>
-        )}
-      </Show>
-      <For each={groups()}>
-        {([group, windows]) => (
-          <div class="provider-usage__group" role="group" aria-label={group || undefined}>
-            <Show when={group}>
-              <div class="provider-usage__note">{group}</div>
+      <For each={groups()} keyed={([group]) => group}>
+        {(group) => (
+          <div class="provider-usage__group" role="group" aria-label={group()[0] || undefined}>
+            <Show when={group()[0]}>
+              <div class="provider-usage__note">{group()[0]}</div>
             </Show>
-            <div class="provider-usage__windows">
-              <For each={windows}>
-                {(window) => (
-                  <div class="provider-usage__window" data-tone={remainingTone(window)}>
-                    <span class="provider-usage__window-label">{window.label}</span>
-                    <strong class="provider-usage__window-value">
-                      {t("usage.providerUsage.remaining", {
-                        percent: String(remainingPercent(window)),
-                      })}
-                    </strong>
-                    <UsageWindowMeter window={window} />
-                    <Show when={resetText(window).date}>
-                      <small class="provider-usage__reset">
-                        {t("usage.providerUsage.resets", {
-                          date: `${resetText(window).date} · ${resetText(window).relative}`,
-                        })}
-                      </small>
-                    </Show>
-                  </div>
-                )}
-              </For>
-            </div>
+            {/* Provider snapshots have no row IDs and may repeat labels. These slots own no state. */}
+            <For each={group()[1]} keyed={false}>
+              {(window) => (
+                <UsageFact
+                  class="provider-usage__window"
+                  label={window().label}
+                  value={t("usage.providerUsage.remaining", {
+                    percent: String(remainingPercent(window())),
+                  })}
+                  tone={remainingTone(window())}
+                  mark={<UsageWindowMeter window={window()} />}
+                  detail={
+                    resetText(window()).date
+                      ? t("usage.providerUsage.resets", {
+                          date: `${resetText(window()).date} · ${resetText(window()).relative}`,
+                        })
+                      : undefined
+                  }
+                />
+              )}
+            </For>
           </div>
         )}
       </For>
-      <Show when={hasRows()}>
-        <div class="oc-menu-panel-usage provider-usage__rows">
-          <For each={props.usage.billing ?? []}>
-            {(entry) => (
-              <div class="oc-menu-panel-usage-row provider-usage__row">
-                <span class="oc-menu-panel-usage-label">{billingLabel(entry)}</span>
-                <span />
-                <span class="oc-menu-panel-usage-value">{billingText(entry)}</span>
-              </div>
-            )}
-          </For>
-          <Show when={props.usage.costHistory?.daily.length ? props.usage.costHistory : undefined}>
-            {(history) => <BilledCost history={history()} />}
+      <Show
+        when={props.compact}
+        fallback={
+          <Show when={hasRows()}>
+            <div class="oc-menu-panel-usage provider-usage__rows">
+              <For each={props.usage.billing ?? []} keyed={false}>
+                {(entry) => (
+                  <div class="oc-menu-panel-usage-row provider-usage__row">
+                    <span class="oc-menu-panel-usage-label">{billingLabel(entry())}</span>
+                    <span />
+                    <span class="oc-menu-panel-usage-value">{billingText(entry())}</span>
+                  </div>
+                )}
+              </For>
+              <Show when={history()}>{(cost) => <BilledCost history={cost()} />}</Show>
+            </div>
           </Show>
-        </div>
+        }
+      >
+        <For each={props.usage.billing ?? []} keyed={false}>
+          {(entry) => <UsageFact label={billingLabel(entry())} value={billingText(entry())} />}
+        </For>
+        <Show when={history()}>{(cost) => <CostFact history={cost()} />}</Show>
       </Show>
       <Show when={props.usage.summary}>
         {(summary) => <p class="provider-usage__note">{summary()}</p>}
       </Show>
     </div>
-  );
-}
-
-/** At most two windows (or the first balance) beside a provider's name; the panel has the rest. */
-export function ProviderUsageChips(props: { usage: ProviderUsageDetails | undefined }) {
-  const windows = () => props.usage?.windows.slice(0, 2) ?? [];
-  const balance = () => (windows().length === 0 ? props.usage?.billing?.[0] : undefined);
-  return (
-    <span class="provider-usage__chips">
-      <For each={windows()}>
-        {(window) => (
-          <span class="provider-usage__chip" data-tone={remainingTone(window)}>
-            <span class="provider-usage__chip-label">{window.label}</span>
-            <UsageWindowMeter window={window} />
-            <span class="provider-usage__chip-value">
-              {t("usage.providerUsage.remaining", { percent: String(remainingPercent(window)) })}
-            </span>
-          </span>
-        )}
-      </For>
-      <Show when={balance()}>
-        {(entry) => (
-          <span class="provider-usage__chip">
-            <span class="provider-usage__chip-label">{billingLabel(entry())}</span>
-            <span class="provider-usage__chip-value">{billingText(entry())}</span>
-          </span>
-        )}
-      </Show>
-      <Show when={props.usage?.error}>
-        <span class="provider-usage__chip provider-usage__chip--failed">
-          {t("usage.providerUsage.checkFailed")}
-        </span>
-      </Show>
-    </span>
   );
 }

@@ -301,6 +301,7 @@ function expectDelivered(account: Account, result: ChannelMessageSendResult, med
     },
   ]);
   expect(account.onPlatformSendDispatch).toHaveBeenCalledTimes(1);
+  expect(account.uploadCanceled).toHaveBeenCalledTimes(1);
   expect(
     account.requests.every(
       ({ phase, dispatchCount }) => dispatchCount === (phase === "poke" ? 1 : 0),
@@ -353,7 +354,6 @@ describe("Tlon preferred media send authority", () => {
 
     expectDelivered(account, result, account.sourceUrl);
     expect(account.requests.filter(({ phase }) => phase === "upload")).toHaveLength(1);
-    expect(account.uploadCanceled).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an earlier media send on its own account after another account completes and closes", async () => {
@@ -371,7 +371,5 @@ describe("Tlon preferred media send authority", () => {
 
     expectDelivered(first, await firstResult, getUploadedUrl(first));
     expect(second.requests).toEqual(secondRequests);
-    expect(first.uploadCanceled).toHaveBeenCalledTimes(1);
-    expect(second.uploadCanceled).toHaveBeenCalledTimes(1);
   });
 });

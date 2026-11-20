@@ -17,6 +17,7 @@ import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runti
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { getChildLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -29,7 +30,6 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
-import { resolveDiscordSystemLocation, resolveTimestampMs } from "./format.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -75,11 +75,6 @@ import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
 } from "./timeouts.js";
-
-export type {
-  DiscordMessagePreflightContext,
-  DiscordMessagePreflightParams,
-} from "./message-handler.preflight.types.js";
 
 const DISCORD_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const DISCORD_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
@@ -700,12 +695,15 @@ export async function preflightDiscordMessage(
     return null;
   }
 
-  const systemLocation = resolveDiscordSystemLocation({
-    isDirectMessage,
-    isGroupDm,
-    guild: params.data.guild ?? undefined,
-    channelName: channelName ?? messageChannelId,
-  });
+  const systemGuild = params.data.guild;
+  const systemChannelName = channelName ?? messageChannelId;
+  const systemLocation = isDirectMessage
+    ? "DM"
+    : isGroupDm
+      ? `Group DM #${systemChannelName}`
+      : systemGuild?.name
+        ? `${systemGuild.name} #${systemChannelName}`
+        : `#${systemChannelName}`;
   const { resolveDiscordSystemEvent } = await loadSystemEventsRuntime();
   if (params.isPolicyCurrent?.() === false) {
     return null;
@@ -749,7 +747,7 @@ export async function preflightDiscordMessage(
       config: params.discordConfig?.botLoopProtection,
       defaultsConfig: params.cfg.channels?.defaults?.botLoopProtection,
       defaultEnabled: true,
-      nowMs: resolveTimestampMs(message.timestamp),
+      nowMs: parseDateStringTimestampMs(message.timestamp),
     });
     if (botLoopResult.suppressed) {
       logVerbose(

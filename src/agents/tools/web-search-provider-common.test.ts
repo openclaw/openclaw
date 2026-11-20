@@ -1,9 +1,13 @@
-import { afterEach, expect, it, vi } from "vitest";
+import type { IncomingHttpHeaders } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UnresolvedSecretInputError } from "../../config/types.secrets.js";
-import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
+import { PROXY_ENV_KEYS } from "../../infra/net/proxy-env.js";
+import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import { redactLogRecordForTransport } from "../../logging/redact.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { withEnv } from "../../test-utils/env.js";
 import {
+  postPinnedTrustedHostWebToolsJson,
   postTrustedWebToolsJson as postJson,
   readWebSearchApiKey as readKey,
   readWebSearchQueryAndCount as readQuery,
@@ -52,10 +56,8 @@ async function requestSearch(
   return { result, authorization };
 }
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
+afterEach(vi.unstubAllGlobals);
+afterEach(vi.restoreAllMocks);
 
 const readCredential = (value: unknown) => readKey(value, "test.apiKey", ["SEARCH_A", "SEARCH_B"]);
 it.each([
@@ -99,7 +101,6 @@ it.each([
   expect(error).toMatchObject({ message, status: 401, statusCode: 401 });
   const diagnostic = redactLogRecordForTransport({ error: String(error) });
   expect(diagnostic).toEqual({ error: `ProviderHttpError: ${message}` });
-  expect(String(diagnostic.error)).not.toContain(apiKey);
 });
 
 it("preserves caller cancellation after error headers arrive", async () => {
@@ -114,7 +115,6 @@ it("preserves caller cancellation after error headers arrive", async () => {
 });
 
 it("keeps successful responses and existing two-argument SDK calls usable", async () => {
-  expect(redactToolPayloadText("Bearer tokens")).toBe("Bearer tokens");
   const { result } = await requestSearch([200, '{"answer":"Bearer tokens"}']);
   expect(result).toEqual({ answer: "Bearer tokens" });
   const failure = throwApiError(new Response("quota exceeded", { status: 429 }), "Search");
@@ -135,14 +135,88 @@ it("honors the reader TTL while preserving the shipped one-argument reader", asy
   expect(cache.readCachedSearchPayload(key)).toBeUndefined();
 });
 
-it("keeps cache entries module-local instead of exposing them on a global symbol", async () => {
-  vi.resetModules();
-  const symbol = Symbol.for("openclaw.web-search.cache");
-  Reflect.deleteProperty(globalThis, symbol);
-  const module = await import("./web-search-provider-common.js");
-  const cacheKey = "query:test";
-  module.writeCachedSearchPayload(cacheKey, { ok: true }, 60_000);
+describe("pinned trusted-host web provider endpoints", () => {
+  beforeEach(() => {
+    // The loopback server must be reached directly, not through an env proxy.
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, "");
+    }
+  });
 
-  expect(module.readCachedSearchPayload(cacheKey)).toEqual({ ok: true, cached: true });
-  expect(Reflect.get(globalThis, symbol)).toBeUndefined();
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("honors an operator-configured loopback endpoint that the trusted helper refuses", async () => {
+    // The operator typed the loopback address; the pinned helper delivers the same
+    // request shape the trusted helper sends to the hosted API.
+    const requests: Array<{ method?: string; headers: IncomingHttpHeaders; body: string }> = [];
+    await withServer(
+      (request, response) => {
+        let body = "";
+        request.on("data", (chunk: Buffer) => {
+          body += chunk.toString();
+        });
+        request.on("end", () => {
+          requests.push({ method: request.method, headers: request.headers, body });
+          response.setHeader("content-type", "application/json");
+          response.end('{"results":[]}');
+        });
+      },
+      async (baseUrl) => {
+        const params = {
+          url: `${baseUrl}/search`,
+          timeoutSeconds: 5,
+          apiKey: "s7Key",
+          body: { query: "test" },
+          errorLabel: "Search",
+          extraHeaders: { "X-Client-Source": "openclaw" },
+        };
+        const parse = (response: Response) => response.json();
+
+        await expect(postJson(params, parse)).rejects.toBeInstanceOf(SsrFBlockedError);
+        expect(requests).toHaveLength(0);
+
+        await expect(postPinnedTrustedHostWebToolsJson(params, parse)).resolves.toEqual({
+          results: [],
+        });
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.method).toBe("POST");
+        expect(requests[0]?.headers).toMatchObject({
+          accept: "application/json",
+          authorization: "Bearer s7Key",
+          "content-type": "application/json",
+          "x-client-source": "openclaw",
+        });
+        expect(requests[0]?.body).toBe('{"query":"test"}');
+      },
+    );
+  });
+
+  it("shares the redacted, bounded non-2xx error path", async () => {
+    const apiKey = "synthetic-web-key-long";
+    await withServer(
+      (_request, response) => {
+        response.writeHead(401);
+        response.end(`rejected ${apiKey}`);
+      },
+      async (baseUrl) => {
+        const error = await postPinnedTrustedHostWebToolsJson(
+          {
+            url: `${baseUrl}/search`,
+            timeoutSeconds: 5,
+            apiKey,
+            body: { query: "test" },
+            errorLabel: "Search",
+            maxErrorBytes: 15,
+          },
+          (response) => response.json(),
+        ).catch((cause: unknown) => cause);
+        expect(error).toMatchObject({
+          message: "Search API error (401): rejected ***",
+          status: 401,
+        });
+      },
+    );
+  });
 });

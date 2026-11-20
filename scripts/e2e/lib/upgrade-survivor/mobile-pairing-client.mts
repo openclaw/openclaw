@@ -99,7 +99,7 @@ export const MOBILE_PAIRING_AUDIT_CLIENT: MobileClientMetadata = Object.freeze({
 
 // Shipped iOS 2026.8.10 builds derive this default-on iPhone surface before
 // every node connect. Keep it fixed so historical reconnects cannot drift.
-export const MOBILE_PAIRING_NODE_CAPS = Object.freeze([
+const MOBILE_PAIRING_NODE_CAPS = Object.freeze([
   "canvas",
   "screen",
   "camera",
@@ -113,7 +113,7 @@ export const MOBILE_PAIRING_NODE_CAPS = Object.freeze([
   "motion",
 ]);
 
-export const MOBILE_PAIRING_NODE_COMMANDS = Object.freeze([
+const MOBILE_PAIRING_NODE_COMMANDS = Object.freeze([
   "canvas.present",
   "canvas.hide",
   "canvas.navigate",
@@ -147,7 +147,7 @@ export const MOBILE_PAIRING_NODE_COMMANDS = Object.freeze([
   "motion.pedometer",
 ]);
 
-export const MOBILE_PAIRING_NODE_PERMISSIONS = Object.freeze({
+const MOBILE_PAIRING_NODE_PERMISSIONS = Object.freeze({
   camera: false,
   microphone: false,
   speechRecognition: false,

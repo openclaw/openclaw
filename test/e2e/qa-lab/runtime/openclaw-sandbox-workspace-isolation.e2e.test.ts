@@ -242,7 +242,6 @@ test("Docker confines subagent attachments to the authorized session", async () 
 
     const exposedPath = `/openclaw/attachments/${attachmentId}/proof.txt`;
     await expectOk(attached, 'test "$(cat "$1")" = authorized', [exposedPath]);
-    await expectOk(attached, 'test "$(cat "$1")" = authorized', [exposedPath]);
     const mutation = await run(attached, 'printf denied > "$1"', [exposedPath], true);
     expect(mutation.code).not.toBe(0);
     const attachmentRoot = resolveSubagentSessionAttachmentRootDir({

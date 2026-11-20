@@ -2,12 +2,12 @@ import {
   type AssistantMessage,
   type Context,
   createAssistantMessageEventStream,
-  streamSimple,
   type Model,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
+import { captureProviderRequestPayload } from "../test-support/provider-request-payload.test-support.js";
 import plugin from "./index.js";
 
 const GEMINI_MODEL = "gemini-3-6-flash";
@@ -37,6 +37,7 @@ function wireAssistant(...calls: [id: string, name: string, args?: string][]) {
       id,
       type: "function",
       function: { name, ...(args === undefined ? {} : { arguments: args }) },
+      provider_specific_fields: { thought_signature: "SIG-TRANSPORT-BY-ID" },
     })),
   };
 }
@@ -118,20 +119,7 @@ it.each([
   const normalized =
     provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
     model;
-  let payload: unknown;
-  const result = await streamSimple(
-    normalized,
-    { messages: [] },
-    {
-      apiKey: "synthetic-unused-key",
-      sessionId: "synthetic-session",
-      cacheRetention: "long",
-      onPayload(value) {
-        payload = value;
-        throw new Error("captured before request");
-      },
-    },
-  ).result();
+  const { result, payload } = await captureProviderRequestPayload(normalized);
   expect(result.errorMessage).toBe("captured before request");
   expect(payload).toMatchObject({ prompt_cache_key: route.expected });
   expect(payload).not.toHaveProperty("prompt_cache_retention");
@@ -217,7 +205,7 @@ it.each(["SIG-READ", undefined])("pairs reused Gemini tool-call ids: %s", async 
     expect(messages[0]).toMatchObject({
       tool_calls: [{ id: "call_0", thought_signature: signature }],
     });
-    expect(messages[0]).not.toHaveProperty("tool_calls.0.extra_content");
+    expect(JSON.stringify(messages)).not.toContain("provider_specific_fields");
   } else {
     expectTextHistory(messages, "read", "read result");
   }

@@ -14,7 +14,7 @@ import {
   GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
   GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -63,6 +63,7 @@ import {
   createGatewayAuthRateLimiter,
 } from "../auth-rate-limit.js";
 import * as gatewayAuth from "../auth.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-enrollment.js";
@@ -277,11 +278,8 @@ async function attachStartupNodeConnect(params: {
   socket.emit(
     "message",
     Buffer.from(
-      JSON.stringify({
-        type: "req",
-        id: "startup-node-connect",
-        method: "connect",
-        params: {
+      JSON.stringify(
+        gatewayRequest("startup-node-connect", "connect", {
           minProtocol: PROTOCOL_VERSION,
           maxProtocol: PROTOCOL_VERSION,
           client: {
@@ -305,8 +303,8 @@ async function attachStartupNodeConnect(params: {
             signedAt,
             nonce,
           },
-        },
-      }),
+        }),
+      ),
     ),
   );
   return {
@@ -391,14 +389,28 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     await vi.dynamicImportSettled();
   });
 
-  it("admits only one of two connect frames that race during lazy handler loading", async () => {
+  it("admits only one racing authenticated connect while sidecars are pending", async ({
+    signal,
+  }) => {
     await withStartupTestState({}, async () => {
       const sent: unknown[] = [];
+      const response = createDeferred<StartupConnectResponse>();
       const clients = new GatewayClientRegistry();
       const socket = createGatewayWsTestSocket({
+        closeEmits: true,
         onSend: (data) => {
-          sent.push(JSON.parse(data));
+          const frame = JSON.parse(data) as StartupConnectResponse;
+          sent.push(frame);
+          if (frame.type === "res" && frame.id === "connect-1") {
+            response.resolve(frame);
+          }
         },
+      });
+
+      socket.once("close", (code, reason: Buffer) => {
+        response.reject(
+          new Error(`Connect closed: ${code} ${reason.toString()}; frames=${JSON.stringify(sent)}`),
+        );
       });
 
       attachTrackedGatewayWs({
@@ -407,15 +419,14 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         socket,
         options: {
           getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
+          isStartupPending: () => true,
+          isConnectPending: () => false,
           buildRequestContext: () => createGatewayWsTestRequestContext() as never,
         },
       });
       const connectFrame = (id: string) =>
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "connect",
-          params: {
+        JSON.stringify(
+          gatewayRequest(id, "connect", {
             minProtocol: PROTOCOL_VERSION,
             maxProtocol: PROTOCOL_VERSION,
             client: {
@@ -428,25 +439,27 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
             scopes: [],
             caps: [],
             auth: { token: "test-token" },
-          },
-        });
+          }),
+        );
 
       socket.emit("message", Buffer.from(connectFrame("connect-1")));
       socket.emit("message", Buffer.from(connectFrame("connect-2")));
-      await vi.dynamicImportSettled();
 
-      await vi.waitFor(() => {
-        expect(clients.size).toBe(1);
-        expect(
-          sent.filter(
-            (frame) =>
-              typeof frame === "object" &&
-              frame !== null &&
-              (frame as { type?: unknown; ok?: unknown }).type === "res" &&
-              (frame as { ok?: unknown }).ok === true,
-          ),
-        ).toHaveLength(1);
+      expect(await withinTest(response.promise, signal)).toMatchObject({
+        type: "res",
+        id: "connect-1",
+        ok: true,
       });
+      expect(clients.size).toBe(1);
+      expect(
+        sent.filter(
+          (frame) =>
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { type?: unknown; ok?: unknown }).type === "res" &&
+            (frame as { ok?: unknown }).ok === true,
+        ),
+      ).toHaveLength(1);
 
       socket.emit("close", 1000, Buffer.from("done"));
       expect(clients.size).toBe(0);
@@ -488,6 +501,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
         options: {
           getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
           isStartupPending: () => true,
+          isConnectPending: () => true,
           logWsControl: logWsControl as never,
           buildRequestContext: () => createGatewayWsTestRequestContext() as never,
         },
@@ -495,11 +509,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       socket.emit(
         "message",
         Buffer.from(
-          JSON.stringify({
-            type: "req",
-            id: "connect-1",
-            method: "connect",
-            params: {
+          JSON.stringify(
+            gatewayRequest("connect-1", "connect", {
               minProtocol: PROTOCOL_VERSION,
               maxProtocol: PROTOCOL_VERSION,
               client: {
@@ -511,8 +522,8 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
               role: "operator",
               scopes: ["operator.read"],
               caps: [],
-            },
-          }),
+            }),
+          ),
         ),
       );
 

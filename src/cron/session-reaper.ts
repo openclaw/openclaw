@@ -12,7 +12,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readExpiredCronRunEntriesInWorker } from "../config/sessions/session-entry-read-maintenance.js";
 import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance-runtime.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -266,11 +265,6 @@ export async function sweepCronRunSessions(params: {
       });
     }
     if (removals.length > 0) {
-      // Archive-age cleanup follows the session maintenance retention knob:
-      // the reaper's cron retention decides which rows die, but archived
-      // transcript files are conversation history owned by the archive
-      // retention policy (null = keep until the disk budget evicts).
-      const archiveRetentionMs = resolveMaintenanceConfig().resetArchiveRetentionMs;
       const result = await applySessionEntryLifecycleMutation({
         agentId: params.agentId,
         env: context.environment,
@@ -291,14 +285,6 @@ export async function sweepCronRunSessions(params: {
             }
           }
         },
-        ...(archiveRetentionMs == null
-          ? {}
-          : {
-              cleanupArchivedTranscripts: {
-                rules: [{ reason: "deleted", olderThanMs: archiveRetentionMs }],
-                nowMs: now,
-              },
-            }),
         captureArtifactCleanupError: true,
       });
       pruned = result.removedEntries;

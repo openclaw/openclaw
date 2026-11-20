@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { captureEnv } from "../test-utils/env.js";
+import { listGitTrackedFiles } from "../test-utils/repo-files.js";
 
 vi.mock("./bundled-dir.js", () => ({
   isPluginInPackageBundledRoots: vi.fn(() => false),
@@ -12,7 +14,8 @@ vi.mock("./bundled-dir.js", () => ({
 }));
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { listBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
+import { listChannelCatalogEntries } from "./channel-catalog-registry.js";
+import { pluginTestRepoRoot } from "./generated-plugin-test-helpers.js";
 import type { PluginManifest, PluginPackageChannel } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
@@ -52,7 +55,8 @@ function fixture(channel: PluginPackageChannel) {
 }
 
 const readMatrix = () =>
-  listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
+  listChannelCatalogEntries({ origin: "bundled" }).find((entry) => entry.channel.id === "matrix")
+    ?.channel;
 
 describe("bundled package channel metadata", () => {
   it("reads doctor capabilities from the resolved bundled plugin dir", () => {
@@ -84,11 +88,7 @@ describe("bundled package channel metadata", () => {
   });
 });
 
-it("keeps bundled channel schemas single-sourced from the generated metadata", async () => {
-  const { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } =
-    await import("../config/bundled-channel-config-metadata.generated.js");
-  const { listGitTrackedFiles } = await import("../test-utils/repo-files.js");
-  const { pluginTestRepoRoot } = await import("./generated-plugin-test-helpers.js");
+it("keeps bundled channel schemas single-sourced from the generated metadata", () => {
   const tracked =
     listGitTrackedFiles({
       repoRoot: pluginTestRepoRoot,
@@ -98,7 +98,6 @@ it("keeps bundled channel schemas single-sourced from the generated metadata", a
   const generatedChannelIds = new Set(
     GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => entry.channelId),
   );
-  const emptyStub = { type: "object", additionalProperties: false, properties: {} };
   for (const file of tracked) {
     const dirName = file.split("/")[1] ?? file;
     const manifest = JSON.parse(
@@ -109,19 +108,17 @@ it("keeps bundled channel schemas single-sourced from the generated metadata", a
       continue;
     }
     for (const channelId of channelIds) {
-      // A manifest copy silently overrides the zod-derived generated schema in
-      // config validation and rots (stale copies rejected valid keys; see #131292).
+      // Manifest copies override generated schemas and reject valid keys (#131292).
       expect(
         manifest.channelConfigs?.[channelId]?.schema,
-        `extensions/${dirName}: delete channelConfigs.${channelId}.schema — the zod-derived generated bundled channel metadata is the single schema source`,
+        `${file}: ${channelId} schema must use generated metadata`,
       ).toBeUndefined();
     }
     // WhatsApp has a distinct plugin-entry config surface.
     if ((manifest.id ?? dirName) !== "whatsapp") {
-      expect(
-        manifest.configSchema,
-        `extensions/${dirName}: channel plugins carry no plugin-entry config; keep configSchema as the empty stub or add a named exception here with its reason`,
-      ).toEqual(emptyStub);
+      expect(manifest.configSchema, `${file}: channel plugin-entry config must stay empty`).toEqual(
+        { type: "object", additionalProperties: false, properties: {} },
+      );
     }
   }
 });

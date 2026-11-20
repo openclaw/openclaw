@@ -2,8 +2,11 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../../src/test-utils/prepare-compiled-subprocesses.js";
+import * as nodeProcess from "../../src/test-utils/node-process.js";
 import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+
+const testNodeExecPath = nodeProcess.resolveTestNodeExecPath();
 
 const fixtures = [
   { owner: "setup", name: "forwards output and SIGTERM through the runner process group" },
@@ -16,6 +19,7 @@ afterEach(() => {
     "vitest",
     "node:fs",
     "node:child_process",
+    "../../src/test-utils/node-process.js",
     "../../scripts/profile-extension-memory.mts",
     "../../scripts/lib/vitest-build-prerequisites.mts",
     "../helpers/fixture-receipts.js",
@@ -71,6 +75,11 @@ async function runFixture(owner: (typeof fixtures)[number]["owner"]) {
     expect,
     vi,
   }));
+  // Keep Bun's real Node prerequisite outside the synthetic filesystem and process faults.
+  vi.doMock("../../src/test-utils/node-process.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof nodeProcess>()),
+    resolveTestNodeExecPath: () => testNodeExecPath,
+  }));
   await (owner === "setup"
     ? import("./vitest-e2e-global-setup.test.js")
     : import("./profile-extension-memory.test.js"));
@@ -99,8 +108,9 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
   it.each(fixtures.flatMap(({ owner }) => ["EPERM", "ESRCH"].map((code) => ({ owner, code }))))(
     "preserves failures and finishes safe $owner cleanup after $code",
     async ({ owner, code }) => {
-      const childProcess =
-        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      const childProcess = await vi.importActual<
+        typeof import("node:child_process") & { default: typeof import("node:child_process") }
+      >("node:child_process");
       const primary = new Error("fixture assertion failed");
       const denied = Object.assign(new Error("injected kill failure"), { code });
       const scratchError = new Error("scratch removal failed");
@@ -136,8 +146,7 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
           }
         },
       });
-      vi.doMock("node:child_process", () => ({
-        ...childProcess,
+      const overrides = {
         spawn: () => {
           if (owner === "setup") {
             child.stdin.once("data", () => {
@@ -154,6 +163,11 @@ describe.skipIf(process.platform === "win32")("process fixture cleanup faults", 
           });
           return child;
         },
+      };
+      vi.doMock("node:child_process", () => ({
+        ...childProcess,
+        ...overrides,
+        default: { ...childProcess.default, ...overrides },
       }));
       vi.doMock("../../scripts/profile-extension-memory.mts", () => ({
         runCase: async () => {

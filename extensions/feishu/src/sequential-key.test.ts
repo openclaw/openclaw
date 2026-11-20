@@ -1,3 +1,4 @@
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { describe, expect, it } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
 import { createFeishuTestEvent } from "./bot.test-support.js";
@@ -18,13 +19,19 @@ function key(
   event: FeishuMessageEvent,
   options: { botOpenId?: string; preparedContent?: string } = {},
 ) {
-  return getFeishuSequentialKey({ accountId: "default", event, ...options });
+  return getFeishuSequentialKey({
+    accountId: "default",
+    event,
+    isControlCommandMessage,
+    ...options,
+  });
 }
 
 describe("getFeishuSequentialKey", () => {
   it.each([
     [createTextEvent("hello"), "feishu:default:oc_dm_chat"],
-    [createTextEvent("/status"), "feishu:default:oc_dm_chat"],
+    [createTextEvent("/status"), "feishu:default:oc_dm_chat:commands"],
+    [createTextEvent("/new"), "feishu:default:oc_dm_chat:commands"],
     [createTextEvent("/stop"), "feishu:default:oc_dm_chat:control"],
   ])("resolves sequential key %#", (event, expected) => {
     expect(key(event)).toBe(expected);

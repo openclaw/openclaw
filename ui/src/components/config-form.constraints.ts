@@ -6,16 +6,19 @@ import {
   asFiniteNumber as finiteNumber,
   asSafeIntegerInRange,
 } from "@openclaw/normalization-core/number-coercion";
-import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-form.array-items.ts";
+import {
+  arrayItemSchema,
+  collectAllOfSchemas,
+  objectAdditionalPropertiesSchema,
+  objectPropertyKeys,
+  objectPropertySchema,
+  ownPropertySchema,
+  requiredPropertyKeys,
+} from "./config-form.array-items.ts";
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
 export { configValuesEqual, isSupportedConfigValueValid };
-
-function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
-  const properties = schema.properties;
-  return properties && Object.hasOwn(properties, key) ? properties[key] : undefined;
-}
 
 function normalizePrecision(value: number, step: number | undefined): number {
   if (!step) {
@@ -170,39 +173,6 @@ export function arrayInputConstraints(schema: JsonSchema) {
   return { minItems, maxItems, uniqueItems };
 }
 
-export function requiredPropertyKeys(schema: JsonSchema): Set<string> {
-  return new Set(collectAllOfSchemas(schema).flatMap((entry) => entry.required ?? []));
-}
-
-export function objectPropertyKeys(schema: JsonSchema): string[] {
-  const schemas = collectAllOfSchemas(schema);
-  const keys = new Set(schemas.flatMap((entry) => Object.keys(entry.properties ?? {})));
-  return [...keys].filter((key) =>
-    schemas.every(
-      (entry) =>
-        ownPropertySchema(entry, key) !== undefined || entry.additionalProperties !== false,
-    ),
-  );
-}
-
-export function objectAdditionalPropertiesSchema(
-  schema: JsonSchema,
-): JsonSchema | false | undefined {
-  const policies = collectAllOfSchemas(schema)
-    .map((entry) => entry.additionalProperties)
-    .filter((policy) => policy !== undefined);
-  if (policies.some((policy) => policy === false)) {
-    return false;
-  }
-  const schemas = policies.filter(
-    (policy): policy is JsonSchema => Boolean(policy) && typeof policy === "object",
-  );
-  if (schemas.length > 0) {
-    return combinedSchema(schemas);
-  }
-  return policies.some((policy) => policy === true) ? {} : undefined;
-}
-
 function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknown>): number {
   let issues = 1;
   const knownKeys = new Set(objectPropertyKeys(schema));
@@ -262,17 +232,6 @@ export function canApplyObjectCandidate(
     return false;
   }
   return objectRepairIssueCount(schema, candidate) <= objectRepairIssueCount(schema, current);
-}
-
-export function objectPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
-  if (!objectPropertyKeys(schema).includes(key)) {
-    return undefined;
-  }
-  return combinedSchema(
-    collectAllOfSchemas(schema)
-      .map((entry) => ownPropertySchema(entry, key))
-      .filter((property): property is JsonSchema => property !== undefined),
-  );
 }
 
 export function arrayConstraintCandidates(schema: JsonSchema): unknown[][] {

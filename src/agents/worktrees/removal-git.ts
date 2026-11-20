@@ -4,7 +4,11 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec-runner.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
@@ -14,6 +18,7 @@ import {
   commandError,
   listGitWorktrees,
   requireGit,
+  requireGitPath,
   resolveGitMetadataPath,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
@@ -27,6 +32,44 @@ import type { ManagedWorktreeRecord } from "./types.js";
 type GitOptions = Parameters<typeof runGit>[2];
 const log = createSubsystemLogger("agents/worktrees");
 let checkoutDeletion = Promise.resolve();
+const deletingCheckouts = new Set<string>();
+
+export function isRetiredCheckoutDeletionPending(directory: string): boolean {
+  return deletingCheckouts.has(path.resolve(directory));
+}
+
+/** One serialized deletion owner for retired checkouts and orphan recovery. */
+export function deleteRetiredCheckout(directory: string): Promise<void> {
+  const retired = path.resolve(directory);
+  deletingCheckouts.add(retired);
+  const deletion = checkoutDeletion
+    .then(async () => {
+      await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
+      const argv = [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+        ),
+        retired,
+      ];
+      const deleted = await runOutsideCommandProcessScope(() =>
+        withChildProcessOperation("worktree.cleanup", () =>
+          runCommandWithTimeout(
+            process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
+            // Pacing and pressure waits need a separate background budget;
+            // this retired tree owns no live checkout or removal lease.
+            { timeoutMs: 30 * 60_000, killProcessTree: true },
+          ),
+        ),
+      );
+      if (deleted.termination !== "exit" || deleted.code !== 0) {
+        throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
+      }
+    })
+    .finally(() => deletingCheckouts.delete(retired));
+  checkoutDeletion = deletion.catch(() => {});
+  return deletion;
+}
 
 function missingPathOrThrow(error: unknown): undefined {
   if (!isMissingPathError(error)) {
@@ -156,28 +199,9 @@ export async function removeManagedCheckout(
         }
         // Serialize deletion to avoid a sweep starting many simultaneous filesystem walks.
         // The original .git marker protects rollback from concurrent orphan cleanup.
-        checkoutDeletion = checkoutDeletion
-          .then(async () => {
-            await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
-            const argv = [
-              process.execPath,
-              "-e",
-              'require("node:fs").rmSync(process.argv[1], { recursive: true, force: true })',
-              retired,
-            ];
-            const deleted = await withChildProcessOperation("worktree.cleanup", () =>
-              runCommandWithTimeout(
-                process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-                { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS, killProcessTree: true },
-              ),
-            );
-            if (deleted.termination !== "exit" || deleted.code !== 0) {
-              throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
-            }
-          })
-          .catch((error: unknown) =>
-            log.warn(`Retired checkout cleanup failed at ${retired}: ${String(error)}`),
-          );
+        void deleteRetiredCheckout(retired).catch((error: unknown) =>
+          log.warn(`Retired checkout cleanup failed at ${retired}: ${String(error)}`),
+        );
       }),
     queueSignal,
   );
@@ -359,12 +383,7 @@ export async function requireExactWorktreeRepository(
 ) {
   const commonAt = async (cwd: string) =>
     await canonicalPathKey(
-      path.resolve(
-        cwd,
-        normalizeGitPathForFilesystem(
-          await requireGit(cwd, ["rev-parse", "--git-common-dir"], options),
-        ),
-      ),
+      path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-common-dir"], options)),
     );
   if ((await commonAt(sourcePath)) !== (await commonAt(record.repoRoot))) {
     throw new Error("Retained exact-state repository changed; source preserved");

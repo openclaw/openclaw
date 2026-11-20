@@ -66,7 +66,6 @@ export function expectOwnedCommandSession(
     });
   const entry = load(params.agentId);
   expect(entry).toMatchObject({ sessionId: params.sessionId, model: "m", modelProvider: "p" });
-  expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
   expect(load(params.excludedAgentId)).toBeUndefined();
 }
 

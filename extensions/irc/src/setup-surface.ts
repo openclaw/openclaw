@@ -77,16 +77,20 @@ function parseAutoJoinChannels(value: string): string[] {
     .filter((entry): entry is string => Boolean(entry && entry !== "*"));
 }
 
-const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
-  defaultAccountId: resolveDefaultIrcAccountId,
-  noteTitle: t("wizard.irc.allowlistTitle"),
-  noteLines: [
+function ircAllowlistHelpLines(): string[] {
+  return [
     t("wizard.irc.allowlistIntro"),
     t("wizard.irc.examples"),
     "- alice",
     "- alice!ident@example.org",
     t("wizard.irc.multipleEntries"),
-  ],
+  ];
+}
+
+const promptIrcAllowFrom = createPromptParsedAllowFromForAccount<CoreConfig>({
+  defaultAccountId: resolveDefaultIrcAccountId,
+  noteTitle: t("wizard.irc.allowlistTitle"),
+  noteLines: ircAllowlistHelpLines(),
   message: t("wizard.irc.allowFromPrompt"),
   placeholder: "alice, bob!ident@example.org",
   parseEntries: (raw) => ({
@@ -267,13 +271,7 @@ export const ircSetupWizard: ChannelSetupWizard = {
   },
   allowFrom: createAllowFromSection({
     helpTitle: t("wizard.irc.allowlistTitle"),
-    helpLines: [
-      t("wizard.irc.allowlistIntro"),
-      t("wizard.irc.examples"),
-      "- alice",
-      "- alice!ident@example.org",
-      t("wizard.irc.multipleEntries"),
-    ],
+    helpLines: ircAllowlistHelpLines(),
     message: t("wizard.irc.allowFromPrompt"),
     placeholder: "alice, bob!ident@example.org",
     invalidWithoutCredentialNote: t("wizard.irc.allowFromInvalid"),

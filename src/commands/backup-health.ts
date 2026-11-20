@@ -1,4 +1,5 @@
 import { note } from "../../packages/terminal-core/src/note.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { summarizeBackupSchedules } from "../cron/backup-command.js";
@@ -16,14 +17,13 @@ const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
 export function buildBackupStatusValue(params: {
   freshness: BackupRunFreshness;
-  now?: number;
   formatTimeAgo: (ageMs: number) => string;
 }): string {
   const latest = params.freshness.latest;
   if (!latest) {
     return "none recorded";
   }
-  const age = params.formatTimeAgo(Math.max(0, (params.now ?? Date.now()) - latest.createdAt));
+  const age = params.formatTimeAgo(Math.max(0, Date.now() - latest.createdAt));
   return latest.status === "ok"
     ? `last ok ${age} (${latest.kind}${latest.pushFailed ? ", push failing" : ""})`
     : `last attempt failed ${age} (${latest.kind})`;
@@ -34,7 +34,7 @@ function buildBackupDoctorHint(freshness: BackupRunFreshness): string | null {
   if (latestOk?.pushFailed) {
     return [
       "The newest local Git backup succeeded, but its requested push failed.",
-      `Check the configured Git remote for ${latestOk.archivePath}, then retry the backup.`,
+      terminalText`Check the configured Git remote for ${latestOk.archivePath}, then retry the backup.`,
     ].join("\n");
   }
   const stale = !latestOk || Date.now() - latestOk.createdAt > BACKUP_STALE_AFTER_MS;
@@ -84,12 +84,12 @@ export async function noteBackupDoctorHint(
           return [];
         }
         const reason = failed
-          ? `The newest offsite backup attempt to ${schedule.target} failed${target.latest.error ? `: ${target.latest.error}` : "."}`
+          ? terminalText`The newest offsite backup attempt to ${schedule.target} failed${target.latest.error ? `: ${target.latest.error}` : "."}`
           : target?.latestOk
-            ? `The newest successful offsite backup to ${schedule.target} is older than three scheduled intervals.`
-            : `No successful offsite backup to ${schedule.target} is recorded.`;
+            ? terminalText`The newest successful offsite backup to ${schedule.target} is older than three scheduled intervals.`
+            : terminalText`No successful offsite backup to ${schedule.target} is recorded.`;
         return [
-          `${reason}\nCheck the destination with ${formatCliCommand(`openclaw storage test ${schedule.target}`)}.`,
+          `${reason}\nCheck the destination with ${formatCliCommand(terminalText`openclaw storage test ${schedule.target}`)}.`,
         ];
       }),
     );

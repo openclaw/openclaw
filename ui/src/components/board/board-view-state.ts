@@ -1,7 +1,9 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { createMemo, createStore, onSettled } from "solid-js";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
+import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
-  BOARD_GRID_COLUMNS,
+  BOARD_DOCUMENT_AUTO_MAX_ROWS,
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
   boardChromeRowPx,
@@ -24,6 +26,8 @@ import type {
   BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
 import { boardWidgetPresentationReady } from "./board-widget-cell.solid.tsx";
+
+registerBoardDocumentEnglish();
 
 type BoardPointerGesture = {
   mode: "move" | "resize";
@@ -99,6 +103,7 @@ export function createBoardViewState(
   };
   const [presentation, update] = createStore<Presentation>(sync, initial);
   const contentHeights = { get: (name: string) => presentation.contentHeights[name]?.height };
+  const fitAutoContent = () => props.fitAutoContent || boardChromeRowPx() > 0;
   onSettled(() => stopGesture);
 
   function sync(local: Presentation): void {
@@ -270,8 +275,9 @@ export function createBoardViewState(
         t("board.announcement.resized", { title: widget.title || widget.name }),
       ),
     setHeightMode: async (widget, mode) => {
-      // Pinning keeps the currently rendered auto height, not the stale stored
-      // sizeH, so "fixed" freezes exactly what the user sees.
+      // Pin the content-derived height rather than stale stored sizeH, within
+      // the fixed grid bound. A taller touch/document auto card shrinks to that
+      // existing bound when switched to fixed height.
       const sizeH =
         mode === "fixed"
           ? effectiveBoardWidgetRows(
@@ -399,7 +405,12 @@ export function createBoardViewState(
     } catch {
       // Synthetic pointers and detached test targets cannot be captured.
     }
-    const items = boardWidgetGridItems(orderedWidgets(snapshot, tab.tabId), contentHeights);
+    const items = boardWidgetGridItems(
+      orderedWidgets(snapshot, tab.tabId),
+      contentHeights,
+      fitAutoContent(),
+      props.pageWidgetName,
+    );
     gesture = {
       mode,
       name: widget.name,
@@ -430,6 +441,7 @@ export function createBoardViewState(
     active: BoardPointerGesture,
     items: readonly BoardGridItem[],
   ) {
+    const maxItemHeight = fitAutoContent() ? BOARD_DOCUMENT_AUTO_MAX_ROWS : undefined;
     const pointer =
       active.mode === "move" ? document.elementFromPoint(event.clientX, event.clientY) : null;
     const tabTarget = pointer?.closest<HTMLElement>("[data-board-tab-id]");
@@ -461,6 +473,7 @@ export function createBoardViewState(
             Math.round(
               (event.clientY - active.originClientY) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP),
             ),
+          maxItemHeight,
         ),
       };
     }
@@ -473,11 +486,16 @@ export function createBoardViewState(
     )?.widget?.name;
     return {
       hoverTabId: "",
-      items: previewDrag(items, active.name, {
-        name: targetName,
-        x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
-        y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
-      }),
+      items: previewDrag(
+        items,
+        active.name,
+        {
+          name: targetName,
+          x: Math.floor((event.clientX - bounds.left) / (columnWidth + BOARD_GRID_GAP)),
+          y: Math.floor((event.clientY - bounds.top) / (BOARD_GRID_ROW_HEIGHT + BOARD_GRID_GAP)),
+        },
+        maxItemHeight,
+      ),
     };
   }
 
@@ -554,6 +572,7 @@ export function createBoardViewState(
     ),
     visitedTabs,
     contentHeights,
+    fitAutoContent,
     cellCallbacks,
     tabs,
     activeTab,

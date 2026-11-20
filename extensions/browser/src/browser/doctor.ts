@@ -40,12 +40,7 @@ export function buildBrowserDoctorReport(params: {
 }): BrowserDoctorReport {
   const status = params.status;
   const checks: BrowserDoctorCheck[] = [];
-  const transport: BrowserTransport =
-    status.transport === "chrome-mcp"
-      ? "chrome-mcp"
-      : status.transport === "extension"
-        ? "extension"
-        : "cdp";
+  const transport: BrowserTransport = status.transport ?? "cdp";
 
   checks.push({
     id: "plugin-enabled",
@@ -185,7 +180,7 @@ export function buildBrowserDoctorReport(params: {
         ? "CDP WebSocket is reachable"
         : status.running
           ? "CDP WebSocket is not reachable"
-          : "Browser is launchable but not running",
+          : "Browser is not currently running",
       ...(status.cdpReady || !status.running
         ? {}
         : { fixHint: "Check Chrome launch logs, stale locks, proxy env, and port conflicts." }),

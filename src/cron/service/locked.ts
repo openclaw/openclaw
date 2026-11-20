@@ -1,7 +1,6 @@
 /** Process-local cron operation serialization by SQLite store partition. */
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { cronStoreKey } from "../store/key.js";
-import type { CronServiceState } from "./state.js";
+import { prepareCronServiceStore, type CronServiceState } from "./state.js";
 
 const cronOperations = new KeyedAsyncQueue();
 type PendingCronSessionCleanup = { done: Promise<void>; agentId: string };
@@ -12,7 +11,7 @@ export function getPendingCronSessionCleanup(
   state: CronServiceState,
   jobId: string,
 ): Promise<void> | undefined {
-  return pendingSessionCleanups.get(cronStoreKey(state.deps.storePath))?.get(jobId)?.done;
+  return pendingSessionCleanups.get(state.deps.storeKey)?.get(jobId)?.done;
 }
 
 /** Registers cleanup at the store-partition owner shared by sibling service instances. */
@@ -22,7 +21,7 @@ export function registerPendingCronSessionCleanup(
   done: Promise<void>,
   agentId: string,
 ): () => void {
-  const storeKey = cronStoreKey(state.deps.storePath);
+  const storeKey = state.deps.storeKey;
   let byJobId = pendingSessionCleanups.get(storeKey);
   if (!byJobId) {
     byJobId = new Map<string, PendingCronSessionCleanup>();
@@ -47,18 +46,14 @@ const resolveChain = (promise: Promise<unknown>) =>
   );
 
 /** Serializes operations by their actual SQLite partition and service-local order. */
-export async function locked<T>(
-  state: CronServiceState,
-  fn: () => Promise<T>,
-  opts?: { readOnly?: boolean },
-): Promise<T> {
+export async function locked<T>(state: CronServiceState, fn: () => Promise<T>): Promise<T> {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const previous = state.op;
-  const next = cronOperations.enqueue(cronStoreKey(state.deps.storePath), async () => {
+  const next = cronOperations.enqueue(state.deps.storeKey, async () => {
     await resolveChain(previous);
-    if (!opts?.readOnly) {
-      // Include scheduler-local changes that deliberately do not commit a store revision.
-      state.readSnapshot = undefined;
-    }
     return await fn();
   });
   state.op = resolveChain(next);

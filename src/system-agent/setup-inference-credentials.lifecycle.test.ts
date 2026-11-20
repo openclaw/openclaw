@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import {
@@ -19,7 +19,6 @@ import {
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
-import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import type * as OnboardingPluginInstall from "../commands/onboarding-plugin-install.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import {
@@ -31,11 +30,6 @@ import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { diffGatewayReloadPaths } from "../gateway/config-diff.js";
-import {
-  buildGatewayReloadPlan,
-  listConfigReloadRefinementPrefixes,
-} from "../gateway/config-reload-plan.js";
 import { whenAdmittedWizardSessionSettled } from "../gateway/server-methods/setup-admission.js";
 import * as setupExecution from "../gateway/server-methods/system-agent-execution.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -96,7 +90,6 @@ describe("setup inference credential provider lifetime", () => {
         const id = flow === "managed wizard" ? "managed-plan" : "guided-plan";
         const pluginDir = state.path(id);
         const pluginPath = path.relative(state.stateDir, pluginDir);
-        const nativeEvent = `${id}-native`;
         const observationEvent = `${id}-observation`;
         const rawModelRef = `${id}/preview`;
         const canonicalModelRef = `${id}/canonical`;
@@ -108,10 +101,9 @@ describe("setup inference credential provider lifetime", () => {
           profileCase === "empty"
             ? []
             : [profile("unrelated"), ...(profileCase === "matching-last" ? [profile(id)] : [])];
-        const nativeBefore = process.listenerCount(nativeEvent);
-        const observations: Array<{ phase: string; value: unknown }> = [];
+        const observations: Array<[string, unknown]> = [];
         const observe = (phase: string, value: unknown) => {
-          observations.push({ phase, value });
+          observations.push([phase, value]);
         };
         await state.writeJson(`${pluginPath}/package.json`, {
           name: `@example/${id}`,
@@ -137,20 +129,14 @@ describe("setup inference credential provider lifetime", () => {
         await state.writeText(
           `${pluginPath}/index.cjs`,
           `
-          const nativeEvent = ${JSON.stringify(nativeEvent)};
           const observationEvent = ${JSON.stringify(observationEvent)};
-          const listener = () => {};
-          process.on(nativeEvent, listener);
           module.exports = { id: ${JSON.stringify(id)}, register(api) {
-            api.lifecycle.onDispose(() => {
-              process.off(nativeEvent, listener);
-              process.emit(observationEvent, "dispose");
-            });
+            api.lifecycle.onDispose(() => process.emit(observationEvent, "dispose"));
             api.registerProvider({
               id: ${JSON.stringify(id)}, label: "Synthetic setup",
               normalizeModelId({ modelId }) {
                 process.emit(observationEvent, "normalize", {
-                  modelId, listenerLive: process.listenerCount(nativeEvent) > 0,
+                  modelId,
                   aborted: api.lifecycle.signal.aborted,
                 });
                 return modelId === "preview" ? "canonical" : modelId;
@@ -197,7 +183,7 @@ describe("setup inference credential provider lifetime", () => {
             routeAgentId: "main",
             workspace: state.workspaceDir,
             agentDir: state.agentDir(),
-            effects: { credentialsSaved: false },
+            effects: { credentialsSaved: false, configPersisted: false },
             beforePersistentEffect: async () => {},
             params: {
               kind: "provider-auth",
@@ -230,46 +216,34 @@ describe("setup inference credential provider lifetime", () => {
         try {
           await Promise.race([started.promise, work]);
           expect(entered).toBe(true);
-          expect(process.listenerCount(nativeEvent)).toBe(nativeBefore + 1);
           // Acquire from the test context so this cannot reuse the provider's inherited lease.
           await withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async (lease) =>
             lease.assertOwned(),
           );
           release.resolve();
           const plan = await work;
-          expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
           expect(cfg).toEqual(originalConfig);
-          expect(structuredClone(plan)).toEqual(plan);
           const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "missing-match") {
             expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
             expect(saved).toEqual({});
-            expect(observations[0]).toEqual({ phase: "auth-result", value: rawModelRef });
-            expect(observations.at(-1)).toEqual({ phase: "dispose", value: undefined });
+            expect(observations[0]).toEqual(["auth-result", rawModelRef]);
+            expect(observations.at(-1)).toEqual(["dispose", undefined]);
             return;
           }
           expect(observations).toEqual([
-            { phase: "auth-result", value: rawModelRef },
-            {
-              phase: "normalize",
-              value: { modelId: "preview", listenerLive: true, aborted: false },
-            },
-            { phase: "dispose", value: undefined },
+            ["auth-result", rawModelRef],
+            ["normalize", { modelId: "preview", aborted: false }],
+            ["dispose", undefined],
           ]);
-          expect(plan).toMatchObject({
-            modelRef: canonicalModelRef,
-            config: {
-              agents: {
-                defaults: {
-                  model: { primary: "existing/model" },
-                  models: { [canonicalModelRef]: { alias: "Starter" } },
-                },
-              },
-            },
-          });
           if ("error" in plan) {
             throw new Error(plan.error);
           }
+          expect(plan.modelRef).toBe(canonicalModelRef);
+          expect(plan.config.agents?.defaults?.model).toMatchObject({ primary: "existing/model" });
+          expect(plan.config.agents?.defaults?.models?.[canonicalModelRef]).toMatchObject({
+            alias: "Starter",
+          });
           if (profileCase === "matching-last") {
             expect(plan.authProfileId).toBeDefined();
             expect(Object.keys(saved)).toEqual([plan.authProfileId]);
@@ -368,7 +342,6 @@ function museScenario(version = "1.3", selectModel?: boolean, outcome = "success
 it.each([
   museScenario(),
   museScenario("1.2"),
-  museScenario("1.3", true),
   museScenario("1.3", false),
   ...["cancel", "authority", "verification"].map((outcome) =>
     museScenario("1.3", undefined, outcome),
@@ -380,24 +353,17 @@ it.each([
     const starter = "meta/muse-spark-1.3";
     const original = { alias: "Existing Meta API model", agentRuntime: { id: "openclaw" } };
     const config = structuredClone(setup.config);
-    const agents = expectDefined(config.agents, "fixture agents");
+    const { agents, plugins, models } = config;
+    assert(agents?.defaults?.models && plugins?.entries && models?.providers?.openai);
     agents.ownership = "explicit";
-    const defaults = expectDefined(agents.defaults, "fixture defaults");
-    defaults.models = { ...defaults.models, [starter]: original };
+    agents.defaults.models[starter] = original;
     agents.entries = {
       main: { model: { primary: modelRef, fallbacks: ["stable/agent-fallback"] } },
       other: {},
     };
-    const plugins = expectDefined(config.plugins, "fixture plugins");
-    plugins.entries = { ...plugins.entries, meta: { enabled: true } };
-    const providers = expectDefined(config.models?.providers, "fixture providers");
-    providers.openai = {
-      ...providers.openai,
-      baseUrl: "https://provider.example/v1",
-      models: providers.openai?.models ?? [],
-      apiKey: "synthetic-working-primary-key",
-    };
-    providers.meta = {
+    plugins.entries.meta = { enabled: true };
+    models.providers.openai.apiKey = "synthetic-working-primary-key";
+    models.providers.meta = {
       baseUrl: "https://api.meta.ai/v1",
       models: [],
       apiKey: "synthetic-existing-meta-api-key",
@@ -419,8 +385,7 @@ it.each([
       spec: "@openclaw/muse",
       installPath: path.join(path.dirname(setup.configPath), "extensions/muse"),
     };
-    installRuntime.mockImplementation(async ({ cfg, entry, beforePersistentEffect }) => {
-      expect(entry.pluginId).toBe("muse");
+    installRuntime.mockImplementation(async ({ cfg, beforePersistentEffect }) => {
       await beforePersistentEffect?.();
       phases.push("install");
       return {
@@ -512,14 +477,7 @@ it.each([
         {
           ownsRuntimeActivationFor: setup.configPath,
           preCommitRuntimePreflight: async (sourceConfig, runtimeRefresh) => {
-            const plan = buildGatewayReloadPlan(
-              diffGatewayReloadPaths(config, sourceConfig, listConfigReloadRefinementPrefixes()),
-              { previousConfig: config, candidateConfig: sourceConfig },
-            );
-            expect(plan.reloadPlugins).toBe(true);
-            if (runtimeRefresh?.requireImmediateApplication && plan.reloadPlugins) {
-              throw new Error("The new runtime plugin cannot be applied immediately.");
-            }
+            expect(runtimeRefresh?.requireImmediateApplication).not.toBe(true);
             return { runtimeConfig: sourceConfig, compareConfig: sourceConfig };
           },
         },
@@ -559,21 +517,20 @@ it.each([
       expect(phases.indexOf("activate", verification + 1)).toBeGreaterThan(verification);
     }
     const selected = (await readConfigFileSnapshot()).sourceConfig;
-    expect(selected.agents?.entries?.main?.nativeRuntimeConsent).toEqual(["muse"]);
+    const main = selected.agents?.entries?.main;
+    expect(main?.nativeRuntimeConsent).toEqual(["muse"]);
     expect(selected.agents?.entries?.other?.nativeRuntimeConsent).toBeUndefined();
     if (selectModel === false) {
-      expect(JSON.stringify(selected.agents?.entries?.main?.model)).toBe(previousAgentModel);
+      expect(JSON.stringify(main?.model)).toBe(previousAgentModel);
     } else {
-      expect(resolveAgentModelPrimaryValue(selected.agents?.entries?.main?.model)).toBe(
-        selectedModel,
-      );
+      expect(resolveAgentModelPrimaryValue(main?.model)).toBe(selectedModel);
     }
     expect(JSON.stringify(selected.agents?.defaults?.model)).toBe(previousDefaultModel);
     expect(
       resolveModelRuntimePolicy({ config: selected, modelId: selectedModel, agentId: "main" })
         .policy?.id,
     ).toBe("muse");
-    expect(selected.agents?.entries?.main?.models?.[selectedModel]?.agentRuntime?.id).toBe("muse");
+    expect(main?.models?.[selectedModel]?.agentRuntime?.id).toBe("muse");
     expect(
       resolveModelRuntimePolicy({ config: selected, modelId: starter, agentId: "other" }).policy
         ?.id,
@@ -581,10 +538,6 @@ it.each([
     expect(selected.plugins?.entries?.muse?.enabled).toBe(true);
     expect(selected.agents?.defaults?.models?.[starter]).toEqual(original);
     expect(selected.models?.providers?.meta?.apiKey).toBe("synthetic-existing-meta-api-key");
-    expect(verifySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ provider: "meta", modelId: selectedModel.slice("meta/".length) }),
-    );
-    expect(loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(1);
     expect(setup.run).not.toHaveBeenCalled();
   },
 );

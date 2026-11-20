@@ -18,6 +18,7 @@ import {
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
 import { getRpcSource, registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -35,6 +36,7 @@ const sessionId = "original-stop-session";
 const ownedFollowups: ReturnType<typeof createQueueTestRun>[] = [];
 const readQueue = () =>
   getExistingFollowupQueue(key, ownedFollowups[0]?.controllerInput?.mailbox.owner.target);
+const aborted = (run: ReturnType<typeof createActiveRun>) => run.input.abortSignal.aborted;
 afterEach(async () => {
   const inputs = ownedFollowups.splice(0).flatMap((run) => run.controllerInput ?? []);
   for (const input of inputs) {
@@ -62,12 +64,18 @@ async function setup() {
     },
   );
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const active = createActiveRun(key, {
-    runId: "active",
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
+  const source = (runId: string, queued = false) => {
+    const run = createActiveRun(key, {
+      runId,
+      queued,
+      agentId: "main",
+      sessionId,
+      owner: { connId: client.connId },
+    });
+    registerRpcSource(runId, run);
+    return run;
+  };
+  const active = source("active");
   // This fixture has no native producer: its synthetic turn returns on cancellation.
   active.input.abortSignal.addEventListener(
     "abort",
@@ -80,25 +88,12 @@ async function setup() {
     },
     { once: true },
   );
-  const queued = createActiveRun(key, {
-    runId: "queued",
-    queued: true,
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
-  registerRpcSource("active", active);
-  registerRpcSource("queued", queued);
+  const queued = source("queued", true);
   const authority = revocableAuthority("original queue authority revoked");
   const respond = vi.fn();
   const stop = () =>
     handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "ui-stop",
-        method: "sessions.abort",
-        params: { key, clearQueued: true },
-      },
+      req: gatewayRequest("ui-stop", "sessions.abort", { key, clearQueued: true }),
       client,
       context,
       respond,
@@ -182,9 +177,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       { ok: true, abortedRunId: "queued", status: "aborted" },
       undefined,
     ]);
-    expect(fixture.active.input.abortSignal.aborted).toBe(true);
-    expect(fixture.queued.input.abortSignal.aborted).toBe(true);
-    expect(foreign.input.abortSignal.aborted).toBe(false);
+    expect([fixture.active, fixture.queued, foreign].map(aborted)).toEqual([true, true, false]);
     expect(getRpcSource("foreign")).toBe(foreign);
     expect(ownFollowup.settled).toHaveBeenCalledOnce();
     expect(foreignFollowup.settled).not.toHaveBeenCalled();
@@ -214,7 +207,6 @@ it.each([true, false])(
   "broad research Stop preserves main's work sharing a bare session key (persisted=%s)",
   async (persisted) => {
     const sharedKey = "shared";
-    const canonicalKey = "agent:research:shared";
     const researchSessionId = "research-shared";
     const cfg = {
       ...getRuntimeConfig(),
@@ -227,7 +219,7 @@ it.each([true, false])(
     setRuntimeConfigSnapshot(cfg);
     if (persisted) {
       await upsertSessionEntryCore(
-        { agentId: "research", sessionKey: canonicalKey },
+        { agentId: "research", sessionKey: "agent:research:shared" },
         { sessionId: researchSessionId, updatedAt: 1 },
       );
     }
@@ -240,42 +232,30 @@ it.each([true, false])(
       sharedKey,
       "research-next",
     );
-    try {
-      const respond = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "research-shared-stop",
-          method: "sessions.abort",
-          params: { key: sharedKey, clearQueued: true },
-        },
-        client: sharingPolicyClient({ scopes: ["operator.admin"] }),
-        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionAbortHandlers,
-      });
-      expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
-      expect.soft(foreign.run.queueAbortSignal?.aborted, "main follow-up must survive").toBe(false);
-      expect.soft(foreign.settled).not.toHaveBeenCalled();
-      expect(owned.settled).toHaveBeenCalledOnce();
-      expect(otherIncarnation.settled).toHaveBeenCalledOnce();
-      expect
-        .soft(
-          getExistingFollowupQueue(sharedKey, foreign.run.controllerInput?.mailbox.owner.target)
-            ?.items,
-          "main follow-up must remain queued",
-        )
-        .toEqual([foreign.run]);
-    } finally {
-      for (const run of [foreign.run, owned.run, otherIncarnation.run]) {
-        const input = run.controllerInput;
-        if (input) {
-          retireSessionControllerInput(input);
-          await input.settlement.promise.catch(() => {});
-        }
-      }
-    }
+    const respond = vi.fn();
+    await handleGatewayRequest({
+      req: gatewayRequest("research-shared-stop", "sessions.abort", {
+        key: sharedKey,
+        clearQueued: true,
+      }),
+      client: sharingPolicyClient({ scopes: ["operator.admin"] }),
+      context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: sessionAbortHandlers,
+    });
+    expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0])).toBe(true);
+    expect.soft(foreign.run.queueAbortSignal?.aborted, "main follow-up must survive").toBe(false);
+    expect.soft(foreign.settled).not.toHaveBeenCalled();
+    expect(owned.settled).toHaveBeenCalledOnce();
+    expect(otherIncarnation.settled).toHaveBeenCalledOnce();
+    expect
+      .soft(
+        getExistingFollowupQueue(sharedKey, foreign.run.controllerInput?.mailbox.owner.target)
+          ?.items,
+        "main follow-up must remain queued",
+      )
+      .toEqual([foreign.run]);
   },
 );
 
@@ -301,8 +281,7 @@ it.each(["session", "source"] as const)(
     } else {
       await fixture.stop();
     }
-    expect(fixture.queued.input.abortSignal.aborted).toBe(true);
-    expect(fixture.active.input.abortSignal.aborted).toBe(change !== "source");
+    expect([fixture.queued, fixture.active].map(aborted)).toEqual([true, change !== "source"]);
     expect(original.settled).not.toHaveBeenCalled();
     expect(readQueue()?.items).toEqual([original.run]);
     expect(queue.abortController.signal.aborted).toBe(false);
@@ -324,8 +303,7 @@ it("stops detached pending source cancellation after authority revocation", asyn
     throw new Error("cleanup callback failed");
   });
   await expectAuthorityRevocation(fixture);
-  expect(fixture.queued.input.abortSignal.aborted).toBe(true);
-  expect(fixture.active.input.abortSignal.aborted).toBe(false);
+  expect([fixture.queued, fixture.active].map(aborted)).toEqual([true, false]);
   expect(first.settled).toHaveBeenCalledOnce();
   expect(second.settled).not.toHaveBeenCalled();
   await expect(first.run.controllerInput!.settlement.promise).rejects.toThrow(

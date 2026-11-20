@@ -252,28 +252,7 @@ describe("accepted context-engine turn finalization", () => {
     database.db
       .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
       .run(facts.boundary.admission.logicalTurnId);
-    const retrySessionId = "retry-ready";
-    enqueueContextEngineTurnCommit({
-      database,
-      engineId: "test",
-      payload: {
-        boundary: {
-          admission: {
-            ...facts.boundary.admission,
-            logicalTurnId: retrySessionId,
-            sessionId: retrySessionId,
-            sessionKey: `agent:main:${retrySessionId}`,
-          },
-          terminal: {
-            ...facts.boundary.terminal,
-            sessionId: retrySessionId,
-            sessionKey: `agent:main:${retrySessionId}`,
-          },
-        },
-        messages: [],
-      },
-    });
-    for (let index = 0; index < 15; index += 1) {
+    for (let index = 0; index < 16; index += 1) {
       const sessionId = `orphaned-admission-${index}`;
       enqueue({
         ...facts.boundary.admission,
@@ -282,6 +261,15 @@ describe("accepted context-engine turn finalization", () => {
         sessionKey: `agent:main:${sessionId}`,
       });
     }
+    const retrySessionId = "retry-ready";
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: {
+        boundary: createTurnBoundary(database.path, retrySessionId, retrySessionId),
+        messages: [],
+      },
+    });
     enqueue();
 
     await finalize();

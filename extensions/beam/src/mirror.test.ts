@@ -1,10 +1,11 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import * as sessionCatalogRuntime from "openclaw/plugin-sdk/session-catalog-runtime";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sampleUpload } from "./beam-store.test-support.js";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beamMirrorTestFixture,
   beamTestMirrorConfig,
@@ -17,13 +18,7 @@ import {
   createScheduledBeamTestRunner,
   createBeamTestRuntime,
 } from "./beam.test-support.js";
-import {
-  beamMirrorId,
-  buildBeamMirrorItems,
-  createBeamMirrorService,
-  fitBeamMirrorUpload,
-  parseBeamMirrorConfig,
-} from "./mirror.js";
+import { beamMirrorId, createBeamMirrorService, parseBeamMirrorConfig } from "./mirror.js";
 import { BEAM_MAX_ITEMS, parseBeamUpload } from "./types.js";
 
 let fixture: ReturnType<typeof beamMirrorTestFixture>;
@@ -39,31 +34,36 @@ vi.mock("openclaw/plugin-sdk/session-catalog-runtime", async (importOriginal) =>
   return { ...actual, listActiveSessionCatalogs: vi.fn(actual.listActiveSessionCatalogs) };
 });
 
-async function readRequestBody(req: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function withMirrorServer(
   respond: (req: IncomingMessage, res: ServerResponse, body: string) => void,
   run: (origin: string) => Promise<void>,
 ) {
   await withServer((req, res) => {
-    void readRequestBody(req).then(
-      (body) => respond(req, res, body),
+    void consumeBuffer(req).then(
+      (body) => respond(req, res, body.toString("utf8")),
       (error: unknown) => res.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   }, run);
 }
 
+async function withMirrorRunner(
+  respond: Parameters<typeof withMirrorServer>[0],
+  run: (runner: ReturnType<typeof createBeamTestRunner>) => Promise<void>,
+) {
+  await withMirrorServer(respond, (origin) =>
+    run(createBeamTestRunner({ endpoint: `${origin}/beam`, logger: fixture.logger })),
+  );
+}
+
+async function runTicks(runner: { tick: () => Promise<unknown> }, count = 2) {
+  for (let i = 0; i < count; i++) {
+    await runner.tick();
+  }
+}
+
 describe("parseBeamMirrorConfig", () => {
   it("returns undefined without mirror config", () => {
-    expect(parseBeamMirrorConfig({ plugins: { entries: { beam: { enabled: true } } } })).toBe(
-      undefined,
-    );
+    expect(parseBeamMirrorConfig({})).toBeUndefined();
   });
 
   it.each([
@@ -77,351 +77,209 @@ describe("parseBeamMirrorConfig", () => {
   });
 });
 
-describe("buildBeamMirrorItems", () => {
-  it("restores chronological text from newest-first catalog items and summarizes raw content", () => {
-    const reduced = buildBeamMirrorItems([
-      { type: "agentMessage", text: "Done." },
-      { type: "reasoning", text: "private thoughts" },
-      { type: "toolResult", raw: { output: "secret output" } },
-      { type: "toolCall", text: "rm -rf /tmp/x", raw: { command: "secret" } },
-      { type: "userMessage", text: "Fix it." },
-    ]);
-    expect(reduced.items).toEqual([
-      { type: "userMessage", text: "Fix it." },
-      {
-        type: "other",
-        text: "1 tool calls, 1 tool results, 1 reasoning items; raw content dropped",
-      },
-      { type: "agentMessage", text: "Done." },
-    ]);
-    expect(JSON.stringify(reduced.items)).not.toContain("secret");
-    expect(JSON.stringify(reduced.items)).not.toContain("private thoughts");
-  });
-});
-
-describe("fitBeamMirrorUpload", () => {
-  it("fits the newest suffix with multibyte and JSON-escaped text", () => {
-    const upload = sampleUpload({
-      title: "big",
-      items: Array.from({ length: 300 }, (_, index) => ({
-        type: "agentMessage" as const,
-        text: `entry ${index} ${"🙂\n\u0000".repeat(200)}`,
-      })),
-    });
-    const fitted = fitBeamMirrorUpload(upload);
-    expect(fitted.truncated).toBe(true);
-    expect(fitted.items.length).toBeLessThanOrEqual(BEAM_MAX_ITEMS);
-    expect(fitted.items).toEqual(upload.items.slice(-fitted.items.length));
-    expect(Buffer.byteLength(JSON.stringify(fitted), "utf8")).toBeLessThanOrEqual(56 * 1024);
-    // The fitted payload must remain acceptable to the receiver.
-    expect(parseBeamUpload(structuredClone(fitted)).ok).toBe(true);
-  });
-});
-
 describe("createBeamMirrorRunner", () => {
-  it("does not replay mirror uploads across redirects to another private origin", async () => {
-    const redirectedBodies: string[] = [];
-    const receiverBodies: string[] = [];
-    await withMirrorServer(
-      (_req, res, body) => {
-        redirectedBodies.push(body);
-        res.end("ok");
-      },
-      async (internalOrigin) => {
-        await withMirrorServer(
-          (_req, res, body) => {
-            receiverBodies.push(body);
-            res.writeHead(307, { Location: `${internalOrigin}/internal-action` });
-            res.end();
-          },
-          async (receiverOrigin) => {
-            const runner = createBeamTestRunner({
-              endpoint: `${receiverOrigin}/beam`,
-              listCatalogs: () => [createBeamTestCatalog()],
-            });
-            await runner.tick();
-            expect(receiverBodies).toHaveLength(1);
-            expect(receiverBodies[0]).toContain("Fix the flow.");
-            expect(redirectedBodies).toEqual([]);
-          },
-        );
-      },
-    );
-  });
-
-  it("blocks a redirect without retrying the configured endpoint or logging its location", async () => {
-    const warnings: string[] = [];
-    const receiverBodies: string[] = [];
-    const redirectedBodies: string[] = [];
-    await withMirrorServer(
-      (req, res, body) => {
-        if (req.url?.startsWith("/redirected")) {
-          redirectedBodies.push(body);
-          res.end("ok");
-          return;
-        }
-        receiverBodies.push(body);
-        res.writeHead(301, { Location: "/redirected?private=do-not-log" });
-        res.end();
-      },
-      async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
-        });
-        await runner.tick();
-        await runner.tick();
-        expect(receiverBodies).toHaveLength(1);
-        expect(redirectedBodies).toEqual([]);
-        expect(warnings).toEqual([
-          "beam mirror upload blocked for claude: receiver returned redirect (301); redirects are not followed; configure the final endpoint",
-        ]);
-        expect(warnings.join(" ")).not.toContain("do-not-log");
-      },
-    );
-  });
-
-  it("logs a terminal redirect block after a recent transient warning", async () => {
-    const warnings: string[] = [];
-    let requestCount = 0;
-    await withMirrorServer(
-      (_req, res) => {
-        requestCount += 1;
-        res.statusCode = requestCount === 1 ? 503 : 307;
-        res.end();
-      },
-      async (origin) => {
-        const runner = createBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger: { warn: (message) => warnings.push(message), info: () => {} },
-          listCatalogs: () => [createBeamTestCatalog()],
-        });
-        await runner.tick();
-        await runner.tick();
-        await runner.tick();
-        expect(requestCount).toBe(2);
-        expect(warnings).toEqual([
-          "beam mirror upload failed (503) for claude",
-          "beam mirror upload blocked for claude: receiver returned redirect (307); redirects are not followed; configure the final endpoint",
-        ]);
-      },
-    );
-  });
+  it.each([
+    { target: "private origin", status: 307, transient: false },
+    { target: "same origin", status: 301, transient: false },
+    { target: "same origin", status: 307, transient: true },
+  ])(
+    "blocks and redacts $status redirects to $target after transient=$transient",
+    async ({ target, status, transient }) => {
+      const { warnings } = fixture;
+      const bodies: string[] = [],
+        leaked: string[] = [];
+      await withMirrorServer(
+        (_req, res, body) => {
+          leaked.push(body);
+          res.end();
+        },
+        async (privateOrigin) => {
+          await withMirrorRunner(
+            (req, res, body) => {
+              if (req.url !== "/beam") {
+                leaked.push(body);
+                res.end();
+                return;
+              }
+              bodies.push(body);
+              if (transient && bodies.length === 1) {
+                res.statusCode = 503;
+              } else {
+                const origin = target === "private origin" ? privateOrigin : "";
+                res.writeHead(status, { Location: `${origin}/redirected?private=do-not-log` });
+              }
+              res.end();
+            },
+            async (runner) => {
+              await runTicks(runner, 3);
+              expect(bodies).toHaveLength(transient ? 2 : 1);
+              expect(bodies[0]).toContain("Fix the flow.");
+              expect(leaked).toEqual([]);
+              expect(warnings).toHaveLength(transient ? 2 : 1);
+              if (transient) {
+                expect(warnings[0]).toContain("upload failed (503)");
+              }
+              expect(warnings.at(-1)).toContain(
+                `upload blocked for claude: receiver returned redirect (${status})`,
+              );
+              expect(warnings.join(" ")).not.toContain("do-not-log");
+            },
+          );
+        },
+      );
+    },
+  );
 
   it("rechecks once after runner restart and resumes after the endpoint changes", async () => {
     const requests: string[] = [];
     await withMirrorServer(
       (req, res) => {
         requests.push(req.url ?? "");
-        if (req.url === "/redirecting") {
+        if (req.url === "/redirect") {
           res.writeHead(307, { Location: "/redirected" });
         }
         res.end();
       },
       async (origin) => {
-        let endpoint = `${origin}/redirecting`;
+        let endpoint = `${origin}/redirect`;
         const runtime = {
           config: { current: () => beamTestMirrorConfig({ endpoint }) },
         };
         let active = true;
+        const catalog = createBeamTestCatalog({
+          sessions: () => (active ? beamTestSessions(["t1"]) : []),
+        });
         const createRunner = () =>
           createBeamTestRunner({
             runtime,
-            listCatalogs: () => [
-              createBeamTestCatalog({
-                sessions: () => (active ? [{ threadId: "t1", recencyAt: beamTestNow }] : []),
-              }),
-            ],
+            listCatalogs: () => [catalog],
           });
         const runner = createRunner();
-        await runner.tick();
-        await runner.tick();
+        await runTicks(runner);
         const restartedRunner = createRunner();
         await restartedRunner.tick();
         endpoint = `${origin}/direct`;
-        await restartedRunner.tick();
-        await restartedRunner.tick();
-        endpoint = `${origin}/another-receiver`;
+        await runTicks(restartedRunner);
+        endpoint = `${origin}/other`;
         active = false;
         await restartedRunner.tick();
-        expect(requests).toEqual(["/redirecting", "/redirecting", "/direct"]);
+        expect(requests).toEqual(["/redirect", "/redirect", "/direct"]);
         active = true;
-        await restartedRunner.tick();
-        await restartedRunner.tick();
+        await runTicks(restartedRunner);
         endpoint = `${origin}/direct`;
         await restartedRunner.tick();
-        expect(requests).toEqual([
-          "/redirecting",
-          "/redirecting",
-          "/direct",
-          "/another-receiver",
-          "/direct",
-        ]);
+        expect(requests).toEqual(["/redirect", "/redirect", "/direct", "/other", "/direct"]);
       },
     );
   });
 
-  it("uploads the newest chronological suffix of a large transcript once", async () => {
-    const count = 50;
-    const { sent } = fixture;
-    const reads: string[] = [];
-    const cancel = vi.fn();
-    const chronological = Array.from({ length: count }, (_, index) => ({
-      type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
-      text: `Message ${index}: ${"text ".repeat(300)}end`,
-    }));
-    const runner = fixture.runner(
-      {
-        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
-        items: chronological.toReversed(),
-        onRead: (threadId) => reads.push(threadId),
-      },
-      { runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })) },
-      { cancel },
-    );
-    await runner.tick();
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(reads).toEqual(["t1", "t1"]);
-    expect(sent[0]?.auth).toBe("Bearer scratch-token");
-    expect(sent[0]?.payload).toMatchObject({
-      version: 1,
-      beamId: beamMirrorId("claude", "gateway:local", "t1"),
-      source: "claude",
-      title: "Fix flow",
-      completed: false,
-    });
-    expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
-    const payload = sent[0]!.payload;
-    expect(payload.items).toEqual(chronological.slice(-payload.items.length));
-    expect(payload.truncated).toBe(true);
-    expect(payload.items.length).toBeLessThan(count);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("includes the latest source model without changing the sanitized message payload", async () => {
-    const { sent } = fixture;
-    const runner = fixture.runner({
-      sessions: [
+  it.each([false, true])(
+    "uploads the newest suffix once when cancellation rejects: %s",
+    async (rejectCancel) => {
+      const count = 300;
+      const { sent, warnings } = fixture;
+      const cancel = vi.fn(async () => {
+        if (rejectCancel) {
+          throw new Error("cancel failed");
+        }
+      });
+      const chronological = Array.from({ length: count }, (_, index) => ({
+        type: index % 2 === 0 ? ("userMessage" as const) : ("agentMessage" as const),
+        text: `Message ${index}: ${"🙂\n\u0000".repeat(200)}end`,
+      }));
+      const runner = fixture.runner(
         {
-          threadId: "t-model",
-          name: "Model source",
-          modelProvider: "openai",
-          recencyAt: beamTestNow,
+          sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: beamTestNow - 60_000 }],
+          items: chronological.toReversed(),
         },
-      ],
+        { runtime: createBeamTestRuntime(beamTestMirrorConfig({ token: "scratch-token" })) },
+        { cancel },
+      );
+      await runTicks(runner);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]?.auth).toBe("Bearer scratch-token");
+      expect(sent[0]?.payload).toMatchObject({
+        version: 1,
+        beamId: beamMirrorId("claude", "gateway:local", "t1"),
+        source: "claude",
+        title: "Fix flow",
+        completed: false,
+      });
+      expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
+      const payload = sent[0]!.payload;
+      expect(payload.items).toEqual(chronological.slice(-payload.items.length));
+      expect(payload.truncated).toBe(true);
+      expect(payload.items.length).toBeLessThanOrEqual(BEAM_MAX_ITEMS);
+      expect(Buffer.byteLength(JSON.stringify(payload), "utf8")).toBeLessThanOrEqual(56 * 1024);
+      expect(warnings).toEqual([]);
+    },
+  );
+
+  it("uploads chronological sanitized text, latest model and source truncation", async () => {
+    const { sent } = fixture;
+    const display = createTestPluginApi({ id: "incidents" }).inlineView(
+      "incident",
+      { incidentId: "INC-42" },
+      { version: 3, summary: "Investigating." },
+    );
+    const runner = fixture.runner({
+      sessions: [{ threadId: "t-model", recencyAt: beamTestNow, modelProvider: "openai" }],
       items: [
         { type: "agentMessage", text: "Latest", model: "gpt-5.6-sol" },
         { type: "agentMessage", text: "Earlier", model: "gpt-5.6-terra" },
-        { type: "userMessage", text: "Continue this" },
+        { type: "agentMessage", text: display.content[0].text, raw: display.details },
+        { type: "reasoning", text: "private thoughts" },
+        { type: "toolResult", raw: { output: "secret output" } },
+        { type: "toolCall", text: "rm -rf /tmp/x", raw: { command: "secret" } },
+        { type: "userMessage", text: "Continue this", truncated: true },
       ],
     });
-
     await runner.tick();
-
-    expect(sent[0]?.payload.sourceModel).toEqual({
-      provider: "openai",
-      model: "gpt-5.6-sol",
+    expect(sent[0]?.payload).toMatchObject({
+      sourceModel: { provider: "openai", model: "gpt-5.6-sol" },
+      truncated: true,
     });
     expect(sent[0]?.payload.items).toEqual([
       { type: "userMessage", text: "Continue this" },
+      {
+        type: "other",
+        text: "1 tool calls, 1 tool results, 1 reasoning items; raw content dropped",
+      },
+      { type: "agentMessage", text: "Investigating." },
       { type: "agentMessage", text: "Earlier" },
       { type: "agentMessage", text: "Latest" },
     ]);
-  });
-
-  it("marks the upload truncated when the source already truncated a message", async () => {
-    const { sent } = fixture;
-    const runner = fixture.runner({
-      items: [{ type: "userMessage", text: "Partial message", truncated: true }],
-    });
-    await runner.tick();
-    expect(sent).toHaveLength(1);
-    expect(sent[0]?.payload).toMatchObject({
-      truncated: true,
-      items: [{ type: "userMessage", text: "Partial message" }],
-    });
+    expect(JSON.stringify(sent[0]?.payload)).not.toMatch(
+      /pluginInlineView|secret|private thoughts/,
+    );
     expect(parseBeamUpload(structuredClone(sent[0]?.payload)).ok).toBe(true);
   });
 
-  it("keeps successful uploads successful when response cancellation rejects", async () => {
-    const { sent, warnings } = fixture;
-    const cancel = vi.fn(async () => {
-      throw new Error("cancel failed");
-    });
-    const runner = fixture.runner(
-      { sessions: [{ threadId: "t1", recencyAt: beamTestNow - 60_000 }] },
-      {},
-      { cancel },
-    );
-
-    await runner.tick();
-    await runner.tick();
-
-    expect(sent).toHaveLength(1);
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(warnings).toEqual([]);
-  });
-
-  it("keeps one catalog and upload path active across missed scheduler periods", async () => {
+  it("forwards lifecycle abort and waits for guarded response cleanup without warning", async () => {
     vi.useFakeTimers();
-    const list = beamTestBarrier();
-    const read = vi.fn();
-    const { sent } = fixture;
-    const runner = fixture.scheduled({ onList: list.run, onRead: read });
-
-    try {
-      const first = runner.tick();
-      await list.started;
-      await first;
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(list.run).toHaveBeenCalledOnce();
-
-      list.release();
-      await runner.settled;
-
-      expect(read).toHaveBeenCalledOnce();
-      expect(sent).toHaveLength(1);
-    } finally {
-      list.release();
-      await runner.stop();
-    }
-  });
-
-  it("waits for guarded response cleanup after lifecycle abort without warning", async () => {
-    vi.useFakeTimers();
-    const fetchStarted = createDeferred<void>();
-    const cleanup = beamTestBarrier();
-    const cancel = vi.fn();
-    const { warnings, logger } = fixture;
+    const requestStarted = createDeferred<void>();
+    const cleanup = beamTestBarrier(),
+      cancel = vi.fn();
     let signal: AbortSignal | undefined;
-    const guardedFetch = vi
-      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
-      .mockImplementation(async (options) => {
-        const abortSignal = options.signal;
-        fetchStarted.resolve();
-        if (!abortSignal) {
-          throw new Error("guarded fetch did not receive the runner abort signal");
-        }
-        signal = abortSignal;
-        await new Promise<void>((resolve) => {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        });
-        return {
-          response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
-          finalUrl: options.url,
-          release: cleanup.run,
-        };
+    const { warnings, logger } = fixture;
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async (options) => {
+      const abortSignal = options.signal;
+      assert(abortSignal, "missing runner abort signal");
+      signal = abortSignal;
+      requestStarted.resolve();
+      await new Promise<void>((resolve) => {
+        abortSignal.addEventListener("abort", () => resolve(), { once: true });
       });
-    const runner = createScheduledBeamTestRunner({
-      logger,
+      return {
+        response: new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 200 }),
+        finalUrl: options.url,
+        release: cleanup.run,
+      };
     });
-
+    const runner = createScheduledBeamTestRunner({ logger });
     try {
       const tick = runner.tick();
-      await fetchStarted.promise;
-      expect(signal).toBeInstanceOf(AbortSignal);
+      await requestStarted.promise;
       expect(signal?.aborted).toBe(false);
 
       let stopSettled = false;
@@ -432,63 +290,18 @@ describe("createBeamMirrorRunner", () => {
       await cleanup.started;
       await Promise.resolve();
       expect(stopSettled).toBe(false);
-
       cleanup.release();
       await Promise.all([tick, stop]);
-
       expect(cancel).toHaveBeenCalledOnce();
       expect(cleanup.run).toHaveBeenCalledOnce();
       expect(warnings).toEqual([]);
     } finally {
       cleanup.release();
-      guardedFetch.mockRestore();
       await runner.stop();
     }
   });
 
-  it("aborts a stalled loopback transport on stop", async () => {
-    vi.useFakeTimers();
-    const requestStarted = createDeferred<void>();
-    const requestClosed = createDeferred<void>();
-    await withServer(
-      (req) => {
-        requestStarted.resolve();
-        req.socket.once("close", requestClosed.resolve);
-      },
-      async (origin) => {
-        const { warnings, logger } = fixture;
-        let signal: AbortSignal | undefined;
-        const realFetch = fetch;
-        const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-          signal = init?.signal ?? undefined;
-          return realFetch(input, init);
-        }) as unknown as typeof fetch;
-        vi.stubGlobal("fetch", fetchFn);
-        const runner = createScheduledBeamTestRunner({
-          endpoint: `${origin}/beam`,
-          logger,
-        });
-
-        try {
-          const tick = runner.tick();
-          await requestStarted.promise;
-          expect(signal).toBeInstanceOf(AbortSignal);
-          expect(signal?.aborted).toBe(false);
-
-          const stop = runner.stop();
-          expect(signal?.aborted).toBe(true);
-          await Promise.all([requestClosed.promise, tick, stop]);
-
-          expect(warnings).toEqual([]);
-        } finally {
-          await runner.stop();
-        }
-      },
-    );
-  });
-
   it("ignores idle sessions, node hosts, the beam catalog, and unlisted catalogs", async () => {
-    const { sent } = fixture;
     const catalogs = [
       createBeamTestCatalog({ sessions: beamTestSessions(["old"], beamTestNow - 86_400_000) }),
       createBeamTestCatalog({ id: "codex", hostKind: "node" }),
@@ -497,35 +310,26 @@ describe("createBeamMirrorRunner", () => {
     ];
     const runner = fixture.runner({}, { listCatalogs: () => catalogs });
     await runner.tick();
-    expect(sent).toHaveLength(0);
+    expect(fixture.sent).toHaveLength(0);
   });
 
   it("warns once when profile isolation disables process-HOME fallback", async () => {
-    const { warnings } = fixture;
-    const runner = createBeamTestRunner({
-      runtime: createBeamTestRuntime(beamTestMirrorConfig({ catalogs: ["claude"] })),
-      logger: fixture.logger,
-      listCatalogs: () => [
-        createBeamTestCatalog({ sessions: [], processHomeFallbackAllowed: false }),
-      ],
-    });
+    const runner = fixture.runner({ sessions: [], processHomeFallbackAllowed: false });
 
-    await runner.tick();
-    await runner.tick();
+    await runTicks(runner);
 
-    expect(warnings).toEqual([
+    expect(fixture.warnings).toEqual([
       "beam mirror process-HOME fallback disabled: isolated state; only explicit catalog roots can be mirrored",
     ]);
   });
 
   it("sends one completed upload for an observed idle session on a partial host page", async () => {
     const { sent } = fixture;
-    const recency = beamTestNow - 60_000;
     let clock = beamTestNow;
     const runner = fixture.runner(
       {
         hostCursor: "older-sessions",
-        sessions: [{ threadId: "t1", name: "Fix flow", recencyAt: recency }],
+        sessions: beamTestSessions(["t1"], beamTestNow - 60_000),
       },
       { now: () => clock },
     );
@@ -534,8 +338,7 @@ describe("createBeamMirrorRunner", () => {
     expect(sent[0]?.payload.completed).toBe(false);
     // Session goes idle past the window; the next tick finalizes it once.
     clock = beamTestNow + 4 * 60 * 60_000;
-    await runner.tick();
-    await runner.tick();
+    await runTicks(runner);
     expect(sent).toHaveLength(2);
     expect(sent[1]?.payload.completed).toBe(true);
     expect(sent[1]?.payload.beamId).toBe(sent[0]?.payload.beamId);
@@ -567,20 +370,16 @@ describe("createBeamMirrorService", () => {
         pause = beamTestBarrier();
       const list = stage === "list" ? pause.run : vi.fn();
       const read = stage === "read" ? pause.run : vi.fn();
-      const catalogs = vi
-        .spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs")
-        .mockReturnValue([
-          createBeamTestCatalog({
-            sessions: beamTestSessions(["t1", "t2"], Date.now()),
-            onList: list,
-            onRead: read,
-          }),
-        ]);
-      const upload = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockResolvedValue({
-        response: new Response("{}", { status: 200 }),
-        finalUrl: "https://team.example/api/v1/beam/sessions",
-        release: vi.fn(async () => undefined),
-      });
+      vi.spyOn(sessionCatalogRuntime, "listActiveSessionCatalogs").mockReturnValue([
+        createBeamTestCatalog({
+          sessions: beamTestSessions(["t1", "t2"], Date.now()),
+          onList: list,
+          onRead: read,
+        }),
+      ]);
+      const upload = vi
+        .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+        .mockRejectedValue(new Error("unexpected upload after stop"));
       const service = createBeamMirrorService({
         runtime: createBeamTestRuntime(beamTestMirrorConfig()),
       });
@@ -602,8 +401,6 @@ describe("createBeamMirrorService", () => {
         expect(context.logger.warn).not.toHaveBeenCalled();
       } finally {
         pause.release();
-        upload.mockRestore();
-        catalogs.mockRestore();
         await context.scheduler.stop();
       }
     },

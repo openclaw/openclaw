@@ -1,5 +1,6 @@
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createClosedChunkStream } from "../test-support/streaming-error-response.js";
 import { refreshXaiOAuthCredential } from "./xai-oauth.js";
 
 const credential = {
@@ -13,17 +14,10 @@ const credential = {
 
 /** Streams one byte at a time so multi-byte scalars straddle decoder chunks. */
 function byteStreamResponse(bytes: Buffer, status = 200): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
-      start(stream) {
-        for (const byte of bytes) {
-          stream.enqueue(Uint8Array.of(byte));
-        }
-        stream.close();
-      },
-    }),
-    { status, headers: { "Content-Type": "application/json" } },
-  );
+  return new Response(createClosedChunkStream(Array.from(bytes, (byte) => Uint8Array.of(byte))), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 describe("xAI OAuth refresh response bytes", () => {

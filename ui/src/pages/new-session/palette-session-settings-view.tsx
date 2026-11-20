@@ -1,10 +1,15 @@
-import { createMemo, createSignal, For, latest, Loading, onCleanup, onSettled } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
+import { createMemo, createSignal, For, latest, Loading, onSettled } from "solid-js";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
+import { HeaderSearch } from "../../components/solid/header-search.tsx";
 import "../../components/tooltip.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { SwitchIndicator } from "../../components/solid/switch.tsx";
+import { keyboardHints } from "../../lib/keyboard-hints.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { resolvePaletteSessionSettings, type SettingsOptions } from "./palette-session-settings.ts";
@@ -39,15 +44,11 @@ export function PaletteSessionSettingsView(properties: {
   let focusTarget: FocusTarget | undefined;
   const focusTargets: Partial<Record<FocusTarget, HTMLElement>> = {};
   const focusControls = new Set<HTMLElement>();
-  const controlRef = () => {
-    let control: HTMLElement;
-    // Each conditional control owns its registration, including removal before the panel settles.
-    onCleanup(() => focusControls.delete(control));
-    return (element: HTMLElement) => {
-      focusControls.delete(control);
-      focusControls.add((control = element));
-    };
-  };
+  const controlRef = () =>
+    elementRef((element: HTMLElement) => {
+      focusControls.add(element);
+      return () => focusControls.delete(element);
+    });
   let readAgentControls: (() => readonly HTMLElement[]) | undefined;
   let popover!: PopoverHandle;
   const close = (preferences: SettingsOptions["preferences"]) => {
@@ -60,8 +61,8 @@ export function PaletteSessionSettingsView(properties: {
   const showPlaces = (value: boolean, pointer = false) => {
     setPlaces(value);
     setQuery("");
-    // Pointer entry focuses Back; keyboard entry goes straight to search.
-    focusTarget = value ? (pointer ? "back" : "search") : "workspace";
+    // Search takes focus; a touch tap focuses Back so no on-screen keyboard covers the list.
+    focusTarget = value ? (pointer && !keyboardHints.visible() ? "back" : "search") : "workspace";
   };
   const view = createMemo(() => resolvePaletteSessionSettings(properties.options, query()));
   const selectMachine = (
@@ -103,7 +104,10 @@ export function PaletteSessionSettingsView(properties: {
         .composedPath()
         .some(
           (node) =>
-            node instanceof Element && node.matches('[role="menu"], [aria-haspopup="menu"]'),
+            node instanceof Element &&
+            node.matches(
+              '[role="menu"], [role="listbox"], [aria-haspopup="menu"], [aria-haspopup="listbox"]',
+            ),
         )
     ) {
       return;
@@ -127,7 +131,13 @@ export function PaletteSessionSettingsView(properties: {
     }
     const panel = event.currentTarget;
     const controls = [...focusControls, ...(readAgentControls?.() ?? [])]
-      .filter((control) => panel.contains(control) && !control.matches(":disabled"))
+      // Arrows walk the field and the choices; Tab still reaches the field's clear button.
+      .filter(
+        (control) =>
+          panel.contains(control) &&
+          !control.matches(":disabled") &&
+          !control.matches(".header-search__clear"),
+      )
       .toSorted((left, right) =>
         left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
       );
@@ -169,36 +179,33 @@ export function PaletteSessionSettingsView(properties: {
     const connect = nativeListener("click", () => properties.options.onConnectMachine());
     return (
       <>
-        <div class="palette-session-settings__heading">
-          <button
-            type="button"
-            class="palette-session-settings__back"
-            aria-label={t("common.back")}
-            ref={[
-              controlRef(),
-              (node) => {
-                back(node);
-                focusTargets.back = node;
-              },
-            ]}
-          >
-            <Icon name="arrowLeft" />
-          </button>
-          <span>{t("newSession.projects")}</span>
-        </div>
-        <input
-          class="palette-session-settings__search"
-          type="search"
-          aria-label={t("common.search")}
-          placeholder={t("common.search")}
-          value={query()}
-          ref={[
-            controlRef(),
-            (node) => {
-              focusTargets.search = node;
-            },
-          ]}
-          onInput={(event) => setQuery(event.currentTarget.value)}
+        <HeaderSearch
+          class="palette-session-settings__heading"
+          inputClass="palette-session-settings__search"
+          label={t("common.search")}
+          placeholder={t("newSession.searchProjects")}
+          query={query()}
+          controlRef={controlRef}
+          inputRef={(node) => {
+            focusTargets.search = node;
+          }}
+          onQueryChange={setQuery}
+          leading={
+            <button
+              type="button"
+              class="palette-session-settings__back"
+              aria-label={t("common.back")}
+              ref={[
+                controlRef(),
+                (node) => {
+                  back(node);
+                  focusTargets.back = node;
+                },
+              ]}
+            >
+              <Icon name="arrowLeft" />
+            </button>
+          }
         />
         <div class="palette-session-settings__choices">
           <For each={view().groups} keyed={(group) => group.machine.id}>
@@ -339,7 +346,8 @@ export function PaletteSessionSettingsView(properties: {
                 place().selectAgentId(id);
                 properties.options.onChange();
               },
-              onOpenChange: properties.options.onAgentPickerOpen,
+              identityTargetsRef: properties.options.identityTargetsRef,
+              onIdentityTargetsChange: properties.options.onIdentityTargetsChange,
             }}
           />
         </div>
@@ -402,7 +410,9 @@ export function PaletteSessionSettingsView(properties: {
                   <Icon name="gitBranch" />
                 </span>
                 <span>{t("newSession.checkoutWorktree")}</span>
-                <span class="palette-session-settings__switch" aria-hidden="true" />
+                <span class="palette-session-settings__switch">
+                  <SwitchIndicator checked={place().worktree} size="sm" />
+                </span>
               </button>
             ) : undefined}
           </>
@@ -423,7 +433,7 @@ export function PaletteSessionSettingsView(properties: {
       id={properties.id + "-settings-popover"}
       label={t("commandPalette.newSessionSettings")}
       class="palette-session-settings"
-      placement="bottom-end"
+      placement="bottom-start"
       open={open()}
       onOpenChange={(value) => (value ? setOpen(true) : close(properties.options.preferences))}
     >
@@ -440,9 +450,8 @@ export function PaletteSessionSettingsView(properties: {
                     : undefined
                 }
               >
-                <input
-                  type="checkbox"
-                  ref={controlRef()}
+                <Checkbox
+                  ref={[controlRef()]}
                   checked={properties.options.preferences.remember}
                   disabled={view().locked || !properties.options.preferences.available}
                   onChange={(event) =>
@@ -453,6 +462,7 @@ export function PaletteSessionSettingsView(properties: {
                 />
                 <span>
                   <ShortcutText
+                    fallback={t("commandPalette.rememberSettingsNoShortcut")}
                     text={t("commandPalette.rememberSettings", { shortcut: "{shortcut}" })}
                     shortcut={() => (
                       <KeyboardShortcut combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette} inline />

@@ -49,7 +49,7 @@ function resolveLazyBundledWebSearchProviders(
 }
 
 export function resolvePluginWebSearchProviders(
-  params: Omit<ResolvePluginWebProvidersParams, "sandboxed">,
+  params: ResolvePluginWebProvidersParams,
 ): PluginWebSearchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     ...providerResolution,

@@ -30,6 +30,7 @@ import {
 } from "./session-accessor.js";
 import { readSessionTranscriptMessageEventPage } from "./session-accessor.sqlite-active-events.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlite-replacement-projection.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
@@ -264,15 +265,10 @@ describe("SQLite session handle lifecycle", () => {
       }),
     ];
     await persist(messages);
-    runOpenClawAgentWriteTransaction((database) => {
-      database.db
-        .prepare(`UPDATE transcript_events
-          SET navigation_type = NULL, navigation_custom_type = NULL,
-              navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-              navigation_last_custom_type = NULL, navigation_valid = 1
-          WHERE session_id = ?`)
-        .run(scope.sessionId);
-    }, databaseOptions());
+    runOpenClawAgentWriteTransaction(
+      (database) => clearHistoryNavigation(database, scope.sessionId),
+      databaseOptions(),
+    );
     const facts = await withTranscriptWriteLock(scope, (transcript) =>
       transcript.readMessageFacts({
         idempotencyKeys: ["old-delivery"],
@@ -349,7 +345,7 @@ describe("SQLite session handle lifecycle", () => {
       updateMode: "none",
     });
 
-    expect(result.appendedCount).toBe(1);
+    expect(result.messages.filter((m) => m.appended)).toHaveLength(1);
     await expect(loadTranscriptEvents(scope)).resolves.toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({ content: "append after close" }),

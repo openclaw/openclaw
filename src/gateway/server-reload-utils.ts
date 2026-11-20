@@ -63,16 +63,16 @@ export async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
   timeoutMs: number;
   onWarn: (message: string) => void;
-  label: string;
 }) {
+  const label = "bundle-mcp runtime disposal during config reload";
   // MCP runtime disposal may need async provider cleanup. Bound it so config
   // reload can proceed and report the stale runtime risk.
   const disposePromise = Promise.resolve()
     .then(params.dispose)
     .catch((error: unknown) => {
-      params.onWarn(`${params.label} failed: ${String(error)}`);
+      params.onWarn(`${label} failed: ${String(error)}`);
     });
   if (!(await settlesWithin(disposePromise, params.timeoutMs))) {
-    params.onWarn(`${params.label} exceeded ${params.timeoutMs}ms; continuing`);
+    params.onWarn(`${label} exceeded ${params.timeoutMs}ms; continuing`);
   }
 }

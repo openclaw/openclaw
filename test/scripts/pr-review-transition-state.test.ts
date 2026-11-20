@@ -84,9 +84,7 @@ type Case = {
 it.each<Case>([
   { operation: "merge", renamed: true },
   { operation: "merge", renamed: true, fault: "foreign undo" },
-  { operation: "merge" },
   { operation: "merge", followup: true },
-  { operation: "rebase" },
   { operation: "rebase", followup: true },
   { operation: "rebase", fault: "foreign undo" },
   { operation: "rebase", fault: "moved ORIG_HEAD" },

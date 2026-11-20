@@ -8,7 +8,7 @@ import {
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
-import type { Model } from "../llm/types.js";
+import type { Model, ModelRequestHeaders } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import { resolvePluginOwnedProviderAuth } from "../plugins/provider-runtime.js";
@@ -296,6 +296,12 @@ export async function getApiKeyForModelCore(params: {
   workspaceDir?: string;
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  signal?: AbortSignal;
+  /** Gates a new native refresh claim, not independently owned settlement. */
+  assertRefreshAdmission?: () => void;
+  validateOAuthCredential?: Parameters<
+    typeof resolveApiKeyForProfile
+  >[0]["validateOAuthCredential"];
   credentialPrecedence?: ProviderCredentialPrecedence;
   allowAuthProfileFallback?: boolean;
   skipSetupProviderFallback?: boolean;
@@ -369,7 +375,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
   const runtimeAuth = runtimeProvider?.request?.auth;
   const attachedRequest = getModelProviderRequestTransport(model);
   let protectedRequest = attachedRequest;
-  let protectedRequestHeaders: Record<string, string> | undefined;
+  let protectedRequestHeaders: ModelRequestHeaders | undefined;
   for (const [name, sourceValue] of Object.entries(sourceProvider?.request?.headers ?? {})) {
     if (!isManagedSecret(sourceValue)) {
       continue;
@@ -391,7 +397,12 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
   ) {
     const token = normalizeOptionalSecretInput(runtimeAuth.token)?.trim();
     if (token) {
-      if (attachedRequest?.auth?.mode === "authorization-bearer") {
+      // Protect only the configured value. A later exchange may own a different
+      // credential in the same mode, including one that is already sentinelized.
+      if (
+        attachedRequest?.auth?.mode === "authorization-bearer" &&
+        attachedRequest.auth.token === token
+      ) {
         protectedRequest = {
           ...protectedRequest,
           auth: {
@@ -411,7 +422,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
     const headerName = runtimeAuth.headerName.trim();
     const prefix = runtimeAuth.prefix?.trim() ?? "";
     if (headerName && value) {
-      if (attachedRequest?.auth?.mode === "header") {
+      if (attachedRequest?.auth?.mode === "header" && attachedRequest.auth.value === value) {
         protectedRequest = {
           ...protectedRequest,
           auth: {
@@ -423,7 +434,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
       addReplacement(headerName, `${prefix}${value}`, `${prefix}${sentinelize(value)}`);
     }
   }
-  let headers: Record<string, string> | undefined;
+  let headers: ModelRequestHeaders | undefined;
   for (const [name, value] of Object.entries(model.headers)) {
     const replacement = replacements.get(name.trim().toLowerCase());
     if (replacement?.value !== value) {
@@ -439,7 +450,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
 }
 
 /** Uses the configured standard bearer header for SDKs with vendor-specific auth defaults. */
-export function applyAuthHeaderOverride<T extends Model>(
+export function applyAuthHeaderOverride<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
   cfg: OpenClawConfig | undefined,
@@ -452,10 +463,17 @@ export function applyAuthHeaderOverride<T extends Model>(
   if (!providerConfig?.authHeader) {
     return sentinelModel;
   }
+  // Explicit request auth already owns the credential-bearing headers. The
+  // provider's generic bearer preference must not replace that prepared choice.
+  const request = getModelProviderRequestTransport(sentinelModel);
+  const requestAuth = request?.auth;
+  if (requestAuth && requestAuth.mode !== "provider-default") {
+    return sentinelModel;
+  }
 
   // Strip any existing authorization header (case-insensitive) before
   // injecting the canonical one so we don't produce a comma-joined value.
-  const headers: Record<string, string> = {};
+  const headers: ModelRequestHeaders = {};
   if (sentinelModel.headers) {
     for (const [key, value] of Object.entries(sentinelModel.headers)) {
       if (normalizeOptionalLowercaseString(key) !== "authorization") {
@@ -465,8 +483,9 @@ export function applyAuthHeaderOverride<T extends Model>(
   }
   headers.Authorization = `Bearer ${auth.apiKey}`;
 
-  return {
-    ...sentinelModel,
-    headers,
-  };
+  // Transport readers must not restore a pre-exchange bearer from request.headers.
+  return attachModelProviderRequestTransport(
+    { ...sentinelModel, headers },
+    request ? { ...request, headers } : undefined,
+  );
 }

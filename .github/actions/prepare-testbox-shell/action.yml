@@ -52,12 +52,32 @@ runs:
         link_node_tool node
         link_node_tool npm
         link_node_tool npx
-        link_node_tool corepack
-        sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+        # SSH does not inherit GITHUB_ENV. Reuse the prepared toolchain and store
+        # for both pnpm and direct corepack commands, preserving caller overrides.
+        corepack_binary="$(readlink -f "$node_bin/corepack")"
+        corepack_shim="$(mktemp "$RUNNER_TEMP/openclaw-corepack.XXXXXX")"
+        {
+          printf '#!/usr/bin/env bash\n'
+          for name in COREPACK_HOME PNPM_CONFIG_STORE_DIR PNPM_CONFIG_CACHE_DIR; do
+            value="${!name:-}"
+            if [ -n "$value" ]; then
+              printf '[ -n "${%s:-}" ] || export %s=%q\n' "$name" "$name" "$value"
+            fi
+          done
+          printf 'exec %q "$@"\n' "$corepack_binary"
+        } > "$corepack_shim"
+        pnpm_shim="$(mktemp "$RUNNER_TEMP/openclaw-pnpm.XXXXXX")"
+        cat > "$pnpm_shim" <<'PNPM'
         #!/usr/bin/env bash
         exec /usr/local/bin/corepack pnpm "$@"
         PNPM
-        sudo chmod 0755 /usr/local/bin/pnpm
+        chmod 0755 "$corepack_shim" "$pnpm_shim"
+        # Selected-source installers can put NODE_BIN first. Replace both aliases
+        # without writing through Corepack's symlinks into its packaged files.
+        for target_bin in "$node_bin" /usr/local/bin; do
+          sudo ln -sf "$corepack_shim" "$target_bin/corepack"
+          sudo ln -sf "$pnpm_shim" "$target_bin/pnpm"
+        done
 
     - name: Prepare Android proof prerequisites
       if: inputs.android == 'true'

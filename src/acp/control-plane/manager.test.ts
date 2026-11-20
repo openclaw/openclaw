@@ -26,6 +26,7 @@ import {
   mockParentedAcpSessionEntries,
   readySessionMeta,
   resolvedIdentity,
+  runtimeHandle,
   type OpenClawConfig,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
@@ -165,11 +166,7 @@ describe("AcpSessionManager", () => {
       const onElicitation = vi.fn(async () => ({ action: "cancel" as const }));
       f.runtimeState.ensureSession.mockImplementation(async (input) => {
         await releaseInit.promise;
-        return {
-          sessionKey: input.sessionKey,
-          backend: "acpx",
-          runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-        };
+        return runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`);
       });
       mockParentedAcpSessionEntries({
         childSessionKey,
@@ -296,11 +293,9 @@ describe("AcpSessionManager", () => {
     const f = fixture(
       readySessionMeta({ backend: "metadata-backend", runtimeSessionName: "metadata-runtime" }),
     );
-    f.runtimeState.ensureSession.mockImplementation(async ({ sessionKey }) => ({
-      sessionKey,
-      backend: "metadata-backend",
-      runtimeSessionName: "metadata-runtime",
-    }));
+    f.runtimeState.ensureSession.mockImplementation(async ({ sessionKey }) =>
+      runtimeHandle(sessionKey, "metadata-runtime", { backend: "metadata-backend" }),
+    );
     hoisted.requireAcpRuntimeBackendMock.mockImplementation((backendId?: string) => {
       if (backendId !== "metadata-backend") {
         throw new Error(`unexpected backend ${backendId ?? "<auto>"}`);

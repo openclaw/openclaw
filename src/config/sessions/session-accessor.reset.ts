@@ -6,6 +6,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
@@ -17,6 +18,7 @@ import type {
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { withSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -32,10 +34,9 @@ import type {
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
-import { withSessionActorStorage } from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import type { SessionEntryCreationCommit } from "./session-entry-creation.types.js";
 import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
@@ -351,6 +352,7 @@ export async function commitReplySessionInitialization(params: {
   }
   let staleCommit: SessionEntry | null | undefined;
   let usedMemoryBackend = false;
+  let writtenSource: AgentDatabaseExecutionFileIdentity | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
   const descriptor: ReplySessionInitializationUpsertDescriptor = {
@@ -417,6 +419,9 @@ export async function commitReplySessionInitialization(params: {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
       skipMaintenance: true,
+      onLifecycleCommitted: (committedSource?: AgentDatabaseExecutionFileIdentity) => {
+        writtenSource = committedSource;
+      },
       storePath,
       upserts,
       commitGuard: () => {
@@ -586,6 +591,7 @@ export async function commitReplySessionInitialization(params: {
   if (!usedMemoryBackend) {
     // Reply preparation shares ordinary writes' maintenance owner, never forced cleanup.
     kickSessionEntryMaintenanceAfterWrite({
+      source: writtenSource,
       activeSessionKey: params.activeSessionKey,
       archiveDirectory: resolveSqliteTranscriptArchiveDirectory(captured),
       maintenanceConfig: params.maintenanceConfig,

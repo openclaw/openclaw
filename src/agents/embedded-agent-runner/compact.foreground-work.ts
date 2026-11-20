@@ -116,16 +116,14 @@ export async function withQueuedCompactionTurn(
   return await result.promise;
 }
 
-export type ForegroundCompactionOwner = {
-  adoptLease: (lease: PreparedModelRuntimeLease) => ContextEngineMaintenanceResources;
-  resolveEngine: (factory: () => Promise<ContextEngine>) => Promise<ContextEngine>;
-  captureContext: () => void;
-  transferEngine: () => void;
-};
-
 /** Keeps physical cleanup separate from the compaction result and transcript fences. */
 export async function runForegroundCompactionWork(
-  run: (owner: ForegroundCompactionOwner) => Promise<EmbeddedAgentCompactResult>,
+  run: (owner: {
+    adoptLease: (lease: PreparedModelRuntimeLease) => ContextEngineMaintenanceResources;
+    resolveEngine: (factory: () => Promise<ContextEngine>) => Promise<ContextEngine>;
+    captureContext: () => void;
+    transferEngine: () => void;
+  }) => Promise<EmbeddedAgentCompactResult>,
   abortSignal?: AbortSignal,
 ): Promise<EmbeddedAgentCompactResult> {
   const result = createDeferredCore<EmbeddedAgentCompactResult>();

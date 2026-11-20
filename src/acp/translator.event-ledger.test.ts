@@ -8,8 +8,6 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
 
-vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
-
 async function createHarness(
   eventLedger: AcpEventLedger,
   options: { load?: string; rejectSend?: boolean } = {},
@@ -20,12 +18,6 @@ async function createHarness(
     send: () => {
       if (options.rejectSend) {
         throw new Error("send failed before acceptance");
-      }
-      return { ok: true };
-    },
-    request: (method) => {
-      if (method === "sessions.get") {
-        throw new Error("ledger replay must not load the transcript");
       }
       return { ok: true };
     },
@@ -59,21 +51,19 @@ async function userPrompts(ledger: AcpEventLedger, ref: { sessionId: string; ses
   );
 }
 
-const replayTypes = [
-  "session_info_update",
-  "available_commands_update",
-  "user_message_chunk",
-  "tool_call",
-  "tool_call_update",
-  "agent_message_chunk",
-  "session_info_update",
-  "session_info_update",
-  "available_commands_update",
-];
-
 function expectReplay(harness: Awaited<ReturnType<typeof createHarness>>) {
   expect(harness.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
-  expect(harness.updates().map((update) => update.sessionUpdate)).toEqual(replayTypes);
+  expect(harness.updates()).toMatchObject([
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "available_commands_update" },
+    { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Question" } },
+    { sessionUpdate: "tool_call", toolCallId: "tool-1" },
+    { sessionUpdate: "tool_call_update", toolCallId: "tool-1" },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Answer" } },
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "session_info_update" },
+    { sessionUpdate: "available_commands_update" },
+  ]);
 }
 
 it("replays complete sessions by ACP ID and Gateway key into one canonical ledger", async () => {
@@ -107,16 +97,7 @@ it("replays complete sessions by ACP ID and Gateway key into one canonical ledge
   await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
 
   const second = await createHarness(ledger, { load: ref.sessionId });
-  const updates = second.updates();
   expectReplay(second);
-  expect(updates[2]).toEqual({
-    sessionUpdate: "user_message_chunk",
-    content: { type: "text", text: "Question" },
-  });
-  expect(updates[5]).toEqual({
-    sessionUpdate: "agent_message_chunk",
-    content: { type: "text", text: "Answer" },
-  });
   expect(await userPrompts(ledger, ref)).toHaveLength(1);
 
   const listed = await createHarness(ledger, { load: ref.sessionKey });

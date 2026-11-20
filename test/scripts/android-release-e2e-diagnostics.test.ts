@@ -15,6 +15,13 @@ const nativeDefaults = {
   OKsingle: false,
   phaseReady: phaseReady(false),
 };
+function expectNative(text: string, expected: Record<string, unknown>) {
+  const facts = nativeFacts(text);
+  expect(facts).toEqual({ ...nativeDefaults, ...expected });
+  expect(JSON.stringify(facts)).not.toMatch(
+    /private|secret|token|UnknownException|INSTRUMENTATION_|Process crashed|OK \(1 test\)/iu,
+  );
+}
 
 it.each([
   [
@@ -25,7 +32,6 @@ it.each([
   ["device offline: private-device", { deviceOffline: true }],
   ["Connection reset by peer: private-device", { connectionReset: true }],
   ["private-device timed out", { timeout: true }],
-  ["adb: error: closed", { transportClosed: true }],
   ["adb: error: failed to get feature set: closed", { transportClosed: true }],
   ["adb: device 'private-device' not found", { deviceMissing: true }],
   ["adb: no devices/emulators found", { deviceMissing: true }],
@@ -55,12 +61,11 @@ it("drops unknown tool, operation, output and phase names", () => {
   expect(
     commandFacts("/private/unknown-secret", ["secret"], "private-token", "private-secret"),
   ).toMatchObject({ tool: "other", operation: "other" });
-  const facts = nativeFacts(
+  expectNative(
     "private.UnknownException: private-token\n at private.Secret(secret.kt:5)\n" +
       "OPENCLAW_ANDROID_PHASE_READY private-secret\nOPENCLAW_ANDROID_PHASE_READY initial-private-token\n",
+    {},
   );
-  expect(facts).toMatchObject(nativeDefaults);
-  expect(JSON.stringify(facts)).not.toMatch(/private|secret|token|UnknownException/u);
 });
 
 it("publishes known managed failures without messages, causes or arbitrary codes", () => {
@@ -78,22 +83,17 @@ it("publishes known managed failures without messages, causes or arbitrary codes
   });
 });
 
-it.each([
-  ["java.lang.AssertionError: private-token", "AssertionError"],
-  ["androidx.test.uiautomator.StaleObjectException", "StaleObjectException"],
-])("redacts native source locations: %s", (exception, expectedClass) => {
-  const facts = nativeFacts(
-    `${exception}\n at ai.openclaw.wear.AndroidReleaseWearTest.releasePhase(AndroidReleaseWearTest.kt:121)\n at private.Secret(secret.kt:5)\n at ai.openclaw.release.ReleaseValidationUi.read(ReleaseValidationUi.kt:88)`,
+it("redacts native source locations", () => {
+  expectNative(
+    "java.lang.AssertionError: private-token\n at ai.openclaw.wear.AndroidReleaseWearTest.releasePhase(AndroidReleaseWearTest.kt:121)\n at private.Secret(secret.kt:5)\n at ai.openclaw.release.ReleaseValidationUi.read(ReleaseValidationUi.kt:88)",
+    {
+      class: "AssertionError",
+      frames: [
+        { file: "AndroidReleaseWearTest.kt", line: 121 },
+        { file: "ReleaseValidationUi.kt", line: 88 },
+      ],
+    },
   );
-  expect(facts).toEqual({
-    ...nativeDefaults,
-    class: expectedClass,
-    frames: [
-      { file: "AndroidReleaseWearTest.kt", line: 121 },
-      { file: "ReleaseValidationUi.kt", line: 88 },
-    ],
-  });
-  expect(JSON.stringify(facts)).not.toMatch(/private|token|Secret/u);
 });
 
 it.each([
@@ -101,11 +101,8 @@ it.each([
   ["INSTRUMENTATION_FAILED: private-token", "instrumentationFailed"],
   ["OK (1 test)\nprivate-token", "OKsingle"],
 ])("retains native terminal facts for %s without raw results", (text, expected) => {
-  const facts = nativeFacts(
-    phases.map((phase) => `OPENCLAW_ANDROID_PHASE_READY ${phase}\n`).join("") + text,
-  );
-  expect(facts).toEqual({ ...nativeDefaults, [expected]: true, phaseReady: phaseReady(true) });
-  expect(JSON.stringify(facts)).not.toMatch(
-    /private|token|INSTRUMENTATION_|Process crashed|OK \(1 test\)/u,
-  );
+  expectNative(phases.map((phase) => `OPENCLAW_ANDROID_PHASE_READY ${phase}\n`).join("") + text, {
+    [expected]: true,
+    phaseReady: phaseReady(true),
+  });
 });

@@ -5,12 +5,12 @@ import {
   normalizeChatMessageMaxWidth,
   normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
-  UI_APPEARANCE_DEFAULTS,
 } from "../../app/settings-contract.ts";
 import { Picker } from "../../components/select-picker.ts";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
-  SettingsDefaultDescription,
   SettingsRow,
+  SettingsSegmented,
   SettingsToggleRow,
 } from "../../components/solid/settings-ui.tsx";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
@@ -18,11 +18,11 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { liveValue } from "../../lib/reactive/live-value.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SessionObserverSettings } from "./session-observer-settings-view.tsx";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
-import { SettingsSelectRow } from "./settings-select-row.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
@@ -35,7 +35,7 @@ function languageLabel(locale: Locale) {
 }
 
 export { LobsterPetSection } from "./view-appearance-lobster.tsx";
-export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
+function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): string {
   if (provenance === "profile") {
     return t("configView.profileSyncedHint");
   }
@@ -47,46 +47,43 @@ export function serverUiPrefProvenanceHint(provenance: ServerUiPrefProvenance): 
   }
   return t("configView.syncedHint");
 }
-export function LanguageSection(props: ConfigProps) {
-  const defaultDescription = (
-    <SettingsDefaultDescription
-      value={props.localeResetValue ? languageLabel(props.localeResetValue) : t("common.system")}
-      overridden={props.localeOverridden}
-    />
-  );
-  const provenance = () => serverUiPrefProvenanceHint(props.localeProvenance);
+/**
+ * One sentence for a group of synced preferences. Every key in a group normally
+ * shares a scope; the least-settled one wins so the group never over-promises.
+ */
+export function serverUiPrefsScopeHint(provenances: readonly ServerUiPrefProvenance[]): string {
+  for (const provenance of ["pending", "device-local", "profile"] as const) {
+    if (provenances.includes(provenance)) {
+      return serverUiPrefProvenanceHint(provenance);
+    }
+  }
+  return serverUiPrefProvenanceHint("synced");
+}
+export function LanguageRow(props: ConfigProps) {
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.language} class="settings-section">
-      <SettingsSectionHeader title={t("quickSettings.language")} />
-      <div class="settings-group">
-        <SettingsRow
-          title={t("quickSettings.language")}
-          description={
-            <>
-              {defaultDescription} {provenance()}
-            </>
-          }
-          control={
-            <Picker
-              params={{
-                label: t("quickSettings.language"),
-                value: props.localeOverride ?? "system",
-                options: [
-                  {
-                    value: "system",
-                    label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
-                  },
-                  ...SUPPORTED_LOCALES.map((value) => ({ value, label: languageLabel(value) })),
-                ],
-                showOptionTooltips: false,
-                onChange: (value) =>
-                  props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
-              }}
-            />
-          }
-        />
-      </div>
-    </section>
+    <div id={APPEARANCE_SETTINGS_TARGET_IDS.language}>
+      <SettingsRow
+        title={t("quickSettings.language")}
+        control={
+          <Picker
+            params={{
+              label: t("quickSettings.language"),
+              value: props.localeOverride ?? "system",
+              options: [
+                {
+                  value: "system",
+                  label: `${t("common.system")} (${languageLabel(props.systemLocale)})`,
+                },
+                ...SUPPORTED_LOCALES.map((value) => ({ value, label: languageLabel(value) })),
+              ],
+              showOptionTooltips: false,
+              onChange: (value) =>
+                props.onLocaleChange(SUPPORTED_LOCALES.find((locale) => locale === value)),
+            }}
+          />
+        }
+      />
+    </div>
   );
 }
 function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "camera" }) {
@@ -169,31 +166,22 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
                   });
                   return (
                     <Errored
-                      fallback={(error) => (
-                        <>
-                          <span role="alert">{formatUiError(error())}</span>
-                          <br />
-                        </>
-                      )}
+                      fallback={(error) => <span role="alert">{formatUiError(error())}</span>}
                     >
                       <Loading fallback={null}>
-                        {ready() && state()?.devices.length === 0 && (
-                          <>
-                            {t(
-                              props.kind === "microphone"
-                                ? "chat.composer.noMicrophones"
-                                : "chat.composer.noCameras",
-                            )}
-                            <br />
-                          </>
-                        )}
+                        {ready() &&
+                          state()?.devices.length === 0 &&
+                          t(
+                            props.kind === "microphone"
+                              ? "chat.composer.noMicrophones"
+                              : "chat.composer.noCameras",
+                          )}
                       </Loading>
                     </Errored>
                   );
                 }}
               </Show>
             </Show>
-            {t("quickSettings.personal.browserOnly")}
           </>
         }
         control={
@@ -244,47 +232,95 @@ export function ChatPreferencesSection(props: ConfigProps) {
           mode: serverQueueMode(),
         })
       : undefined;
-  // The value binding rewrites the DOM whenever it reruns. Track only the stored
-  // width so unrelated settings refreshes keep an uncommitted draft.
+  // Isolate committed values from unrelated settings and translation refreshes.
   const messageWidth = createMemo(() => props.chatMessageMaxWidth ?? "");
-  const messageWidthDefaultDescription = (
-    <SettingsDefaultDescription
-      value={UI_APPEARANCE_DEFAULTS.chatMessageMaxWidth}
-      overridden={props.chatMessageMaxWidth !== undefined}
-    />
-  );
-  const sendShortcutDefaultDescription = (
-    <SettingsDefaultDescription
-      value={
-        props.chatSendShortcutResetValue === "modifier-enter"
-          ? t("chat.sendShortcutModifierEnter")
-          : t("chat.sendShortcutEnter")
-      }
-      overridden={props.chatSendShortcutOverridden}
-    />
-  );
   const sendShortcutProvenance = () => serverUiPrefProvenanceHint(props.chatSendShortcutProvenance);
   const followUpProvenance = () => serverUiPrefProvenanceHint(props.chatFollowUpModeProvenance);
-  const catalogTargetDefaultDescription = (
-    <SettingsDefaultDescription
-      value={t("chat.catalogOpenTargetViewer")}
-      overridden={props.catalogOpenTarget !== UI_APPEARANCE_DEFAULTS.catalogOpenTarget}
-    />
-  );
 
   return (
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <SettingsSectionHeader title={t("configView.chatPrefs.title")} />
       <div class="settings-group">
         <SettingsRow
-          title={t("configView.chatPrefs.messageWidth")}
+          title={t("chat.sendShortcut")}
           description={
             <>
-              {t("configView.chatPrefs.messageWidthHint")}
+              {t("chat.sendShortcutHint")}
               <br />
-              {messageWidthDefaultDescription} {t("quickSettings.personal.browserOnly")}
+              {sendShortcutProvenance()}
             </>
           }
+          stackedOnNarrow={true}
+          control={
+            <SettingsSegmented
+              value={props.chatSendShortcut}
+              ariaLabel={t("chat.sendShortcut")}
+              options={[
+                {
+                  value: "enter",
+                  label: t("chat.sendShortcutEnter"),
+                  testId: "send-shortcut-enter",
+                },
+                {
+                  value: "modifier-enter",
+                  label: t("chat.sendShortcutModifierEnter"),
+                  testId: "send-shortcut-modifier-enter",
+                },
+              ]}
+              onChange={(value) =>
+                props.onAppearanceChange({
+                  chatSendShortcut: normalizeChatSendShortcut(value),
+                })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title={t("chat.followUpMode")}
+          description={
+            <span class="settings-follow-up-status">
+              {followUpProvenance()}
+              <br />
+              {followUpDescription()}{" "}
+              {props.chatFollowUpModeOverridden ? (
+                <button
+                  type="button"
+                  class="settings-row__desc-action"
+                  onClick={() => props.resetChatFollowUpMode()}
+                >
+                  {t("chat.followUpModeReset")}
+                </button>
+              ) : undefined}
+            </span>
+          }
+          control={
+            <>
+              <SettingsSelect
+                data-settings-follow-up-mode
+                aria-label={t("chat.followUpMode")}
+                value={followUpSelection()}
+                onChange={(event) => {
+                  const value = event.currentTarget.value;
+                  props.onAppearanceChange({
+                    chatFollowUpMode:
+                      value === "server" ? undefined : normalizeChatFollowUpMode(value),
+                  });
+                }}
+                options={[
+                  {
+                    value: "server",
+                    label: t("chat.followUpModeServer", { mode: serverQueueMode() }),
+                  },
+                  { value: "steer", label: t("chat.followUpModeSteer") },
+                  { value: "queue", label: t("chat.followUpModeQueue") },
+                ]}
+              />
+            </>
+          }
+        />
+        <SettingsRow
+          title={t("configView.chatPrefs.messageWidth")}
+          description={t("configView.chatPrefs.messageWidthHint")}
           control={
             <input
               class="settings-input"
@@ -293,7 +329,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
               type="text"
               spellcheck="false"
               placeholder="48rem"
-              value={messageWidth()}
+              ref={liveValue(messageWidth)}
               onChange={(event) => {
                 const input = event.currentTarget;
                 const normalized = normalizeChatMessageMaxWidth(input.value);
@@ -324,113 +360,28 @@ export function ChatPreferencesSection(props: ConfigProps) {
           hint={t("configView.chatPrefs.collapseTaskProgressHint")}
           disabled={!props.chatShowTaskProgress}
         />
-        <SettingsSelectRow
-          title={t("chat.sendShortcut")}
-          value={props.chatSendShortcut}
-          setting={"send-shortcut"}
-          description={
-            <>
-              {t("chat.sendShortcutHint")}
-              <br />
-              {sendShortcutDefaultDescription} {sendShortcutProvenance()}
-            </>
-          }
-          options={[
-            {
-              value: "enter",
-              label: t("chat.sendShortcutEnter"),
-            },
-            {
-              value: "modifier-enter",
-              label: t("chat.sendShortcutModifierEnter"),
-            },
-          ]}
-          onChange={(value) =>
-            props.onAppearanceChange({
-              chatSendShortcut: normalizeChatSendShortcut(value),
-            })
-          }
-        />
         <SettingsRow
-          title={t("chat.followUpMode")}
-          description={
-            <>
-              {followUpDescription()} {followUpProvenance()}
-            </>
-          }
-          control={
-            <>
-              <select
-                class="settings-select"
-                data-settings-follow-up-mode
-                aria-label={t("chat.followUpMode")}
-                value={followUpSelection()}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
-                  props.onAppearanceChange({
-                    chatFollowUpMode:
-                      value === "server" ? undefined : normalizeChatFollowUpMode(value),
-                  });
-                }}
-              >
-                <option value="server" selected={followUpSelection() === "server"}>
-                  {t("chat.followUpModeServer", {
-                    mode: serverQueueMode(),
-                  })}
-                </option>
-                <option value="steer" selected={followUpSelection() === "steer"}>
-                  {t("chat.followUpModeSteer")}
-                </option>
-                <option value="queue" selected={followUpSelection() === "queue"}>
-                  {t("chat.followUpModeQueue")}
-                </option>
-              </select>
-              {props.chatFollowUpModeOverridden ? (
-                <button
-                  type="button"
-                  class="btn btn--sm"
-                  onClick={() => props.resetChatFollowUpMode()}
-                >
-                  {t("chat.followUpModeReset")}
-                </button>
-              ) : undefined}
-            </>
-          }
-        />
-        <SettingsSelectRow
           title={t("chat.catalogOpenTarget")}
-          value={props.catalogOpenTarget}
-          setting={"catalog-open-target"}
-          description={
-            <>
-              {catalogTargetDefaultDescription} {t("quickSettings.personal.browserOnly")}
-            </>
-          }
-          options={[
-            {
-              value: "viewer",
-              label: t("chat.catalogOpenTargetViewer"),
-            },
-            {
-              value: "terminal",
-              label: t("chat.catalogOpenTargetTerminal"),
-            },
-          ]}
-          onChange={(value) =>
-            props.onAppearanceChange({
-              catalogOpenTarget: normalizeCatalogOpenTarget(value),
-            })
+          stackedOnNarrow={true}
+          control={
+            <SettingsSegmented
+              value={props.catalogOpenTarget}
+              ariaLabel={t("chat.catalogOpenTarget")}
+              options={[
+                { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
+                { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
+              ]}
+              onChange={(value) =>
+                props.onAppearanceChange({
+                  catalogOpenTarget: normalizeCatalogOpenTarget(value),
+                })
+              }
+            />
           }
         />
         <SettingsToggleRow
           title={t("configView.chatPrefs.openLinksExternally")}
-          description={
-            <>
-              {t("configView.chatPrefs.openLinksExternallyHint")}
-              <br />
-              {t("configView.chatPrefs.openLinksExternallyStorage")}
-            </>
-          }
+          description={t("configView.chatPrefs.openLinksExternallyHint")}
           checked={props.openLinksExternally}
           onChange={(enabled) =>
             props.onAppearanceChange({
@@ -438,6 +389,15 @@ export function ChatPreferencesSection(props: ConfigProps) {
             })
           }
         />
+      </div>
+    </section>
+  );
+}
+export function MediaDevicesSection(props: ConfigProps) {
+  return (
+    <section id={APPEARANCE_SETTINGS_TARGET_IDS.devices} class="settings-section">
+      <SettingsSectionHeader title={t("configView.chatPrefs.devices")} />
+      <div class="settings-group">
         <MediaDeviceField config={props} kind="microphone" />
         <MediaDeviceField config={props} kind="camera" />
         <LocalToggleRow
@@ -450,16 +410,22 @@ export function ChatPreferencesSection(props: ConfigProps) {
     </section>
   );
 }
-export function SidebarPreferencesSection(props: ConfigProps) {
+export function SidebarPreferencesSection(
+  props: ConfigProps & { sectionRef?: (element: HTMLElement) => void },
+) {
   const catalogLabelsScope = createMemo(() => props.hiddenSessionCatalogLabels.scope);
   const hiddenCatalogIds = createMemo(() => [...props.hiddenSessionCatalogIds].toSorted());
   // The delete dialog's "Don't ask me again" writes this off; this row is where
   // the operator turns it back on, so it has to stay next to the session prefs.
 
   return (
-    <section id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+    <section
+      ref={(element) => props.sectionRef?.(element)}
+      id={APPEARANCE_SETTINGS_TARGET_IDS.sidebar}
+      class="settings-section"
+      onFocusIn={() => props.onAppearanceDataNeeded?.()}
+    >
       <SettingsSectionHeader title={t("configView.sidebarPrefs.title")} />
-      <p class="settings-section__desc">{t("configView.sidebarPrefs.hint")}</p>
       <div class="settings-group">
         <LocalToggleRow
           config={props}
@@ -474,6 +440,7 @@ export function SidebarPreferencesSection(props: ConfigProps) {
           hint={t("configView.sidebarPrefs.deleteConfirmHint")}
         />
       </div>
+      <SessionObserverSettings config={props} />
       {hiddenCatalogIds().length > 0 ? (
         <>
           <div class="settings-section__header settings-section__header--subsection">
@@ -490,7 +457,6 @@ export function SidebarPreferencesSection(props: ConfigProps) {
                       </Loading>
                     </Errored>
                   }
-                  description={t("quickSettings.personal.browserOnly")}
                   control={
                     <button
                       type="button"
@@ -506,7 +472,6 @@ export function SidebarPreferencesSection(props: ConfigProps) {
           </div>
         </>
       ) : undefined}
-      <SessionObserverSettings config={props} />
     </section>
   );
 }

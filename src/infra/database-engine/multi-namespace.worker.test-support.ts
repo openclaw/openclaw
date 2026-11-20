@@ -8,10 +8,9 @@ import {
   revokeSqliteDatabaseAdmissions,
   type SqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import type { StoreSchema } from "./contract.js";
+import { createNotesSearch, openPostgresEngineTestStore } from "./engine-store.test-support.js";
 import type { NamespaceCommand } from "./multi-namespace.test-support.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import { pgSearchName } from "./postgres-search-schema.js";
 import { bindStoreSearch } from "./search.js";
@@ -21,19 +20,7 @@ const schema: StoreSchema = {
   version: 1,
   sqlite: "",
   postgres: "CREATE TABLE notes(id TEXT PRIMARY KEY, text TEXT NOT NULL, embedding BYTEA)",
-  search: {
-    text: {
-      notes: { table: "notes", fields: ["text"], postgres: { identity: "id", mode: "trigram" } },
-    },
-    vector: {
-      notes: {
-        table: "vectors",
-        alias: "v",
-        rowShape: { id: "string" },
-        postgres: { source: "notes", key: "id", embedding: "embedding", dimensions: 3 },
-      },
-    },
-  },
+  search: createNotesSearch(),
 };
 
 const input: {
@@ -55,18 +42,10 @@ function wait(index: number) {
 installSqliteDatabaseAdmissions(input.admissions);
 const anchor = openNodeSqliteDatabase(input.path);
 function open() {
-  const db = openEngineStore({
+  const db = openPostgresEngineTestStore({
     anchor,
     schema,
     input: { connection: input.connection, schemaPrefix: input.prefix },
-    openSqlite: () => {
-      throw new Error("Unexpected SQLite bootstrap");
-    },
-    prepareAnchor: () => {},
-    inspectSqlite: () => {
-      admitSqliteSchema(anchor);
-      return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-    },
   });
   if (!(db instanceof PostgresSyncConnection)) {
     throw new Error("Expected PostgreSQL");

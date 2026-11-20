@@ -11,6 +11,7 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
@@ -21,6 +22,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import { textMessage, timedText } from "./chat-flow-fixtures.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
   installWidgetPromptDiagnostics,
   retainWidgetPromptFailure,
@@ -46,6 +48,7 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="query">Query approved runs</button>
     <button id="popup">Try native popup</button>
     <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
@@ -69,6 +72,8 @@ function widgetDocument(): string {
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
       document.querySelector('#record').onclick=async()=>{await window.openclaw.state.emit({clicked:true});
         document.querySelector('#result').textContent='State recorded';};
+      document.querySelector('#query').onclick=async()=>{const data=await window.openclaw.data.query('main-ci');
+        document.querySelector('#result').textContent='Approved query returned '+data.workflow_runs.length+' run';};
     </script>`,
   );
 }
@@ -175,30 +180,39 @@ suite.define(() => {
     const html = widgetDocument();
     const { sandboxUrl, sandboxPort } = sandboxDocument(html);
     const proxy = await startProtectedSource(html);
-    const snapshot = {
-      sessionKey,
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-      widgets: [
-        {
-          name: widgetName,
-          tabId: "main",
-          title: "Community pulse",
-          contentKind: "html",
-          sizeW: 12,
-          sizeH: 5,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-          frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
-          viewTicket: "ticket",
-          viewTicketTtlMs: 1_200_000,
-          viewGeneration: "0123456789abcdef0123456789abcdef",
-          sandboxUrl,
-          sandboxPort,
+    const snapshot = createBoardSnapshot(sessionKey, [
+      createBoardWidget({
+        name: widgetName,
+        title: "Community pulse",
+        sizeW: 12,
+        sizeH: 5,
+        grantState: "granted",
+        declared: {
+          queries: [
+            {
+              name: "main-ci",
+              bindingId: "github.actions.runs",
+              params: {
+                repository: "owner/repo",
+                workflow: "ci.yml",
+                branch: "main",
+                status: null,
+                created: null,
+                perPage: 5,
+                excludePullRequests: true,
+              },
+              fields: ["status"],
+            },
+          ],
         },
-      ],
-    };
+        frameUrl: `${new URL(proxy.baseUrl).origin}${boardPath}?bt=ticket`,
+        viewTicket: "ticket",
+        viewTicketTtlMs: 1_200_000,
+        viewGeneration: "0123456789abcdef0123456789abcdef",
+        sandboxUrl,
+        sandboxPort,
+      }),
+    ]);
     try {
       const unauthenticated = await fetch(new URL(documentPath, proxy.baseUrl), {
         redirect: "manual",
@@ -235,6 +249,7 @@ suite.define(() => {
               ...defaultControlUiFeatureMethods,
               "board.get",
               "board.event",
+              "board.data.read",
               "canvas.document.view",
             ],
             historyMessages: [
@@ -247,6 +262,7 @@ suite.define(() => {
               "canvas.document.view": { html, sandboxUrl, sandboxPort },
               "board.get": snapshot,
               "board.event": { ok: true, appended: true },
+              "board.data.read": { workflow_runs: [{ status: "completed" }] },
             },
           });
           const outer = page.locator(".chat-tool-card__preview-frame");
@@ -286,6 +302,34 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          const confirmations: number[] = [];
+          for (let index = 0; index < 2; index++) {
+            confirmations.push(
+              await outer.evaluate(
+                (frame: HTMLIFrameElement) =>
+                  new Promise<number>((resolve) => {
+                    const receive = (event: MessageEvent<{ type?: string; height?: unknown }>) => {
+                      if (
+                        event.source !== frame.contentWindow ||
+                        event.data?.type !== "openclaw:widget-size" ||
+                        typeof event.data.height !== "number"
+                      ) {
+                        return;
+                      }
+                      window.removeEventListener("message", receive);
+                      resolve(event.data.height);
+                    };
+                    window.addEventListener("message", receive);
+                    frame.contentWindow!.postMessage(
+                      { type: "openclaw:widget-chat-host", measure: true },
+                      new URL(frame.src).origin,
+                    );
+                  }),
+              ),
+            );
+          }
+          expect(confirmations[0]).toBeGreaterThan(0);
+          expect(confirmations[1]).toBe(confirmations[0]);
           for (const widget of [inline, board]) {
             await click(widget, "Toggle details");
             await widget.getByText("Additional community details").waitFor();
@@ -320,6 +364,11 @@ suite.define(() => {
           await inline.getByRole("button", { name: "Try dashboard data" }).click();
           await inline.getByText("Dashboard data is unavailable in chat").waitFor();
           expect(await gateway.getRequests("board.data.read")).toEqual([]);
+          await click(board, "Query approved runs");
+          await board.getByText("Approved query returned 1 run", { exact: true }).waitFor();
+          expect(
+            (await gateway.getRequests("board.data.read")).map((request) => request.params),
+          ).toEqual([{ ticket: "ticket", queryName: "main-ci" }]);
 
           const retainedFrame = await outer.elementHandle();
           const retainedBoardFrame = await boardOuter.elementHandle();

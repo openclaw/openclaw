@@ -4,7 +4,10 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewayService } from "../../daemon/service.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { resolveGitReleasePrefix, servingGitReleaseSlot } from "../../infra/git-release-paths.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
@@ -27,6 +30,7 @@ import {
   resolveNpmLifecyclePolicyGate,
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
+import { resolveNativePackageProjectRoot } from "../../infra/update-native-package-owner.js";
 import {
   DEFAULT_UPDATE_STEP_TIMEOUT_MS,
   UPDATE_RUNNER_TIMEOUT_MS,
@@ -61,7 +65,12 @@ import {
 import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
 import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
-import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
+import {
+  gatewayServiceCommandUsesRoot,
+  inspectManagedGatewayServiceBeforeUpdate,
+  readGatewayServiceStateForUpdate,
+} from "./update-command-service-plan.js";
+import { assessSnapshotCapacityOfferingCleanup } from "./update-snapshot-space-cleanup.js";
 
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -131,10 +140,10 @@ export async function retireStandaloneGitWrapper(params: {
     if (!matchesWindows && !matchesPosix) {
       continue;
     }
+    await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
+      wrapperPath,
+    );
     try {
-      await createSystemPackageOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
-        wrapperPath,
-      );
       // Filesystem and pkg reads can outlive this wrapper or the update's authority.
       const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
       const current = await fs.lstat(wrapperPath, { bigint: true });
@@ -146,7 +155,12 @@ export async function retireStandaloneGitWrapper(params: {
       ) {
         throw new Error("The installer wrapper changed before retirement.");
       }
-      params.assertCurrent?.();
+    } catch (error) {
+      return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
+    }
+    // Ownership refusals must remain errors, never optional filesystem warnings.
+    params.assertCurrent?.();
+    try {
       await fs.unlink(wrapperPath);
     } catch (error) {
       return { error: `Could not retire ${wrapperPath}: ${String(error)}` };
@@ -286,6 +300,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   devTarget?: DevUpdateTarget;
 }): Promise<{
   schemaVersions?: OpenClawSchemaVersions;
+  nodeEngine?: string | null;
   metadataUnreadable?: string;
   failureCode?: "target-git-cache-stale";
 }> {
@@ -340,9 +355,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     timeoutMs: params.timeoutMs,
   });
   return target.status === "ok"
-    ? target.schemaVersions
-      ? { schemaVersions: target.schemaVersions }
-      : {}
+    ? { schemaVersions: target.schemaVersions, nodeEngine: target.nodeEngine }
     : {
         metadataUnreadable: target.reason,
         ...(target.reason.startsWith("git show ")
@@ -357,6 +370,9 @@ export async function updateGitInstall(params: {
   restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
+  /** Decided once by the update command (usesGitReleases). */
+  gitReleases?: boolean;
+  deferReleaseActivation?: boolean;
   installKind: "git" | "package" | "unknown";
   timeoutMs: number | undefined;
   startedAt: number;
@@ -434,11 +450,23 @@ export async function updateGitInstall(params: {
     await params.progress.onStepStart?.(info);
     assertCurrent?.();
     const { config, env } = await params.getSnapshotSource();
-    const snapshot = await assessInitialUpdateSnapshotCapacity({
-      config,
-      stateDir: resolveStateDir(env),
-      env,
-    });
+    const backupProject =
+      installTarget && resolveNativePackageProjectRoot(installTarget, installEnv);
+    // An interactive update was offered cleanup before it started; here it is only named.
+    const snapshot = await assessSnapshotCapacityOfferingCleanup(
+      () =>
+        assessInitialUpdateSnapshotCapacity({
+          config,
+          stateDir: resolveStateDir(env),
+          env,
+          backupDirectory: params.switchToGit
+            ? backupProject
+              ? path.dirname(resolvePathViaExistingAncestorSync(backupProject))
+              : (installTarget?.globalRoot ?? path.dirname(params.root))
+            : path.join(params.root, ".artifacts"),
+        }),
+      { prompt: false, env, print: () => {} },
+    );
     await reportUpdateStepCompletion(params.progress, { ...snapshot, index: 0, total: 0 });
     assertCurrent?.();
     if (snapshot.exitCode !== 0) {
@@ -454,7 +482,11 @@ export async function updateGitInstall(params: {
     }
     return snapshot;
   };
-  const snapshotBeforeClone = params.switchToGit ? await checkSnapshot() : undefined;
+  // A Git release takes no database image and migrates at Gateway start, whose
+  // upgrade owns its own space; only a checkout updated in place is checked here.
+  const checksSnapshot = params.gitReleases !== true;
+  const snapshotBeforeClone =
+    params.switchToGit && checksSnapshot ? await checkSnapshot() : undefined;
   if (snapshotBeforeClone && snapshotBeforeClone.exitCode !== 0) {
     return failed(
       "snapshot-capacity-insufficient",
@@ -487,6 +519,9 @@ export async function updateGitInstall(params: {
       timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
       startedAt: params.startedAt,
       opts: {
+        gitReleases: params.gitReleases === true,
+        deferReleaseActivation: params.deferReleaseActivation,
+        releaseNode: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         sourceRuntimePrepared: params.sourceRuntimePrepared,
         progress: params.progress,
@@ -498,12 +533,13 @@ export async function updateGitInstall(params: {
           params.assertCurrent?.();
         },
         inspectGitTarget: (target) => params.inspectGitTarget(target, installTarget ?? undefined),
-        beforeGitStaging: params.switchToGit
-          ? undefined
-          : async () => ({
-              step: await checkSnapshot(),
-              failureReason: "snapshot-capacity-insufficient",
-            }),
+        beforeGitStaging:
+          params.switchToGit || !checksSnapshot
+            ? undefined
+            : async () => ({
+                step: await checkSnapshot(),
+                failureReason: "snapshot-capacity-insufficient",
+              }),
         publishGitCheckout,
         gitArtifactStorageRoot,
         validateCandidate: params.validateCandidate,
@@ -544,6 +580,7 @@ export async function updateGitInstall(params: {
     const checkout = params.switchToGit
       ? await ensureGitCheckout({
           dir: updateRoot,
+          assertCurrent: params.assertCurrent,
           env: installEnv,
           timeoutMs: effectiveTimeout,
           progress: params.progress,
@@ -620,4 +657,34 @@ export async function updateGitInstall(params: {
   } finally {
     await exposure?.cancel();
   }
+}
+
+/**
+ * Whether a release switch reaches the next Gateway start: the installed service already
+ * starts the release link, or it starts this checkout and this update restarts it with a
+ * definition redirected to the launcher (`--no-restart` never rewrites it). Otherwise the
+ * checkout updates in place.
+ */
+export async function gatewayServiceOwnsGitInstall(
+  root: string,
+  shouldRestart: boolean,
+  timeoutMs?: number,
+) {
+  try {
+    const state = await readGatewayServiceStateForUpdate(
+      resolveGatewayService(),
+      process.env,
+      timeoutMs,
+    );
+    const slot = servingGitReleaseSlot(resolveGitReleasePrefix());
+    const release = await inspectManagedGatewayServiceBeforeUpdate({ root: slot, state });
+    if (release.kind === "owned") {
+      return true;
+    }
+    const checkout = await inspectManagedGatewayServiceBeforeUpdate({ root, state });
+    return shouldRestart && checkout.kind === "owned" && checkout.refreshDefinition;
+  } catch {
+    // An unreadable service keeps the in-place runner, which needs no service.
+  }
+  return false;
 }

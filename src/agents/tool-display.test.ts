@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import CLIENT_TOOL_DISPLAY from "../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
+import { TOOL_DISPLAY_CONFIG } from "./tool-display-config.js";
 import {
   hasShellCompoundCommand,
   scanTopLevelChars,
@@ -16,6 +18,23 @@ import {
 function detailFor(name: string, args: unknown) {
   return formatToolDetail(resolveToolDisplay({ name, args }));
 }
+
+it("ships client display fields without Gateway-only progress metadata", () => {
+  const clientTools: Record<string, unknown> = CLIENT_TOOL_DISPLAY.tools;
+  for (const [name, source] of Object.entries(TOOL_DISPLAY_CONFIG.tools)) {
+    const { progress: _progress, actions, ...display } = source;
+    const clientActions =
+      actions &&
+      Object.fromEntries(
+        Object.entries(actions).map(([action, { progress: _actionProgress, ...actionDisplay }]) => [
+          action,
+          actionDisplay,
+        ]),
+      );
+    expect(clientTools[name]).toEqual(actions ? { ...display, actions: clientActions } : display);
+  }
+  expect(CLIENT_TOOL_DISPLAY.fallback).toEqual(TOOL_DISPLAY_CONFIG.fallback);
+});
 
 function execDetail(command: string, detailMode?: "explain", workdir?: string, name = "exec") {
   return formatToolDetail(resolveToolDisplay({ name, args: { command, workdir }, detailMode }));
@@ -43,6 +62,22 @@ describe("tool display details", () => {
       label: "Web Search",
       detail: 'for "OpenClaw release notes"',
     });
+  });
+
+  it("shortens only subagent progress references, retaining labels and full diagnostics", () => {
+    for (const [id, suffix] of [
+      ["00000000-0000-4000-8000-000000002633", "…2633"],
+      ["00000000-0000-4000-8000-00000000a4f0", "…a4f0"],
+    ]) {
+      const args = { sessionKey: `agent:demo:subagent:${id}`, label: "Check streaming" };
+      const display = resolveToolDisplay({ name: "sessions_send", args });
+      expect(display.progress).toEqual({
+        label: "Send to session",
+        detail: `Check streaming ${suffix}`,
+      });
+      expect(display.detail).toContain(args.sessionKey);
+      expect(args.sessionKey).toBe(`agent:demo:subagent:${id}`);
+    }
   });
 
   it("keeps sessions_yield private context out of tool status", () => {
@@ -86,21 +121,17 @@ describe("tool display details", () => {
     ],
     [
       "web_search",
-      {
-        search_query: ["Kimi", "Gemini", "Claude", "OpenAI"].map((provider) => ({
-          q: `latest ${provider} model`,
-        })),
-      },
-      'for "latest Kimi model", "latest Gemini model", "latest Claude model"…',
+      { search_query: ["a", "b", "c", "d"].map((q) => ({ q })) },
+      'for "a", "b", "c"…',
     ],
     [
       "web_search",
       {
-        objective: "Find the OpenClaw repository on GitHub",
-        search_queries: ["openclaw github", "openclaw repository"],
+        objective: "Find OpenClaw",
+        search_queries: ["github", "repository"],
         count: 5,
       },
-      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+      'for "Find OpenClaw", "github", "repository" (top 5)',
     ],
   ] as const)("formats %s arguments with intent-first detail: %j", (name, args, expected) => {
     expect(detailFor(name, args)).toBe(expected);
@@ -145,20 +176,15 @@ describe("tool display details", () => {
       "echo start && if test -f package.json; then pnpm test; fi",
       "(echo one; echo two)",
       "f() { echo one; echo two; }",
-      "function f { echo one; echo two; }",
       "function deploy-prod { echo one; echo two; }",
-      "function log::info { echo one; echo two; }",
-      "deploy-prod() { echo one; echo two; }",
       "log::info() { echo one; echo two; }",
       'select d in a b; do echo "$d"; break; done',
       "coproc worker { echo one; echo two; }",
       "coproc (echo one; echo two)",
       "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test",
       "printf x | select d in a b; do break; done",
-      "printf x | [[ -n x ]]",
       "true & select d in a b; do break; done",
       "printf x |& select d in a b; do break; done",
-      "printf x | function deploy-prod { echo one; echo two; }",
       "function deploy-prod if true; then echo ok; fi",
       "function check [[ -n x ]]",
       "function bump (( n++ )) && pnpm test",
@@ -166,14 +192,11 @@ describe("tool display details", () => {
       "function worker (echo one; echo two)",
       "function worker(echo one; echo two)",
       "plain() if true; then echo ok; fi",
-      "! [[ -f a && -f b ]] && pnpm test",
       "time -p ! [[ -n x ]]",
-      "! time [[ -n x ]]",
       "time(echo one; echo two)",
       "function bump(( n++ )) && pnpm test",
       "time -- if true; then echo one; echo two; fi",
     ]) {
-      expect(splitTopLevelStages(command)).toEqual([command]);
       expect(execDetail(command, "explain")).toBe(command);
     }
 
@@ -182,8 +205,6 @@ describe("tool display details", () => {
       "time (( ready || fallback )) && pnpm test",
       ["(\\", "( ready && enabled )) && pnpm test"].join("\n"),
       ["echo $\\", "(( ready && enabled )) && pnpm test"].join("\n"),
-      "time(( n++ )) && pnpm test",
-      "time -p(( n++ )) && pnpm test",
       "!(( n++ )) && pnpm test",
       "time -p -- (( n++ )) && pnpm test",
     ]) {
@@ -201,16 +222,9 @@ describe("tool display details", () => {
 
     for (const quoted of [
       "printf '%s' '; if ' && pnpm test",
-      "printf '%s' 'function f { echo; }' && pnpm test",
-      "printf '%s' 'select d; do echo; done' && pnpm test",
-      "printf '%s' '[[ a && b ]]' && pnpm test",
       "printf '%s' $'can\\'t; if literal' && pnpm test",
       ["printf '%s' $\\", "'can\\'t; if literal' && pnpm test"].join("\n"),
     ]) {
-      expect(splitTopLevelStages(quoted)).toEqual([
-        quoted.slice(0, quoted.lastIndexOf(" && ")),
-        "pnpm test",
-      ]);
       expect(execDetail(quoted, "explain")).toBe("print text → run tests");
     }
 

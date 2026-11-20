@@ -1,24 +1,17 @@
 // @vitest-environment node
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type { SessionsListResult } from "../../api/types.ts";
-import {
-  createGatewayRequestMock,
-  createTestGatewayClient,
-} from "../../test-helpers/gateway-client.ts";
-import {
-  createSessionCapabilityHarness,
-  sessionsResult,
-} from "./session-capability.test-support.ts";
+import { expect, it, onTestFinished, vi } from "vitest";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { sessionChangedEvent, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionCapability } from "./session-capability.ts";
+import type { ObservedSessionList } from "./session-list-query.ts";
+import { createSessionRosterObservations } from "./session-roster-observations.ts";
+import { rosterReadFixture } from "./session-roster-refresh.test-support.ts";
 
-const makeRow = (id: string, label: string) => ({
-  key: `agent:main:${id}`,
-  sessionId: id,
-  kind: "direct" as const,
-  label,
-  updatedAt: 1,
-});
+const makeRow = (id: string, label: string) =>
+  ({ key: `agent:main:${id}`, sessionId: id, kind: "direct", label, updatedAt: 1 }) as const;
 type Row = ReturnType<typeof makeRow>;
 const makeQuery = (limit: number) => ({ agentId: "main", search: "Shared", limit });
 const changed = (row: Row, reason: string, label: string, updatedAt = 1) => ({
@@ -33,136 +26,239 @@ const changed = (row: Row, reason: string, label: string, updatedAt = 1) => ({
     updatedAt,
   },
 });
-function makeHarness(result: (params?: unknown) => SessionsListResult) {
+function makeHarness(result: (params?: unknown) => SessionsListResult, ownerId?: string) {
   vi.useFakeTimers();
-  const request = createGatewayRequestMock(async (method, params) => {
-    expect(method).toBe("sessions.list");
-    return result(params);
-  });
-  const client = createTestGatewayClient(request);
-  const harness = createSessionCapabilityHarness(client.request.bind(client));
-  const cleanup: Array<() => void> = [];
-  onTestFinished(() => {
-    cleanup.forEach((dispose) => dispose());
-    harness.sessions.dispose();
-    vi.useRealTimers();
-  });
+  const harness = rosterReadFixture(result, ownerId);
   const subscribe = (...args: Parameters<SessionCapability["subscribeList"]>) =>
-    cleanup.push(harness.sessions.subscribeList(...args));
-  return { ...harness, request, subscribe, cleanup };
+    harness.watch(harness.sessions.subscribeList(...args));
+  return { ...harness, subscribe };
 }
 
-describe("event-driven session list refresh", () => {
-  it("bounds held-roster enumeration while reconciling overlapping session views", async () => {
-    const rows = Array.from({ length: 10 }, (_, index) =>
-      makeRow(`shared-${index}`, `Shared ${index}`),
-    );
-    const { sessions, emitEvent, request, subscribe, cleanup } = makeHarness(() =>
-      sessionsResult(structuredClone(rows), 1),
-    );
-    const queries = Array.from({ length: 8 }, (_, index) => makeQuery(10 + index));
-    queries.forEach((query) => subscribe(query, () => undefined));
-    const target = rows[0]!;
-    const observed = vi.fn();
-    let descriptor: ReturnType<SessionCapability["observeRow"]> | null = null;
-    const heldResults = () => [
-      sessions.state.result,
-      ...queries.map((query) => sessions.listSnapshot(query).result),
-    ];
-    const findTarget = (result: SessionsListResult | null | undefined) =>
-      result?.sessions.find((row) => row.key === target.key);
-    const eventDelivered = vi.fn(() => ({
-      descriptor: descriptor?.row,
-      rows: heldResults().map(findTarget),
-    }));
-    await sessions.refresh({ agentId: "main", force: true });
-    for (const query of queries) {
-      await sessions.refreshList({ ...query, force: true });
-    }
-    descriptor = sessions.observeRow({ key: target.key, agentId: "main" }, observed, {
-      onEvent: eventDelivered,
-    });
-    cleanup.unshift(() => descriptor?.dispose());
-    observed.mockClear();
-    const event = changed(target, "update", "Shared updated", 2);
-    const held = heldResults();
-    const heldRowCount = held.reduce((count, result) => count + (result?.sessions.length ?? 0), 0);
-    let visitedRows = 0;
-    for (const source of new Set(held.flatMap((result) => (result ? [result.sessions] : [])))) {
-      // Count whole-source enumeration; values() bypasses this replaced iterator.
-      Object.defineProperty(source, Symbol.iterator, {
-        configurable: true,
-        *value() {
-          for (const row of source.values()) {
-            visitedRows++;
-            yield row;
-          }
-        },
-      });
-    }
-    emitEvent(event);
-    const expected = expect.objectContaining({ label: "Shared updated", updatedAt: 2 });
-    // Allow per-view reduction and decoration; repeated whole-roster preparation is quadratic.
-    expect(visitedRows).toBeLessThanOrEqual(heldRowCount * 12);
-    expect(descriptor.row).toEqual(expected);
-    for (const result of heldResults()) {
-      expect(result?.sessions).toHaveLength(rows.length);
-      expect(findTarget(result)).toEqual(expected);
-    }
-    expect(eventDelivered).toHaveBeenCalledExactlyOnceWith(
-      event,
-      expect.objectContaining({ applied: true, admittedRow: expected, row: expected }),
-    );
-    expect(eventDelivered).toHaveReturnedWith({
-      descriptor: expected,
-      rows: Array.from({ length: queries.length + 1 }, () => expected),
-    });
-    expect(observed).toHaveBeenCalled();
-    expect(request).toHaveBeenCalledTimes(queries.length + 1);
+it("converges overlapping views before listeners run without refetching", async () => {
+  const rows = Array.from({ length: 10 }, (_, index) => ({
+    ...makeRow(`shared-${index}`, `Shared ${index}`),
+    lastMessagePreview: "Before",
+  }));
+  const queries = Array.from({ length: 8 }, (_, index) => makeQuery(10 + index));
+  const newest = queries.at(-1)!;
+  let fresh = false;
+  let observe = false;
+  const { sessions, emitEvent, request, subscribe, watch } = makeHarness((params) =>
+    sessionsResult(
+      rows.map((row, index) => ({
+        ...row,
+        lastMessagePreview:
+          fresh && index === 1 && asNullableRecord(params)?.limit === newest.limit
+            ? "After"
+            : "Before",
+      })),
+      1,
+    ),
+  );
+  const target = rows[0]!;
+  const observed = vi.fn();
+  let descriptor: ReturnType<SessionCapability["observeRow"]> | null = null;
+  const heldResults = () => [
+    sessions.state.result,
+    ...queries.map((query) => sessions.listSnapshot(query).result),
+  ];
+  const findTarget = (result: SessionsListResult | null | undefined) =>
+    result?.sessions.find((row) => row.key === target.key);
+  const previews = () => heldResults().map((result) => result?.sessions[1]?.lastMessagePreview);
+  const deliveredPreviews: ReturnType<typeof previews>[] = [];
+  queries.forEach((query, index) =>
+    subscribe(query, () => {
+      if (observe && index === 0) {
+        deliveredPreviews.push(previews());
+      }
+    }),
+  );
+  const eventDelivered = vi.fn(() => ({
+    descriptor: descriptor?.row,
+    rows: heldResults().map(findTarget),
+  }));
+  await sessions.refresh({ agentId: "main", force: true });
+  for (const query of queries) {
+    await sessions.refreshList({ ...query, force: true });
+  }
+  emitEvent(changed(target, "patch", target.label));
+  fresh = true;
+  await sessions.refreshList({ ...newest, force: true });
+  expect([previews()[1], previews().at(-1)]).toEqual(["Before", "After"]);
+  descriptor = sessions.observeRow({ key: target.key, agentId: "main" }, observed, {
+    onEvent: eventDelivered,
   });
+  watch(() => descriptor?.dispose());
+  observed.mockClear();
+  observe = true;
+  const event = changed(target, "update", "Shared updated", 2);
+  emitEvent(event);
+  const expected = expect.objectContaining({ label: "Shared updated", updatedAt: 2 });
+  for (const result of heldResults()) {
+    expect(result?.sessions).toHaveLength(rows.length);
+  }
+  expect(eventDelivered).toHaveBeenCalledExactlyOnceWith(
+    event,
+    expect.objectContaining({ applied: true, admittedRow: expected, row: expected }),
+  );
+  expect(eventDelivered).toHaveReturnedWith({
+    descriptor: expected,
+    rows: Array.from({ length: queries.length + 1 }, () => expected),
+  });
+  expect(deliveredPreviews).toEqual([Array(queries.length + 1).fill("After")]);
+  expect(observed).toHaveBeenCalled();
+  expect(request).toHaveBeenCalledTimes(queries.length + 2);
+});
 
-  it("converges an unrelated row before managed listeners run through Gateway reconciliation", async () => {
-    const first = makeRow("first", "Shared first");
-    const second = { ...makeRow("second", "Shared second"), lastMessagePreview: "Before" };
-    const olderQuery = makeQuery(10);
-    const newerQuery = makeQuery(11);
-    let fresh = false;
-    const { sessions, emitEvent, request, subscribe } = makeHarness((params) => {
-      const newer = fresh && asNullableRecord(params)?.limit === newerQuery.limit;
-      return sessionsResult(
-        [{ ...first }, { ...second, lastMessagePreview: newer ? "After" : "Before" }],
-        1,
-      );
-    });
-    let observe = false;
-    const delivered: Array<Record<"older" | "newer", string | null | undefined>> = [];
-    const preview = (query: typeof olderQuery) =>
-      sessions.listSnapshot(query).result?.sessions.find((row) => row.key === second.key)
-        ?.lastMessagePreview;
-    subscribe(olderQuery, () => {
-      if (observe) {
-        delivered.push({ older: preview(olderQuery), newer: preview(newerQuery) });
+const ownerId = "profile-ada";
+const ownerRow = (name: string, updatedAt: number, id = ownerId) => ({
+  key: `agent:main:${name}`,
+  kind: "direct" as const,
+  updatedAt,
+  createdActor: { type: "human" as const, id },
+});
+
+it.each([false, true])(
+  "retains owner and shared pages throughout refresh (fails: %s)",
+  async (fails) => {
+    vi.useFakeTimers();
+    const ownerTail = ownerRow("owner-tail", 1);
+    const ownerHead = ownerRow("owner-head", 3);
+    const sharedRows = [
+      ownerHead,
+      ...Array.from({ length: 119 }, (_, index) =>
+        ownerRow(`shared-${index}`, 119 - index, "profile-bob"),
+      ),
+    ];
+    let failRefresh = false;
+    const { sessions, emitEvent, request } = rosterReadFixture(
+      (params?: { limit?: number; offset?: number; ownerFirst?: boolean }) => {
+        if (failRefresh) {
+          throw new Error("session roster unavailable");
+        }
+        const offset = params?.offset ?? 0;
+        const shared = sharedRows.slice(offset, offset + (params?.limit ?? 50));
+        return sessionsResult(
+          params?.ownerFirst
+            ? [ownerHead, ownerTail, ...shared.filter((row) => row !== ownerHead)]
+            : shared,
+          2,
+        );
+      },
+      ownerId,
+    );
+
+    await sessions.refresh({ agentId: "main", limit: 60, force: true });
+    await sessions.refresh({ agentId: "main", limit: 60, offset: 60, append: true, force: true });
+    expect(sessions.state.result?.sessions).toHaveLength(121);
+    const publishedKeySets: string[][] = [];
+    const stop = sessions.subscribe((next) => {
+      if (next.result) {
+        publishedKeySets.push(next.result.sessions.map((row) => row.key));
       }
     });
-    subscribe(newerQuery, () => undefined);
-    await sessions.refresh({ agentId: "main", force: true });
-    await sessions.refreshList({ ...olderQuery, force: true });
-    await sessions.refreshList({ ...newerQuery, force: true });
-    emitEvent(changed(first, "patch", first.label));
-    fresh = true;
-    await sessions.refreshList({ ...newerQuery, force: true });
-    expect([preview(olderQuery), preview(newerQuery)]).toEqual(["Before", "After"]);
-    const beforeRequests = request.mock.calls.length;
-    observe = true;
-    const label = "Shared first updated";
-    emitEvent(changed(first, "patch", label, 2));
-    expect(delivered).toEqual([{ older: "After", newer: "After" }]);
-    for (const query of [olderQuery, newerQuery]) {
-      expect(sessions.listSnapshot(query).result?.sessions).toHaveLength(2);
-      expect(
-        sessions.listSnapshot(query).result?.sessions.find((row) => row.key === first.key)?.label,
-      ).toBe(label);
+    failRefresh = fails;
+
+    emitEvent(sessionChangedEvent(sharedRows[1]!.key));
+    await vi.advanceTimersByTimeAsync(5_000);
+    stop();
+
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(sessions.state.result?.sessions).toHaveLength(121);
+    expect(sessions.state.result?.sessions.map((row) => row.key)).toContain(ownerTail.key);
+    expect(publishedKeySets.length).toBeGreaterThan(0);
+    for (const keys of publishedKeySets) {
+      expect(keys).toContain(sharedRows[1]!.key);
     }
-    expect(request).toHaveBeenCalledTimes(beforeRequests);
+    if (fails) {
+      expect(sessions.state.error).not.toBeNull();
+      expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual(publishedKeySets[0]);
+    }
+  },
+);
+
+function observationFixture(readResult: () => SessionsListResult | null = () => null) {
+  const connection = createGatewayConnectionLifecycle({
+    phase: "connected",
+    client: createTestGatewayClient(async () => ({})),
   });
-});
+  onTestFinished(() => connection.dispose());
+  const lists = new Map<string, ObservedSessionList>();
+  const observations = createSessionRosterObservations(
+    {
+      connection,
+      observerError: () => null,
+      readState: () => ({ result: readResult(), agentId: "main" }),
+      decorate: (value) => value,
+    },
+    lists,
+  );
+  return {
+    observations,
+    list: (name: string, rows: GatewaySessionRow[], agentId = "main") =>
+      lists.set(name, {
+        scope: { agentId },
+        connectionEpoch: connection.epoch,
+        snapshot: { result: sessionsResult(rows), agentId, loading: false, error: null },
+        listeners: new Set(),
+      }),
+    stage: (row: GatewaySessionRow, revision: number) =>
+      observations.stageObservedRows([row], connection.capture(), "main", revision)(),
+    register: (key: string, isValid: (sessionId: string) => boolean = () => true) =>
+      observations.registerRow({ key, agentId: "main" }, () => {}, {
+        isValid,
+        decorate: (value) => value,
+      }),
+  };
+}
+
+it.each(["main", "global"])(
+  "projects %s receipts without mixing owners or session incarnations",
+  (key) => {
+    let primary: SessionsListResult | null = null;
+    const { list, observations, stage, register } = observationFixture(() => primary);
+    const row: GatewaySessionRow = {
+      key,
+      sessionId: " selected ",
+      kind: "direct",
+      label: "Primary",
+      snapshotAt: 100,
+    };
+    const descriptor = {
+      ...row,
+      key: key === "main" ? "agent:main:main" : key,
+      snapshotAt: 150,
+      providerReview: undefined,
+    };
+    const registered = register(key, (sessionId) => sessionId === row.sessionId);
+    stage(descriptor, 2);
+    stage({ ...descriptor, sessionId: "rejected", snapshotAt: 160 }, 3);
+    expect(registered.isCurrent()).toBe(true);
+    expect(registered.current()).toEqual(descriptor);
+    observations.observeReadRow(row, 1, "main");
+    primary = sessionsResult([row]);
+    const fresh = {
+      ...row,
+      key: descriptor.key,
+      label: "Newer list",
+      snapshotAt: 200,
+      providerReview: { id: "pause", runId: "run", canContinue: false },
+    };
+    observations.observeReadRow(fresh, 4, "main");
+    list("fresh", [fresh]);
+    const otherOwner = {
+      ...fresh,
+      key: key === "main" ? "agent:other:main" : key,
+      agentId: "other",
+      label: "Other owner",
+    };
+    list("other-owner", [otherOwner], "other");
+    list("other-incarnation", [{ ...fresh, sessionId: "selected", label: "Other ID" }]);
+    expect(observations.projectRows([row])[0]).toEqual({ ...fresh, key });
+    expect(observations.currentRow(row, "main")).toEqual({ ...fresh, key });
+    expect(observations.currentRow({ ...row, sessionId: "missing" }, "main")).toBeUndefined();
+    expect(observations.projectRows([row, { ...row, sessionId: " " }])[1]?.label).toBe("Primary");
+    primary = null;
+    expect(observations.currentRow(row, "main")).toEqual(fresh);
+  },
+);

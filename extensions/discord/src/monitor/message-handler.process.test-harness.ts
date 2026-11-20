@@ -4,10 +4,13 @@ import type {
   ReplyPayload,
   DispatchReplyWithBufferedBlockDispatcher,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import {
+  runWithSessionInitConflictRetry,
+  setReplyPayloadMetadata,
+} from "openclaw/plugin-sdk/reply-payload-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeAll, beforeEach, vi } from "vitest";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 
 type SessionRecord = Parameters<
@@ -40,8 +43,6 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 });
 
 export const getGlobalHookRunnerForTest = getGlobalHookRunner;
-
-export const logVerboseForTest = runtimeEnvMocks.logVerbose;
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -204,14 +205,11 @@ const createDiscordRestClientSpy = vi.hoisted(() =>
 );
 export const sendMocksForTest = sendMocks;
 export const typingMocksForTest = typingMocks;
-export const discordTargetMocksForTest = discordTargetMocks;
 export const dispatchInboundMessageForTest = dispatchInboundMessage;
 export const readAgentRunTerminalOutcomeForTest = readAgentRunTerminalOutcome;
 export const recordInboundSessionForTest = recordInboundSession;
-export const createDiscordRestClientSpyForTest = createDiscordRestClientSpy;
 let createBaseDiscordMessageContext: typeof import("./message-handler.test-harness.js").createBaseDiscordMessageContext;
 let createDiscordDirectMessageContextOverrides: typeof import("./message-handler.test-harness.js").createDiscordDirectMessageContextOverrides;
-export let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
 export let discordInboundEventDelivery: typeof import("../inbound-event-delivery.js").discordInboundEventDelivery;
 
@@ -292,42 +290,28 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
       plan: import("openclaw/plugin-sdk/channel-inbound").ChannelInboundTurnPlan<"provider_message_sending">,
     ) => {
       const { cfg, route, delivery, sessionInitRetry, ...prepared } = plan;
-      const runDispatch = async () => {
-        for (let retryIndex = 0; ; retryIndex += 1) {
-          try {
-            return await replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
+      const runDispatch = () =>
+        runWithSessionInitConflictRetry(
+          () =>
+            replyRuntime.dispatchReplyWithBufferedBlockDispatcher({
               ctx: plan.ctxPayload,
               cfg,
               dispatcherOptions: {
                 ...plan.dispatcherOptions,
-                deliver: (payload, info) => {
-                  const providerInfo = {
+                deliver: (payload, info) =>
+                  delivery.deliverWithProviderMessageSending(payload, {
                     ...info,
                     onPlatformSendDispatch: async () => undefined,
                     assertPlatformSendAuthorized: () => undefined,
-                  };
-                  return delivery.deliverWithProviderMessageSending(payload, providerInfo);
-                },
+                  }),
                 onError: delivery.onError,
               },
               toolsAllow: plan.toolsAllow,
               replyOptions: plan.replyOptions,
               replyResolver: plan.replyResolver,
-            });
-          } catch (error) {
-            const delayMs = sessionInitRetry?.delaysMs[retryIndex];
-            const message = error instanceof Error ? error.message : String(error);
-            if (
-              delayMs === undefined ||
-              sessionInitRetry?.signal?.aborted === true ||
-              !/^reply session initialization conflicted for \S+$/u.test(message)
-            ) {
-              throw error;
-            }
-            await sessionInitRetry?.sleep?.(delayMs, sessionInitRetry.signal);
-          }
-        }
-      };
+            }),
+          { retryDelaysMs: sessionInitRetry?.delaysMs, ...sessionInitRetry },
+        );
       return await actual.runPreparedInboundReply({
         ...prepared,
         routeSessionKey: route.sessionKey,
@@ -421,7 +405,6 @@ export function registerDiscordProcessTestLifecycle() {
     vi.useRealTimers();
     ({ createBaseDiscordMessageContext, createDiscordDirectMessageContextOverrides } =
       await import("./message-handler.test-harness.js"));
-    ({ createThreadBindingManager } = await import("./thread-bindings.js"));
     ({ processDiscordMessage } = await import("./message-handler.process.js"));
     ({ discordInboundEventDelivery } = await import("../inbound-event-delivery.js"));
   });
@@ -475,11 +458,4 @@ export function getLastDispatchReplyOptions() {
 
 export async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Promise<void> {
   await processDiscordMessage(ctx);
-}
-
-export async function runInPartialStreamMode(): Promise<void> {
-  const ctx = await createBaseContext({
-    discordConfig: { streaming: { mode: "partial" } },
-  });
-  await runProcessDiscordMessage(ctx);
 }

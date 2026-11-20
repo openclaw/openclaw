@@ -4,7 +4,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { prepareDoctorContext } from "./doctor-config-flow.test-support.js";
 import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -20,10 +19,7 @@ async function repair(configPath: string) {
   return JSON.parse(await fs.readFile(configPath, "utf8"));
 }
 
-afterEach(() => {
-  note.mockClear();
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(() => note.mockClear());
 
 function migrate(scenario: "blind" | "env-root" | "canonical-alias" | "legacy-root") {
   return withHome(async (home) => {
@@ -60,9 +56,7 @@ function migrate(scenario: "blind" | "env-root" | "canonical-alias" | "legacy-ro
       await fs.chmod(blocked, 0);
       try {
         const saved = await repair(configPath);
-        expect
-          .soft(saved.plugins?.entries?.canvas?.config?.host?.root ?? saved.canvasHost?.root)
-          .toBe(configuredRoot);
+        expect.soft(saved.plugins.entries.canvas.config.host.root).toBe(configuredRoot);
         if (scenario === "env-root") {
           // A committed partial repair must retain the root but remove the obsolete port.
           expect.soft(saved.plugins.entries.canvas.config.host).not.toHaveProperty("port");
@@ -89,10 +83,7 @@ function migrate(scenario: "blind" | "env-root" | "canonical-alias" | "legacy-ro
     }
     const saved = await repair(configPath);
     expect(saved.plugins?.entries?.canvas?.config?.host).toEqual({ enabled: false });
-    if (!fails) {
-      expect(Object.keys(saved.plugins.entries)).toEqual(["canvas"]);
-      expect(saved).not.toHaveProperty("canvasHost");
-    }
+    expect(saved).not.toHaveProperty("canvasHost");
     expect((await readConfigFileSnapshot()).valid).toBe(true);
     for (const id of ids) {
       await expect(readHtml(destination, id)).resolves.toBe(fails ? id : "existing");

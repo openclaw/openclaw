@@ -58,25 +58,6 @@ describe("createInboundDebouncer", () => {
         createFlush({ lifecycle, dispatch: (turn) => dispatch(items[0]?.id ?? "", turn) }),
     });
   }
-  function numberDebouncer(
-    options: RecordingOptions<number>,
-    onBatch: (items: number[]) => void | Promise<void> = () => {},
-  ) {
-    const calls: number[][] = [];
-    const debouncer = batchDebouncer(
-      {
-        debounceMs: 0,
-        ...options,
-        buildKey: () => "sender",
-      },
-      (items: number[]) => {
-        calls.push(items);
-        return onBatch(items);
-      },
-    );
-    return { calls, debouncer };
-  }
-
   function createRecordingDebouncer<T extends Message = Message>(options: RecordingOptions<T>) {
     const calls: string[][] = [];
     const debouncer = batchDebouncer<T>({ ...options, buildKey: (item) => item.key }, (items) => {
@@ -190,9 +171,15 @@ describe("createInboundDebouncer", () => {
 
   it("seals bounded batches without blocking collection behind an active flush", async () => {
     const firstGate = createDeferred();
-    const { calls, debouncer } = numberDebouncer(
-      { debounceMs: 10, canAppend: (_item, pending) => pending.length < 2 },
+    const calls: number[][] = [];
+    const debouncer = batchDebouncer<number>(
+      {
+        debounceMs: 10,
+        buildKey: () => "sender",
+        canAppend: (_item, pending) => pending.length < 2,
+      },
       async (items) => {
+        calls.push(items);
         if (items[0] === 1) {
           await firstGate.promise;
         }
@@ -213,11 +200,16 @@ describe("createInboundDebouncer", () => {
   });
 
   it("uses pending contents for continuation timing without carrying them into a full batch", async () => {
-    const { calls, debouncer } = numberDebouncer({
-      debounceMs: 0,
-      resolveDebounceMs: (item, pending) => (item === 1 || pending?.includes(1) ? 20 : 0),
-      canAppend: (_item, pending) => pending.length < 2,
-    });
+    const calls: number[][] = [];
+    const debouncer = batchDebouncer<number>(
+      {
+        debounceMs: 0,
+        buildKey: () => "sender",
+        resolveDebounceMs: (item, pending) => (item === 1 || pending?.includes(1) ? 20 : 0),
+        canAppend: (_item, pending) => pending.length < 2,
+      },
+      (items) => void calls.push(items),
+    );
     expect(debouncer.shouldBuffer(1)).toBe(true);
     await debouncer.enqueue(1);
     expect(debouncer.shouldBuffer(2)).toBe(true);

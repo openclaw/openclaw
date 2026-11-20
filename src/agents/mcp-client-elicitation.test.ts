@@ -5,11 +5,11 @@ import { z } from "zod";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { AgentHarnessQuestionGatewayCall } from "./harness/gateway-question-dispatch.js";
 import {
-  bindMcpClientElicitation,
   createMcpClientElicitationHandler,
   runWithMcpElicitationHandler,
   type McpElicitationHandler,
 } from "./mcp-client-elicitation.js";
+import { bindMcpClientElicitation } from "./mcp-client-elicitation.runtime.js";
 import { buildMcpClientCapabilities } from "./mcp-metadata.js";
 const accepted = { action: "accept" as const };
 

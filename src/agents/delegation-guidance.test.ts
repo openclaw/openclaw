@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildDelegationGuidanceSection,
+  buildSubagentPromptGuidance,
   resolveMainSessionDelegationMode,
 } from "./delegation-guidance.js";
 
@@ -41,6 +42,54 @@ describe("resolveMainSessionDelegationMode", () => {
       expect(resolveMainSessionDelegationMode({ config, agentId, sessionKey })).toBe(expected);
     },
   );
+});
+
+describe("buildSubagentPromptGuidance", () => {
+  it.each([true, false])(
+    "preserves automation collection guidance with yield available (collection=%s)",
+    (canCollect) => {
+      const guidance = buildSubagentPromptGuidance({
+        mode: "prefer",
+        isMinimal: false,
+        availableTools: new Set([
+          "sessions_spawn",
+          "sessions_yield",
+          ...(canCollect ? ["agents_wait"] : []),
+        ]),
+        sessionKey: "agent:main:cron:nightly-job:run:run-1",
+        resolveToolName: (name) => name,
+      });
+
+      expect(guidance.inTurnCollectionGuidance).toContain(
+        canCollect ? "collect=true` and wait with `agents_wait`" : "complete that work directly",
+      );
+      expect(guidance.inTurnCollectionGuidance).toContain(
+        "`sessions_yield` ends this turn; the scheduler delivers that output",
+      );
+      const section = guidance.delegationSection.join("\n");
+      expect(section).toContain(guidance.inTurnCollectionGuidance);
+      expect(section).not.toContain("Need announced results before reply");
+      expect(section).not.toContain("Announcing spawns notify when the run ends");
+    },
+  );
+
+  it("renders the same session routing whether or not the turn holds the task-suggestion grant", () => {
+    const render = (granted: boolean) =>
+      buildSubagentPromptGuidance({
+        mode: "prefer",
+        isMinimal: false,
+        availableTools: new Set([
+          "sessions_spawn",
+          "sessions_create",
+          ...(granted ? ["suggest_task", "dismiss_task"] : []),
+        ]),
+        sessionKey: "agent:main:dashboard:project",
+        resolveToolName: (name) => name,
+      }).delegationSection.join("\n");
+
+    expect(render(true)).toContain("## Session routing");
+    expect(render(true)).toBe(render(false));
+  });
 });
 
 describe("buildDelegationGuidanceSection", () => {

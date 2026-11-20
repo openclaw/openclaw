@@ -1,21 +1,27 @@
 import { createSignal, createStore } from "solid-js";
 import type { ChatGoalDraftMode, HumanMention } from "../../../lib/chat/chat-types.ts";
+import type { ComposerTasks } from "../../../lib/chat/composer-tasks.runtime.ts";
+import { loadComposerTasksRuntime } from "../../../lib/chat/composer-tasks.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
-import { createComposerEmojiMenu } from "./chat-composer-emoji.tsx";
-import { createHumanMentionMenu } from "./chat-composer-mention-menu.tsx";
-import { createSkillMenu } from "./chat-composer-skill-menu.tsx";
-import { createSlashMenu } from "./chat-composer-slash-menu.tsx";
+import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
+import { createHumanMentionMenu } from "./chat-composer-mention-menu-state.ts";
+import { createSkillMenu } from "./chat-composer-skill-menu-state.ts";
+import { createSlashMenu } from "./chat-composer-slash-menu-state.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 
 function createChatComposerState(): ChatComposerState {
   const [presentation, updatePresentation] = createStore<ChatComposerState["presentation"]>({
     dictationError: null,
     goalExpandedId: null,
+    queuedSubmit: null,
   });
-  return {
+  const [tasks, setTasks] = createSignal<ComposerTasks | null>(null);
+  // Signal writes commit on flush, so concurrent loads share this synchronous owner.
+  let owner: ComposerTasks | undefined;
+  const state: ChatComposerState = {
     // Admission survives composer remounts while the same goal mode is pending.
     goalPending: createSignal<ChatGoalDraftMode | null>(null),
     presentation,
@@ -29,16 +35,44 @@ function createChatComposerState(): ChatComposerState {
     emojiMenu: createComposerEmojiMenu(),
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
-    questionTakeoverActive: false,
+    questionFocusActive: false,
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,
+    composerContext: null,
     microphonePicker: null,
     textareaRef: null,
     composerInputRef: null,
+    stopRunFromEscape: null,
+    sendDraft: null,
     dictation: null,
     composerDraftScope: null,
     dictationSelection: null,
+    tasks,
+    // One owner per pane, created once the runtime has loaded.
+    loadTasks: () =>
+      loadComposerTasksRuntime().then(({ createComposerTasks }) => {
+        if (!owner) {
+          const created = createComposerTasks(state);
+          owner = created;
+          setTasks(() => created);
+        }
+        return owner;
+      }),
+    taskPresenters: 0,
+  };
+  return state;
+}
+
+/** A mounted built-in composer presents the pane's tasks; a replacement composer cannot. */
+export function presentComposerTasks(state: ChatComposerState) {
+  state.taskPresenters += 1;
+  return () => {
+    state.taskPresenters -= 1;
+    if (state.taskPresenters === 0) {
+      // The next editor has fresh history, so the Undo receipt cannot restore anything.
+      state.tasks()?.dismiss();
+    }
   };
 }
 
@@ -70,6 +104,13 @@ export function commitComposerDraft(
   }
   getChatComposerState(props.paneId).editRevision += 1;
   props.onDraftChange(value, mentions);
+}
+
+/** Enter before the session is ready submits this exact draft once the composer can. */
+export function queueComposerSubmit(state: ChatComposerState, draft: string | null): void {
+  state.updatePresentation((presentation) => {
+    presentation.queuedSubmit = draft;
+  });
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {

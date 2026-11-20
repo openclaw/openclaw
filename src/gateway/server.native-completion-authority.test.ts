@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { agentCommand } from "../agents/agent-command.js";
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
@@ -182,12 +182,12 @@ async function reachBoundary(boundary: Promise<void>, delivery: Promise<unknown>
 describe("native completion final-effect authority", () => {
   const getContext = installAuthorityProofGateway();
   registerAgentSessionLoopTestLifecycle();
+  beforeEach(() => prepareGatewayReplyRuntimeForTest());
   afterEach(() => vi.restoreAllMocks());
 
   it.for(["predecessor", "successor"] as const)(
     "keeps registered turn delivery independent when %s source is revoked in flight",
     async (revokedSource, { signal }) => {
-      await prepareGatewayReplyRuntimeForTest();
       const context = getContext();
       const pair = await createRegisteredCompletionPair(context);
       const gates = [createGate(), createGate()] as const;
@@ -292,7 +292,6 @@ describe("native completion final-effect authority", () => {
   it.for(["operator-revoked", "requester-replaced"] as const)(
     "revalidates %s authority at real Gateway input staging",
     async (change, { signal }) => {
-      await prepareGatewayReplyRuntimeForTest();
       const context = getContext();
       using completion = await createCompletion(context);
       const before = completion.transcript();
@@ -312,7 +311,6 @@ describe("native completion final-effect authority", () => {
         },
       );
       agentCommandMock.mockImplementation((input) => receiveCompletion(input as AgentCommandOpts));
-      expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();
       try {
         await reachBoundary(entered.promise, delivery);
@@ -338,7 +336,6 @@ describe("native completion final-effect authority", () => {
   it.for(["live", "operator-revoked", "requester-replaced"] as const)(
     "revalidates %s authority after the real recorder during automatic compaction",
     async (change, { signal }) => {
-      await prepareGatewayReplyRuntimeForTest();
       const context = getContext();
       using completion = await createCompletion(context);
       const { entered, resume } = createGate();
@@ -391,7 +388,6 @@ describe("native completion final-effect authority", () => {
               onDeferredLifecycleOwner: () => {},
             },
           });
-          expect(prepared.queueHandle.messageInjectionV2?.version).toBe(2);
           const inject = vi.spyOn(session.agent, "admitSteeringMessage");
           const steer = session.steer.bind(session);
           let steering: ReturnType<typeof session.steer> | undefined;

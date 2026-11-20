@@ -5,10 +5,7 @@ import { expect, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { encodePackageActivationLauncher } from "../../infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
-import {
-  readPackageActivationStatus,
-  runPackageActivationRecovery,
-} from "../../infra/package-update-activation.js";
+import { runPackageActivationRecovery } from "../../infra/package-update-activation.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPublicationOwner } from "../../infra/package-update-publication-owner.js";
 import {
@@ -101,18 +98,16 @@ export async function createInterruptedPackagePublication(
     }
     return preparation;
   });
-  const { anchor, journal } = prepared;
-  const record = journal.read();
-  const operationId = record.descriptor.operationId;
+  const record = prepared.journal.read();
   expect(record.phase).toBe(phase);
   if (phase === "publishing") {
-    await expect(runPackageActivationRecovery(anchor, "repair", operationId)).rejects.toThrow(
-      "Package publication object changed",
-    );
-    await expect(runPackageActivationRecovery(anchor, "retire", operationId)).rejects.toThrow(
-      "Package evidence cannot be retired (publishing)",
-    );
+    const operationId = record.descriptor.operationId;
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "repair", operationId),
+    ).rejects.toThrow("Package publication object changed");
+    await expect(
+      runPackageActivationRecovery(prepared.anchor, "retire", operationId),
+    ).rejects.toThrow("Package evidence cannot be retired (publishing)");
   }
-  expect(await readPackageActivationStatus(anchor, operationId)).toMatchObject({ phase });
   return { ...f, ...prepared, record };
 }

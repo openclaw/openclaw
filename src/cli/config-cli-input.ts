@@ -1,5 +1,5 @@
+import { addAbortSignal } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -20,6 +20,7 @@ import {
   isValidSecretProviderAlias,
 } from "../secrets/ref-contract.js";
 import { resolveConfigSecretTargetByPath } from "../secrets/target-registry.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   parseConcreteConfigPathWithProvenance,
   toDotPath,
@@ -40,6 +41,8 @@ import {
   resolveConfigSetMode,
   type ConfigSetOptions,
 } from "./config-set-input.js";
+import { parseKeyValueEntries } from "./parse-key-value-entries.js";
+import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
 const CONFIG_PATCH_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -127,40 +130,11 @@ function parseSecretRefBuilder(params: {
   return { source, provider, id };
 }
 
-function parseOptionalPositiveInteger(raw: string | undefined, flag: string): number | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
+function parseProviderPositiveInteger(raw: string | undefined, flag: string): number | undefined {
+  if (raw !== undefined && !raw.trim()) {
     throw new Error(`${flag} must not be empty.`);
   }
-  const parsed = parseStrictPositiveInteger(trimmed);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function parseProviderEnvEntries(
-  entries: string[] | undefined,
-): Record<string, string> | undefined {
-  if (!entries || entries.length === 0) {
-    return undefined;
-  }
-  const env: Record<string, string> = {};
-  for (const entry of entries) {
-    const separator = entry.indexOf("=");
-    if (separator <= 0) {
-      throw new Error("--provider-env expects KEY=*** entries.");
-    }
-    const key = entry.slice(0, separator).trim();
-    if (!key) {
-      throw new Error("--provider-env key must not be empty.");
-    }
-    env[key] = entry.slice(separator + 1);
-  }
-  return Object.keys(env).length > 0 ? env : undefined;
+  return parseOptionalPositiveInteger(raw, flag, ".");
 }
 
 function validateProviderAliasPath(path: PathSegment[]): void {
@@ -307,17 +281,17 @@ export function buildConfigSetOperations(params: {
       throw new Error("--provider-source is required in provider builder mode.");
     }
     const source = parseSecretRefSource(sourceRaw, "--provider-source");
-    const timeoutMs = parseOptionalPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
-    const maxBytes = parseOptionalPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
-    const noOutputTimeoutMs = parseOptionalPositiveInteger(
+    const timeoutMs = parseProviderPositiveInteger(opts.providerTimeoutMs, "--provider-timeout-ms");
+    const maxBytes = parseProviderPositiveInteger(opts.providerMaxBytes, "--provider-max-bytes");
+    const noOutputTimeoutMs = parseProviderPositiveInteger(
       opts.providerNoOutputTimeoutMs,
       "--provider-no-output-timeout-ms",
     );
-    const maxOutputBytes = parseOptionalPositiveInteger(
+    const maxOutputBytes = parseProviderPositiveInteger(
       opts.providerMaxOutputBytes,
       "--provider-max-output-bytes",
     );
-    const providerEnv = parseProviderEnvEntries(opts.providerEnv);
+    const providerEnv = parseKeyValueEntries(opts.providerEnv, "--provider-env");
 
     let provider: SecretProviderConfig;
     if (source === "env") {
@@ -430,13 +404,17 @@ async function readStdinText(): Promise<string> {
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
-  const bytes = await readByteStreamWithLimit(process.stdin, {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
+  const stdin = signal ? addAbortSignal(signal, process.stdin) : process.stdin;
+  const bytes = await readByteStreamWithLimit(stdin, {
     maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes }) =>
       configPatchModeError(
         `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
       ),
   });
+  signal?.throwIfAborted();
   return decodeUtf8Input(bytes, "--stdin");
 }
 

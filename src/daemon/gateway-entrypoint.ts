@@ -1,12 +1,15 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  runtimeProcessExternalPackageEntrypoints,
+  runtimeProcessGatewayEntrypointNames,
+} from "../infra/runtime-process-manifest.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { pathExists } from "../utils.js";
 
-const GATEWAY_DIST_ENTRYPOINT_BASENAMES = [
-  "index.js",
-  "index.mjs",
-  "entry.js",
-  "entry.mjs",
-] as const;
+const GATEWAY_DIST_ENTRYPOINT_BASENAMES = runtimeProcessGatewayEntrypointNames.map((name) =>
+  path.basename(runtimeProcessExternalPackageEntrypoints[name]),
+);
 
 export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
@@ -16,7 +19,9 @@ export function buildGatewayInstallEntrypointCandidates(root?: string): string[]
   if (!root) {
     return [];
   }
-  return GATEWAY_DIST_ENTRYPOINT_BASENAMES.map((basename) => path.join(root, "dist", basename));
+  return runtimeProcessGatewayEntrypointNames.map((name) =>
+    fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl(name, root)),
+  );
 }
 
 export function buildGatewayDistEntrypointCandidates(...inputs: string[]): string[] {

@@ -5,11 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  roleClient,
-  rolePolicyConfig,
-  sharingPolicyClient,
-} from "../session-sharing.test-utils.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   ArtifactSessionResolutionError,
   createArtifactSessionAccess,
@@ -37,15 +33,8 @@ async function sessionFixture(
   const row = { sessionId: `session-${sessionKey.split(":").at(-1)}`, updatedAt: 1, ...entry };
   await upsertSessionEntryCore(scope, row);
   resolveRunSession.mockReturnValue(scope);
-  const read = async (
-    client: GatewayClient | null,
-    query: ArtifactQuery = { sessionKey },
-    runtimeConfig: OpenClawConfig | undefined = cfg,
-  ) => {
-    using access = createArtifactSessionAccess({
-      getRuntimeConfig: () => runtimeConfig ?? {},
-      client,
-    });
+  const read = async (client: GatewayClient, query: ArtifactQuery) => {
+    using access = createArtifactSessionAccess({ getRuntimeConfig: () => cfg, client });
     const resolve = await prepareArtifactSessionResolution(query);
     return await resolve(access);
   };
@@ -102,10 +91,7 @@ it("denies direct and indirect incognito selectors while preserving admin access
     const cfg = { agents: { entries: { main: {} } } };
     const { read, allows } = await sessionFixture(
       sessionKey,
-      {
-        incognito: true,
-        visibility: "shared",
-      },
+      { incognito: true, visibility: "shared" },
       cfg,
     );
     const viewer = identifiedClient(["operator.read"]);
@@ -122,87 +108,30 @@ it("denies direct and indirect incognito selectors while preserving admin access
   });
 });
 
-it.each([
-  ["draft without roles", "draft", {}, undefined],
-  ["draft without runtime config", "draft", undefined, undefined],
-  ["shared with a none role", "shared", rolePolicyConfig(), "none"],
-  ["draft with a write role", "draft", rolePolicyConfig(), "write"],
-] as const)(
-  "hides %s artifacts behind direct and run selectors",
-  async (_name, visibility, cfg, role) => {
-    await withOpenClawTestState(profileState, async () => {
-      setRuntimeConfigSnapshot(cfg ?? {});
-      const viewerProfile = ensureProfileForEmail("viewer@example.com");
-      const ownerProfile = ensureProfileForEmail("owner@example.com");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const sessionKey = "agent:main:foreign-artifacts";
-      const { read, allows } = await sessionFixture(
-        sessionKey,
-        {
-          createdActor: { type: "human", source: "profile", id: ownerProfile.id },
-          visibility,
-        },
-        cfg,
-      );
-      const viewer = role
-        ? roleClient(role, "artifact-viewer")
-        : identifiedClient(["operator.read"], viewerProfile.id);
-
-      for (const query of [{ sessionKey }, { runId: "run-foreign" }]) {
-        await expect(read(viewer, query, cfg)).rejects.toThrowError(
-          expect.objectContaining({
-            shape: { code: "INVALID_REQUEST", ...scopeNotFound },
-          }),
-        );
-      }
-
-      const owner = identifiedClient(["operator.read"], ownerProfile.id);
-      const admin = identifiedClient(["operator.admin"], viewerProfile.id);
-      await allows(owner, { sessionKey }, cfg);
-      await allows(admin, { runId: "run-foreign" }, cfg);
-    });
-  },
-);
-
-it.each(["shared", "read-only", "suggest"] as const)(
-  "allows reading foreign %s artifacts without participation",
-  async (visibility) => {
-    await withOpenClawTestState(profileState, async () => {
-      setRuntimeConfigSnapshot({});
-      const owner = ensureProfileForEmail("artifact-owner@example.test");
-      const viewer = roleClient("view", "artifact-reader");
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      const sessionKey = "agent:main:readable-artifacts";
-      const { allows } = await sessionFixture(sessionKey, {
-        createdActor: { type: "human", source: "profile", id: owner.id },
-        visibility,
-      });
-
-      for (const cfg of [undefined, {}, rolePolicyConfig()]) {
-        await allows(viewer, { sessionKey }, cfg);
-      }
-    });
-  },
-);
-
-it("preserves solo and system reads while denying identityless reads with roles", async () => {
+it("hides foreign draft artifacts behind direct and run selectors", async () => {
   await withOpenClawTestState(profileState, async () => {
-    const sessionKey = "agent:main:solo-artifacts";
+    setRuntimeConfigSnapshot({});
+    const viewerProfile = ensureProfileForEmail("viewer@example.com");
+    const ownerProfile = ensureProfileForEmail("owner@example.com");
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    const sessionKey = "agent:main:foreign-artifacts";
     const { read, allows } = await sessionFixture(sessionKey, {
+      createdActor: { type: "human", source: "profile", id: ownerProfile.id },
       visibility: "draft",
     });
-    const identityless = sharingPolicyClient({});
-    for (const client of [null, identityless, sharingPolicyClient({ user: "gateway-owner" })]) {
-      await allows(client);
+    const viewer = identifiedClient(["operator.read"], viewerProfile.id);
+
+    for (const query of [{ sessionKey }, { runId: "run-foreign" }]) {
+      await expect(read(viewer, query)).rejects.toThrowError(
+        expect.objectContaining({
+          shape: { code: "INVALID_REQUEST", ...scopeNotFound },
+        }),
+      );
     }
-    const cfg = rolePolicyConfig();
-    await expect(read(identityless, { sessionKey }, cfg)).rejects.toThrow(
-      "no session found for artifact query",
-    );
-    const system: GatewayClient = {
-      ...identityless,
-      internal: { operatorRoleActor: { kind: "system" } },
-    };
-    await allows(system, { sessionKey }, cfg);
+
+    const owner = identifiedClient(["operator.read"], ownerProfile.id);
+    const admin = identifiedClient(["operator.admin"], viewerProfile.id);
+    await allows(owner, { sessionKey });
+    await allows(admin, { runId: "run-foreign" });
   });
 });

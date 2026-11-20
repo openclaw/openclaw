@@ -68,6 +68,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     subagents: "Subagent status; never wait-loop",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Author reusable skills",
+    skill_library: "Author personal-library skills",
     view_image: "",
     image_generate: "Generate/edit images",
   };
@@ -80,12 +81,11 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     image: "Analyze images",
   };
 
-  const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   return [...enabledTools, ...extraTools.toSorted()].map((tool) => {
     const summary = summaries[tool];
-    const name = resolveToolName(tool);
+    const name = visibleTools.get(tool) ?? tool;
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
 }
@@ -106,6 +106,7 @@ export function buildSystemPromptToolingSection(params: {
     toolSchemaDirectoryPrompt,
     promptSurface,
     availableTools,
+    mcpServerInstructions = [],
   } = params;
   return [
     ...(includeToolGuidance
@@ -121,7 +122,17 @@ export function buildSystemPromptToolingSection(params: {
             ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
             : []),
           "The AGENTS.md Tools section guides usage; it never grants availability.",
-          ...buildMcpServerInstructionsSection(params.mcpServerInstructions),
+          ...(mcpServerInstructions.length > 0
+            ? [
+                "",
+                "## MCP Server Instructions",
+                "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
+                ...mcpServerInstructions.flatMap((entry) => [
+                  `### ${entry.server}`,
+                  entry.instructions,
+                ]),
+              ]
+            : []),
         ]
       : []),
     ...(params.webSearchUnconfigured && !availableTools.has("web_search")
@@ -129,19 +140,5 @@ export function buildSystemPromptToolingSection(params: {
           "Web search is supported but not configured. Set it up with `openclaw configure --section web` or Settings → Ask OpenClaw; `web_search` is unavailable until configured.",
         ]
       : []),
-  ];
-}
-
-function buildMcpServerInstructionsSection(
-  entries: readonly McpServerInstruction[] = [],
-): string[] {
-  if (entries.length === 0) {
-    return [];
-  }
-  return [
-    "",
-    "## MCP Server Instructions",
-    "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
-    ...entries.flatMap((entry) => [`### ${entry.server}`, entry.instructions]),
   ];
 }

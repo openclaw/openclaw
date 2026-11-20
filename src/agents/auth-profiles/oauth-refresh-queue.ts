@@ -11,7 +11,7 @@ export type OAuthRefreshCohort = {
 /** Serialize refreshes while sharing a settled transient failure only with waiting admissions. */
 export function createOAuthRefreshQueue() {
   type Admission = OAuthRefreshCohort & { pending: number; retire(): void };
-  let queue = new KeyedAsyncQueue();
+  const queue = new KeyedAsyncQueue();
   const cohorts = new Map<string, Admission>();
 
   return {
@@ -59,10 +59,6 @@ export function createOAuthRefreshQueue() {
           }
         },
       });
-    },
-    reset() {
-      queue = new KeyedAsyncQueue();
-      cohorts.clear();
     },
   };
 }

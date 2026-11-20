@@ -10,12 +10,8 @@ import { log } from "./logger.js";
 import { stripThinkingBlocksFromMessage } from "./thinking.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 
-type RewritableSessionManager = Parameters<
-  typeof rewriteTranscriptEntriesInSessionManager
->[0]["sessionManager"];
-
 type ReplayRepairParams = {
-  sessionManager: RewritableSessionManager;
+  sessionManager: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   sessionFile?: string;
   sessionId?: string;
   sessionKey?: string;

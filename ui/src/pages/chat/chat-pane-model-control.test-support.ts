@@ -1,4 +1,5 @@
 import { onTestFinished } from "vitest";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 
@@ -13,6 +14,7 @@ export function renderPaneModelControl(
   container: HTMLElement,
   openModelPicker = false,
 ) {
+  installModelPickerLayout();
   const renderProps = openModelPicker
     ? { ...props, model: { ...props.model, modelPickerOpen: true } }
     : props;

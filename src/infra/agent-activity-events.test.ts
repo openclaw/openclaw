@@ -1,4 +1,5 @@
 import { expect, expectTypeOf, onTestFinished, test } from "vitest";
+import { makeMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import {
   emitAgentActivityEvent,
@@ -56,7 +57,7 @@ function resultEntry(messageId: string, toolCallId: string | undefined, metadata
   return { messageId, message: toolResult(toolCallId, "exec", metadata) };
 }
 
-test("emits every activity stream with shared sequencing and context", () => {
+test("forwards activity data with sequencing and optional session context", () => {
   type ItemData = Extract<Parameters<typeof emitAgentActivityEvent>[0], { stream: "item" }>["data"];
   expectTypeOf<AgentApprovalEventData>().not.toMatchTypeOf<ItemData>();
 
@@ -67,16 +68,6 @@ test("emits every activity stream with shared sequencing and context", () => {
       ...context,
       stream: "item",
       data: { ...item, phase: "start", kind: "tool", status: "running" },
-    },
-    {
-      ...context,
-      stream: "approval",
-      data: { phase: "requested", kind: "exec", status: "pending", title: "Approve" },
-    },
-    {
-      ...context,
-      stream: "command_output",
-      data: { ...item, phase: "delta", output: "working" },
     },
     {
       ...context,
@@ -103,9 +94,7 @@ test("emits every activity stream with shared sequencing and context", () => {
     events.map(({ runId, seq, stream, sessionKey }) => [runId, seq, stream, sessionKey]),
   ).toEqual([
     ["run-1", 1, "item", "session-1"],
-    ["run-1", 2, "approval", "session-1"],
-    ["run-1", 3, "command_output", "session-1"],
-    ["run-1", 4, "patch", undefined],
+    ["run-1", 2, "patch", undefined],
   ]);
   expect(events.map((event) => event.data)).toEqual(inputs.map((input) => input.data));
   expect(events[0]?.data).toBe(inputs[0]?.data);
@@ -147,9 +136,8 @@ test("projects Tool Search names for live and history activity without changing 
         commandBearing: true,
       },
     ]);
-    expect(entry.items[0]?.meta).toBeUndefined();
+    expect(entry.items[0]?.meta).toBe("check-release");
   }
-  expect(skipped).toMatchObject({ toolName: "tool_call", isError: true });
 });
 
 test("derives historical Tool Search metadata from the executed inner input", () => {
@@ -182,7 +170,6 @@ test.each([
   const history = projectAgentHistoryActivity([{ messageId: "result", message: result }]);
   expect(live.status).toBe(status);
   expect(history[0]?.items).toMatchObject([{ status }]);
-  expect(result.isError).toBe(true);
 });
 
 test.each([
@@ -256,23 +243,21 @@ test("keeps a completed step countable when its only child is routine progress",
 });
 
 test.each([
-  [
-    "a nested step holds the routine call",
-    [
+  {
+    nested: [
       ["inner", "exec", "outer"],
       ["plan", "progress_card", "inner"],
-    ],
-    "inner",
-  ],
-  [
-    "a visible call sits under a hidden one",
-    [
+    ] as const,
+    counted: "inner",
+  },
+  {
+    nested: [
       ["plan", "progress_card", "outer"],
       ["read", "read", "plan"],
-    ],
-    "read",
-  ],
-] as const)("counts one operation for a completed step when %s", (_, nested, counted) => {
+    ] as const,
+    counted: "read",
+  },
+])("counts only $counted through nested hidden progress", ({ nested, counted }) => {
   const projected = projectAgentHistoryActivity([
     call("outer", "outer", { __openclaw: { runId: "run" } }),
     ...nested.map(([id, name, parent], index) =>
@@ -291,15 +276,22 @@ test.each([
 });
 
 test.each([true, false])("does not expose a child assignment in progress (named: %s)", (named) => {
-  const item = projectAgentToolActivity({
+  const tool = {
     toolCallId: "spawn-worker",
     name: "sessions_spawn",
-    phase: "start",
     args: {
       ...(named ? { label: "Maple", taskName: "verify-release" } : {}),
       task: "PRIVATE_CHILD_ASSIGNMENT: inspect an internal document and report its contents",
     },
-  });
+  };
+  const item = projectAgentToolActivity({ ...tool, phase: "start" });
+  const result = {
+    details: { childSessionKey: "agent:demo:subagent:00000000-0000-4000-8000-000000002633" },
+  };
+  const ended = projectAgentToolActivity({ ...tool, phase: "result", result, isError: false });
+  expect(ended.meta).toBe(named ? "Maple …2633" : "…2633");
+  expect(result.details.childSessionKey).toContain("00000000-0000-4000-8000-000000002633");
+  expect(JSON.stringify(ended)).not.toContain("PRIVATE_CHILD_ASSIGNMENT");
   if (named) {
     expect(`${item.title} ${item.meta ?? ""}`).toContain("Maple");
   }
@@ -308,8 +300,20 @@ test.each([true, false])("does not expose a child assignment in progress (named:
 test("marks only unpaired history calls as provisional, including terminal unknown outcomes", () => {
   const unpaired = call("call", "command");
   const missing = projectAgentHistoryActivity([unpaired])[0]?.items[0];
-  expect(missing).toMatchObject({ phase: "end", unpairedCall: true, summary: "Outcome unknown" });
+  expect(missing).toMatchObject({ phase: "end", unpairedCall: true });
+  expect(missing).not.toHaveProperty("summary");
   expect(missing?.status).toBeUndefined();
+  const repaired = projectAgentHistoryActivity([
+    unpaired,
+    {
+      messageId: "repair",
+      message: makeMissingToolResult({ toolCallId: "command", toolName: "exec", text: "aborted" }),
+    },
+  ]);
+  for (const entry of repaired) {
+    expect(entry.items[0]).toMatchObject({ unpairedCall: true });
+    expect(entry.items[0]?.status).toBeUndefined();
+  }
   const result = resultEntry("result", "command", {
     details: {
       status: "completed",

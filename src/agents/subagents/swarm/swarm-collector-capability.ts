@@ -12,6 +12,9 @@ import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { ToolInputError, type AnyAgentTool } from "../../tools/common.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 
+/** Requester-facing tools a non-interactive collector turn must never receive. */
+const COLLECTOR_WITHHELD_TOOL_NAMES = new Set(["ask_user", "sessions_send", "sessions_yield"]);
+
 const COLLECTOR_FIELDS = ["collect", "outputSchema", "groupId"] as const;
 const WAIT_GUIDANCE = SESSIONS_SPAWN_COLLECTOR_GUIDANCE.replace(
   /\.$/u,
@@ -35,8 +38,32 @@ type JoinedSpawn = {
   toolCallId?: string;
   claimed: boolean;
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"];
+  subagentProfile?: import("../../../plugins/subagent-profile.types.js").RegisteredSubagentProfile;
 };
 const joinedSpawns = new AsyncLocalStorage<JoinedSpawn>();
+
+/**
+ * Applies the collector run contract to an already policy-filtered surface.
+ * Collector output is run transport rather than an operator-configurable
+ * capability, so it survives allowlists that would otherwise drop it.
+ */
+export function applySwarmCollectorToolContract<T extends { name: string }>(
+  tools: T[],
+  params: { swarmCollector?: boolean; structuredOutputTool?: T },
+): T[] {
+  if (!params.swarmCollector) {
+    return tools;
+  }
+  const collectorTools = tools.filter((tool) => !COLLECTOR_WITHHELD_TOOL_NAMES.has(tool.name));
+  const { structuredOutputTool } = params;
+  if (
+    structuredOutputTool &&
+    !collectorTools.some((tool) => tool.name === structuredOutputTool.name)
+  ) {
+    collectorTools.push(structuredOutputTool);
+  }
+  return collectorTools;
+}
 
 export function markCollectorReaderTool<T extends AnyAgentTool>(tool: T): T {
   return bindAgentToolAvailability(tool, readerBinding);
@@ -174,6 +201,7 @@ export async function runWithJoinedCollectorSpawn<T>(
   assertCurrent: () => void,
   run: () => Promise<T>,
   nativePluginOwner?: SubagentRunRecord["nativePluginOwner"],
+  subagentProfile?: JoinedSpawn["subagentProfile"],
 ): Promise<T> {
   const owner = getAgentToolAvailabilityBinding(tool);
   if (!owner || !spawnCapabilities.has(owner)) {
@@ -185,6 +213,7 @@ export async function runWithJoinedCollectorSpawn<T>(
     active: true,
     claimed: false,
     nativePluginOwner,
+    subagentProfile,
   };
   return await joinedSpawns.run(joined, async () => {
     try {
@@ -197,7 +226,7 @@ export async function runWithJoinedCollectorSpawn<T>(
 }
 
 /** Only the exact claimed native spawn can carry SDK provenance into registration. */
-export function captureCollectorPluginOwner(tool: object, toolCallId: string) {
+function captureCollectorPluginOwner(tool: object, toolCallId: string) {
   const joined = joinedSpawns.getStore();
   if (
     !joined ||
@@ -209,6 +238,17 @@ export function captureCollectorPluginOwner(tool: object, toolCallId: string) {
   }
   assertJoinedSpawn(joined);
   return joined.nativePluginOwner ? { ...joined.nativePluginOwner } : undefined;
+}
+
+/** Capture host-only SDK context once at the exact claimed invocation. */
+export function captureCollectorPluginContext(tool: object, toolCallId: string) {
+  const nativePluginOwner = captureCollectorPluginOwner(tool, toolCallId);
+  const profile = joinedSpawns.getStore()?.subagentProfile;
+  return {
+    nativePluginOwner,
+    subagentProfile:
+      nativePluginOwner && profile?.pluginId === nativePluginOwner.pluginId ? profile : undefined,
+  };
 }
 
 /** Bind the private context to the catalog's exact invocation before awaited hooks. */

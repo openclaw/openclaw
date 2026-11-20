@@ -143,14 +143,7 @@ it("targets the exact origin for authenticated cross-origin embeds", () => {
   stubComputedStyles({ "--bg": "#0e1015", "--accent": "#ff5c5c" });
   const { frame, post } = makeFrame();
   postWidgetTheme(frame, "https://discussion.example");
-  expect(post.mock.calls[0]).toEqual([
-    {
-      type: "openclaw:widget-theme",
-      mode: "dark",
-      tokens: { surface: "#0e1015", accent: "#ff5c5c" },
-    },
-    "https://discussion.example",
-  ]);
+  expectTheme(post, { mode: "dark" }, "https://discussion.example");
 });
 
 it("shares one token sample across frames and refreshes mounted widgets on root changes", async () => {

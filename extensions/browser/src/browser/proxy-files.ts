@@ -8,6 +8,7 @@ import {
   assertBrowserProxyFileCountWithinLimit,
   assertBrowserProxyFileBytesWithinLimits,
   BROWSER_PROXY_MAX_FILE_BYTES,
+  collectBrowserProxyFilePaths,
   type BrowserProxyFile,
   visitBrowserProxyFilePaths,
 } from "../browser-proxy-envelope.js";
@@ -18,17 +19,8 @@ function invalidBrowserProxyFileEnvelope(): never {
   throw new Error(INVALID_BROWSER_PROXY_FILE_ENVELOPE);
 }
 
-function collectBrowserProxyResultPaths(result: unknown): Set<string> {
-  const paths = new Set<string>();
-  visitBrowserProxyFilePaths(result, (filePath) => {
-    paths.add(filePath);
-    assertBrowserProxyFileCountWithinLimit(paths.size);
-  });
-  return paths;
-}
-
 function validateBrowserProxyFiles(result: unknown, files: unknown): BrowserProxyFile[] {
-  const referencedPaths = collectBrowserProxyResultPaths(result);
+  const referencedPaths = collectBrowserProxyFilePaths(result);
   const candidates = files === undefined ? [] : files;
   if (!Array.isArray(candidates)) {
     return invalidBrowserProxyFileEnvelope();

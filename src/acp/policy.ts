@@ -33,11 +33,20 @@ export function resolveAcpExplicitTurnPolicyError(cfg: OpenClawConfig): AcpRunti
   return new AcpRuntimeError("ACP_DISPATCH_DISABLED", ACP_DISABLED_MESSAGE);
 }
 
+function listAcpAllowedAgentIds(cfg: OpenClawConfig): string[] {
+  return (cfg.acp?.allowedAgents ?? []).map(normalizeAgentId).filter(Boolean);
+}
+
+/** Returns whether `acp.allowedAgents` restricts ACP target ids. */
+export function hasAcpAgentAllowlist(cfg: OpenClawConfig): boolean {
+  return listAcpAllowedAgentIds(cfg).length > 0;
+}
+
 export function resolveAcpAgentPolicyError(
   cfg: OpenClawConfig,
   agentId: string,
 ): AcpRuntimeError | null {
-  const allowed = (cfg.acp?.allowedAgents ?? []).map(normalizeAgentId).filter(Boolean);
+  const allowed = listAcpAllowedAgentIds(cfg);
   if (allowed.length === 0 || allowed.includes(normalizeAgentId(agentId))) {
     return null;
   }

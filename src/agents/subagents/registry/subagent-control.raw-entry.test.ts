@@ -77,6 +77,12 @@ const sessionScope = (storePath: string, sessionKey = "global", agentId = "main"
   storePath,
   sessionKey,
 });
+const transcriptScope = (storePath: string, agentId: string, sessionId = `${agentId}-global`) => ({
+  ...sessionScope(storePath, "global", agentId),
+  sessionId,
+});
+const transcript = (storePath: string, agentId: string) =>
+  loadTranscriptEvents(transcriptScope(storePath, agentId));
 const readSession = (storePath: string, sessionKey = "global", agentId = "main") =>
   loadSessionEntry(sessionScope(storePath, sessionKey, agentId));
 const writeSession = (agentId: string, sessionKey: string, defaultSessionId: string) =>
@@ -315,18 +321,15 @@ it.each([
     fixture.capture.mockImplementation(captureSubagentCompletionReply);
     const { children } = await prepareWatchedRawChildren();
     for (const [agentId, { storePath }] of children) {
-      await appendTranscriptMessage(
-        { agentId, storePath, sessionKey: "global", sessionId: `${agentId}-global` },
-        {
-          message: {
-            role: "assistant",
-            content: `${agentId}'s partial result`,
-            phase: "final",
-            stopReason: "stop",
-            __openclaw: { runId: agentId === "main" ? "main-1" : "research-2" },
-          },
+      await appendTranscriptMessage(transcriptScope(storePath, agentId), {
+        message: {
+          role: "assistant",
+          content: `${agentId}'s partial result`,
+          phase: "final",
+          stopReason: "stop",
+          __openclaw: { runId: agentId === "main" ? "main-1" : "research-2" },
         },
-      );
+      });
     }
     const entry = getSubagentRunByRunId(runId)!;
     if (foreignStatus) {
@@ -408,14 +411,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
     );
     expectAccepted(sent, { targetDisposition: "steered" });
     expect(queueMessage).toHaveBeenCalledOnce();
-    expect(
-      await loadTranscriptEvents({
-        agentId: "main",
-        storePath: children.get("main")!.storePath,
-        sessionKey: "global",
-        sessionId: "main-global",
-      }),
-    ).toContainEqual(
+    expect(await transcript(children.get("main")!.storePath, "main")).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({
           role: "user",
@@ -429,14 +425,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
         }),
       }),
     );
-    expect(
-      await loadTranscriptEvents({
-        agentId: "research",
-        storePath: children.get("research")!.storePath,
-        sessionKey: "global",
-        sessionId: "research-global",
-      }),
-    ).toEqual([]);
+    expect(await transcript(children.get("research")!.storePath, "research")).toEqual([]);
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
     expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
   } finally {

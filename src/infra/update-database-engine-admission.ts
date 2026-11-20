@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 /** Refuse a downgrade that would strand an installed PostgreSQL store. */
@@ -94,9 +95,12 @@ export async function assertUpdateDatabaseEngineContexts(
       let family: string;
       try {
         family = await readPostgresBackupFamily(pathname, context.config);
-      } catch {
-        refuse(
-          `PostgreSQL family at ${pathname} cannot be captured by this updater; use a version with a port and backup provider for that family`,
+      } catch (error) {
+        const failure = createUpdateErrorFact("database-engine-preflight", error, context.env);
+        throw new UpdatePreMutationError(
+          "database-engine-preflight",
+          `Update refused: PostgreSQL family lookup at ${pathname} failed: ${failure.message}`,
+          { cause: error, failureFacts: [failure] },
         );
       }
       admitFamily(family);

@@ -7,7 +7,8 @@ import {
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isMissingPathError } from "../infra/errors.js";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
+import { stateRootDirectoryMode } from "../infra/private-dir-mode.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { hashConfigIncludeRaw } from "./includes.js";
@@ -15,17 +16,11 @@ import { stampConfigWriteMetadata } from "./io.meta.js";
 import { hashConfigRaw, parseConfigJson5 } from "./io.read-helpers.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
 import type { ConfigWriteOptions } from "./io.types.js";
+import type { ConfigFileWritePathSnapshot } from "./io.write-path.types.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
+import { resolveStateDir } from "./paths.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { createConfigWriteAuthorityGuard } from "./write-authority.js";
-
-export type ConfigFileWritePathSnapshot = {
-  targetPath: string;
-  entries: Array<
-    | { path: string; kind: "missing-directory" }
-    | { path: string; kind: "existing"; dev: string; ino: string; link?: string }
-  >;
-};
 
 /** The captured path facts survive an update's delegated finalizer; they grant no write authority. */
 export function assertConfigFileWritePathSnapshot(
@@ -97,7 +92,7 @@ export function captureConfigFileWritePathProof(
     capture(parent);
     let realParent: string;
     try {
-      realParent = ioFs.realpathSync(parent);
+      realParent = ioFs.realpathSync.native(parent);
     } catch (error) {
       if (!isMissingPathError(error)) {
         throw error;
@@ -141,6 +136,48 @@ export function captureConfigFileWritePathProof(
   const assertCurrent = () => assertConfigFileWritePathSnapshot(snapshot, ioFs);
   assertCurrent();
   return { path: filePath, snapshot, assertCurrent };
+}
+
+/** Resolve the operator-selected directory, retaining its logical-path identity. */
+export function captureConfigRootWriteTarget(filePath: string, ioFs: typeof fs) {
+  if (ioFs.lstatSync(filePath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    throw new ConfigMutationConflictError(
+      `Config writes need a regular file, but ${filePath} is a symlink. Point OPENCLAW_CONFIG_PATH at the real file, or replace the symlink with that file.`,
+      { retryable: false },
+    );
+  }
+  const directory = path.dirname(filePath);
+  let realDirectory: string;
+  try {
+    // Match fs-safe's native spelling; Windows' JS resolver preserves input casing.
+    realDirectory = ioFs.realpathSync.native(directory);
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    realDirectory = resolvePathViaExistingAncestorSync(directory);
+  }
+  // Resolve the parent only; a config-file symlink must not redirect publication.
+  const targetPath = path.join(realDirectory, path.basename(filePath));
+  return {
+    path: targetPath,
+    pathProof: captureConfigFileWritePathProof(filePath, targetPath, ioFs),
+  };
+}
+
+export function resolveConfigWriteDirectory(
+  configPath: string,
+  publicationPath: string,
+  deps: Pick<NormalizedConfigIoDeps, "env" | "homedir"> & { logger: Pick<typeof console, "warn"> },
+) {
+  const stateRoot = resolveStateDir(deps.env, deps.homedir);
+  return {
+    path:
+      path.resolve(path.dirname(configPath)) === path.resolve(stateRoot)
+        ? path.dirname(publicationPath)
+        : stateRoot,
+    warn: (message: string) => deps.logger.warn(message),
+  };
 }
 
 type ConfigFileWriteIdentity = Pick<fs.BigIntStats, "dev" | "ino">;
@@ -199,6 +236,7 @@ export function createConfigFileWriteGuard(
     preserveDirectoryMode?: boolean;
     stateDirectory?: ConfigStateDirectory;
     targetPathProof?: ReturnType<typeof captureConfigFileWritePathProof>;
+    validateUtf8?: boolean;
   },
 ) {
   const includePathProofs = new Map(
@@ -250,6 +288,7 @@ export function createConfigFileWriteGuard(
           fsModule,
           publication?.includeGraph,
           includePathProofs,
+          publication?.validateUtf8,
         );
       }
     } catch (error) {
@@ -350,7 +389,12 @@ export function assertBaseSnapshotStillCurrent(
   ioFs: typeof fs,
   includeGraph?: { hashes: Record<string, string>; targets: Record<string, string> },
   includePathProofs?: ReadonlyMap<string, ReturnType<typeof captureConfigFileWritePathProof>>,
+  validateUtf8 = false,
 ): void {
+  const readSource = (pathname: string) =>
+    validateUtf8
+      ? decodeUtf8Input(ioFs.readFileSync(pathname), pathname)
+      : ioFs.readFileSync(pathname, "utf-8");
   if (snapshot.path !== configPath) {
     throw new ConfigMutationConflictError("config path changed since last load", {
       retryable: false,
@@ -366,7 +410,7 @@ export function assertBaseSnapshotStillCurrent(
       }
       const pathProof = includePathProofs?.get(includePath);
       pathProof?.assertCurrent();
-      if (!pathProof && path.normalize(ioFs.realpathSync(includePath)) !== expectedTarget) {
+      if (!pathProof && path.normalize(ioFs.realpathSync.native(includePath)) !== expectedTarget) {
         throw new ConfigMutationConflictError("included config target changed since last load", {
           retryable: false,
         });
@@ -375,7 +419,7 @@ export function assertBaseSnapshotStillCurrent(
       if (expectedTarget === configPath) {
         continue;
       }
-      if (hashConfigIncludeRaw(ioFs.readFileSync(expectedTarget, "utf-8")) !== expectedHash) {
+      if (hashConfigIncludeRaw(readSource(expectedTarget)) !== expectedHash) {
         throw new ConfigMutationConflictError("included config changed since last load");
       }
     } catch (error) {
@@ -392,8 +436,10 @@ export function assertBaseSnapshotStillCurrent(
   const expectedHash = snapshot.raw === null ? null : hashConfigRaw(snapshot.raw);
   let currentRaw: string | null = null;
   let currentExists = true;
+  // Owned fallback bytes may end mid-character until the next short write completes.
   try {
-    currentRaw = ioFs.readFileSync(configPath, "utf-8");
+    currentRaw =
+      snapshot.raw === null ? ioFs.readFileSync(configPath, "utf-8") : readSource(configPath);
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
       throw error;
@@ -465,11 +511,8 @@ export async function rollbackConfigFileWriteIfUnchanged(params: {
         filePath: params.configPath,
         content: previousRaw,
         dirMode: params.stateDirectory
-          ? (readExistingStateRootMode(
-              path.dirname(params.configPath),
-              params.stateDirectory.path,
-              params.fsModule,
-            ) ?? 0o700)
+          ? (stateRootDirectoryMode(path.dirname(params.configPath), params.stateDirectory.path) ??
+            0o700)
           : 0o700,
         mode: 0o600,
         copyFallbackOnPermissionError: true,

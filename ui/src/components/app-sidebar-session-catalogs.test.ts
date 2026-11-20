@@ -1,12 +1,10 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type {
   SessionCatalog,
-  SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { i18n } from "../i18n/index.ts";
 import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   findCatalogSessionHovercardRow,
@@ -26,96 +24,53 @@ const session = (
   canArchive: false,
   ...overrides,
 });
-const host = (sessions: SessionCatalogSession[]): SessionCatalogHost => ({
-  hostId: "gateway:codex",
-  label: "Local Codex",
-  kind: "gateway",
-  connected: true,
-  sessions,
-});
-const catalog = (hosts: SessionCatalogHost[]): SessionCatalog => ({
+const catalog = (sessions: SessionCatalogSession[]): SessionCatalog => ({
   id: "codex",
   label: "Codex",
   capabilities: { continueSession: true, archive: false },
-  hosts,
+  hosts: [
+    { hostId: "gateway:codex", label: "Local Codex", kind: "gateway", connected: true, sessions },
+  ],
 });
 
-describe("formatSidebarTimestamp", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-29T08:00:00Z"));
-  });
-  afterEach(async () => {
-    vi.useRealTimers();
-    await i18n.setLocale("en");
-  });
-  it.each([
-    [-10_000, "now"],
-    [-5 * 60_000, "5m"],
-  ] as const)("formats offset %i as %s", (offset, expected) => {
-    expect(formatSidebarTimestamp(Date.now() + offset)).toBe(expected);
-  });
-  it("preserves direction for future timestamps", () => {
-    expect(formatSidebarTimestamp(Date.now() + 30_000)).toBe("in 30s");
-    expect(formatSidebarTimestamp(Date.now() + 5 * 60_000)).toBe("in 5m");
-  });
+afterEach(() => vi.restoreAllMocks());
+it.each([
+  [-10_000, "now"],
+  [-5 * 60_000, "5m"],
+  [30_000, "in 30s"],
+] as const)("formats sidebar timestamp offset %i as %s", (offset, expected) => {
+  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+  expect(formatSidebarTimestamp(Date.now() + offset)).toBe(expected);
 });
 
-it("preserves adopted naming while distinguishing repository and workspace context", () => {
-  const source = catalog([
-    host([
-      session("project", {
-        name: "Renamed upstream",
-        sessionKey: "agent:main:adopted-project",
-        cwd: "/work/openclaw",
-        gitBranch: "feature/hovercard",
-      }),
-      session("colored", { color: "cyan" }),
-      session("workspace", { cwd: "/work/release-notes" }),
-      session("pull-request", {
-        cwd: "/work/pull-request",
-        pullRequest: { numbers: [125068], state: "open" },
+it.each<[Partial<SessionCatalogSession>, "project" | "workspace", { branch?: string }]>([
+  [{ gitBranch: "feature/hovercard" }, "project", { branch: "feature/hovercard" }],
+  [{}, "workspace", {}],
+  [{ pullRequest: { numbers: [125068], state: "open" } }, "project", {}],
+])("projects catalog work context %j", (metadata, kind, extra) => {
+  const row = findCatalogSessionHovercardRow({
+    catalogs: [catalog([session("thread", { cwd: "/work/openclaw", ...metadata })])],
+    sessionKey: "catalog:codex:gateway%3Acodex:thread",
+  });
+  expect(row?.workContext).toEqual({ kind, name: "openclaw", path: "/work/openclaw", ...extra });
+});
+
+it("preserves adopted naming, activity and cleared color over catalog metadata", () => {
+  const catalogs = [
+    catalog([
+      session("thread", {
+        name: "Upstream name",
+        color: "cyan",
+        sessionKey: "agent:main:adopted",
       }),
     ]),
-  ]);
-  type LiveRow = Parameters<typeof findCatalogSessionHovercardRow>[0]["liveRow"];
-  const find = (id: string, liveRow?: LiveRow) =>
-    findCatalogSessionHovercardRow({
-      catalogs: [source],
-      sessionKey: id.startsWith("agent:") ? id : "catalog:codex:gateway%3Acodex:" + id,
-      liveRow,
-    });
-  const live = { label: "Project", hasAutomation: false, hasActiveRun: false };
-  expect(find("colored")).toMatchObject({ color: "cyan", hasActiveRun: false });
-  // An adopted session's cleared color overrides stale CLI metadata.
-  expect(find("colored", live)?.color).toBeUndefined();
-  expect(find("colored", { ...live, color: "red" })?.color).toBe("red");
-  expect(
-    find("agent:main:adopted-project", {
-      ...live,
-      label: "Operator chosen label",
-      hasActiveRun: true,
-    }),
-  ).toMatchObject({
-    label: "Operator chosen label",
-    hasActiveRun: true,
-    workContext: {
-      kind: "project",
-      name: "openclaw",
-      path: "/work/openclaw",
-      branch: "feature/hovercard",
-    },
-  });
-  expect(find("workspace")?.workContext).toEqual({
-    kind: "workspace",
-    name: "release-notes",
-    path: "/work/release-notes",
-  });
-  expect(find("pull-request")?.workContext).toEqual({
-    kind: "project",
-    name: "pull-request",
-    path: "/work/pull-request",
-  });
+  ];
+  const liveRow = { label: "Operator label", hasAutomation: false, hasActiveRun: true };
+  const find = (live?: typeof liveRow & { color?: string }) =>
+    findCatalogSessionHovercardRow({ catalogs, sessionKey: "agent:main:adopted", liveRow: live });
+  expect(find()).toMatchObject({ color: "cyan", hasActiveRun: false });
+  expect(find(liveRow)).toMatchObject({ ...liveRow, color: undefined });
+  expect(find({ ...liveRow, color: "red" })?.color).toBe("red");
 });
 
 it.each([
@@ -123,7 +78,7 @@ it.each([
   ["all", ["native", "adopted"]],
 ] as const)("applies shared %s visibility to adopted rows only", (statusFilter, expected) => {
   const row: GatewaySessionRow = { key: "agent:main:adopted", kind: "direct", snoozedUntil: 200 };
-  const local = host([session("native"), session("adopted", { sessionKey: row.key })]);
+  const local = catalog([session("native"), session("adopted", { sessionKey: row.key })]);
   const visibility = projectSidebarArchiveVisibility({
     sessionData: {
       childSessionRowsByParent: {},
@@ -138,12 +93,7 @@ it.each([
     deletionState: () => undefined,
     archiveVisibility: () => undefined,
   });
-  const projected = projectSidebarSessionCatalogs(
-    [catalog([local])],
-    null,
-    [row],
-    visibility.isSessionHidden,
-  );
+  const projected = projectSidebarSessionCatalogs([local], null, [row], visibility.isSessionHidden);
   expect(
     projected.flatMap((entry) =>
       entry.visibleHosts.flatMap((visibleHost) =>
@@ -153,30 +103,26 @@ it.each([
   ).toEqual(expected);
 });
 
-it.each([false, true])(
-  "filters by effective owner, preferring live adopted ownership (adopted=%s)",
-  (adopted) => {
-    const key = "agent:main:adopted";
-    const hosts = [
-      host(
-        adopted
-          ? [
-              session("adopted", {
-                sessionKey: key,
-                createdActor: { id: "operator:creator", type: "human" },
-              }),
-            ]
-          : ["mine", "theirs"].map((id) =>
-              session(id, { createdActor: { id: "operator:" + id, type: "human" } }),
-            ),
-      ),
-    ];
-    const ownerId = adopted ? "operator:owner" : "operator:mine";
-    const liveRows: GatewaySessionRow[] = adopted
-      ? [{ key, kind: "direct", updatedAt: 1, owner: { actor: { type: "human", id: ownerId } } }]
-      : [];
-    expect(projectSidebarSessionCatalogs([catalog(hosts)], ownerId, liveRows)).toEqual([
-      { ...catalog(hosts), visibleHosts: [{ ...hosts[0]!, sessions: [hosts[0]!.sessions[0]!] }] },
-    ]);
-  },
-);
+it.each(["mine", "adopted"])("filters by effective %s owner", (id) => {
+  const key = "agent:main:adopted";
+  const source = catalog([
+    ...["mine", "theirs"].map((ownerId) =>
+      session(ownerId, { createdActor: { id: ownerId, type: "human" } }),
+    ),
+    session("adopted", { sessionKey: key, createdActor: { id: "creator", type: "human" } }),
+  ]);
+  const liveRows: GatewaySessionRow[] = [
+    { key, kind: "direct", owner: { actor: { type: "human", id: "adopted" } } },
+  ];
+  const result = projectSidebarSessionCatalogs([source], id, liveRows);
+  expect(result).toHaveLength(1);
+  expect(result[0]!.visibleHosts).toHaveLength(1);
+  expect(result[0]!.visibleHosts[0]!.sessions.map((row) => row.threadId)).toEqual([id]);
+  expect(
+    projectSidebarSessionCatalogs(
+      [{ ...source, error: { code: "UNAVAILABLE", message: "Discovery failed" } }],
+      "unrelated",
+      liveRows,
+    ),
+  ).toEqual([]);
+});

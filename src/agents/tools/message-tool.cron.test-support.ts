@@ -46,7 +46,6 @@ export async function withCronMessageRun<T>(
           agentId: scope.agentId,
           runId: scope.runId,
           runSessionKey: scope.sessionKey,
-          operatorAuthorityRestored: false,
         }),
         cfg,
         jobId: job.id,

@@ -1,6 +1,10 @@
 // Subagent delivery-state tests cover current registry record normalization.
 import { describe, expect, it } from "vitest";
-import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  normalizeSubagentRunState,
+  recordRequesterDelivery,
+  resolveRequesterDeliveryOutcome,
+} from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -51,32 +55,6 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.suppressCompletionDelivery).toBe(true);
   });
 
-  it("keeps only complete interrupted-recovery terminal ownership", () => {
-    const terminal = {
-      endedReason: "subagent-error" as const,
-      execution: {
-        status: "terminal" as const,
-        startedAt: 100,
-        endedAt: 200,
-        outcome: { status: "error" as const, error: "restart interrupted run" },
-      },
-      terminalOwner: "interrupted-recovery" as const,
-    };
-    const valid = normalizeSubagentRunState(baseRun(terminal));
-    const malformed = [
-      baseRun({ ...terminal, execution: { ...terminal.execution, endedAt: undefined } }),
-      baseRun({
-        ...terminal,
-        execution: { ...terminal.execution, outcome: { status: "ok" } },
-      }),
-      baseRun({ ...terminal, endedReason: "subagent-complete" }),
-      baseRun({ ...terminal, pauseReason: "sessions_yield" }),
-    ].map((entry) => normalizeSubagentRunState(entry));
-
-    expect(valid.terminalOwner).toBe("interrupted-recovery");
-    expect(malformed.every((entry) => entry.terminalOwner === undefined)).toBe(true);
-  });
-
   it("clears stale cleanupHandled locks after delivered notification if cleanup did not finish", () => {
     const entry = normalizeSubagentRunState(
       baseRun({
@@ -90,4 +68,37 @@ describe("normalizeSubagentRunState", () => {
 
     expect(entry.cleanupHandled).toBe(false);
   });
+});
+
+it("keeps an ambiguous send when the requester consumed the result first", () => {
+  const run = baseRun();
+  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
+  const outcome = {
+    delivered: false,
+    path: "direct",
+    disposition: "ambiguous",
+    error: "automatic completion delivery could not be confirmed",
+  } as const;
+
+  expect(resolveRequesterDeliveryOutcome([run], outcome)).toEqual(outcome);
+});
+
+it("keeps recorded send ambiguity when transcript consumption arrives later", () => {
+  const run = baseRun({
+    delivery: {
+      status: "pending",
+      disposition: "ambiguous",
+      lastError: "send returned no identity",
+    },
+  });
+  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
+
+  expect(run.delivery).toMatchObject({
+    status: "pending",
+    disposition: "ambiguous",
+    lastError: "send returned no identity",
+    requesterDelivery: { state: "consumed", runId: "requester-turn" },
+  });
+  const receipt = { delivered: true, path: "direct", deliveredAt: 200 } as const;
+  expect(resolveRequesterDeliveryOutcome([run], receipt)).toEqual(receipt);
 });

@@ -65,12 +65,13 @@ export async function cacheSticker(sticker: CachedSticker): Promise<void> {
 }
 
 export async function searchStickers(query: string, limit = 10): Promise<CachedSticker[]> {
-  const queryLower = normalizeLowercaseStringOrEmpty(query);
+  // Canonical forms compare equal here; cached sticker records keep their original text.
+  const queryLower = normalizeLowercaseStringOrEmpty(query).normalize("NFC");
   const queryWords = queryLower.split(/\s+/).filter(Boolean);
   const results: Array<{ sticker: CachedSticker; score: number }> = [];
 
   for (const sticker of await getAllCachedStickers()) {
-    const descLower = normalizeLowercaseStringOrEmpty(sticker.description);
+    const descLower = normalizeLowercaseStringOrEmpty(sticker.description).normalize("NFC");
     let score = descLower.includes(queryLower) ? 10 : 0;
 
     const descWords = descLower.split(/\s+/);
@@ -81,7 +82,9 @@ export async function searchStickers(query: string, limit = 10): Promise<CachedS
     }
 
     score += sticker.emoji && query.includes(sticker.emoji) ? 8 : 0;
-    score += normalizeLowercaseStringOrEmpty(sticker.setName).includes(queryLower) ? 3 : 0;
+    score += normalizeLowercaseStringOrEmpty(sticker.setName).normalize("NFC").includes(queryLower)
+      ? 3
+      : 0;
 
     if (score > 0) {
       results.push({ sticker, score });

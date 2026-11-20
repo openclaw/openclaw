@@ -77,13 +77,8 @@ const runtimeCliBackends = [
 const createTypingController = (): TypingController =>
   createNativeSlashFixture("", maybeResolveNativeSlashCommandFastReply).typing;
 
-type NativeSlashFastReplyParams = Parameters<typeof maybeResolveNativeSlashCommandFastReply>[0];
 function runTestNativeSlashFastReply(
-  overrides: Pick<
-    NativeSlashFastReplyParams,
-    "ctx" | "cfg" | "agentId" | "commandAuthorized" | "typing"
-  > &
-    Partial<NativeSlashFastReplyParams>,
+  overrides: Parameters<ReturnType<typeof createNativeSlashFixture>["run"]>[0],
 ) {
   return createNativeSlashFixture("", maybeResolveNativeSlashCommandFastReply).run(overrides);
 }
@@ -140,15 +135,28 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         CommandTargetSessionKey: "agent:main:telegram:123",
       }),
       cfg: markCompleteReplyConfig(resolvedConfig),
-      agentId: "main",
       agentCfg: config?.agents?.defaults,
-      commandAuthorized: true,
       typing,
       preparedModelCatalog: preparedCatalog,
     });
 
     return { result, typing, storePath: resolvedConfig.session?.store };
   }
+
+  it.each(["[example] /help", "Ada: /help"])(
+    "does not admit wrapped canonical text to the native fast path: %j",
+    async (body) => {
+      handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "help" } });
+      const result = await runTestNativeSlashFastReply({
+        ctx: buildNativeCommandCtx(body, { SenderName: "Ada" }),
+        cfg: markCompleteReplyConfig({
+          session: { store: path.join(tempDirs.make("openclaw-wrapped-native-"), "sessions.json") },
+        }),
+      });
+      expect(result).toEqual({ handled: false });
+      expect(handleCommandsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("persists a native exec node selection before model dispatch", async () => {
     const { result, storePath } = await resolveNativeDirectiveCommand(
@@ -415,9 +423,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         } as OpenClawConfig,
         { runtimeMode: "full" },
       ),
-      agentId: "main",
-      agentCfg: undefined,
-      commandAuthorized: true,
       typing,
     });
 
@@ -548,7 +553,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         ),
         agentId: targetAgentId,
         commandAuthorized: transportAuthorized,
-        typing: createTypingController(),
       });
 
       expect(result.handled).toBe(true);
@@ -596,7 +600,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "dev",
-      commandAuthorized: true,
       typing,
     });
 
@@ -643,7 +646,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig),
       agentId: "dev",
-      commandAuthorized: true,
       typing,
     });
 
@@ -682,9 +684,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           ? { commands: { allowFrom: { "*": ["approved-sender"] } } }
           : {}),
       } as OpenClawConfig),
-      agentId: "main",
       commandAuthorized: authorized,
-      typing: createTypingController(),
     });
 
     expect(result).toEqual({
@@ -721,9 +721,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         CommandTargetSessionKey: sessionKey,
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
-      agentId: "main",
-      commandAuthorized: true,
-      typing: createTypingController(),
     });
 
     expect(result).toEqual({
@@ -745,7 +742,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       sessionId: "session-1",
       updatedAt: 1,
       lastInteractionAt: 1,
-      channel: "old-channel",
     } as SessionEntry);
     handleCommandsMock.mockImplementationOnce(async (params: { sessionEntry?: unknown }) => {
       const persisted = loadSessionEntry({ sessionKey, storePath });
@@ -754,10 +750,11 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         sessionStartedAt: 100,
         updatedAt: 100,
         lastInteractionAt: 100,
-        channel: "telegram",
       };
       expect(params.sessionEntry).toMatchObject(initialized);
       expect(persisted).toMatchObject(initialized);
+      // The retired channel field stays out of new session state (#190213).
+      expect(persisted).not.toHaveProperty("channel");
       return { shouldContinue: false, reply: { text: "ok" } };
     });
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(100);
@@ -769,9 +766,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           CommandTargetSessionKey: sessionKey,
         }),
         cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
-        agentId: "main",
-        commandAuthorized: true,
-        typing: createTypingController(),
       });
     } finally {
       nowSpy.mockRestore();

@@ -18,7 +18,7 @@ export function matchSlashCommandToken(raw: string, command: string): string | n
 
 export function resolveSlashCommandName(commandBody: string): string | null {
   const match = commandBody.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
-  return normalizeLowercaseStringOrEmpty(match?.[1]) || null;
+  return match?.[1]?.toLowerCase() ?? null;
 }
 
 /** Parses a normalized send-policy command without importing command runtime state. */
@@ -30,7 +30,7 @@ export function parseSendPolicyCommandBody(normalized: string): {
   if (!match) {
     return { hasCommand: false };
   }
-  const token = normalizeLowercaseStringOrEmpty(match[1]);
+  const token = match[1]?.toLowerCase();
   if (!token) {
     return { hasCommand: true };
   }
@@ -53,7 +53,7 @@ export function parseSlashCommandOrNull(
 ): { action: string; args: string } | null {
   const trimmed = raw.trim();
   const slashLower = normalizeLowercaseStringOrEmpty(slash);
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith(slashLower)) {
+  if (!trimmed.toLowerCase().startsWith(slashLower)) {
     return null;
   }
   // Longer command names such as `/config-check` belong to their own handler.

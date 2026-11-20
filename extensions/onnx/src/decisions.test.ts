@@ -1,6 +1,6 @@
 import { decisionBatchV1ToV2 } from "openclaw/plugin-sdk/decisions";
 import type { DecisionBatch, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
-import { beforeEach, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { createOnnxProvider, createPreparedOnnxProvider } from "./decisions.js";
 import { OnnxWorkerError } from "./protocol.js";
 import type { InferenceWorkerClient } from "./worker-client.js";
@@ -32,19 +32,14 @@ it("preserves classifier estimates and the physical worker admission callback", 
     { logits: [0, Math.log(2), Math.log(7)], inputTokens: 15 },
     { logits: [Math.log(4), 0], inputTokens: 14 },
   ]);
-  const input = decisionBatchV1ToV2(batch)!;
   const ctx = preparedContext();
-  const result = await prepared.evaluate(input, ctx);
-  expect(result).toEqual({
+  const probabilities = { trip: expect.closeTo(0.75, 14), cash: expect.closeTo(0.25, 14) };
+  expect(await prepared.evaluate(decisionBatchV1ToV2(batch)!, ctx)).toEqual({
     status: "ok",
     result: {
       model,
       answers: {
-        topic: {
-          type: "choice",
-          choice: "holiday",
-          probabilities: { holiday: expect.closeTo(0.75, 14), finance: expect.closeTo(0.25, 14) },
-        },
+        topic: { type: "choice", choice: "trip", probabilities },
         rating: {
           type: "score",
           score: expect.closeTo(1.6),
@@ -58,7 +53,7 @@ it("preserves classifier estimates and the physical worker admission callback", 
   expect(classify).toHaveBeenCalledWith(model, expect.any(Array), ctx.signal, ctx.isAdmissible);
   expect(classify.mock.calls[0]?.[1][0]).toMatchObject({
     text: '{"message":"A pleasant holiday"}',
-    labels: ["holiday", "finance"],
+    labels: ["trip", "cash"],
   });
 });
 
@@ -109,45 +104,38 @@ it("keeps per-model limits and canonical billing facts during V1 catalog enrichm
 const batch: DecisionBatch = {
   state: { message: "A pleasant holiday" },
   questions: {
-    topic: { type: "choice", criteria: { holiday: "travel", finance: null } },
+    topic: { type: "choice", criteria: { trip: "travel", cash: null } },
     rating: { type: "score", criteria: ["negative", "neutral", "positive"] },
     mentioned: { type: "boolean", criteria: { true: "holiday", false: "no holiday" } },
   },
 };
 
-it.each(["list", "reasoning", "bare Boolean"] as const)(
-  "rejects %s before dispatch",
-  async (kind) => {
-    const input = decisionBatchV1ToV2(batch)!;
-    const result =
-      kind === "bare Boolean"
-        ? await provider.evaluate(
-            { ...batch, questions: { ...batch.questions, bare: { type: "boolean" } } },
-            context(),
-          )
-        : await prepared.evaluate(
-            kind === "list"
-              ? { ...input, state: { type: "list", items: [{ id: "one", content: "first" }] } }
-              : input,
-            kind === "reasoning" ? { ...preparedContext(), reasoning: "on" } : preparedContext(),
-          );
-    expect(result).toEqual(unavailable);
+it.each(["list", "reasoning", "bare"] as const)("rejects %s before dispatch", async (kind) => {
+  if (kind === "bare") {
+    expect(
+      await provider.evaluate(
+        { ...batch, questions: { ...batch.questions, bare: { type: "boolean" } } },
+        context(),
+      ),
+    ).toEqual(unavailable);
     expect(classify).not.toHaveBeenCalled();
-  },
-);
+    return;
+  }
+  let input = decisionBatchV1ToV2(batch)!;
+  if (kind === "list") {
+    input = { ...input, state: { type: "list", items: [{ id: "one", content: "first" }] } };
+  }
+  const reasoning = kind === "reasoning" ? "on" : undefined;
+  expect(await prepared.evaluate(input, { ...preparedContext(), reasoning })).toEqual(unavailable);
+  expect(classify).not.toHaveBeenCalled();
+});
 
 it("preserves arbitrary question and label keys without prototype assignment", async () => {
   classify.mockResolvedValue([{ logits: [1000, -1000], inputTokens: 3 }]);
-  const questions = {
-    ["__proto__"]: {
-      type: "choice" as const,
-      criteria: { ["__proto__"]: "first", constructor: "second" },
-    },
-  };
+  const criteria = { ["__proto__"]: "first", constructor: "second" };
+  const questions = { ["__proto__"]: { type: "choice" as const, criteria } };
   const result = await provider.evaluate({ state: "text", questions }, context());
-  if (result.status !== "ok") {
-    throw new Error("Expected an available provider");
-  }
+  assert(result.status === "ok", "Expected an available provider");
   expect(Object.keys(result.result.answers)).toEqual(["__proto__"]);
   expect(Object.getOwnPropertyDescriptor(result.result.answers, "__proto__")?.value).toEqual({
     type: "choice",

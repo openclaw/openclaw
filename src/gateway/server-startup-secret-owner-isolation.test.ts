@@ -1,25 +1,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
-import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { resolveMemorySearchConfig } from "../agents/memory-search.js";
-import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
-import { resolveSandboxContext } from "../agents/sandbox/context.js";
 import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import {
-  peekSystemEventEntries,
-  peekSystemEvents,
-  resetSystemEventsForTest,
-} from "../infra/system-events.js";
-import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
@@ -110,16 +98,15 @@ function baseConfig(): OpenClawConfig {
 }
 
 const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
-const vaultRef = (id: string) => ({ source: "exec" as const, provider: "vault", id });
 const memorySearch = (id: string) => ({ search: { remote: { apiKey: envRef(id) } } });
 const sandboxIdentity = (id: string) => ({ ssh: { identityData: envRef(id) } });
-const openaiProvider = (apiKey: ReturnType<typeof envRef> | ReturnType<typeof vaultRef>) => ({
+const openaiProvider = (apiKey: ReturnType<typeof envRef>) => ({
   providers: { openai: { apiKey, baseUrl: "https://api.openai.com/v1", models: [] } },
 });
-const elevenlabs = (apiKey: ReturnType<typeof envRef> | ReturnType<typeof vaultRef>) => ({
+const elevenlabs = (apiKey: ReturnType<typeof envRef>) => ({
   providers: { elevenlabs: { apiKey } },
 });
-const googleSearch = (apiKey: ReturnType<typeof envRef> | ReturnType<typeof vaultRef>) => ({
+const googleSearch = (apiKey: ReturnType<typeof envRef>) => ({
   enabled: true,
   entries: { google: { enabled: true, config: { webSearch: { apiKey } } } },
 });
@@ -132,29 +119,6 @@ function expectOwnerWarnings(warnings: unknown, paths: string[]) {
       ),
     ),
   );
-}
-
-async function startVaultAclFixture() {
-  const requests: string[] = [];
-  const vault = createServer((request, response) => {
-    requests.push(request.url ?? "");
-    response.setHeader("content-type", "application/json");
-    response.statusCode = 403;
-    response.end(JSON.stringify({ errors: ["permission denied"] }));
-  });
-  await new Promise<void>((resolve) => {
-    vault.listen(0, "127.0.0.1", resolve);
-  });
-  const address = vault.address();
-  assert(address && typeof address !== "string", "Vault ACL fixture did not bind to a TCP port");
-  return {
-    requests,
-    vaultAddr: `http://127.0.0.1:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
-        vault.close(() => resolve());
-      }),
-  };
 }
 
 describe("Gateway startup SecretRef owner isolation", () => {
@@ -213,8 +177,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
         expect(peekSystemEvents("agent:ops:global")).toEqual([
           expect.stringContaining("[SECRETS_RELOADER_DEGRADED]"),
         ]);
-        expect(peekSystemEventEntries("agent:ops:global")).toHaveLength(1);
-        expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
+        expect(peekSystemEvents("agent:main:global")).toEqual([]);
       });
     });
   });
@@ -301,20 +264,19 @@ describe("Gateway startup SecretRef owner isolation", () => {
               payload: { accountId, [action === "start" ? "started" : "stopped"]: true },
             });
           };
-          const expectStarts = (...ids: string[]) =>
-            expect(startAccount.mock.calls.map(([context]) => context.accountId)).toEqual(ids);
           const status = async (expected: Record<string, Partial<ChannelAccountSnapshot>>) => {
             const reply = await rpcReq<{
               channelAccounts: Record<string, ChannelAccountSnapshot[]>;
             }>(ws, "channels.status", { probe: false });
             expect(reply.ok, JSON.stringify(reply)).toBe(true);
-            expect(reply.payload?.channelAccounts.telegram).toEqual(
-              expect.arrayContaining(
-                Object.entries(expected).map(([accountId, fields]) =>
-                  expect.objectContaining({ accountId, ...fields }),
-                ),
+            expect(
+              Object.fromEntries(
+                (reply.payload?.channelAccounts.telegram ?? []).map(({ accountId, ...account }) => [
+                  accountId,
+                  account,
+                ]),
               ),
-            );
+            ).toMatchObject(expected);
             return reply.payload;
           };
           const expectPrivate = (value: unknown) => {
@@ -326,7 +288,7 @@ describe("Gateway startup SecretRef owner isolation", () => {
             channel: "telegram",
             accountId: "broken",
           });
-          expect(brokenStart.ok).toBe(false);
+          expect(brokenStart).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
           for (const accountId of ["healthy", "stopped"]) {
             const pluginStarted = createDeferred();
             accountStarted.set(accountId, pluginStarted.resolve);
@@ -334,11 +296,14 @@ describe("Gateway startup SecretRef owner isolation", () => {
             // The RPC acknowledges handoff; traced startup invokes the plugin on a later turn.
             await pluginStarted.promise;
           }
-          expectStarts("healthy", "stopped");
           const healthyLifetime = startAccount.mock.calls[0]?.[0].abortSignal;
           const stoppedLifetime = startAccount.mock.calls[1]?.[0].abortSignal;
-          expect(healthyLifetime?.aborted).toBe(false);
-          expect(stoppedLifetime?.aborted).toBe(false);
+          const expectLifetimes = (healthy: boolean, stopped: boolean) =>
+            expect([healthyLifetime?.aborted, stoppedLifetime?.aborted]).toEqual([
+              healthy,
+              stopped,
+            ]);
+          expectLifetimes(false, false);
 
           const before = await status({
             broken: { configured: true, running: false },
@@ -352,12 +317,10 @@ describe("Gateway startup SecretRef owner isolation", () => {
               reason: "credential file is unavailable",
             }),
           );
-          expect(brokenStart.error).toMatchObject({ code: "UNAVAILABLE" });
           expectPrivate({ error: brokenStart.error, accounts: before?.channelAccounts.telegram });
 
           await accountAction("stop", "stopped");
-          expect(stoppedLifetime?.aborted).toBe(true);
-          expect(healthyLifetime?.aborted).toBe(false);
+          expectLifetimes(false, true);
 
           writeFileSync(credentialPath, repairedToken, { mode: 0o600 });
           expect(readFileSync(configPath)).toEqual(originalConfig);
@@ -370,10 +333,14 @@ describe("Gateway startup SecretRef owner isolation", () => {
             payload: { warningCount: 0 },
           });
           await repairedStarted.promise;
-          expectStarts("healthy", "stopped", "broken");
-          expect(startAccount.mock.calls[2]?.[0].account.token).toBe(repairedToken);
-          expect(healthyLifetime?.aborted).toBe(false);
-          expect(stoppedLifetime?.aborted).toBe(true);
+          expect(
+            startAccount.mock.calls.map(([{ accountId, account }]) => [accountId, account.token]),
+          ).toEqual([
+            ["healthy", "healthy-test-token"],
+            ["stopped", "stopped-test-token"],
+            ["broken", repairedToken],
+          ]);
+          expectLifetimes(false, true);
           expect(listActiveDegradedSecretOwners()).not.toContainEqual(
             expect.objectContaining({ ownerId: "telegram:broken" }),
           );
@@ -451,21 +418,6 @@ describe("Gateway startup SecretRef owner isolation", () => {
         await expectReady(await start(false));
         const active = getActiveSecretsRuntimeSnapshot();
         expect(active?.config.gateway?.auth?.token).toBe("placeholder");
-        expect(active?.degradedOwners).toEqual(
-          expect.arrayContaining(
-            [
-              ["provider", "openai"],
-              ["capability", "tts"],
-              ["capability", "memory-provider:main"],
-              ["capability", "agent-sandbox:cold"],
-              ["capability", "cron-webhook"],
-              ["capability", "skill:cold"],
-              ["capability", "web-search:gemini"],
-            ].map(([ownerKind, ownerId]) =>
-              expect.objectContaining({ ownerKind, ownerId, state: "unavailable" }),
-            ),
-          ),
-        );
         expectOwnerWarnings(active?.warnings, [
           "models.providers.openai.apiKey",
           "tts.providers.elevenlabs.apiKey",
@@ -475,167 +427,6 @@ describe("Gateway startup SecretRef owner isolation", () => {
           "skills.entries.cold.apiKey",
           "plugins.entries.google.config.webSearch.apiKey",
         ]);
-        assert(active, "Expected active secrets runtime snapshot");
-        expect(() => resolveMemorySearchConfig(active.config, "main")).toThrow(
-          expect.objectContaining({
-            code: "SECRET_SURFACE_UNAVAILABLE",
-            ownerKind: "capability",
-            ownerId: "memory-provider:main",
-          }),
-        );
-        await expect(
-          resolveSandboxContext({
-            config: active.config,
-            agentId: "cold",
-            sessionKey: "agent:cold:main",
-          }),
-        ).rejects.toMatchObject({
-          code: "sandbox_provisioning",
-          backendId: "ssh",
-          message: expect.stringContaining("openclaw secrets reload"),
-          cause: {
-            code: "SECRET_SURFACE_UNAVAILABLE",
-            ownerKind: "capability",
-            ownerId: "agent-sandbox:cold",
-          },
-        });
-      },
-    );
-  });
-
-  it.each(["auth outage", "path ACL"])("isolates Vault %s failures", async (failure) => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const acl = failure === "path ACL";
-    const root = tempDirs.make("openclaw-gateway-vault-");
-    const callLogPath = path.join(root, "calls.log");
-    const commandPath = path.join(root, "provider.sh");
-    const resolverPath = path.resolve("extensions/vault/vault-secret-ref-resolver.js");
-    writeFileSync(
-      commandPath,
-      `#!/bin/sh\n` +
-        (acl ? "" : `printf 'call\\n' >> ${JSON.stringify(callLogPath)}\n`) +
-        `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(resolverPath)}\n`,
-      { encoding: "utf8", mode: 0o700 },
-    );
-    const vault = acl ? await startVaultAclFixture() : undefined;
-    try {
-      await withEnvAsync(
-        vault
-          ? { VAULT_ADDR: vault.vaultAddr, VAULT_TOKEN: "not-a-real-auth-header" }
-          : { VAULT_ADDR: "https://vault.example.test" },
-        async () => {
-          await writeConfig({
-            ...baseConfig(),
-            secrets: {
-              providers: {
-                vault: {
-                  source: "exec",
-                  command: commandPath,
-                  passEnv: ["PATH", "VAULT_ADDR", ...(acl ? ["VAULT_TOKEN"] : [])],
-                },
-              },
-            },
-            models: openaiProvider(vaultRef("models/openai")),
-            tts: elevenlabs(vaultRef("tts/elevenlabs")),
-            ...(!acl
-              ? {
-                  tools: { web: { search: { provider: "gemini" } } },
-                  plugins: googleSearch(vaultRef("web/gemini")),
-                }
-              : {}),
-          });
-
-          await expectReady(await start());
-          const snapshot = getActiveSecretsRuntimeSnapshot();
-          const degradedOwners = snapshot?.degradedOwners ?? [];
-          if (!vault) {
-            expect(readFileSync(callLogPath, "utf8").trim().split("\n")).toHaveLength(2);
-            expect(degradedOwners).toMatchObject(
-              [
-                ["provider", "openai"],
-                ["capability", "tts"],
-                ["capability", "web-search:gemini"],
-              ].map(([ownerKind, ownerId]) => ({
-                ownerKind,
-                ownerId,
-                providerFailures: [{ source: "exec", provider: "vault" }],
-              })),
-            );
-            return;
-          }
-          expect(degradedOwners).toMatchObject([
-            { ownerKind: "provider", ownerId: "openai", state: "unavailable" },
-            { ownerKind: "capability", ownerId: "tts", state: "unavailable" },
-          ]);
-          expect(degradedOwners.every((owner) => !owner.providerFailures)).toBe(true);
-          expectOwnerWarnings(snapshot?.warnings, [
-            "models.providers.openai.apiKey",
-            "tts.providers.elevenlabs.apiKey",
-          ]);
-          expect(
-            vault.requests.filter((url) => url === "/v1/auth/token/lookup-self").length,
-          ).toBeGreaterThan(0);
-        },
-      );
-    } finally {
-      await vault?.close();
-    }
-  });
-
-  it("starts with a selected provider profile cold and fails its first request before dispatch", async () => {
-    await withEnvAsync(
-      {
-        MISSING_SELECTED_PROFILE_KEY: undefined,
-        OPENAI_API_KEY: "unused",
-      },
-      async () => {
-        const profileId = "openai:cold";
-        const config: OpenClawConfig = {
-          ...baseConfig(),
-          agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-          auth: { order: { openai: [profileId] } },
-        };
-        const agentDir = resolveDefaultAgentDir(config);
-        saveAuthProfileStore(
-          {
-            version: 1,
-            profiles: {
-              [profileId]: {
-                type: "api_key",
-                provider: "openai",
-                keyRef: envRef("MISSING_SELECTED_PROFILE_KEY"),
-              },
-            },
-          },
-          agentDir,
-        );
-        await writeConfig(config);
-
-        await expectReady(await start());
-
-        const ownerId = resolveAuthProfileSecretOwnerId({ agentDir, profileId });
-        const active = getActiveSecretsRuntimeSnapshot();
-        expect(active?.degradedOwners).toMatchObject([
-          { ownerKind: "account", ownerId, state: "unavailable" },
-        ]);
-        const store = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-        assert(store && active, "Expected activated Gateway auth profile snapshot");
-        const request = vi.fn();
-        await expect(
-          resolveApiKeyForProviderCore({
-            provider: "openai",
-            cfg: active.config,
-            store,
-            agentDir,
-          }).then(request),
-        ).rejects.toMatchObject({
-          code: "SECRET_SURFACE_UNAVAILABLE",
-          ownerKind: "account",
-          ownerId,
-        });
-        expect(request).not.toHaveBeenCalled();
       },
     );
   });

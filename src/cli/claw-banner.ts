@@ -37,11 +37,6 @@ const GAP = 3;
 const BANNER_WIDTH = MASCOT_WIDTH + GAP + 48;
 const ROWS = MASCOT_ART.length;
 
-type ClawBannerOptions = {
-  /** Ends the animation on its static frame when parallel startup work settles. */
-  settleWhen?: PromiseLike<unknown>;
-};
-
 export type ClawBannerResult = "static" | "completed" | "settled";
 
 type CellTint = (col: number) => (text: string) => string;
@@ -179,7 +174,10 @@ async function animateBanner(
 
 export async function printClawBanner(
   runtime: RuntimeEnv,
-  options: ClawBannerOptions = {},
+  options: {
+    /** Ends the animation on its static frame when parallel startup work settles. */
+    settleWhen?: PromiseLike<unknown>;
+  } = {},
 ): Promise<ClawBannerResult> {
   const columns = process.stdout.columns ?? 80;
   if (columns < BANNER_WIDTH) {

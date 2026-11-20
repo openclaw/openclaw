@@ -1,7 +1,7 @@
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease-context.js";
+import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease-context.js";
 import { runWithOpenClawStateLeaseWorker } from "../state/openclaw-state-lease-worker-operation.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
@@ -24,6 +24,7 @@ export function createTranscriptStoreOperation(
     assertOwner?.();
   };
   return {
+    context,
     assertCurrent,
     databaseOptions: { env: context.environment, path: context.admission.databasePath, readOnly },
     async streamExport(
@@ -63,7 +64,7 @@ export function createTranscriptStoreOperation(
     async writeExport<Key extends TranscriptExportWriteKey>(
       type: Key,
       request: TranscriptWriteOperations[Key]["input"],
-      lease: OpenClawStateLeaseContext,
+      lease: OpenClawStateAsyncLeaseContext,
     ): Promise<void> {
       const input = { ...request, readOnly };
       assertCurrent();

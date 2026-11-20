@@ -5,7 +5,8 @@ import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
 import { DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT } from "./gateway-handle.js";
 import { fetchDiscordGatewayInfoWithTimeout } from "./gateway-metadata.js";
 
-const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
+const { GatewayIntents, GatewayPlugin } = await vi.hoisted(async () => {
+  const { EventEmitter: TestEmitter } = await import("node:events");
   const GatewayIntentsLocal = {
     Guilds: 1 << 0,
     GuildMessages: 1 << 1,
@@ -18,22 +19,6 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
     GuildVoiceStates: 1 << 8,
     GuildExpressions: 1 << 9,
   } as const;
-
-  class TestEmitter {
-    private readonly listenersByEvent = new Map<string, Array<(value: unknown) => void>>();
-
-    on(event: string, listener: (value: unknown) => void) {
-      const listeners = this.listenersByEvent.get(event) ?? [];
-      listeners.push(listener);
-      this.listenersByEvent.set(event, listeners);
-    }
-
-    emit(event: string, value: unknown) {
-      for (const listener of this.listenersByEvent.get(event) ?? []) {
-        listener(value);
-      }
-    }
-  }
 
   class GatewayPluginLocal {
     options: unknown;

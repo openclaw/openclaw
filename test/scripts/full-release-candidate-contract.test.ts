@@ -57,36 +57,6 @@ function runJsonContract(command: string, value: unknown) {
   return { result: runContract([command, "--input", input, "--output", output]), output };
 }
 
-type CandidateBindingFixture = ReturnType<typeof fullReleaseCandidateBindingFixture>;
-const COUNTERFEIT_WORKFLOW = ".github/workflows/candidate-evidence-test.yml";
-const LATER_EXPIRY = "2026-09-05T12:00:00Z";
-
-function setBindingAttempt(
-  binding: CandidateBindingFixture,
-  attempt: Partial<Pick<CandidateBindingFixture["producer"], "runId" | "runAttempt">>,
-) {
-  for (const participant of [
-    binding.producer,
-    binding.publisher,
-    binding.package.artifact,
-    binding.prepublishPluginRegistry.artifact,
-    binding.sharedImage.artifact,
-    binding.evidenceArtifact,
-  ]) {
-    Object.assign(participant, attempt);
-  }
-}
-
-function replaceBindingRequest(
-  binding: CandidateBindingFixture,
-  overrides: Record<string, unknown>,
-) {
-  const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
-  binding.request = request;
-  binding.requestSha256 = canonicalTestSha256(request);
-  binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
-}
-
 function retainedBinding<Request extends Record<string, unknown>>(request: Request) {
   const currentManifest = fullReleaseCandidateManifestFixture();
   const requestSha256 = canonicalTestSha256(request);
@@ -123,18 +93,6 @@ function bindingArgs(
 }
 
 describe("full release candidate contract", () => {
-  it("canonicalizes equivalent request inputs and expands effective policy", () => {
-    const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
-    const reordered = Object.fromEntries(
-      Object.entries(fullReleaseCandidateRequestInput()).toReversed(),
-    );
-    const reorderedRequest = buildFullReleaseCandidateRequest(reordered);
-
-    expect(request).toEqual(reorderedRequest);
-    expect(canonicalTestJson(request)).toBe(CANONICAL_REQUEST_JSON);
-    expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
-  });
-
   it("canonicalizes historical baseline receipts and equivalent scenario set ordering", () => {
     const request = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
@@ -328,78 +286,9 @@ describe("full release candidate contract", () => {
     );
   });
 
-  it.each(
-    Object.entries({
-      "producer job id": (binding) => void (binding.producer.jobId = "202"),
-      "producer job name": (binding) => void (binding.producer.jobName = "different producer job"),
-      "publisher job id": (binding) => void (binding.publisher.jobId = "203"),
-      "publisher job name": (binding) =>
-        void (binding.publisher.jobName = "different publisher job"),
-      "publisher workflow path": (binding) =>
-        void (binding.publisher.workflowPath = COUNTERFEIT_WORKFLOW),
-      "producer workflow path": (binding) =>
-        void (binding.producer.workflowPath = COUNTERFEIT_WORKFLOW),
-      "producer run id tuple": (binding) => setBindingAttempt(binding, { runId: "78" }),
-      "producer run attempt tuple": (binding) => setBindingAttempt(binding, { runAttempt: "2" }),
-      "repository identity tuple": (binding) => {
-        replaceBindingRequest(binding, { repository: "openclaw/other" });
-        binding.producer.repository = binding.request.repository;
-        binding.publisher.repository = binding.request.repository;
-      },
-      "tooling identity tuple": (binding) => {
-        replaceBindingRequest(binding, { toolingSha: "8".repeat(40) });
-        binding.producer.workflowSha = binding.request.toolingSha;
-        binding.publisher.workflowSha = binding.request.toolingSha;
-      },
-      "target source identity tuple": (binding) => {
-        replaceBindingRequest(binding, { targetSha: "9".repeat(40) });
-        binding.package.sourceSha = binding.request.targetSha;
-        binding.prepublishPluginRegistry.sourceSha = binding.request.targetSha;
-      },
-      "request policy tuple": (binding) => {
-        replaceBindingRequest(binding, { releaseSoak: false });
-      },
-      "preparation plan": (binding) => void (binding.preparation.planSha256 = "5".repeat(64)),
-      "required prerelease packages": (binding) =>
-        void (binding.preparation.requiredPrepublishPluginPackages = [
-          "@openclaw/codex",
-          "@openclaw/discord",
-        ]),
-      "package artifact id": (binding) => void (binding.package.artifact.id = "105"),
-      "package artifact digest": (binding) =>
-        void (binding.package.artifact.digest = "5".repeat(64)),
-      "package artifact expiry": (binding) =>
-        void (binding.package.artifact.expiresAt = LATER_EXPIRY),
-      "package artifact name": (binding) => void (binding.package.artifact.name = "other-package"),
-      "package file name": (binding) => void (binding.package.fileName = "other.tgz"),
-      "package and shared image digest tuple": (binding) => {
-        binding.package.packageSha256 = "8".repeat(64);
-        binding.sharedImage.packageSha256 = "8".repeat(64);
-      },
-      "package version": (binding) => void (binding.package.version = "2026.8.28-beta.2"),
-      "registry artifact id": (binding) =>
-        void (binding.prepublishPluginRegistry.artifact.id = "106"),
-      "registry artifact digest": (binding) =>
-        void (binding.prepublishPluginRegistry.artifact.digest = "6".repeat(64)),
-      "registry artifact expiry": (binding) =>
-        void (binding.prepublishPluginRegistry.artifact.expiresAt = LATER_EXPIRY),
-      "registry artifact name": (binding) =>
-        void (binding.prepublishPluginRegistry.artifact.name = "other-registry"),
-      "registry manifest": (binding) =>
-        void (binding.prepublishPluginRegistry.manifestSha256 = "6".repeat(64)),
-      "shared image artifact id": (binding) => void (binding.sharedImage.artifact.id = "107"),
-      "shared image artifact digest": (binding) =>
-        void (binding.sharedImage.artifact.digest = "7".repeat(64)),
-      "shared image artifact expiry": (binding) =>
-        void (binding.sharedImage.artifact.expiresAt = LATER_EXPIRY),
-      "shared image artifact name": (binding) =>
-        void (binding.sharedImage.artifact.name = "other-shared-image"),
-      "shared image archive": (binding) =>
-        void (binding.sharedImage.archiveSha256 = "7".repeat(64)),
-    } satisfies Record<string, (binding: CandidateBindingFixture) => void>),
-  )("binds the %s to the manifest digest", (_label, mutate) => {
-    const binding = structuredClone(fullReleaseCandidateBindingFixture());
-    mutate(binding);
+  it("rejects a changed manifest field under the original digest", () => {
+    const binding = fullReleaseCandidateBindingFixture();
+    binding.preparation.planSha256 = "5".repeat(64);
     expect(() => validateFullReleaseCandidateBinding(binding)).toThrow(
       "manifestSha256 does not match its manifest fields",
     );

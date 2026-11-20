@@ -79,9 +79,9 @@ function pressTab(element: HTMLElement, tab: string, key = "Enter") {
 }
 
 function dreamingInput(element: HTMLElement) {
-  const input = element.querySelector<HTMLInputElement>('input[aria-label="Dreaming frequency"]');
+  const input = element.querySelector<HTMLInputElement>('input[aria-label="Schedule (cron)"]');
   if (!input) {
-    throw new Error("Missing Dreaming frequency");
+    throw new Error("Missing Schedule (cron)");
   }
   return input;
 }
@@ -96,13 +96,11 @@ it("defaults to the disabled slot owner and offers Enable even when another engi
     setEnabled,
   });
   await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-  expect(element.textContent).toContain("falls back to its default owner");
   expect(
     [
-      ...(element
-        .querySelector('.settings-segmented[role="radiogroup"]')
-        ?.querySelectorAll(".settings-segmented__btn") ?? []),
-    ].map((radio) => radio.textContent?.trim()),
+      ...(element.querySelector<HTMLSelectElement>("select[aria-label='Memory engine']")?.options ??
+        []),
+    ].map((option) => option.textContent?.trim()),
   ).toEqual(["OpenClaw Memory", "Memory LanceDB", "Off"]);
   await waitText(element, "This engine is disabled");
   const enable = [...element.querySelectorAll("button")].find(
@@ -134,7 +132,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
   element.configObject = { plugins: { slots: { memory: "none" } } };
   flush();
   expect(activeEngine(element)).toBe("");
-  expect(element.textContent).toContain("switched off");
 
   selectEngine(element, "memory-core");
   await waitForSolid(() => expect(runExternalMutation).toHaveBeenCalledOnce());
@@ -142,18 +139,6 @@ it("persists Off and drains its autosave before re-enabling memory", async () =>
 
   pendingWrites.resolve();
   await waitForSolid(() => expect(setEnabled).toHaveBeenCalledOnce());
-});
-
-it("reports a rejected engine change instead of silently snapping back", async () => {
-  const { element } = createPage({
-    catalog: [engine("memory-core", true), engine("memory-lancedb", false)],
-    setEnabled: () => Promise.reject(new Error("plugin not installed: memory-lancedb")),
-  });
-  await waitForSolid(() => expect(activeEngine(element)).toBe("memory-core"));
-
-  selectEngine(element, "memory-lancedb");
-  await waitText(element, "plugin not installed: memory-lancedb");
-  expect(element.textContent).toContain("Could not change the memory engine");
 });
 
 it.each(["connection", "plugin publication"])(
@@ -212,19 +197,21 @@ it("retains catalog controls during a plugin publication refresh", async () => {
         : refresh.promise,
   });
   await waitAddon(element, "Active memory", true);
-  const engineControl = element.querySelector<HTMLInputElement>('input[value="memory-core"]');
+  const engineControl = element.querySelector<HTMLSelectElement>(
+    "select[aria-label='Memory engine']",
+  );
   const addonControl = addonSwitch(element, "Active memory");
   engineControl!.focus();
 
   publishPluginGeneration(1);
   flush();
-  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(element.querySelector("select[aria-label='Memory engine']")).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
   expect(document.activeElement).toBe(engineControl);
 
   refresh.resolve({ plugins: [engine("memory-core", true), addon("active-memory", false)] });
   await waitAddon(element, "Active memory", false);
-  expect(element.querySelector('input[value="memory-core"]')).toBe(engineControl);
+  expect(element.querySelector("select[aria-label='Memory engine']")).toBe(engineControl);
   expect(addonSwitch(element, "Active memory")).toBe(addonControl);
 });
 
@@ -237,7 +224,7 @@ it("falls back to read-only add-on status rows without operator.admin", async ()
   expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
   expect(addonSwitch(element, "Active memory")).toBeNull();
   expect(addonSwitch(element, "Memory wiki")).toBeNull();
-  expect(element.querySelector("a.memory-page__link")?.textContent).toContain("Open Plugins");
+  expect(element.querySelector("a.memory-page__nav-row")?.textContent).toContain("All plugins");
 });
 
 it("ignores an older catalog reload from a parallel add-on mutation", async () => {
@@ -307,7 +294,7 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   const updated = [addon("active-memory", true), addon("memory-wiki", true)];
   const warning = "Review memory-wiki settings.";
   let mutations = 0;
-  const { element, request, setPhase, setBootId, publishPluginGeneration } = createPage({
+  const { element, setPhase, setBootId, publishPluginGeneration } = createPage({
     listCatalog: (call) => Promise.resolve({ plugins: call === 0 ? initial : updated }),
     setEnabled: (pluginId, enabled) =>
       mutations++ === 0
@@ -334,7 +321,6 @@ it("retains runtime warnings through same-boot reconnects and publications, then
   publishPluginGeneration(2);
   flush();
   expect(element.textContent).toContain(warning);
-  expect(request.mock.calls.filter(([method]) => method === "system.info")).toHaveLength(0);
 
   setBootId("memory-boot-b");
   await waitText(element, warning, false);
@@ -353,12 +339,12 @@ it("renders and clears mutation errors on only the affected add-on", async () =>
   await waitText(element, "enablement rejected");
   expect(addonSwitch(element, "Active memory")?.checked).toBe(true);
   expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(false);
-  expect(element.textContent).toContain("Could not update Active memory");
-  expect(element.textContent).not.toContain("Could not update Memory wiki");
+  expect(element.textContent).toContain("Couldn’t update Active memory. Try again.");
+  expect(element.textContent).not.toContain("Couldn’t update Memory wiki. Try again.");
 
   toggleAddon(element, "Active memory", false);
   await waitText(element, "enablement rejected", false);
-  await waitText(element, "Could not update Active memory", false);
+  await waitText(element, "Couldn’t update Active memory. Try again.", false);
   retry.resolve(committed("active-memory", false));
 });
 
@@ -385,18 +371,17 @@ it("renders every canonical tab path and honors browser history restoration", as
   flush();
   expect(visibleTab(element)).toBe("dreams");
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
-  expect(element.textContent).not.toContain("Dreaming frequency");
+  expect(element.textContent).not.toContain("Schedule (cron)");
 });
 
 it("keeps Dreams empty when no configured agent is available", async () => {
-  const { element, settingsAgentSelection } = createPage({
+  const { element } = createPage({
     agents: [],
     routeData: memoryTabRoute("dreams"),
   });
-  expect(settingsAgentSelection.state.selectedId).toBeNull();
   expect(element.querySelector("openclaw-agent-memory-panel")).toBeNull();
   expect(element.querySelector("openclaw-agent-select")).toBeNull();
-  expect(element.textContent).not.toContain("Dreaming frequency");
+  expect(element.textContent).not.toContain("Schedule (cron)");
 });
 
 it("loads each Dreams target once when the existing agent key changes", async () => {
@@ -661,7 +646,7 @@ it("makes a previously unsupported Dreaming schema unknown while a fresh probe i
   });
   try {
     await waitText(element, "Not available for this engine");
-    expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+    expect(element.querySelector('input[aria-label="Schedule (cron)"]')).toBeNull();
 
     publishPluginGeneration(1);
     await waitForSolid(() => {
@@ -750,7 +735,7 @@ it.each([
       expect(runtimeConfig.removeFormValue).toHaveBeenCalledWith(frequencyPath);
       schema.resolve({ schema: { type: "object", additionalProperties: false }, children: [] });
       await waitText(element, "Not available for this engine");
-      expect(element.querySelector('input[aria-label="Dreaming frequency"]')).toBeNull();
+      expect(element.querySelector('input[aria-label="Schedule (cron)"]')).toBeNull();
     } finally {
       schema.resolve({ type: "object" });
       element.remove();

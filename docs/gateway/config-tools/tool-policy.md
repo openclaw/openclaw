@@ -20,8 +20,8 @@ Explicit `minimal`, `coding`, `messaging`, and `full` profiles and other tool
 policies remain unchanged. Existing configs are not automatically migrated.
 </Note>
 
-Full selects tools; it does not grant **Full Access** execution permissions.
-The chat **Execution permissions** menu controls what available tools may do in
+Full selects tools; it does not grant **Full access** execution permissions.
+The chat **Permissions** menu controls what available tools may do in
 that session. Global, agent, provider, allow/deny, owner, filesystem, sandbox, and
 execution restrictions still apply. A catalog entry does not mean a tool or plugin
 is configured, connected, or authorized in the current session.
@@ -31,12 +31,12 @@ The agent's **Tools** settings include run-dependent tools such as
 also adds explicit denies for them. Their catalog rows do not bypass the GitHub
 workspace and identity checks or the meeting transcript caller checks.
 
-| Profile     | Includes                                                                                                                                                                                                                                                                         |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
-| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (update only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
-| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
-| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                     |
+| Profile     | Includes                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal`   | `session_status`, `gateway` (maintenance only)                                                                                                                                                                                                                                                 |
+| `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (maintenance only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `skill_library`, `view_image`, `image_generate`, `music_generate`, `video_generate` |
+| `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (maintenance only), `ask_user`          |
+| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                                   |
 
 `coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
 allow `bundle-mcp` (configured MCP servers).
@@ -51,12 +51,14 @@ optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
 selection, including optional tools from enabled plugins. Plugin configuration,
 availability, and independent policy restrictions still apply.
 
-The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
-`update.run` action. This lets owners request an OpenClaw update through the
-existing tool without granting configuration reads. Updates use the same Gateway
-handler as `/update` and the Control UI. External-chat updates require current
-owner authorization and `commands.restart`; Control UI updates retain their
-operator authorization.
+The `minimal`, `coding`, and `messaging` profiles include `gateway` maintenance
+actions: `update.run`, `restart`, and `update.cleanup`, without configuration
+reads. Each requires an explicit owner request or operator-scheduled admission.
+Updates and restarts use runtime-supervised paths. Cleanup keeps the Gateway
+serving and permanently retires eligible rollback copies; `dryRun` previews.
+External-chat updates and restarts require current owner authorization and
+`commands.restart`; cleanup does not restart and is independent of that flag.
+Control UI requests retain their operator authorization.
 
 The `full` profile and an unset profile retain the tool's configuration-read
 actions. In a limited profile, explicitly add `gateway` to `tools.alsoAllow` to
@@ -78,7 +80,7 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:automation` | `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                                           |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `skill_library`                                                                                                                                  |
 | `group:media`      | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`                                                                                                                                                                         |
 | `group:openclaw`   | All built-in tools above except `read`/`write`/`edit`/`apply_patch`/`exec`/`process`/`canvas` (excludes plugin tools)                                                                                                                                    |
 | `group:plugins`    | Tools owned by loaded plugins, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
@@ -211,6 +213,15 @@ still match other tools and adds `view_image` when the pattern no longer covers
 inspection. Patterns that already cover both names, such as `*` or `*image*`,
 remain unchanged.
 
+Personal-library authoring uses its own `skill_library` tool, separate from
+`skill_workshop`. Once, for a config written before the split, `openclaw doctor --fix`
+adds `skill_library` beside `skill_workshop` in allow, `alsoAllow`, and deny lists so
+the policy keeps covering personal authoring. Patterns that already cover both names
+remain unchanged. A `tools.gatewayPolicy` that allowed `skill_workshop` gains
+`skill_library` with only the personal-library actions its `skill_workshop` action list
+permitted. Doctor then records `meta.migrations.skillLibraryToolSplit: true`, which config
+writes also record, and never changes tool policy for the split again.
+
 ## `tools.gatewayPolicy`
 
 Deployment owners can require a concrete tool and action allowlist for model-directed work. OpenClaw applies this limit after ordinary tool and plugin grants, including owner-started conversations. Without this setting, existing tool policies behave as before.
@@ -286,6 +297,25 @@ Further restrict tools for specific providers or models. Order: base profile →
   },
 }
 ```
+
+### Per-model exec ceiling
+
+`exec.mode` in a `byProvider` entry caps host exec for turns that run on that provider or `provider/model`. The ceiling only restricts: the lower security level applies, allowlist misses stay denied when either side denies them, a human `ask` beats reviewer `auto`, and a configured `ask: "always"` keeps prompting for every command. It caps per-run `/exec` overrides and full-permission sessions too. Global and agent `byProvider` entries both apply.
+
+Use `auto` to put only one model's exec misses behind the [exec reviewer](/tools/permission-modes) while other models keep their normal mode:
+
+```json5
+{
+  tools: {
+    exec: { mode: "full" },
+    byProvider: {
+      "local-llm/small-model": { exec: { mode: "auto" } },
+    },
+  },
+}
+```
+
+The reviewer uses `tools.exec.reviewer.model` when set, otherwise the agent's primary model. Native Codex app-server sessions keep their own Guardian mapping from `tools.exec.mode`.
 
 ## `tools.toolsBySender`
 

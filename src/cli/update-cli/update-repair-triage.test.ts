@@ -67,7 +67,10 @@ it.skipIf(process.platform === "win32").each([
     runs.finishUpdateRun(lastRun.runId, { status: "succeeded" });
     expect(await readUpdateRunStatus()).toMatchObject({ lastRun: { status: "succeeded" } });
     expect(await inspectUpdateRecoveryBackups()).toEqual([]);
-    expect(() => readPackageActivationReceipt(f.packageRoot)).toThrow(error);
+    expect(readPackageActivationReceipt(f.packageRoot)).toMatchObject({
+      phase: "prepared",
+      operationId: f.operationId,
+    });
     expect(() => assertUpdatePackageActivationAdmission(f.packageRoot)).toThrow(
       expect.objectContaining({
         message: expect.stringMatching(error),

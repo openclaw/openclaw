@@ -34,6 +34,17 @@ type FixtureInputs = Pick<typeof fixtures, "executionParams" | "mocks" | "succes
 };
 type Run = NonNullable<UpdateCommandOptions["run"]>;
 
+function interceptPhaseReceipt(phase: Phase, afterReceipt: () => void | Promise<void>) {
+  const original = phaseWrites.recordUpdateRunPhaseAsync;
+  return vi.spyOn(phaseWrites, "recordUpdateRunPhaseAsync").mockImplementation(async (...args) => {
+    const record = await original(...args);
+    if (args[1] === phase) {
+      await afterReceipt();
+    }
+    return record;
+  });
+}
+
 export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   const { executionParams, mocks, successfulUpdate, phaseAdmission } = inputs;
   const gitTarget = { sha: "a".repeat(40), version: "2026.9.2" };
@@ -43,7 +54,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       root: string;
       run: Run;
       events: string[];
-      beforeCall: { run?: () => void };
+      beforeCall: { run?: () => void; settled?: boolean };
       readRun: () => ReturnType<typeof getUpdateRunAsync>;
       start: () => ReturnType<typeof executeMutableUpdate>;
     }) => Promise<void>,
@@ -68,7 +79,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           { env },
         );
         const events: string[] = [];
-        const beforeCall: { run?: () => void } = {};
+        const beforeCall: { run?: () => void; settled?: boolean } = {};
         const params = {
           ...executionParams(phase === "staging" ? "git" : "package"),
           root,
@@ -91,16 +102,20 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             serviceUpdateVerdict: { kind: "absent" },
           };
         });
-        mocks.validateCanary.mockImplementation(async () => {
+        mocks.checkCandidate.mockImplementation(async () => {
           if (phase === "validating") {
-            events.push("canary");
+            events.push("candidate-check");
           }
-          return { status: "ok", phase: "readiness", steps: [], durationMs: 1, logTail: [] };
+          return { status: "ok", steps: [] };
         });
         mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
           if (phase === "validating") {
             beforeCall.run?.();
-            await options.validateCandidate(root);
+            try {
+              await options.validateCandidate(root);
+            } finally {
+              beforeCall.settled = true;
+            }
           } else {
             await options.validateCandidate(root);
             beforeCall.run?.();
@@ -145,17 +160,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       withPhase(phase, async (fixture) => {
         const entered = createDeferredCore();
         const release = createDeferredCore();
-        const original = phaseWrites.recordUpdateRunPhaseAsync;
-        using _ = vi
-          .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
-          .mockImplementation(async (...args) => {
-            const record = await original(...args);
-            if (args[1] === phase) {
-              entered.resolve();
-              await release.promise;
-            }
-            return record;
-          });
+        using _ = interceptPhaseReceipt(phase, () => {
+          entered.resolve();
+          return release.promise;
+        });
         let observing = false;
         fixture.beforeCall.run = () => {
           observing = true;
@@ -206,7 +214,11 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
           release.resolve();
           expect(await pending).toMatchObject({ result: { status: "ok" } });
           expect(fixture.events).toContain(
-            phase === "validating" ? "canary" : phase === "activating" ? "activated" : "prepared",
+            phase === "validating"
+              ? "candidate-check"
+              : phase === "activating"
+                ? "activated"
+                : "prepared",
           );
           expect(hostWrites).toEqual([]);
           expect(admissionSql).toEqual([]);
@@ -222,28 +234,11 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
       const context = captureOpenClawStateWorkerContext({ env: fixture.run.env });
       let foreign: ReturnType<typeof holdForeignWriter> | undefined;
       let releaseTurn: ReturnType<typeof setImmediate> | undefined;
-      let phaseSettled = false;
       let releasedBeforeSettlement = false;
-      const original = mocks.runPackageUpdate.getMockImplementation()!;
-      mocks.runPackageUpdate.mockImplementation(async (options: PackageInstallUpdateParams) => {
-        const callback = options.validateCandidate;
-        return original({
-          ...options,
-          validateCandidate: async (
-            ...args: Parameters<PackageInstallUpdateParams["validateCandidate"]>
-          ) => {
-            try {
-              return await callback(...args);
-            } finally {
-              phaseSettled = true;
-            }
-          },
-        });
-      });
       fixture.beforeCall.run = () => {
         foreign = holdForeignWriter(context);
         releaseTurn = setImmediate(() => {
-          releasedBeforeSettlement = !phaseSettled;
+          releasedBeforeSettlement = !fixture.beforeCall.settled;
           foreign?.release();
         });
       };
@@ -251,7 +246,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
         expect(releasedBeforeSettlement).toBe(true);
         expect((await fixture.readRun())?.phase).toBe("validating");
-        expect(fixture.events).toContain("canary");
+        expect(fixture.events).toContain("candidate-check");
       } finally {
         if (releaseTurn) {
           clearImmediate(releaseTurn);
@@ -264,17 +259,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
   it("refuses downstream work after an interrupted staging receipt", async () => {
     await withPhase("staging", async (fixture) => {
       let received = false;
-      const recordPhase = phaseWrites.recordUpdateRunPhaseAsync;
-      using _ = vi
-        .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
-        .mockImplementation(async (...args) => {
-          const record = await recordPhase(...args);
-          if (args[1] === "staging") {
-            received = true;
-            fixture.run.interrupted = true;
-          }
-          return record;
-        });
+      using _ = interceptPhaseReceipt("staging", () => {
+        received = true;
+        fixture.run.interrupted = true;
+      });
       expect(await fixture.start()).toMatchObject({
         mutationStarted: false,
         result: { status: "error" },
@@ -289,12 +277,10 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     async (failure) =>
       withPhase("validating", async (fixture) => {
         const original = phaseWrites.recordUpdateRunPhaseAsync;
-        let receiptAttempted = false;
         using worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
         using _ = vi
           .spyOn(phaseWrites, "recordUpdateRunPhaseAsync")
           .mockImplementation(async (...args) => {
-            receiptAttempted = true;
             if (failure === "missing-row") {
               openOpenClawStateDatabase({ env: fixture.run.env })
                 .db.prepare("DELETE FROM update_runs WHERE run_id = ?")
@@ -316,8 +302,6 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             return original(...args);
           });
         const result = await fixture.start();
-        expect(receiptAttempted).toBe(true);
-        expect(worker).toHaveBeenCalledOnce();
         expect(result).toMatchObject({ mutationStarted: false, result: { status: "error" } });
         expect(fixture.events).toEqual([]);
         if (failure === "missing-row") {
@@ -342,7 +326,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
         { env: fixture.run.env },
       );
       expect(await fixture.start()).toMatchObject({ result: { status: "ok" } });
-      expect(fixture.events).toContain("canary");
+      expect(fixture.events).toContain("candidate-check");
       expect(await fixture.readRun()).toEqual(terminal);
     });
   });

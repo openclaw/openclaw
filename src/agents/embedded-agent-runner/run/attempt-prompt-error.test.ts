@@ -6,7 +6,6 @@ const hoisted = vi.hoisted(() => ({
   isSessionsYieldAbortError: vi.fn(() => false),
   markYieldAborted: vi.fn(),
   sendCustomMessage: vi.fn(async () => undefined),
-  releaseLeasedSteering: vi.fn(),
   stripSessionsYieldArtifacts: vi.fn(),
   waitForEmbeddedAbortSettle: vi.fn(async () => undefined),
   withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => await operation()),
@@ -38,7 +37,6 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
     error: new Error("prompt failed"),
     handleMidTurnPrecheckRequest: hoisted.handleMidTurnPrecheckRequest,
     markYieldAborted: hoisted.markYieldAborted,
-    releaseLeasedSteering: hoisted.releaseLeasedSteering,
     withOwnedTranscriptWrite: hoisted.withOwnedTranscriptWrite,
     yieldAbortSettled: null,
     yieldDetected: false,
@@ -63,7 +61,6 @@ it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (
   await expect(handleError(createInput({ error }))).resolves.toEqual(
     precheck ? {} : { promptFailure: { error, source: "prompt" } },
   );
-  expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
   if (precheck) {
     expect(hoisted.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
     expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
@@ -87,23 +84,20 @@ it("persists yield handoff context without displaying it or triggering a turn", 
   );
 });
 
-it.each(["releaseLeasedSteering", "waitForEmbeddedAbortSettle"] as const)(
-  "marks yield state before fallible %s",
-  async (phase) => {
-    const recoveryError = new Error("recovery failed");
-    let marked = false;
-    hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-    hoisted[phase].mockImplementationOnce(async () => {
-      expect(marked).toBe(true);
-      throw recoveryError;
-    });
+it("marks yield state before fallible abort settlement", async () => {
+  const recoveryError = new Error("recovery failed");
+  let marked = false;
+  hoisted.isSessionsYieldAbortError.mockReturnValue(true);
+  hoisted.waitForEmbeddedAbortSettle.mockImplementationOnce(async () => {
+    expect(marked).toBe(true);
+    throw recoveryError;
+  });
 
-    const input = createInput({
-      markYieldAborted: () => {
-        marked = true;
-      },
-      yieldDetected: true,
-    });
-    await expect(handleError(input)).rejects.toBe(recoveryError);
-  },
-);
+  const input = createInput({
+    markYieldAborted: () => {
+      marked = true;
+    },
+    yieldDetected: true,
+  });
+  await expect(handleError(input)).rejects.toBe(recoveryError);
+});

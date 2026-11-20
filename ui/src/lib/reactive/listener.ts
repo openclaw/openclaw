@@ -12,7 +12,19 @@ type NativeEventMap<T> = (T extends Window | typeof globalThis
             ? ServiceWorkerContainerEventMap
             : T extends MessagePort
               ? MessagePortEventMap
-              : Record<string, Event>) &
+              : T extends WebSocket
+                ? WebSocketEventMap
+                : T extends Worker
+                  ? WorkerEventMap
+                  : T extends RTCDataChannel
+                    ? RTCDataChannelEventMap
+                    : T extends RTCPeerConnection
+                      ? RTCPeerConnectionEventMap
+                      : T extends MediaStreamTrack
+                        ? MediaStreamTrackEventMap
+                        : T extends FileReader
+                          ? FileReaderEventMap
+                          : Record<string, Event>) &
   Record<string, Event>;
 
 export function listen<T extends EventTarget, K extends string>(
@@ -25,4 +37,50 @@ export function listen<T extends EventTarget, K extends string>(
   const listener = handler as EventListenerOrEventListenerObject;
   target.addEventListener(type, listener, options);
   return () => target.removeEventListener(type, listener, options);
+}
+
+type Subscription = { callback: () => void };
+type EventPool = { subscribers: Set<Subscription>; stop: () => void };
+
+export function createSharedEventObserver(type: string, capture?: boolean) {
+  const pools = new WeakMap<EventTarget, EventPool>();
+  return (target: EventTarget, callback: () => void) => {
+    let pool = pools.get(target);
+    if (!pool) {
+      const subscribers = new Set<Subscription>();
+      pool = {
+        subscribers,
+        stop: listen(
+          target,
+          type,
+          () => {
+            const delivery = [...subscribers];
+            for (const subscriber of delivery) {
+              if (!subscribers.has(subscriber)) {
+                continue;
+              }
+              try {
+                subscriber.callback();
+              } catch (error) {
+                reportError(error);
+              }
+            }
+          },
+          capture,
+        ),
+      };
+      pools.set(target, pool);
+    }
+    const subscription = { callback };
+    pool.subscribers.add(subscription);
+    return () => {
+      if (!pool.subscribers.delete(subscription)) {
+        return;
+      }
+      if (pool.subscribers.size === 0) {
+        pool.stop();
+        pools.delete(target);
+      }
+    };
+  };
 }

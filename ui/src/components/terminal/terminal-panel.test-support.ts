@@ -2,6 +2,7 @@ import type { CreateGhosttyTerminalOptions } from "@openclaw/libterminal/browser
 import { vi, type Mock } from "vitest";
 import { createTerminalController } from "./terminal-controller.test-support.ts";
 export { createTerminalController } from "./terminal-controller.test-support.ts";
+import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import { TerminalPanelHost } from "./terminal-panel-registration.tsx";
 import type { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
@@ -83,4 +84,11 @@ export function defineTestTerminalPanelElement(
     customElements.define(tagName, class extends Element {});
   }
   return tagName;
+}
+
+export function createTerminalGatewayClient(
+  request: TerminalGatewayClient["request"],
+  addEventListener: TerminalGatewayClient["addEventListener"] = () => () => {},
+): TerminalGatewayClient {
+  return { forceReconnect: () => {}, request, addEventListener };
 }

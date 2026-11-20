@@ -13,6 +13,7 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { agentControlText } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   decodeSlackApprovalAction,
@@ -39,7 +40,7 @@ import {
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackDeferredActionTarget } from "../deferred-action-routing.js";
-import { resolveSlackMonitorEventScope } from "../event-scope.js";
+import { resolveSlackInteractionEventScope } from "../event-scope.js";
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   captureSlackInteractionEventRoute,
@@ -73,9 +74,11 @@ async function respondEphemeral(
     return;
   }
   try {
+    // Without replace_original: false, Slack's response_url replaces the source message.
     await respond({
       text,
       response_type: "ephemeral",
+      replace_original: false,
     });
   } catch {
     // Best-effort feedback only.
@@ -466,20 +469,8 @@ export function registerSlackBlockActionHandler(params: {
     const { ack, body, action, respond } = args;
     await ack();
     const runtimeContext = await params.ctx.readRuntimeContext();
-    const eventScope = resolveSlackMonitorEventScope({
-      ctx: runtimeContext,
-      body,
-      context: args.context,
-      client: args.client,
-      onDrop: (reason) => runtimeContext.runtime.log?.(`slack:interaction drop action ${reason}`),
-    });
+    const eventScope = resolveSlackInteractionEventScope(runtimeContext, args, "action");
     if (eventScope === null) {
-      return;
-    }
-    if (runtimeContext.shouldDropMismatchedSlackEvent?.(body)) {
-      runtimeContext.runtime.log?.(
-        "slack:interaction drop block action payload (mismatched app/team)",
-      );
       return;
     }
     const parsed = parseSlackBlockAction({ body, action, log: runtimeContext.runtime.log });
@@ -670,7 +661,7 @@ export function registerSlackBlockActionHandler(params: {
       normalizeOptionalString(parsed.typedActionWithText.action_ts) ?? parsed.typedBody.trigger_id,
     ].filter(Boolean);
     const accepted = await enqueueSlackInteractionEvent(
-      eventPayload,
+      agentControlText(pluginInteractionData) ?? eventPayload,
       route,
       {
         contextKey: contextParts.join(":"),

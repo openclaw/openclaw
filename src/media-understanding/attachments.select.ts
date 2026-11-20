@@ -1,11 +1,11 @@
-import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type {
   MediaAttachment,
   MediaAttachmentDisposition,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
-} from "./types.js";
+} from "../../packages/media-understanding-common/src/types.js";
+import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
 
@@ -13,10 +13,9 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
-  // Ordering is stable and non-mutating so downstream decisions can still cite
-  // original attachment indexes.
   if (prefer === "last") {
-    return attachments.toReversed();
+    // oxlint-disable-next-line unicorn/no-array-reverse -- selectAttachments owns the filtered array.
+    return attachments.reverse();
   }
   if (prefer === "path" || prefer === "url") {
     const preferred: MediaAttachment[] = [];

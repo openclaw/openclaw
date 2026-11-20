@@ -34,7 +34,6 @@ import { createToolsMcpServer, serveRegisteredToolsMcpServer } from "./tools-std
 
 export async function acquirePluginToolsForMcp(params: {
   config: OpenClawConfig;
-  agentSessionKey?: string;
   agentId?: string;
 }): Promise<PluginToolRegistryAcquisition> {
   const { config } = params;

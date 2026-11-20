@@ -23,7 +23,8 @@ import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/con
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { readSessionIdentityEvidenceInDatabase as readEvidence } from "../config/sessions/session-accessor.sqlite-entry-availability.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -35,9 +36,12 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerPlacementSessionEvidenceResolver as createResolver } from "./server-worker-placement-session-evidence.js";
+import * as sessionStoreKey from "./session-store-key.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -166,13 +170,13 @@ describe("worker placement session evidence", () => {
         await writeSession(identity);
       }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
-      // Retain an admitted reader so one later corrupt row does not block unrelated evidence.
+      // Retain an admitted reader so an uncertified row does not block unrelated evidence.
       expect(readEvidence(database, identities.slice(0, 2)).map((row) => row.status)).toEqual([
         "current",
         "current",
       ]);
       database.db
-        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 1 WHERE session_key = ?")
+        .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
         .run("{", identities[1]!.sessionKey);
       const forceDestroyEnvironment = vi.fn();
       const retirement = createPlacementSessionRetirement({
@@ -315,62 +319,69 @@ describe("worker placement session evidence", () => {
   it.each(["cold", "warm"] as const)(
     "resolves a %s multi-agent disk batch without caller-thread SQLite",
     (mode) =>
-      withEvidenceState(async () => {
-        setRuntimeConfigSnapshot({});
-        const placements = Array.from({ length: 20 }, (_, index) => {
-          const agentId = index % 2 === 0 ? "main" : "ops";
-          const sessionId = `session-${index}`;
-          const sessionKey = `agent:${agentId}:placement-${index}`;
-          return localPlacement(sessionId, sessionKey, agentId);
+      withEvidenceState(async (stateDir) => {
+        const gateway = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: path.join(stateDir, "openclaw.json"),
+            role: "gateway",
+            processNamespace: readGatewayLockProcessNamespace(),
+          },
         });
-        for (const placement of placements) {
-          await writeSession(placement);
-        }
-        // Drain fixture maintenance before independently admitting warm readers.
-        await closeOpenClawAgentDatabasesAsync();
-        if (mode === "warm") {
-          const databases = new Map(
-            ["main", "ops"].map((agentId) => [agentId, openOpenClawAgentDatabase({ agentId })]),
-          );
-          expect(
-            sessionAccessor
-              .readSessionIdentityEvidenceBatch(
-                placements.map((placement) => ({
-                  ...placement,
-                  storePath: databases.get(placement.agentId)!.path,
-                })),
-              )
-              .map((row) => row.status),
-          ).toEqual(placements.map(() => "current"));
-        }
-
-        registryListing.invalidateRegisteredAgentDatabasesMemo({ env: process.env });
-        const calibration = new (requireNodeSqlite().DatabaseSync)(":memory:");
-        calibration.exec("CREATE TABLE calibration (value INTEGER)");
-        const cachedInsert = calibration.prepare("INSERT INTO calibration VALUES (?)");
-        const cachedRead = calibration.prepare("SELECT value FROM calibration");
-        const observation = observeMainThreadSql();
         try {
+          setRuntimeConfigSnapshot({});
+          const placements = Array.from({ length: 20 }, (_, index) => {
+            const agentId = index % 2 === 0 ? "main" : "ops";
+            const sessionId = `session-${index}`;
+            const sessionKey = `agent:${agentId}:placement-${index}`;
+            return localPlacement(sessionId, sessionKey, agentId);
+          });
+          for (const placement of placements) {
+            await writeSession(placement);
+          }
+          // Drain fixture maintenance before independently admitting warm readers.
+          await closeOpenClawAgentDatabasesAsync();
+          if (mode === "warm") {
+            const databases = new Map(
+              ["main", "ops"].map((agentId) => [agentId, openOpenClawAgentDatabase({ agentId })]),
+            );
+            expect(
+              sessionAccessor
+                .readSessionIdentityEvidenceBatch(
+                  placements.map((placement) => ({
+                    ...placement,
+                    storePath: databases.get(placement.agentId)!.path,
+                  })),
+                )
+                .map((row) => row.status),
+            ).toEqual(placements.map(() => "current"));
+          }
+
+          registryListing.invalidateRegisteredAgentDatabasesMemo({ env: process.env });
+          const resolveOwner = vi.spyOn(sessionStoreKey, "resolveSessionStoreAgentId");
+          const observation = observeMainThreadSql();
           try {
             observation.calibrate();
-            cachedInsert.run(1);
-            cachedRead.get();
-            cachedRead.all();
-            expect([...cachedRead.iterate()]).toHaveLength(1);
-            expect(observation.calls.slice(2).every((call) => call.mock.calls.length > 0)).toBe(
-              true,
+            using filesystem = observeMainThreadFs();
+            const resolve = await createResolver(placements);
+            await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
+              placements.map(() => "current"),
             );
+            observation.expectIdle();
+            expect(filesystem.calls()).toEqual({});
+            expect(resolveOwner).not.toHaveBeenCalled();
           } finally {
-            calibration.close();
-            observation.clear();
+            resolveOwner.mockRestore();
+            observation.restore();
           }
-          const resolve = await createResolver(placements);
-          await expect(Promise.all(placements.map(resolve))).resolves.toEqual(
-            placements.map(() => "current"),
-          );
-          observation.expectIdle();
         } finally {
-          observation.restore();
+          try {
+            await closeOpenClawAgentDatabasesAsync();
+          } finally {
+            gateway.release();
+          }
         }
       }),
   );

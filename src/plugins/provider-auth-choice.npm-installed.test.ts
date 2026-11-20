@@ -16,7 +16,6 @@ import {
   clearPluginLoaderCache,
   resetPluginLoaderTestStateForTest,
 } from "./loader.test-fixtures.js";
-import { prepareAuthChoiceLoadedPluginProvider } from "./provider-auth-choice.js";
 import { buildPluginRegistrySnapshotReport } from "./status-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
@@ -142,8 +141,7 @@ it.each([
                 archivePath,
                 extensionsDir: path.join(stateDir, "extensions"),
               });
-        expect(result.ok, JSON.stringify(result)).toBe(true);
-        assert.ok(result.ok);
+        assert.ok(result.ok, JSON.stringify(result));
         await seedInstalledPluginIndex(
           {
             [pluginId]: {
@@ -161,56 +159,39 @@ it.each([
           enabled: true,
           version: "1.0.0",
         });
-        install.mockImplementation(async ({ cfg }) => ({
-          cfg,
-          pluginId,
-          installed: true,
-          status: "installed",
-        }));
         const authContext = {
           config,
           workspaceDir,
           agentId: "main",
           agentDir: path.join(stateDir, "agents", "main", "agent"),
         };
-        for (const { choiceId } of choices) {
-          const prompter = createWizardPrompter();
-          await prepareAuthChoiceLoadedPluginProvider(
-            {
-              authChoice: choiceId,
-              ...authContext,
-              prompter,
-              runtime: createNonExitingRuntime(),
-              setDefaultModel: false,
+        for (const { choiceId: authChoice } of choices) {
+          const prompter = createWizardPrompter({
+            select: async <T>({ options }: WizardSelectParams<T>) => {
+              const selected =
+                options.find((option) => option.value === authChoice) ??
+                options.find((option) => option.value === pluginId) ??
+                options.find((option) => option.value === "__more");
+              assert.ok(selected, "Unexpected configure selection");
+              return selected.value;
             },
-            (prepared, provider) => {
-              expect(install, choiceId).not.toHaveBeenCalled();
-              expect(prepared?.retrySelection, choiceId).not.toBe(true);
-              expect(provider?.id, choiceId).toBe(pluginId);
-              expect(prompter.text).toHaveBeenCalledWith({ message: choiceId });
-              expect(prepared?.agentModelOverride).toBe(`${pluginId}/fixture-model`);
-            },
+          });
+          modelPicker.mockReset().mockResolvedValue({ models: undefined });
+          const configured = await promptAuthConfig(
+            config,
+            createNonExitingRuntime(),
+            prompter,
+            authContext,
+          );
+          expect(configured.agents?.defaults?.model).toMatchObject({
+            primary: `${pluginId}/fixture-model`,
+          });
+          expect(install, authChoice).not.toHaveBeenCalled();
+          expect(prompter.text).toHaveBeenCalledWith({ message: authChoice });
+          expect(modelPicker).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ preferredProvider: pluginId }),
           );
         }
-        const authChoice = pluginId === "moonshot" ? "moonshot-api-key-cn" : `${pluginId}-api-key`;
-        const prompter = createWizardPrompter({
-          select: async <T>({ options }: WizardSelectParams<T>) => {
-            const selected =
-              options.find((option) => option.value === authChoice) ??
-              options.find((option) => option.value === pluginId) ??
-              options.find((option) => option.value === "__more");
-            assert.ok(selected, "Unexpected configure selection");
-            return selected.value;
-          },
-        });
-        modelPicker.mockResolvedValue({ models: undefined });
-        await promptAuthConfig(config, createNonExitingRuntime(), prompter, authContext);
-        expect(install, authChoice).not.toHaveBeenCalled();
-        expect(prompter.text).toHaveBeenCalledWith({ message: authChoice });
-        expect(modelPicker).toHaveBeenCalledOnce();
-        expect(modelPicker).toHaveBeenCalledWith(
-          expect.objectContaining({ preferredProvider: pluginId }),
-        );
       },
     );
   },

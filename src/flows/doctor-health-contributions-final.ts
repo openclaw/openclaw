@@ -2,11 +2,14 @@ import type { DoctorOptions } from "../commands/doctor-prompter.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runFinalConfigValidationHealth } from "./doctor-config-validation-findings.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
-import { runCoreHealthFindingNote } from "./doctor-health-contribution-core.js";
+import {
+  runBundledHealthFindingNote,
+  runCoreHealthFindingNote,
+} from "./doctor-health-contribution-core.js";
 import {
   collectWriteConfigHealthFindings,
-  runFinalConfigValidationHealth,
   runWriteConfigHealth,
 } from "./doctor-health-contribution-runners.config.js";
 import {
@@ -23,13 +26,7 @@ import {
   runWebFetchProxyHealth,
   runWhatsappResponsivenessHealth,
 } from "./doctor-health-contribution-runners.gateway.js";
-import {
-  runHeartbeatCadenceMigrationHealth,
-  runHeartbeatScratchMigrationHealth,
-  runHeartbeatTaskMigrationHealth,
-  runMemorySearchHealthContribution,
-  runToolsMdMigrationHealth,
-} from "./doctor-health-contribution-runners.workspace.js";
+import { runMemorySearchHealthContribution } from "./doctor-health-contribution-runners.workspace.js";
 import type {
   DoctorHealthCheckContext,
   DoctorHealthContribution,
@@ -81,6 +78,16 @@ async function collectWorkspaceStatusPluginVersionReadiness(params: {
 
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
+
+async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  await maybeMigrateHeartbeatCadenceToCron({
+    cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
 
 export function resolveFinalDoctorHealthContributions(params: {
   runSystemdLingerHealth: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -237,6 +244,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         note(warnings.join("\n"), "Hooks");
       },
     }),
+    createDoctorHealthContribution("doctor:legacy-output-cap", "Saved model output caps", {
+      updateWork: { kind: "inspection", scope: "run" },
+      healthCheckIds: ["core/doctor/legacy-output-cap"],
+      run: (ctx) =>
+        runCoreHealthFindingNote(ctx, "core/doctor/legacy-output-cap", {
+          infoNoteTitle: "Model output caps",
+        }),
+    }),
     ...(
       [
         ["model-references", "Model references", "agent"],
@@ -244,7 +259,6 @@ export function resolveFinalDoctorHealthContributions(params: {
         ["provider-catalog-projection", "Provider catalog projection", "run"],
         ["local-audio-acceleration", "Local audio acceleration", "run"],
         ["runtime-tool-schemas", "Runtime tool schemas", "agent"],
-        ["skill-workshop-tool-policy", "Skill Workshop tool policy", "agent"],
       ] as const
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution(`doctor:${name}`, label, {
@@ -252,6 +266,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
       }),
+    ),
+    createDoctorHealthContribution(
+      "doctor:skill-workshop-tool-policy",
+      "Skill Workshop tool policy",
+      {
+        updateWork: { kind: "inspection", scope: "agent" },
+        run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
+      },
     ),
     createDoctorHealthContribution("doctor:systemd-linger", "systemd linger", {
       healthChecks: {
@@ -330,12 +352,50 @@ export function resolveFinalDoctorHealthContributions(params: {
         });
       },
     }),
+    createDoctorHealthContribution("doctor:model-allowlist-wildcards", "Model allowlist", {
+      updateWork: { kind: "standalone" },
+      async run(ctx) {
+        const { maybeOfferModelAllowlistWildcards } =
+          await import("../commands/doctor/shared/legacy-runtime-model-policy.js");
+        const { config, changes } = await maybeOfferModelAllowlistWildcards({
+          cfg: ctx.cfg,
+          prompter: ctx.prompter,
+        });
+        ctx.cfg = config;
+        if (changes.length > 0) {
+          ctx.configResult.pendingChangePanels = [
+            ...(ctx.configResult.pendingChangePanels ?? []),
+            changes.join("\n"),
+          ];
+        }
+      },
+    }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       async run(ctx) {
         const { noteBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
         await noteBootstrapFileSize(ctx.cfg);
+      },
+    }),
+    createDoctorHealthContribution("doctor:memory-provenance", "Memory provenance", {
+      healthChecks: {
+        description:
+          "Root MEMORY.md and USER.md with untrusted provenance are excluded from automatic context.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectMemoryProvenanceExclusionFindings } =
+            await import("../commands/doctor-memory-provenance.js");
+          return collectMemoryProvenanceExclusionFindings(ctx.cfg);
+        },
+      },
+      async run(ctx) {
+        const { collectMemoryProvenanceExclusionFindings } =
+          await import("../commands/doctor-memory-provenance.js");
+        renderStructuredHealthFindings(
+          ctx,
+          await collectMemoryProvenanceExclusionFindings(ctx.cfg),
+        );
       },
     }),
     createDoctorHealthContribution(
@@ -351,7 +411,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatCadenceMigrationHealth,
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution(
@@ -364,10 +424,10 @@ export function resolveFinalDoctorHealthContributions(params: {
           async detect(ctx) {
             const { collectHeartbeatScratchMigrationFindings } =
               await import("../commands/doctor-heartbeat-scratch-migration.js");
-            return collectHeartbeatScratchMigrationFindings(ctx.cfg);
+            return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatScratchMigrationHealth,
+        run: runHeartbeatRetirementHealth,
       },
     ),
     createDoctorHealthContribution("doctor:tools-md-migration", "TOOLS.md migration", {
@@ -380,7 +440,14 @@ export function resolveFinalDoctorHealthContributions(params: {
           return collectToolsMdMigrationFindings(ctx.cfg);
         },
       },
-      run: runToolsMdMigrationHealth,
+      async run(ctx) {
+        const { maybeMigrateToolsMd } = await import("../commands/doctor-tools-md-migration.js");
+        await maybeMigrateToolsMd({
+          cfg: ctx.cfg,
+          shouldRepair: ctx.prompter.shouldRepair,
+          env: ctx.env,
+        });
+      },
     }),
     createDoctorHealthContribution(
       "doctor:heartbeat-task-cron-migration",
@@ -395,7 +462,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
           },
         },
-        run: runHeartbeatTaskMigrationHealth,
+        async run(ctx) {
+          const { maybeMigrateHeartbeatTasksToCron } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          await maybeMigrateHeartbeatTasksToCron({
+            cfg: ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
       },
     ),
     createDoctorHealthContribution("doctor:shell-completion", "Shell completion", {

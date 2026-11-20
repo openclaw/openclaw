@@ -30,6 +30,10 @@ describe("resolveSlackThreadContextData", () => {
     });
   }
 
+  function userThreadStarter(text: string, userId: string) {
+    return { text, userId, ts: "100.000" };
+  }
+
   function createThreadMessage(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
     return {
       channel: "C123",
@@ -182,11 +186,7 @@ describe("resolveSlackThreadContextData", () => {
         { text: "allowed follow-up", user: "U1", ts: "100.800" },
         { text: "current message", user: "U1", ts: "101.000" },
       ],
-      threadStarter: {
-        text: "starter secret",
-        userId: "U2",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter("starter secret", "U2"),
       allowFromLower: ["u1"],
       allowNameMatching: false,
     });
@@ -226,11 +226,7 @@ describe("resolveSlackThreadContextData", () => {
           { text: "allowed follow-up", user: "U1", ts: "100.800" },
           { text: "current message", user: "U1", ts: "101.000" },
         ],
-        threadStarter: {
-          text: "starter from Alice",
-          userId: "U1",
-          ts: "100.000",
-        },
+        threadStarter: userThreadStarter("starter from Alice", "U1"),
         allowFromLower: ["u1"],
         allowNameMatching: false,
         sessionState,
@@ -260,11 +256,7 @@ describe("resolveSlackThreadContextData", () => {
     }));
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [...priorMessages, { text: "current message", user: "U1", ts: "101.000" }],
-      threadStarter: {
-        text: "prior user message 0",
-        userId: "U1",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter("prior user message 0", "U1"),
       allowFromLower: ["u1"],
       allowNameMatching: false,
       sessionState: "fresh",
@@ -288,11 +280,7 @@ describe("resolveSlackThreadContextData", () => {
         { text: "blocked follow-up", user: "U2", ts: "100.700" },
         { text: "current message", user: "U1", ts: "101.000" },
       ],
-      threadStarter: {
-        text: "starter from Alice",
-        userId: "U1",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter("starter from Alice", "U1"),
       allowFromLower: ["alice"],
       allowNameMatching: true,
     });
@@ -307,11 +295,7 @@ describe("resolveSlackThreadContextData", () => {
     const starterText = `${"a".repeat(79)}🐱tail`;
     const { result } = await resolveAllowlistedThreadContext({
       repliesMessages: [],
-      threadStarter: {
-        text: starterText,
-        userId: "U1",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter(starterText, "U1"),
       allowFromLower: ["u1"],
       allowNameMatching: false,
     });
@@ -388,11 +372,7 @@ describe("resolveSlackThreadContextData", () => {
         { text: "malformed timestamp follow-up", user: "U1", ts: "0x65" },
         { text: "current message", user: "U1", ts: "101.000" },
       ],
-      threadStarter: {
-        text: "starter from Alice",
-        userId: "U1",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter("starter from Alice", "U1"),
       allowFromLower: ["u1"],
       allowNameMatching: false,
     });
@@ -411,11 +391,7 @@ describe("resolveSlackThreadContextData", () => {
         { text: "allowed follow-up", user: "U1", ts: "100.800" },
         { text: "current message", user: "U1", ts: "101.000" },
       ],
-      threadStarter: {
-        text: "self starter",
-        userId: "U_BOT",
-        ts: "100.000",
-      },
+      threadStarter: userThreadStarter("self starter", "U_BOT"),
       allowFromLower: ["u1"],
       allowNameMatching: false,
     });

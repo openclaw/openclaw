@@ -51,9 +51,7 @@ it.each([false, true])("yielded settle final after requester reset=%s", async (r
         },
       ),
     ];
-    const marker = await persistMarker(target, entry, payloads, {
-      admittedRecoverySource: undefined,
-    });
+    const marker = await persistMarker(target, entry, payloads);
     expect(marker.pendingFinalDeliveryMarkerPersisted).toBe(true);
 
     const entered = createDeferred();

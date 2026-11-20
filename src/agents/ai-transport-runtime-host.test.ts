@@ -1,7 +1,16 @@
-import { getAiTransportHost } from "@openclaw/ai";
-import { expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  getDefaultAiTransportHost,
+} from "@openclaw/ai";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createPluginModuleLoader } from "../plugins/loader-module-runtime.js";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import { attachProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
 import "./ai-transport-runtime-host.js";
 import { attachModelProviderLocalServiceReconciler as attachReconciler } from "./provider-local-service-reconcile.js";
 import {
@@ -16,19 +25,96 @@ import {
 } from "./provider-request-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-function buildOwners(): PluginMetadataSnapshotOwnerMaps {
-  return {
-    ...createEmptyPluginMetadataSnapshot().owners,
-    providerEndpoints: [
-      { endpointClass: "openai-public", hosts: ["prepared.example"] },
-      { endpointClass: "anthropic-public", hosts: ["projected.example"] },
-    ],
-    providerRequests: new Map([["openai", { family: "prepared-openai-family" }]]),
-  };
-}
+const temp = useAutoCleanupTempDirTracker(afterEach);
 
-function preparedModel(owners = buildOwners()) {
-  return attachModelProviderRequestRouteFacts(
+const owners: PluginMetadataSnapshotOwnerMaps = {
+  ...createEmptyPluginMetadataSnapshot().owners,
+  providerEndpoints: [
+    { endpointClass: "openai-public", hosts: ["prepared.example"] },
+    { endpointClass: "anthropic-public", hosts: ["projected.example"] },
+  ],
+  providerRequests: new Map([["openai", { family: "prepared-openai-family" }]]),
+};
+
+it("retains guarded defaults and configured observers across native SDK loading", async () => {
+  const originalHost = getDefaultAiTransportHost();
+  const requests: unknown[] = [];
+  const fetchObserver = vi.fn<typeof fetch>(async (input, init) => {
+    requests.push(await new Request(input, init).json());
+    return new Response(
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "observed" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+      { headers: { "content-type": "text/event-stream" } },
+    );
+  });
+  const buildModelFetch = () => fetchObserver;
+  const model = attachModelProviderRequestRouteFacts(
+    makeProviderModelFixture<"openai-completions">({
+      id: "prepared-model",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://prepared.example/v1",
+    }),
+    owners,
+  );
+  const unexpectedFetch = vi
+    .spyOn(globalThis, "fetch")
+    .mockRejectedValue(new Error("Unexpected real fetch"));
+  try {
+    // The process-wide host may retain another module copy; verify its guard, not function identity.
+    const retiredAuthority = new Error("Provider credential owner retired");
+    const guardedFetch = originalHost.buildModelFetch(
+      attachProviderAuthAuthority(model, () => {
+        throw retiredAuthority;
+      }),
+    );
+    if (!guardedFetch) {
+      throw new Error("Guarded model fetch is not installed");
+    }
+    await expect(guardedFetch(`${model.baseUrl}/chat/completions`)).rejects.toThrow(
+      retiredAuthority,
+    );
+    expect(unexpectedFetch).not.toHaveBeenCalled();
+
+    configureAiTransportHost({ ...originalHost, buildModelFetch });
+    const plugin = path.join(temp.make("native-fetch-observer-"), "index.cjs");
+    fs.writeFileSync(plugin, `module.exports = require("openclaw/plugin-sdk/llm");`);
+    const load = createPluginModuleLoader({ tryNative: true, pluginSdkResolution: "src" });
+    const sdk = load(plugin) as typeof import("../plugin-sdk/llm.js");
+    // Check before invoking the fetch port: a regression must never send a real request.
+    expect(getDefaultAiTransportHost().buildModelFetch).toBe(buildModelFetch);
+    const response = await sdk.complete(
+      model,
+      { messages: [{ role: "user", content: "observer fixture", timestamp: 0 }] },
+      { apiKey: "synthetic-observer-key" },
+    );
+    expect(response).toMatchObject({
+      stopReason: "stop",
+      content: [{ type: "text", text: "observed" }],
+    });
+    expect(requests).toMatchObject([{ model: "prepared-model", stream: true }]);
+    expect(fetchObserver).toHaveBeenCalledTimes(1);
+    expect(unexpectedFetch).not.toHaveBeenCalled();
+    expect(
+      getDefaultAiTransportHost().resolveProviderRequestCapabilities({
+        model,
+        provider: model.provider,
+        api: model.api,
+        baseUrl: model.baseUrl,
+        capability: "llm",
+        transport: "stream",
+      }),
+    ).toMatchObject({
+      endpointClass: "openai-public",
+      knownProviderFamily: "prepared-openai-family",
+    });
+  } finally {
+    unexpectedFetch.mockRestore();
+    configureAiTransportHost(originalHost);
+  }
+});
+
+it("keeps prepared metadata for headers, SSRF posture, and projected routes", () => {
+  const model = attachModelProviderRequestRouteFacts(
     makeProviderModelFixture<"openai-responses">({
       id: "gpt-5.6-luna",
       provider: "openai",
@@ -37,10 +123,6 @@ function preparedModel(owners = buildOwners()) {
     }),
     owners,
   );
-}
-
-it("keeps headers, capabilities, and SSRF posture on the prepared metadata generation", () => {
-  const model = preparedModel();
   const host = getAiTransportHost();
   const route = { model, provider: model.provider, api: model.api, baseUrl: model.baseUrl };
   const request = { ...route, capability: "llm" as const, transport: "stream" as const };
@@ -54,17 +136,14 @@ it("keeps headers, capabilities, and SSRF posture on the prepared metadata gener
     knownProviderFamily: "prepared-openai-family",
   });
   expect(requestPolicy.trustConfiguredBaseUrlOrigin).toBe(false);
-});
+  const projected = host.inheritManagedTransport(model, {
+    ...model,
+    baseUrl: "https://projected.example/v1",
+  });
+  const projectedFacts = getModelProviderRequestRouteFacts(projected);
 
-it("re-resolves projected transport routes against the same metadata generation", () => {
-  const owners = buildOwners();
-  const source = preparedModel(owners);
-  const projection = { ...source, baseUrl: "https://projected.example/v1" };
-  const projected = getAiTransportHost().inheritManagedTransport(source, projection);
-  const routeFacts = getModelProviderRequestRouteFacts(projected);
-
-  expect(routeFacts?.providerMetadataOwners).toBe(owners);
-  expect(routeFacts).toMatchObject({
+  expect(projectedFacts?.providerMetadataOwners).toBe(owners);
+  expect(projectedFacts).toMatchObject({
     capabilities: { endpointClass: "anthropic-public" },
     providerOwner: "anthropic-public",
   });

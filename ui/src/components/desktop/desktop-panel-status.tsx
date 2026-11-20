@@ -113,9 +113,7 @@ export function DesktopViewerHint(props: {
   });
   return (
     <span
-      ref={(element) => {
-        hint = element;
-      }}
+      ref={(element) => (hint = element)}
       class="desktop-viewer-hint"
       aria-hidden="true"
       data-active={props.active ? "true" : "false"}

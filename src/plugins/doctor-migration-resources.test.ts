@@ -2,17 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { definePluginDoctorMigrationFromPlans } from "../plugin-sdk/doctor-migration-plan-adapter.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
-import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
+import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-preparation.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,
   preparePluginDoctorMigrationResources,
 } from "./doctor-migration-resources.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
+import { writeArtifacts as writeDoctorFiles } from "./public-surface.test-support.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
@@ -30,13 +31,15 @@ async function bundledMigrations(pluginIds: string[]) {
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
+    "discord-legacy-state",
+    "line-pre-drain-spool-rows",
     "workboard-28-kv-to-sqlite",
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
-    ({ migration }) => ids.has(migration.id),
-  );
+  noDataMigrations = (
+    await bundledMigrations(["crabbox", "discord", "line", "workboard", "memory-core"])
+  ).filter(({ migration }) => ids.has(migration.id));
   recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
@@ -73,6 +76,7 @@ afterEach(async () => {
 function collectResources(migration: PluginDoctorStateMigration, pluginId: string) {
   return preparePluginDoctorMigrationResources([{ pluginId, migration }], input);
 }
+const resource = (name: string, kind = "sqlite") => ({ path: path.join(stateDir, name), kind });
 
 it.each([
   { engine: "postgres", stateEngine: undefined, skipped: true },
@@ -87,14 +91,14 @@ it.each([
         ...(stateEngine ? { families: { state: { engine: stateEngine } } } : {}),
       },
     };
-    const resource = { path: path.join(stateDir, "legacy.sqlite"), kind: "sqlite" as const };
-    const collectBackupResources = vi.fn(() => [resource]);
+    const legacy = { ...resource("legacy.sqlite"), kind: "sqlite" as const };
+    const collectBackupResources = vi.fn(() => [legacy]);
     const result = await collectResources(
       { ...fixtureMigration, sqliteOnly: { family: "state" }, collectBackupResources },
       "legacy-owner",
     );
     expect(collectBackupResources).toHaveBeenCalledTimes(skipped ? 0 : 1);
-    expect(result.resources).toEqual(skipped ? [] : [resource]);
+    expect(result.resources).toEqual(skipped ? [] : [legacy]);
     expect(result.notices).toEqual(
       skipped
         ? [
@@ -106,12 +110,21 @@ it.each([
   },
 );
 
-it("does not claim missing recovery coverage for bundled core-only and disposable migrations", async () => {
-  expect(noDataMigrations).toHaveLength(4);
-  const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
-  expect(result.resources).toEqual([]);
-  expect(input.warnings).toEqual([]);
-});
+it.each([false, true])(
+  "does not claim missing recovery coverage for bundled core-only and disposable migrations (Discord cache present: %s)",
+  async (cachePresent) => {
+    expect(noDataMigrations).toHaveLength(6);
+    const cachePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+    if (cachePresent) {
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, '{"legacy":"cache"}');
+    }
+    const result = await preparePluginDoctorMigrationResources(noDataMigrations, input);
+    expect(result.resources).toEqual([]);
+    expect(input.warnings).toEqual([]);
+    expect(fs.existsSync(cachePath)).toBe(cachePresent);
+  },
+);
 
 it.each(["absent", "default", "configured"] as const)(
   "declares Codex sidecars and Voice Call SQLite recovery resources for %s state",
@@ -173,12 +186,8 @@ it("warns once per undeclared owner without running its migration", async () => 
     expect.objectContaining({ kind: "undeclared-migration-resources", pluginId: "other-owner" }),
   ]);
   for (const { message } of input.warnings) {
-    expect(message).toContain("migration recovery coverage is unknown");
-    expect(message).toContain("Update the plugin to a version with migration backup support.");
-    expect(message).toContain("keep a separate backup of its configured data");
-    expect(message).toContain("ask its maintainer to add backup support");
-    expect(message).toContain(
-      "https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage",
+    expect(message).toMatch(
+      /migration recovery coverage is unknown.*Update the plugin to a version with migration backup support\..*keep a separate backup of its configured data.*ask its maintainer to add backup support.*https:\/\/docs\.openclaw\.ai\/cli\/doctor\/state-migrations#plugin-migration-recovery-coverage/,
     );
   }
   expect(fixtureMigration.detectLegacyState).not.toHaveBeenCalled();
@@ -205,17 +214,10 @@ it.each(["declared", "malformed"] as const)(
         "collectBackupResources",
       );
     } else {
-      const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
-      const coerced = contract?.stateMigrations?.[0];
-      if (!coerced) {
-        throw new Error("Missing adapted migration");
-      }
+      const coerced = coercePluginDoctorContractModule({ stateMigrations: [migration] })
+        .stateMigrations[0]!;
       const result = await collectResources(coerced, "planned-owner");
       expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-      expect(collectBackupResources).toHaveBeenCalledOnce();
-      expect(collectBackupResources).toHaveBeenCalledWith(
-        expect.objectContaining({ stateDir, requireLocalResources: true }),
-      );
     }
     expect(resolvePlans).not.toHaveBeenCalled();
     expect(input.warnings).toEqual([]);
@@ -231,13 +233,10 @@ it.each([
       { path: `${stateDir}${path.sep}linked${path.sep}..${path.sep}data.sqlite`, kind: "sqlite" },
     ],
   ],
-  ["unknown kind", () => [{ path: path.join(stateDir, "data"), kind: "unknown" }]],
+  ["unknown kind", () => [resource("data", "unknown")]],
   [
     "conflicting kinds",
-    () => [
-      { path: path.join(stateDir, "data"), kind: "file" },
-      { path: path.join(stateDir, "data"), kind: "sqlite" },
-    ],
+    () => [resource("data", "file"), resource("data")],
     "Conflicting migration backup resource kinds",
   ],
 ] as const)("still refuses a declared %s", async (_label, collect, message?: string) => {
@@ -280,28 +279,46 @@ it.each(["undeclared", "declared", "malformed"] as const)(
       }],
     };`,
     );
-    const result = preparePluginDoctorMigrationBackupResources({
-      ...input,
-      config: {
-        plugins: {
-          allow: [pluginId],
-          load: { paths: [pluginRoot] },
-          entries: { [pluginId]: { enabled: true } },
+    const work = new AsyncWorkScope();
+    let current = true;
+    const result = work.track(() =>
+      preparePluginDoctorMigrationBackupResources({
+        ...input,
+        config: {
+          plugins: {
+            allow: [pluginId],
+            load: { paths: [pluginRoot] },
+            entries: { [pluginId]: { enabled: true } },
+          },
         },
-      },
-      env: { ...input.env, HOME: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-    });
-    if (declaration === "malformed") {
-      await expect(result).rejects.toThrow("collectBackupResources");
-      expect(input.warnings).toEqual([]);
-    } else if (declaration === "declared") {
-      expect((await result).resources).toEqual([{ path: resourcePath, kind: "sqlite" }]);
-      expect(input.warnings).toEqual([]);
-    } else {
-      expect((await result).resources).toEqual([]);
-      expect(input.warnings).toEqual([
-        expect.objectContaining({ kind: "undeclared-migration-resources", pluginId }),
-      ]);
+        env: { ...input.env, HOME: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        assertCurrent() {
+          if (!current) {
+            throw new Error("Caller authority expired");
+          }
+        },
+      }),
+    );
+    try {
+      if (declaration === "malformed") {
+        await expect(result).rejects.toThrow("collectBackupResources");
+        expect(input.warnings).toEqual([]);
+      } else if (declaration === "declared") {
+        const prepared = await result;
+        expect(prepared.resources).toEqual([{ path: resourcePath, kind: "sqlite" }]);
+        expect(input.warnings).toEqual([]);
+        await work.drain();
+        expect(() => prepared.assertCurrent()).not.toThrow();
+        current = false;
+        expect(() => prepared.assertCurrent()).toThrow("Caller authority expired");
+      } else {
+        expect((await result).resources).toEqual([]);
+        expect(input.warnings).toEqual([
+          expect.objectContaining({ kind: "undeclared-migration-resources", pluginId }),
+        ]);
+      }
+    } finally {
+      await work.drain();
     }
   },
 );

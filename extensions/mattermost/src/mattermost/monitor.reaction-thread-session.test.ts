@@ -60,7 +60,11 @@ async function withLoopbackMattermost(
   );
 }
 
-async function runReactionThroughMonitor(params: { baseUrl: string; postId: string }) {
+async function runReactionThroughMonitor(params: {
+  baseUrl: string;
+  postId: string;
+  broadcast: boolean;
+}) {
   const runtimeCore = createPluginRuntimeMock();
   runtimeCore.channel.routing.resolveAgentRoute = () => ({
     channel: "mattermost",
@@ -110,7 +114,7 @@ async function runReactionThroughMonitor(params: { baseUrl: string; postId: stri
       }),
       channel_id: CHANNEL_ID,
     },
-    broadcast: { channel_id: CHANNEL_ID },
+    broadcast: params.broadcast ? { channel_id: CHANNEL_ID } : undefined,
   });
 }
 
@@ -124,7 +128,7 @@ describe("mattermost reaction thread placement", () => {
   ])("uses session $sessionKey after the production post lookup", async ({ post, sessionKey }) => {
     const postId = post?.id ?? "post-unknown";
     await withLoopbackMattermost(post, async (baseUrl, requests) => {
-      await runReactionThroughMonitor({ baseUrl, postId });
+      await runReactionThroughMonitor({ baseUrl, postId, broadcast: post !== null });
       expect(requests).toContain(`GET /api/v4/posts/${postId}`);
       expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledTimes(1);
       expect(loopbackState.enqueueSystemEvent).toHaveBeenCalledWith(

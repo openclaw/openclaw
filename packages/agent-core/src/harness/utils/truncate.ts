@@ -27,8 +27,6 @@ export interface TruncationResult {
   maxBytes: number;
 }
 
-type ResolvedTruncationInput = ReturnType<typeof resolveTruncationInput>;
-
 interface RuntimeBuffer {
   byteLength(content: string, encoding: "utf8"): number;
   from(content: string, encoding: "utf16le"): { toString(encoding: "utf16le"): string };
@@ -36,7 +34,7 @@ interface RuntimeBuffer {
 
 const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
 
-function copyString(content: string): string {
+export function copyString(content: string): string {
   // Copy selected code units without normalizing lone surrogates or retaining the source backing.
   return runtimeBuffer ? runtimeBuffer.from(content, "utf16le").toString("utf16le") : content;
 }
@@ -108,7 +106,7 @@ function resolveTruncationInput(content: string, maxBytes: number) {
 }
 
 function buildTruncationResult(
-  input: ResolvedTruncationInput,
+  input: ReturnType<typeof resolveTruncationInput>,
   params: {
     content: string;
     truncatedBy?: TruncationResult["truncatedBy"];

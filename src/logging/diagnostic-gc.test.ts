@@ -111,6 +111,7 @@ it("drains final short-task GC on retirement without sampling each task or count
       },
     ]);
     expect(memory.collectTask()).toBe(true);
+    await vi.advanceTimersByTimeAsync(900);
     expect(samples).toEqual([]);
     await flush();
     expect(samples).toContainEqual({
@@ -243,10 +244,14 @@ it.each([
   trackNativeWorkerForCpu(worker, new URL(`../infra/${file}`, import.meta.url));
   const parent = new MessageChannel();
   const events: unknown[] = [];
+  const heaps: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc" && event.thread !== "main") {
         events.push([event.kind, event.thread, event.durationMs, event.workerSlot]);
+        if (event.kind === "mark_sweep_compact") {
+          heaps.push([event.heapUsedAfterMajorGcBytes, event.heapUsedAfterMajorGcTimestampSeconds]);
+        }
       }
     },
     { include: ["diagnostic.gc"] },
@@ -286,6 +291,7 @@ it.each([
       ["scavenge", `${script}.js`, 2, slot],
       ["mark_sweep_compact", `${script}.js`, 8, slot],
     ]);
+    expect(heaps).toEqual([[0, expect.any(Number)]]);
     events.length = 0;
     messages.length = 0;
     const flushed = once(telemetry!, "message");
@@ -382,12 +388,16 @@ it("bounds SDK GC attribution once before delivering it to metric consumers", as
   ]);
 });
 
-it("reports unavailable native GC reasons as other", async () => {
-  const reasons: unknown[] = [];
+it("reports native major-GC heap bytes and observation time without sampling scavenges", async () => {
+  const samples: unknown[] = [];
   const unsubscribe = onInternalDiagnosticEvent(
     (event) => {
       if (event.type === "diagnostic.gc") {
-        reasons.push(event.reason);
+        samples.push([
+          event.reason,
+          event.heapUsedAfterMajorGcBytes,
+          event.heapUsedAfterMajorGcTimestampSeconds,
+        ]);
       }
     },
     { include: ["diagnostic.gc"] },
@@ -395,10 +405,21 @@ it("reports unavailable native GC reasons as other", async () => {
   setDiagnosticsEnabledForProcess(true);
   reconcileDiagnosticGcObserver();
   try {
-    native.collect([{ gcType: "MarkSweepCompact", cost: 1_000 }]);
+    vi.spyOn(Date, "now").mockReturnValue(1700000000123);
+    native.collect([
+      {
+        gcType: "MarkSweepCompact",
+        cost: 1_000,
+        afterGC: { heapStatistics: { usedHeapSize: 512 }, heapSpaceStatistics: [] },
+      },
+      { gcType: "Scavenge", cost: 1_000 },
+    ]);
     await vi.advanceTimersByTimeAsync(1_000);
     await waitForDiagnosticEventsDrained();
-    expect(reasons).toEqual(["other"]);
+    expect(samples).toEqual([
+      ["other", 512, 1700000000.123],
+      ["other", undefined, undefined],
+    ]);
   } finally {
     stopDiagnosticGcObserver();
     unsubscribe();

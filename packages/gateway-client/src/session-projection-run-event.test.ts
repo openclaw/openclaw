@@ -1,10 +1,18 @@
 import { assert, expect, it } from "vitest";
 import {
   reduceSessionProjectionRunEvent,
+  reduceSessionProjection as reduce,
+  readSessionMessageIdentity,
+  readSessionProjectionFinalMessageIdentity,
   type SessionProjectionGatewayRunEvent,
   type SessionProjectionState,
 } from "./session-projection.js";
-import { primaryScope as scope, projection } from "./session-projection.test-support.js";
+import {
+  primaryScope as scope,
+  projection,
+  user,
+  assistant,
+} from "./session-projection.test-support.js";
 
 function runEvent(state: SessionProjectionState, event: SessionProjectionGatewayRunEvent) {
   const transition = reduceSessionProjectionRunEvent(state, { runId: "shared-run", ...event });
@@ -120,4 +128,71 @@ it("rejects non-run Gateway event states", () => {
       state: "status",
     }),
   ).toBeNull();
+});
+
+it.each([
+  { role: "user", rawSeq: 0 },
+  { role: "assistant", rawSeq: 9 },
+] as const)("keeps a canonical $role row stable through CLI enrichment", ({ role, rawSeq }) => {
+  const metadata = {
+    id: "native-row",
+    seq: 1,
+    transcriptPosition: { source: "canonical-transcript", rawSeq },
+  };
+  const native = { role, content: "Persisted message", __openclaw: metadata };
+  const enriched = {
+    ...native,
+    __openclaw: {
+      ...metadata,
+      importedFrom: "claude-cli",
+      cliSessionId: "external-session",
+      externalId: "provider-row",
+    },
+  };
+  let state = projection([enriched]);
+  state = reduce(state, { type: "messagePersisted", message: native });
+  state = reduce(state, { type: "transportGap" });
+  state = reduce(state, { type: "reconnected" });
+  state = reduce(state, { type: "snapshotLoaded", messages: [enriched] });
+
+  expect(state.messages).toEqual([enriched]);
+  expect(state.hasTransportGap).toBe(false);
+  expect(readSessionProjectionFinalMessageIdentity(enriched)).toBe(
+    readSessionProjectionFinalMessageIdentity(native),
+  );
+});
+
+it.each([
+  ["user", "persisted-run", "conflicting-producer-run"],
+  ["assistant", "producer-run", "producer-run"],
+] as const)(
+  "keeps persisted %s identity and producer-owned run precedence",
+  (role, runId, envelopeRun) => {
+    const id = `${role}-row`;
+    const idempotencyKey = `${runId}:${role}`;
+    const message = (role === "user" ? user : assistant)("persisted", {
+      id,
+      idempotencyKey,
+      seq: 3,
+    });
+    expect(
+      readSessionMessageIdentity(message, {
+        clientRunId: "conflicting-client-run",
+        messageId: "envelope-id",
+        messageSeq: 99,
+        runId: envelopeRun,
+      }),
+    ).toMatchObject({ id, idempotencyKey, role, runId, sequence: 3 });
+  },
+);
+
+it("falls back from an unsafe persisted sequence to the envelope", () => {
+  expect(
+    readSessionMessageIdentity(
+      user("unsafe-sequence", { id: "unsafe-sequence", seq: Number.MAX_SAFE_INTEGER + 1 }),
+      {
+        messageSeq: 5,
+      },
+    ),
+  ).toMatchObject({ id: "unsafe-sequence", role: "user", sequence: 5 });
 });

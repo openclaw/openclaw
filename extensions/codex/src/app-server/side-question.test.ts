@@ -2,6 +2,7 @@ import "./side-question.test-support.js";
 import assert from "node:assert/strict";
 import { Server } from "node:http";
 import path from "node:path";
+import { setImmediate as flushDiagnosticEvents } from "node:timers/promises";
 import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
@@ -244,12 +245,6 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
     throw new Error(`Expected mock call ${index}`);
   }
   return call;
-}
-
-function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
 }
 
 beforeAll(() => setRuntimeConfigSnapshot({}));
@@ -1229,7 +1224,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("forwards side-thread command approvals through the active native hook relay", async () => {
     const turnStarted = createDeferred<void>();
-    const client = createPendingClient();
+    const client = createPendingClient({ policyRelay: true });
     let relayIdDuringFork: string | undefined;
     approveRequest.mockResolvedValueOnce({ decision: "decline" });
     scriptRequests(client, {

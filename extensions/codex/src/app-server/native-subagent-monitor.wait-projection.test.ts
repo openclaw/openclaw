@@ -49,12 +49,15 @@ async function acceptFollowup(client: Client, parentThreadId = "parent-thread") 
     "parent-turn",
     parentThreadId,
   );
-  await client.sendInputOutput({
-    parentThreadId,
-    callId: "submit-b",
-    submissionId: "turn-b",
-  });
+  await client.sendInputOutput({ parentThreadId, callId: "submit-b", submissionId: "turn-b" });
 }
+
+const dependency = (runId = "codex-thread:receiver") => ({ dependencies: [{ runId }] });
+const waiting = (runId?: string) => ({
+  state: "waiting",
+  executionId: "waiter-turn",
+  wait: { kind: "children", ...dependency(runId), pendingCount: 1 },
+});
 
 async function awaitingAdmission(
   options: {
@@ -105,29 +108,17 @@ it.each([
       laterPendingTurn,
     });
     const beforeAdmission = events.at(-1);
-    expect(beforeAdmission?.data).toMatchObject({
-      state: "waiting",
-      executionId: "waiter-turn",
-      wait: {
-        kind: "children",
-        dependencies: [{ runId: "codex-thread:receiver" }],
-        pendingCount: 1,
-      },
-    });
+    expect(beforeAdmission?.data).toMatchObject(waiting());
     await acceptFollowup(client);
     const runId =
       previousStatus === "completed"
         ? "codex-thread:receiver:turn:turn-b"
         : "codex-thread:receiver";
     expect(events.at(-1)?.data).toMatchObject({
-      state: "waiting",
+      ...waiting(runId),
       sourceId: beforeAdmission?.data.sourceId,
-      executionId: "waiter-turn",
-      wait: { kind: "children", dependencies: [{ runId }], pendingCount: 1 },
     });
-    expect(beforeAdmission?.data.wait).toMatchObject({
-      dependencies: [{ runId: "codex-thread:receiver" }],
-    });
+    expect(beforeAdmission?.data.wait).toMatchObject(dependency());
     const admittedEventCount = events.length;
     await endTurn(client, "receiver", "turn-b");
     expect(events).toHaveLength(admittedEventCount);
@@ -205,60 +196,57 @@ it.each([
     const attempts = observeCompletionAttempts();
     const older = olderSettled ? await registerParent(monitor) : undefined;
     const parent = await registerParent(monitor);
-    try {
-      if (older) {
-        older.bindTurn("older-turn");
-      }
-      if (bound) {
-        parent.bindTurn("parent-turn");
-      } else {
-        await client.startTurn("parent-turn", { threadId: "parent-thread" });
-      }
-      const parentEnd = (turnId: string) =>
-        client.completeTurn({
-          threadId: "parent-thread",
-          turnId,
-          status,
-        });
-      if (older) {
-        await parentEnd("older-turn");
-      }
-      await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
-      if (!older) {
-        await parentEnd("parent-turn");
-      }
-      await client.notify(deliveredNativeCompletion());
-      const completeChild = () =>
-        client.finishTurn(
-          "child-turn",
-          agentMessage("child-final", "The build passed.", "final_answer"),
-        );
-      await completeChild();
-      if (!bound) {
-        parent.bindTurn("parent-turn");
-      }
-      await parent.unregister();
-      await older?.unregister();
-      if (!older) {
-        await completeChild();
-      }
-      await attempts.settle();
-      if (older) {
-        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({
-            childSessionId: "child-thread",
-            result: "The build passed.",
-            status: "succeeded",
-          }),
-        );
-      }
-    } finally {
+    onTestFinished(async () => {
       await parent.unregister();
       await older?.unregister();
       await attempts.settle();
       await monitor.dispose();
+    });
+    older?.bindTurn("older-turn");
+    if (bound) {
+      parent.bindTurn("parent-turn");
+    } else {
+      await client.startTurn("parent-turn", { threadId: "parent-thread" });
+    }
+    const parentEnd = (turnId: string) =>
+      client.completeTurn({
+        threadId: "parent-thread",
+        turnId,
+        status,
+      });
+    if (older) {
+      await parentEnd("older-turn");
+    }
+    await notifyChildStarted(client, "parent-thread", "child-thread", "/root/worker");
+    if (!older) {
+      await parentEnd("parent-turn");
+    }
+    await client.notify(deliveredNativeCompletion());
+    const completeChild = () =>
+      client.finishTurn(
+        "child-turn",
+        agentMessage("child-final", "The build passed.", "final_answer"),
+      );
+    await completeChild();
+    if (!bound) {
+      parent.bindTurn("parent-turn");
+    }
+    await parent.unregister();
+    await older?.unregister();
+    if (!older) {
+      await completeChild();
+    }
+    await attempts.settle();
+    if (older) {
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+    } else {
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          childSessionId: "child-thread",
+          result: "The build passed.",
+          status: "succeeded",
+        }),
+      );
     }
   },
 );

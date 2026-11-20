@@ -1,6 +1,5 @@
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createSignal } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -17,7 +16,7 @@ import {
   resetProfileAppearancePrefs,
 } from "../../app/server-prefs-profile.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import type { SessionBackground } from "../../components/session-background.tsx";
+import type { SessionBackground } from "../../components/session-background-host.tsx";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -28,10 +27,6 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
 import { createConfigRouteContext } from "./config-page.test-support.ts";
-import {
-  AppearanceBackground as BackgroundView,
-  type AppearanceBackgroundView as BackgroundViewProps,
-} from "./view-appearance-background.tsx";
 import "../../styles.css";
 import "../../styles/config.css";
 import "../../styles/settings.css";
@@ -45,7 +40,6 @@ beforeEach(() => {
   document.body.append(host);
 });
 afterEach(() => {
-  update = undefined;
   host.remove();
   resetProfileAppearancePrefs();
   vi.restoreAllMocks();
@@ -161,6 +155,7 @@ function activate(range: HTMLInputElement, gesture: "drag" | "Home" | "ArrowRigh
 type Preview = Awaited<ReturnType<typeof mount>>;
 const disabledPlacement = { showOnNewSession: false, showInSessions: false };
 it("holds during a drag, settles 1.2 seconds after release, and keeps focused controls opaque", async () => {
+  host.style.setProperty("--shell-nav-width", "52px");
   const preference = { ...disabledPlacement, presentation: "full-bleed" } as const;
   const { element, range, preview } = await mount(preference);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -190,7 +185,7 @@ it("holds during a drag, settles 1.2 seconds after release, and keeps focused co
   const canvas = host.getBoundingClientRect();
   expect(preview.getBoundingClientRect()).toMatchObject({
     top: canvas.top,
-    left: canvas.left,
+    left: canvas.left + 52,
     width: host.clientWidth,
     height: host.clientHeight,
   });
@@ -285,7 +280,9 @@ it("passes live preferences to the shared renderer without enabling disabled pla
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
-  expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  await waitForSolid(() => {
+    expect(preview.querySelector(".session-background__image")).not.toBeNull();
+  });
   patchSettings({
     background: {
       ...DEFAULT_BACKGROUND_PREFERENCE,
@@ -376,9 +373,7 @@ it("presents background upload failure and retry without losing the selected con
   });
   second.resolve({ status: "ok", asset: null, preference: null });
   await waitForSolid(() => {
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(element.querySelector('[role="alert"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
@@ -421,9 +416,7 @@ it("retires an unresolved upload before admitting the replacement profile's uplo
   chooseBackgroundFile(input);
   await waitForSolid(() => {
     expect(uploads).toBe(2);
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
   abandoned.reject(new Error("Retired upload failure"));
@@ -479,9 +472,7 @@ it("keeps the current profile's upload while its background metadata refresh is 
   expect(element.querySelector('[role="status"]')?.textContent).toContain("Preparing your image");
   replacementUpload.resolve(saved);
   await waitForSolid(() => {
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(upload.disabled).toBe(false);
   });
   replacementMetadata.resolve(saved);
@@ -525,9 +516,7 @@ it("shows invalid background file feedback and clears it when a valid upload sta
   completion.resolve(saved);
   await waitForSolid(() => {
     expect(upload.disabled).toBe(false);
-    expect(element.querySelector('[role="status"]')?.textContent).toContain(
-      "Background image saved.",
-    );
+    expect(element.querySelector('[role="status"]')).toBeNull();
     expect(element.querySelector('[role="alert"]')).toBeNull();
   });
 });
@@ -617,7 +606,7 @@ it("recovers thumbnail errors without waiting for a retired image and revokes th
   first.reject(new Error("Synthetic thumbnail failure"));
   await waitForSolid(() =>
     expect(element.querySelector('[role="alert"]')?.textContent).toContain(
-      "Your background image could not be loaded",
+      "Couldn’t load your background image",
     ),
   );
   element.querySelector<HTMLButtonElement>('[data-background-source="theme"]')!.click();
@@ -656,114 +645,4 @@ it("recovers thumbnail errors without waiting for a retired image and revokes th
     expect(element.querySelector(".settings-background-option__sample img")).toBeNull(),
   );
   expect(revoke).toHaveBeenCalledWith(currentUrl);
-});
-
-let update: ((props: BackgroundViewProps) => void) | undefined;
-const button = (selector: string) => host.querySelector<HTMLButtonElement>(selector)!;
-const buttons = (selector: string) => [...host.querySelectorAll<HTMLButtonElement>(selector)];
-const source = (kind: string) => button(`[data-background-source="${kind}"]`);
-const mode = (kind: string) => button(`[data-test-id="background-presentation-${kind}"]`);
-const backgroundRange = () => host.querySelector<HTMLInputElement>('input[type="range"]')!;
-function renderBackground(
-  overrides: Partial<Omit<BackgroundViewProps, "preference">> = {},
-  preference: Partial<BackgroundPreference> = {},
-) {
-  const props = fixture(overrides, preference);
-  if (!update) {
-    const [current, setCurrent] = createSignal({ ...props });
-    update = setCurrent;
-    mountSolid(() => <BackgroundView {...current()} />, { container: host });
-  } else {
-    update({ ...props });
-  }
-  flush();
-  return props;
-}
-function fixture(
-  overrides: Partial<Omit<BackgroundViewProps, "preference">>,
-  preference: Partial<BackgroundPreference>,
-): BackgroundViewProps {
-  return {
-    preference: { ...DEFAULT_BACKGROUND_PREFERENCE, source: { kind: "theme" }, ...preference },
-    imageUrl: null,
-    hasImage: false,
-    busy: false,
-    uploadAllowed: true,
-    scopeHint: "Personal preference",
-    message: null,
-    onSource: vi.fn(),
-    onChange: vi.fn(),
-    onChooseImage: vi.fn(),
-    onRemoveImage: vi.fn(),
-    onFile: vi.fn(),
-    onPreviewStart: vi.fn(),
-    onPreviewInput: vi.fn(),
-    onPreviewEnd: vi.fn(),
-    onPreviewKey: vi.fn(),
-    onPreviewCancel: vi.fn(),
-    ...overrides,
-  };
-}
-
-describe("Appearance backgrounds", () => {
-  it("explains disabled placement separately from zero visibility", () => {
-    renderBackground({}, disabledPlacement);
-    expect(mode("faded").ariaPressed).toBe("true");
-    expect(host.textContent).toContain("Both pages are off");
-    expect(backgroundRange().disabled).toBe(false);
-    renderBackground({}, { visibility: 0 });
-    expect(host.textContent).toContain("At 0%, the artwork is hidden");
-  });
-
-  it("retains removal access when None is selected without silently deleting the image", () => {
-    const props = renderBackground(
-      { hasImage: true },
-      { source: { kind: "none" }, presentation: "full-bleed" },
-    );
-    expect(source("none").getAttribute("aria-pressed")).toBe("true");
-    const switches = [...host.querySelectorAll<HTMLInputElement>(".settings-toggle__input")];
-    expect(switches).toHaveLength(2);
-    expect(switches.every((input) => input.disabled)).toBe(true);
-    expect(backgroundRange().disabled).toBe(true);
-    expect(
-      buttons('[data-test-id^="background-presentation-"]').every((control) => control.disabled),
-    ).toBe(true);
-    expect(mode("full-bleed").getAttribute("aria-pressed")).toBe("true");
-    expect(host.textContent).toContain("without removing your saved image or choices");
-    expect(props.onRemoveImage).not.toHaveBeenCalled();
-    button("[data-background-remove]").click();
-    expect(props.onRemoveImage).toHaveBeenCalledOnce();
-  });
-
-  it("leaves the plain choices available when custom uploads are unavailable", () => {
-    renderBackground({ uploadAllowed: false });
-    expect([source("none").disabled, source("theme").disabled]).toEqual([false, false]);
-    expect([source("custom").disabled, button("[data-background-upload]").disabled]).toEqual([
-      true,
-      true,
-    ]);
-  });
-
-  it("delivers the chosen file once and clears the input so it can be selected again", () => {
-    const props = renderBackground();
-    const file = new File(["image fixture"], "background.png", { type: "image/png" });
-    const transfer = new DataTransfer();
-    transfer.items.add(file);
-    const input = host.querySelector<HTMLInputElement>("[data-background-file]")!;
-    input.files = transfer.files;
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(props.onFile).toHaveBeenCalledWith(file);
-    expect(input.value).toBe("");
-  });
-
-  it("shows failure text safely and locks conflicting controls during upload", () => {
-    renderBackground({
-      busy: true,
-      hasImage: true,
-      message: { kind: "error", text: "Image <failed>" },
-    });
-    expect(host.querySelector('[role="alert"]')?.textContent).toContain("Image <failed>");
-    expect(host.querySelector("failed")).toBeNull();
-    expect(buttons("button").every((control) => control.disabled)).toBe(true);
-  });
 });

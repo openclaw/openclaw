@@ -1,5 +1,7 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -8,13 +10,13 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import {
   hasActiveStartupMigrationLease,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
 import {
   hasCommandProcessCleanupError,
   ignoreNonCleanupCommandError,
 } from "../../process/exec-result.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils.js";
 import {
@@ -92,11 +94,13 @@ type GatewayRestartWaitOptions = {
   deadlineOutcome?: "throw" | "snapshot";
   phase?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
-  requirePluginHealth?: boolean;
   requireChannelHealth?: boolean;
+  requireOwnedListener?: boolean;
+  allowUnattributedDiagnosticProbe?: boolean;
   /** Diagnostics can report absence immediately; start/restart callers wait for installation. */
   waitForMissingService?: boolean;
   supervisorKeepsAlive?: boolean;
@@ -106,6 +110,7 @@ type GatewayRestartWaitOptions = {
   onProgress?: (phase: string) => void;
   onObservation?: (snapshot: GatewayRestartSnapshot) => void;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function waitForGatewayHealthyRestart(
@@ -115,7 +120,9 @@ export async function waitForGatewayHealthyRestart(
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
 ): Promise<GatewayRestartResult> {
-  const signal = params.deadline?.signal ?? params.signal;
+  // A cancelled scope kills native inspections at spawn. Polling on would only ever read
+  // an unknown service while a healthy Gateway keeps the interrupted command waiting.
+  const signal = resolveCommandProcessSignal(params.deadline?.signal ?? params.signal);
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
       ? params.deadline.read(`${params.phase ?? "health-wait"}:${phase}`, operation)
@@ -147,7 +154,12 @@ export async function waitForGatewayHealthyRestart(
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   // A longer update budget must not make an old heartbeat count as fresh progress.
   const progressWindowMs = attempts * delayMs;
-  const standardDeadlineMs = timeoutMs ?? progressWindowMs;
+  // Doctor restoration uses this owner without supplying lifecycle-specific budgets.
+  const standardDeadlineMs =
+    timeoutMs ??
+    (params.attempts === undefined && process.platform === "win32"
+      ? resolveGatewayStartupTiming().deadlineMs
+      : progressWindowMs);
   // Native inspection shares the readiness deadline, not a network request's cap.
   const inspectionTimeoutMs = () =>
     params.deadline
@@ -176,10 +188,11 @@ export async function waitForGatewayHealthyRestart(
   );
   let migrationActive = false;
   let nextMigrationActivityPollMs = 0;
-  let migrationHeartbeat: number | undefined;
   let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
+  let startupPhasePid: number | undefined;
+  const observedStartupPhases = new Set<string>();
   let startupProgressDeadlineMs = progressWindowMs;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
@@ -192,7 +205,6 @@ export async function waitForGatewayHealthyRestart(
       snapshot.versionMismatch ||
       snapshot.buildIdMismatch ||
       (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) ||
-      (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) ||
       snapshot.staleGatewayPids.length > 0
     ) {
       return "timeout";
@@ -226,10 +238,12 @@ export async function waitForGatewayHealthyRestart(
     const probeContext =
       params.probeContext ??
       (await read("probe-context", () =>
-        resolveGatewayRestartProbeContext(params.env, undefined, signal).catch(() => ({
-          auth: undefined,
-          config: {},
-        })),
+        resolveGatewayRestartProbeContext(params.env, undefined, signal, params.config).catch(
+          () => ({
+            auth: undefined,
+            config: {},
+          }),
+        ),
       ));
     const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
     const probeHosts =
@@ -243,13 +257,15 @@ export async function waitForGatewayHealthyRestart(
 
     for (let attempt = 0; ; attempt += 1) {
       snapshot = await inspectGatewayRestart({
+        assertCurrent: params.assertCurrent,
         service,
         port: params.port,
         env: params.env,
         expectedVersion: params.expectedVersion,
         expectedBuildId: params.expectedBuildId,
-        requirePluginHealth: params.requirePluginHealth,
         requireChannelHealth: params.requireChannelHealth,
+        requireOwnedListener: params.requireOwnedListener,
+        allowUnattributedDiagnosticProbe: params.allowUnattributedDiagnosticProbe,
         probeContext,
         configuredProbe,
         probeHosts,
@@ -307,9 +323,6 @@ export async function waitForGatewayHealthyRestart(
         return withWaitContext(snapshot, "healthy", elapsedMs);
       }
       snapshot.healthy = false;
-      if (params.requirePluginHealth !== false && snapshot.activatedPluginErrors?.length) {
-        return withWaitContext(snapshot, "plugin-errors", elapsedMs);
-      }
       if (params.requireChannelHealth !== false && snapshot.channelProbeErrors?.length) {
         return withWaitContext(snapshot, "channel-errors", elapsedMs);
       }
@@ -430,34 +443,15 @@ export async function waitForGatewayHealthyRestart(
         consecutiveStoppedFreeCount = 0;
       }
 
-      let migrationProgress = false;
-      let migrationCompleted = false;
       if (snapshot.runtime.status !== "running") {
         migrationActive = false;
       } else if (elapsedMs >= nextMigrationActivityPollMs) {
-        const previousHeartbeat = migrationHeartbeat;
-        migrationHeartbeat = undefined;
         try {
           migrationActive = (params.isStartupMigrationActive ?? hasActiveStartupMigrationLease)({
             env: params.env,
-            onActivity: (activity) => {
-              if (
-                activity.pid === undefined ||
-                activity.pid !== snapshot.runtime.pid ||
-                activity.heartbeatAt === null
-              ) {
-                return;
-              }
-              migrationProgress =
-                previousHeartbeat === undefined || activity.heartbeatAt > previousHeartbeat;
-              migrationHeartbeat = activity.heartbeatAt;
-            },
           });
-          migrationCompleted = !migrationActive && previousHeartbeat !== undefined;
         } catch {
           migrationActive = false;
-          migrationProgress = false;
-          migrationHeartbeat = previousHeartbeat;
         }
         nextMigrationActivityPollMs = elapsedMs + STARTUP_MIGRATION_ACTIVITY_POLL_MS;
       }
@@ -483,27 +477,44 @@ export async function waitForGatewayHealthyRestart(
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         );
       const running = snapshot.runtime.status === "running";
+      // Before its listener the replacement has no phase endpoint, so the same service
+      // process still running is its startup signal. Afterwards only new phases from its
+      // own listener renew the watchdog; repeats and a supervisor's next process do not.
+      const preListenerStartup =
+        running &&
+        runtimePid !== undefined &&
+        !observedListener &&
+        snapshot.portUsage.status === "free" &&
+        (startupPhasePid ??= runtimePid) === runtimePid;
+      let phaseProgress = false;
+      if (
+        running &&
+        runtimePid !== undefined &&
+        reportedStartupPhase &&
+        (startupPhasePid === undefined || runtimePid === startupPhasePid) &&
+        allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid)
+      ) {
+        startupPhasePid = runtimePid;
+        phaseProgress = !observedStartupPhases.has(reportedStartupPhase);
+        observedStartupPhases.add(reportedStartupPhase);
+      }
       const startupProgress =
         attempt > 0 &&
-        ((!observedRunning && running) || (!observedListener && ownsListener) || identifiedBoot);
+        ((!observedRunning && running) ||
+          (!observedListener && ownsListener) ||
+          identifiedBoot ||
+          phaseProgress);
       const stableRunning =
         running && (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined);
       if (
         !healthy &&
         stableRunning &&
         (boundedDeadlineMs !== undefined || elapsedMs <= startupProgressDeadlineMs) &&
-        (migrationProgress || migrationCompleted || startupProgress)
+        (startupProgress || preListenerStartup)
       ) {
-        // Include one poll of observation lag after the producer's renewal interval.
         startupProgressDeadlineMs = Math.max(
           startupProgressDeadlineMs,
-          elapsedMs +
-            Math.max(
-              progressWindowMs,
-              migrationProgress
-                ? STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS + STARTUP_MIGRATION_ACTIVITY_POLL_MS
-                : 0,
-            ),
+          elapsedMs + progressWindowMs,
         );
       }
       // Re-observing a service or listener after a failed probe is not new progress.

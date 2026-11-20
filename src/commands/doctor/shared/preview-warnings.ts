@@ -548,6 +548,15 @@ export async function collectDoctorPreviewNotes(params: {
         warnings.push(stalePluginWarnings.join("\n"));
       }
     }
+    const { collectContextEnginePluginIdSelectorWarnings } =
+      await import("./context-engine-plugin-id-selector.js");
+    warnings.push(
+      ...collectContextEnginePluginIdSelectorWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      }),
+    );
   }
 
   const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
@@ -589,7 +598,7 @@ export async function collectDoctorPreviewNotes(params: {
   if (hasChannelConfig) {
     const { createChannelDoctorEmptyAllowlistPolicyHooks } = await import("./channel-doctor.js");
     const { scanEmptyAllowlistPolicyWarnings } = await import("./empty-allowlist-scan.js");
-    const emptyAllowlistHooks = createChannelDoctorEmptyAllowlistPolicyHooks({
+    const emptyAllowlistHooks = await createChannelDoctorEmptyAllowlistPolicyHooks({
       cfg: params.cfg,
       env,
     });
@@ -620,7 +629,7 @@ export async function collectDoctorPreviewNotes(params: {
     const safeBinCoverage = scanExecSafeBinCoverage(params.cfg);
     appendScanWarnings(safeBinCoverage, collectExecSafeBinCoverageWarnings);
 
-    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
+    const safeBinTrustedDirHints = await scanExecSafeBinTrustedDirHints(params.cfg);
     if (safeBinTrustedDirHints.length > 0) {
       warnings.push(collectExecSafeBinTrustedDirHintWarnings(safeBinTrustedDirHints).join("\n"));
     }

@@ -33,44 +33,46 @@ function buildGrant(
 }
 
 describe("buildCliMcpGrantContext", () => {
-  it("snapshots only the resolved logical model into the loopback grant", () => {
-    const selected = {
-      provider: "selected-provider",
-      model: "selected-provider/literal-model",
+  it("snapshots policy and logical model fields without copying private metadata", () => {
+    const elevated = {
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off" as const,
+      fullAccessAvailable: false,
+      privateMetadata: "must not enter the grant",
     };
+    const selected = { provider: "selected-provider", model: "selected-provider/literal-model" };
     const requesterModel = { ...selected, nativeModelId: "native-model[1m]" };
-    const grant = buildGrant({ requesterModel });
-    requesterModel.model = "later-model";
-
-    expect(grant.requesterModel).toEqual(selected);
-    expect(buildGrant()).not.toHaveProperty("requesterModel");
-  });
-
-  it("binds screen commands to the requesting browser in the server-owned grant", () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
-    expect(buildGrant({ gatewayUiCommandTarget }).gatewayUiCommandTarget).toEqual(
-      gatewayUiCommandTarget,
-    );
-  });
-
-  it("carries the exact read-only session permission into the loopback grant", () => {
-    const permission = { permissionMode: "read-only", execHost: "gateway" } as const;
-    expect(buildGrant({ sessionEntry: { ...session, ...permission } })).toMatchObject({
-      execSession: permission,
+    const grant = buildGrant({ bashElevated: elevated, requesterModel, gatewayUiCommandTarget });
+    elevated.enabled = true;
+    requesterModel.model = "later-model";
+    expect(grant.requesterModel).toEqual(selected);
+    expect(grant.gatewayUiCommandTarget).toEqual(gatewayUiCommandTarget);
+    expect(grant.bashElevated).toEqual({
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
     });
+    expect(
+      buildGrant({ bashElevated: { ...elevated, fullAccessAvailable: undefined } }).bashElevated,
+    ).not.toHaveProperty("fullAccessAvailable");
   });
 
   it.each([
+    ["read-only", undefined, "read-only"],
     ["workspace", "full", "full"],
     ["full", "allowlist", "guarded"],
   ] as const)(
     "maps persisted %s with execution override %s to %s permission",
     (persisted, mode, permissionMode) => {
       const grant = buildGrant({
-        sessionEntry: { ...session, permissionMode: persisted },
-        execOverrides: { mode },
+        sessionEntry: { ...session, permissionMode: persisted, execHost: "gateway" },
+        execOverrides: mode ? { mode } : undefined,
       });
-      expect(grant).toMatchObject({ execSession: { permissionMode }, execOverrides: { mode } });
+      expect(grant.execSession).toMatchObject({ permissionMode, execHost: "gateway" });
+      expect(grant.execOverrides).toEqual(mode ? { mode } : undefined);
     },
   );
 
@@ -88,31 +90,28 @@ describe("buildCliMcpGrantContext", () => {
     { cliToolAvailability: undefined },
     { cliToolAvailability: { native: [], openClaw: ["message", "read"] } },
   ])("does not stamp source-only authority for %j", (overrides) => {
-    expect(buildGrant(overrides).sourceReplyOnly).toBeUndefined();
+    const grant = buildGrant(overrides);
+    expect(grant.sourceReplyOnly).toBeUndefined();
+    expect(grant).not.toHaveProperty("inputProvenance");
   });
   it.each(["report_only", "host_only"] as const)("retains %s in the minted grant", (capability) => {
     expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });
 
-  it.each([
-    [{ kind: "internal_system", sourceTool: "exec", runId: "owner-run" }, true],
-    [{ kind: "external_user" }, false],
-    [{ kind: "inter_session", sourceTool: "sessions_send" }, false],
-  ] as const)(
-    "carries policy-neutral internal provenance %j for plugin tools",
-    (input, carried) => {
-      const grant = buildGrant({ inputProvenance: input });
-      if (carried) {
-        expect(grant.inputProvenance).toEqual(input);
-      } else {
-        expect(grant).not.toHaveProperty("inputProvenance");
-      }
-    },
-  );
+  it("carries policy-neutral internal provenance for plugin tools", () => {
+    const inputProvenance = {
+      kind: "internal_system",
+      sourceTool: "exec",
+      runId: "owner-run",
+    } as const;
+    expect(buildGrant({ inputProvenance }).inputProvenance).toEqual(inputProvenance);
+  });
 
   it("leaves the grant shape untouched for ordinary runs", () => {
-    // Full authority must not add a key to ordinary grant contexts.
-    expect(buildGrant()).not.toHaveProperty("delegationCapability");
+    const grant = buildGrant();
+    for (const field of ["delegationCapability", "bashElevated", "requesterModel"]) {
+      expect(grant).not.toHaveProperty(field);
+    }
     expect(buildGrant({}, "full")).not.toHaveProperty("delegationCapability");
   });
 });

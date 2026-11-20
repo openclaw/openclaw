@@ -144,6 +144,11 @@ openclaw migrate apply claude --json --yes
 
 ## Troubleshooting
 
+Source text must be an ordinary file. Optional unreadable settings are skipped;
+instructions and commands that become special files are refused before changing
+destinations or creating backups. Restore an ordinary source file and retry.
+Symlinks to ordinary source files remain supported.
+
 <AccordionGroup>
   <Accordion title="A Claude configuration file is not valid UTF-8">
     Migration stops before importing when a Claude JSON source contains invalid UTF-8 bytes. Re-save or re-encode the file named in the error as UTF-8, then retry. The source file and existing OpenClaw config remain unchanged. Valid Unicode, including a literal replacement character (`�`), is preserved.

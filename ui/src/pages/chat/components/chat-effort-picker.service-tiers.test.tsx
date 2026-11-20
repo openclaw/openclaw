@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "../../../api/types.ts";
 import { resolveChatFastModeSelectState } from "../../../lib/chat/model-select-state.ts";
 import { resolveChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatEffortPicker } from "./chat-effort-picker.tsx";
 
 const host = document.createElement("div");
@@ -12,12 +12,14 @@ beforeEach(() => {
   document.body.append(host);
   onTestFinished(() => host.remove());
 });
-function openPicker() {
+async function openPicker() {
   summary().click();
-  flush();
+  await waitForSolid(() =>
+    expect(host.querySelector(".chat-controls__effort-menu")).not.toBeNull(),
+  );
 }
 
-it("keeps Ultrafast selectable while showing and clearing a provider downgrade", () => {
+it("keeps Ultrafast selectable while showing and clearing a provider downgrade", async () => {
   const onFastModeSelect = vi.fn(async () => undefined);
   const model: ModelCatalogEntry = {
     id: "model",
@@ -61,32 +63,39 @@ it("keeps Ultrafast selectable while showing and clearing a provider downgrade",
     return host.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
   };
   const observation = { requestedTier: "ultrafast", responseTier: "priority" };
-  openPicker();
+  await openPicker();
   const ultrafast = show("ultrafast", [observation]);
   expect([ultrafast.disabled, ultrafast.getAttribute("aria-checked")]).toEqual([false, "true"]);
-  expect(summary().title).toContain("Ultrafast requested, currently served as priority");
+  expect(summary().title).toContain("Running at priority. Ultrafast isn’t available right now.");
 
   show("ultrafast", [{ requestedTier: "ultrafast" }]);
-  expect(summary().title).toContain("Ultrafast requested, currently unavailable");
+  expect(summary().title).toContain("Ultrafast isn’t available right now.");
 
   show(true, [observation]).click();
   expect(onFastModeSelect).toHaveBeenCalledWith("ultrafast", "tier-observation");
-  expect(summary().title).not.toContain("requested");
+  expect(summary().title).not.toContain("available right now");
 
   const independent = [
     { requestedTier: "priority", responseTier: "fast" },
     { requestedTier: "ultrafast", responseTier: "fast" },
   ];
   show(true, independent);
-  expect(summary().title).toContain("Fast requested, currently served as fast");
+  expect(summary().title).toContain("Running at fast. Fast isn’t available right now.");
   show("ultrafast", independent);
-  expect(summary().title).toContain("Ultrafast requested, currently served as fast");
+  expect(summary().title).toContain("Running at fast. Ultrafast isn’t available right now.");
 
   expect(show("ultrafast").getAttribute("aria-checked")).toBe("true");
   expect(summary().title).toBe("Speed: Ultrafast");
 });
 
-it("keeps an uncommitted reasoning preview when other picker props refresh", () => {
+it("keeps an uncommitted reasoning preview when other picker props refresh", async () => {
+  // jsdom has no Web Animations API; the browser suite owns motion proof.
+  const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+  Object.defineProperty(media, "matches", { value: true });
+  vi.spyOn(window, "matchMedia").mockReturnValue(media);
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  });
   const onThinkingSelect = vi.fn(async () => undefined);
   const options = (active: boolean): Parameters<typeof ChatEffortPicker>[0] => ({
     disabled: false,
@@ -114,7 +123,7 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     onThinkingSelect,
   });
   const view = mountSolid(ChatEffortPicker, options(false), host);
-  openPicker();
+  await openPicker();
   const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
   slider.value = "2";
   slider.dispatchEvent(new Event("input", { bubbles: true }));

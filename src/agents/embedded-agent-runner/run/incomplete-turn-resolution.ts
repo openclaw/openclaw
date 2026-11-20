@@ -1,5 +1,6 @@
 import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import {
   hasAcceptedSessionSpawn,
@@ -24,7 +25,7 @@ import {
   hasCommittedMessagingToolDeliveryEvidence,
   resolveSourceReplyDelivery,
 } from "../delivery-evidence.js";
-import type { EmbeddedRunLivenessState } from "../types.js";
+import type { EmbeddedAgentRunResult, EmbeddedRunLivenessState } from "../types.js";
 import {
   hasAsyncActivity,
   hasAttemptTerminalState,
@@ -32,6 +33,7 @@ import {
 } from "./attempt-terminal-evidence.js";
 import {
   classifyAssistantTurn,
+  countSettledTurnDeliveryPayloads,
   isIncompleteTerminalAssistantTurn,
   joinAssistantTexts,
   type IncompleteTurnAttempt,
@@ -43,10 +45,11 @@ type RunLivenessAttempt = Pick<
   "currentAttemptAssistant" | "currentAttemptCompletedAssistant" | "replayMetadata" | "terminal"
 >;
 
-type TerminalAuthFailureContext = {
+type TerminalFailureContext = {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider: string;
   runParams: Pick<Parameters<typeof buildProviderAuthRecoveryHint>[0], "config" | "workspaceDir">;
+  prepared: { payloadsForVisibleCompletion: EmbeddedAgentRunResult["payloads"] };
 };
 
 /**
@@ -62,10 +65,20 @@ export function resolveIncompleteTurnPayloadText(params: {
   timedOut: boolean;
   hadPotentialSideEffects?: boolean;
   hasIntentionalTerminalCompletion?: boolean;
-  terminalAuthFailure?: TerminalAuthFailureContext;
+  terminalFailure?: TerminalFailureContext;
   attempt: IncompleteTurnAttempt;
 }): string | null {
-  const assistantState = classifyAssistantTurn(params);
+  // A generated warning reports a failed tool; it is not the answer that consumes
+  // the failure. Keep its prepared detail when the terminal owner records failure.
+  const payloads = params.terminalFailure?.prepared.payloadsForVisibleCompletion;
+  const toolFailurePayload =
+    params.attempt.terminal.kind === "ok" && params.attempt.lastToolError
+      ? payloads?.find((payload) => getReplyPayloadMetadata(payload)?.toolErrorWarning)
+      : undefined;
+  const payloadCount = toolFailurePayload
+    ? countSettledTurnDeliveryPayloads({ payloads, attempt: params.attempt })
+    : params.payloadCount;
+  const assistantState = classifyAssistantTurn({ ...params, payloadCount });
   const textToolCallAttempt = params.attempt.textToolCallAttempt === true;
   const assistant = assistantState.assistant;
   const completionAttempt = {
@@ -80,7 +93,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   // nothing. A length stop that did produce visible text is a partial answer and
   // is delivered with a truncation notice instead. (#76477)
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
-    hasAssistantVisibleText: params.payloadCount > 0,
+    hasAssistantVisibleText: payloadCount > 0,
     hasTerminalOutput,
     lastAssistant: assistant,
   });
@@ -88,17 +101,17 @@ export function resolveIncompleteTurnPayloadText(params: {
   // content; bypass the visible-text guard when thinking was the only output
   // so that incomplete-turn stall detection fires below. (#89787, #91953)
   const thinkingOnlyTerminal =
-    params.payloadCount !== 0 &&
+    payloadCount !== 0 &&
     params.attempt.keptAnswer === undefined &&
     !assistantState.visibleText.length &&
     !assistant?.openclawDelivery?.tts?.text?.trim() &&
     !hasTerminalOutput &&
     Boolean(assistant && hasOnlyAssistantReasoningContent(assistant));
   const presentationHiddenAssistantReply =
-    (params.rawPayloadCount ?? params.payloadCount) > params.payloadCount;
+    (params.rawPayloadCount ?? params.payloadCount) > payloadCount;
 
   if (
-    (params.payloadCount !== 0 &&
+    (payloadCount !== 0 &&
       !incompleteTerminalAssistant &&
       !thinkingOnlyTerminal &&
       !textToolCallAttempt) ||
@@ -107,7 +120,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     params.attempt.clientToolCalls ||
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
-    params.attempt.lastToolError ||
+    (toolFailurePayload && hasTerminalOutput) ||
+    (params.attempt.lastToolError && !toolFailurePayload) ||
     params.hasIntentionalTerminalCompletion ||
     params.attempt.hasToolMediaBlockReply ||
     resolveSourceReplyDelivery(completionAttempt) !== "missing" ||
@@ -149,6 +163,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
+  if (toolFailurePayload?.text) {
+    return toolFailurePayload.text;
+  }
+
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
   if (
     !promptError &&
@@ -160,7 +178,11 @@ export function resolveIncompleteTurnPayloadText(params: {
   const preflightFailureText = renderAgentHarnessPreflightUserMessage(promptError);
   const failureFacts =
     promptError && preflightFailureText === undefined
-      ? resolveReplyFailoverFacts(promptError, formatErrorMessage(promptError))
+      ? resolveReplyFailoverFacts(
+          promptError,
+          formatErrorMessage(promptError),
+          params.terminalFailure?.runParams.config,
+        )
       : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
   // Share classified copy with thrown failures; never display raw prompt diagnostics.
@@ -168,8 +190,8 @@ export function resolveIncompleteTurnPayloadText(params: {
     textToolCallFailureText ??
     preflightFailureText ??
     (failureFacts
-      ? (failureFacts.providerRequestError?.userMessage ??
-        failureFacts.requestFailureText ??
+      ? (failureFacts.requestFailureText ??
+        failureFacts.providerRequestError?.userMessage ??
         renderAssistantRequestFailureCopy({
           reason: failureFacts.reason,
           status: failureFacts.status,
@@ -188,9 +210,11 @@ export function resolveIncompleteTurnPayloadText(params: {
     return preflightFailureText;
   }
   if (assistant && isProviderRefusalAssistantError(assistant)) {
-    return formatUserFacingAssistantErrorText(assistant);
+    return formatUserFacingAssistantErrorText(assistant, {
+      cfg: params.terminalFailure?.runParams.config,
+    });
   }
-  const authFailure = params.terminalAuthFailure;
+  const authFailure = params.terminalFailure;
   const reason = authFailure?.assistantProfileFailureReason;
   if (authFailure && (reason === "auth" || reason === "auth_permanent")) {
     return renderAuthProfileFailoverCopy({
@@ -257,6 +281,7 @@ interface YieldContinuationAttempt {
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
   toolMetas?: readonly { asyncStarted?: boolean }[];
+  yieldAcknowledgment?: string;
 }
 
 /** Same-attempt work that can resume execution or deliver its completion. */
@@ -273,9 +298,13 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
   );
 }
 
-/** A deliberate yield can also leave accepted work or already-sent output. */
+/**
+ * A deliberate yield can also leave accepted work or already-sent output. A waiting
+ * acknowledgment is kept only for an armed completion, so that wake is its continuation.
+ */
 export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
   return (
+    Boolean(attempt.yieldAcknowledgment?.trim()) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     (attempt.successfulCronAdds ?? 0) > 0 ||

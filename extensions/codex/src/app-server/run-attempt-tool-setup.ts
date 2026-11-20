@@ -10,6 +10,7 @@ import {
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
 import type { CodexComputerContextEpoch } from "./computer-context.js";
 import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
@@ -18,6 +19,7 @@ import {
   resolveCodexMessageToolProvider,
   shouldWarnCodexDynamicToolBuildStageSummary,
 } from "./dynamic-tool-build.js";
+import { resolveGatewayOnlySkillDirs } from "./dynamic-tool-content.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
@@ -28,10 +30,12 @@ import {
 } from "./dynamic-tools.js";
 import { buildCodexHookRequester } from "./hook-requester.js";
 import type { NativePendingChild } from "./native-subagent-monitor-types.js";
-import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
+import {
+  hasCodexNativeToolCatalog,
+  loadCodexAttemptNativeToolCatalog,
+} from "./native-tool-catalog.js";
 import { CodexCompactionPlanState } from "./plan-compaction-state.js";
 import { requestPluginApprovalOutcome } from "./plugin-approval-roundtrip.js";
-import type { CodexDynamicToolSpec } from "./protocol.js";
 import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent, runCodexCleanupStep } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
@@ -259,34 +263,34 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
         }
       : {}),
   };
-  let nativeSpecs: CodexDynamicToolSpec[] | undefined;
-  if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
-    runAbortController.signal.throwIfAborted();
-    connection.assertCurrent();
-    const client = await connection.attemptClientFactory({
-      assertCurrent: connection.assertLegacyCurrent,
-      startOptions: connection.appServer.start,
-      authProfileId: connection.startupClientAuthProfileId,
-      agentDir,
-      config: params.config,
-      timeoutMs: connection.appServer.requestTimeoutMs,
-    });
-    try {
-      nativeSpecs = await loadCodexNativeToolCatalog({
-        client,
-        authority: connection.authority,
-        binding: mutable.startupBinding,
-        appServer: connection.appServer,
+  const nativeSpecs = await loadCodexAttemptNativeToolCatalog({
+    binding: mutable.startupBinding,
+    ephemeral: isIncognitoSessionKey(params.sessionKey),
+    authority: connection.authority,
+    appServer: connection.appServer,
+    agentDir,
+    signal: runAbortController.signal,
+    acquireClient: () =>
+      connection.attemptClientFactory({
+        assertCurrent: connection.assertLegacyCurrent,
+        startOptions: connection.appServer.start,
+        authProfileId: connection.startupClientAuthProfileId,
+        authRequirement: connection.startupAuthRequirement,
         agentDir,
-        assertCurrent: () => {
-          runAbortController.signal.throwIfAborted();
-          connection.assertCurrent();
-        },
-      });
-    } finally {
-      await releaseCodexProbeClient(client, connection.attemptClientFactory);
-    }
-  }
+        config: params.config,
+        timeoutMs: connection.appServer.requestTimeoutMs,
+      }),
+    releaseClient: (client) =>
+      releaseCodexProbeClient(
+        client,
+        connection.attemptClientFactory,
+        connection.callerOwnedAttemptClient,
+      ),
+    assertCurrent: () => {
+      runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
+  });
   let requireExplicitMessageTarget: boolean | undefined;
   let configuredMcp: Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>> | undefined;
   let scopedMcpTools: Awaited<ReturnType<typeof materializeRequesterScopedMcpToolsForHarnessRun>>;
@@ -367,6 +371,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       senderIsOwner: params.senderIsOwner,
       modelProvider: params.provider,
       modelId: params.modelId,
+      modelAuthProfileId: params.authProfileId,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       modelHasVision: params.model.input?.includes("image") ?? false,
@@ -419,6 +424,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       agentDir: policyContext.agentDir,
       cfg: params.config,
       manifestRegistry: bundleManifestRegistry,
+      metadata: params.preparedModelRuntime?.metadataSnapshot,
+      isTurnTainted: params.isTurnTainted,
       toolsAllow: params.toolsAllow,
       toolOverrides: codexMcpToolOverrides,
       autoApproveCodexAppServerApprovals: shouldAutoApproveCodexAppServerApprovals(
@@ -490,6 +497,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       contextWindowTokens: params.contextTokenBudget ?? params.model.contextWindow,
       workspaceDir: effectiveWorkspace,
       remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
+      gatewayOnlySkillDirs: resolveGatewayOnlySkillDirs(
+        [
+          ...(runtimeParams.skillsSnapshot?.resolvedSkills ?? []),
+          ...(runtimeParams.skillsSnapshot?.discoverySkills ?? []),
+        ],
+        connection.appServer.remoteWorkspaceRoot,
+      ),
       remoteWorkspaceRequestTimeoutMs: connection.appServer.requestTimeoutMs,
       sessionId: params.sessionId,
       sessionKey: contextSessionKey,
@@ -521,6 +535,8 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       tools: toolsWithScopedMcp,
       registeredTools: registeredWithScopedMcp,
       registeredSpecs: nativeSpecs,
+      requireExactRegisteredDefinitions:
+        nativeSpecs !== undefined && !hasCodexNativeToolCatalog(mutable.startupBinding),
       signal: runAbortController.signal,
       computerContextEpoch,
       functionToolsOnly: isCodexResponsesOAuth(connection.startupPreparedAuth),

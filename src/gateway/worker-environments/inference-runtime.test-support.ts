@@ -30,6 +30,7 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import type { WorkerInferenceExecutionParams } from "./inference-runtime.js";
 import { executeWorkerInference } from "./inference.js";
 import * as workerTurnOwners from "./placement-turn-claim-events.js";
@@ -54,9 +55,9 @@ afterEach(() => {
 
 export const PROVIDER = "openai";
 export const MODEL = "gpt-5.4";
-export const ALIAS = "fast";
-export const BASE_URL = "https://chatgpt.com/backend-api";
-export const ENDPOINT = `${BASE_URL}/codex`;
+const ALIAS = "fast";
+const BASE_URL = "https://chatgpt.com/backend-api";
+
 export const PROFILE = ["gateway", "profile"].join("-");
 export const AUTH_MARKER = ["gateway", "profile", "value"].join("-");
 export const SESSION_ID = "session-runtime-test";
@@ -67,7 +68,7 @@ const sessionTarget: BoundAgentRunSessionTarget = {
   sessionKey: SESSION_KEY,
   storePath: "runtime-sessions.json",
 };
-export const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "lookup", arguments: {} };
+const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "lookup", arguments: {} };
 const WORKSPACE_BASE = "/gateway-workspace";
 export const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
 
@@ -95,25 +96,20 @@ export const sessionEntry: SessionEntry = {
   authProfileOverride: PROFILE,
   authProfileOverrideSource: "user",
 };
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment-runtime-test",
+const turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
+  sessionId: SESSION_ID,
+  claimId: "claim-runtime-test",
+  runId: "run-runtime-test",
+  placementGeneration: 4,
+  owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
+};
+const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
   credentialHash: ["credential", "hash", "runtime", "test"].join("-"),
   bundleHash: "bundle-hash-runtime-test",
-  sessionId: SESSION_ID,
-  runId: "run-runtime-test",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-runtime-test",
-    runId: "run-runtime-test",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
-  },
-  ownerEpoch: 3,
-  rpcSetVersion: 1,
   protocolFeatures: ["worker-inference-v1"],
   credentialExpiresAtMs: 100_000,
-};
-export const usage: Usage = {
+});
+const usage: Usage = {
   input: 11,
   output: 7,
   cacheRead: 3,
@@ -177,7 +173,7 @@ export function finalMessage(): AssistantMessage {
   };
 }
 
-export function providerStream(message = finalMessage(), options: { omitToolEnd?: boolean } = {}) {
+function providerStream(message = finalMessage(), options: { omitToolEnd?: boolean } = {}) {
   const stream = createAssistantMessageEventStream();
   const fragmented = {
     ...message,
@@ -312,6 +308,7 @@ export function setup(
         pluginMetadataSnapshot: leased.metadataSnapshot,
         pluginRegistry: leased.pluginRegistry,
       },
+      run: <T>(run: () => T): T => run(),
       [Symbol.asyncDispose]: releaseRuntime,
     };
   });

@@ -77,49 +77,28 @@ it.skipIf(process.platform === "win32").each([0o000, 0o077])(
     });
   },
 );
-it.each(["9007199254740992", "-9007199254740992"])(
-  "reads released numeric receipts and preserves full-width ID %s",
-  (ino) => {
-    const legacy = readReceipt(fileState, fileState);
-    expect(legacy).toMatchObject({ dev: 7, ino: 42 });
-    expect(matchesPublication({ ...legacy, dev: "7", ino: "42" }, legacy)).toBe(true);
-
-    const exact = readReceipt({ ...fileState, ino }, fileState);
-    for (const field of ["mtimeMs", "ctimeMs"] as const) {
-      const settled = { ...exact, [field]: exact[field] + 10 };
-      expect([matchesPublication(settled, exact), matchesState(settled, exact)]).toEqual([
-        true,
-        false,
-      ]);
-    }
-    expect(matchesPublication({ ...exact, sha256: "b".repeat(64) }, exact)).toBe(false);
-    expect(matchesPublication({ ...exact, ino: (BigInt(ino) + 1n).toString() }, exact)).toBe(false);
-  },
-);
-
 it.each([
-  { field: "ino", exactId: "9007199254740992", legacyId: 9007199254740992 },
-  { field: "ino", exactId: "-9223372036854775808", legacyId: 9223372036854775808 },
-  { field: "dev", exactId: "-9223372036854775808", legacyId: 9223372036854775808 },
+  ["ino", "42", 42, false],
+  ["ino", "9007199254740992", 9007199254740992, true],
+  ["ino", "-9223372036854775808", 9223372036854775808, true],
+  ["dev", "-9223372036854775808", 9223372036854775808, true],
 ] as const)(
-  "distinguishes rounded legacy from exact $field=$exactId receipts",
-  ({ field, exactId, legacyId }) => {
-    const state = {
-      ...fileState,
-      dev: "7",
-      ino: "42",
-      [field]: exactId,
-    };
+  "distinguishes rounded legacy from exact %s=%s receipts",
+  (field, exactId, legacyId, rounded) => {
+    const state = readReceipt({ ...fileState, dev: "7", ino: "42", [field]: exactId }, fileState);
     const legacy = readReceipt({ ...fileState, [field]: legacyId });
     expect(legacy[field]).toBe(legacyId);
     expect(matchesPublication(state, legacy)).toBe(true);
     expect(matchesPublication({ ...state, [field]: legacyId }, legacy)).toBe(true);
     expect(matchesPublication(state, state)).toBe(true);
-    const replacedId = BigInt(exactId) + 1n;
-    const replaced = { ...state, [field]: replacedId.toString() };
-    expect([matchesPublication(replaced, legacy), matchesPublication(replaced, state)]).toEqual([
-      true,
-      false,
-    ]);
+    const replaced = { ...state, [field]: (BigInt(exactId) + 1n).toString() };
+    expect(matchesPublication(replaced, legacy)).toBe(rounded);
+    expect(matchesPublication(replaced, state)).toBe(false);
+    for (const timestamp of ["mtimeMs", "ctimeMs"] as const) {
+      const settled = { ...state, [timestamp]: state[timestamp] + 10 };
+      expect(matchesPublication(settled, state)).toBe(true);
+      expect(matchesState(settled, state)).toBe(false);
+    }
+    expect(matchesPublication({ ...state, sha256: "b".repeat(64) }, state)).toBe(false);
   },
 );

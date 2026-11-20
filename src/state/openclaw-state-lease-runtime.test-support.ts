@@ -1,18 +1,28 @@
+import { createTestEntrypoint } from "../infra/runtime-entrypoint.test-support.ts";
+
+const entrypoint = createTestEntrypoint(import.meta.url, "state");
+
 // Compile once per test invocation so process-exit proof uses packaged worker startup.
-export const stateLeaseProcessExitRuntimeEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "openclaw-state-lease-process-exit-child.test-support",
-  distWorkerPath: "state/openclaw-state-lease-process-exit-child.test-support.js",
-} as const;
+export const stateLeaseProcessExitRuntimeEntrypoint = entrypoint(
+  "openclaw-state-lease-process-exit-child.test-support",
+);
 
-export const stateLeaseRetentionRuntimeEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "openclaw-state-lease.retention.test-support",
-  distWorkerPath: "state/openclaw-state-lease.retention.test-support.js",
-} as const;
+export const stateLeaseRetentionRuntimeEntrypoint = entrypoint(
+  "openclaw-state-lease.retention.test-support",
+);
 
-export const agentDatabaseHeldRuntimeEntrypoint = {
-  currentModuleUrl: import.meta.url,
-  sourceWorkerName: "openclaw-agent-db-held-child.test-support",
-  distWorkerPath: "state/openclaw-agent-db-held-child.test-support.js",
-} as const;
+export const agentDatabaseHeldRuntimeEntrypoint = entrypoint(
+  "openclaw-agent-db-held-child.test-support",
+);
+
+export const agentDeletionRecoveryHoldPostgresRuntimeEntrypoint = entrypoint(
+  "agent-deletion-recovery-hold.postgres.test-support",
+);
+
+export const cronOwnerInspectionPostgresRuntimeEntrypoint = entrypoint(
+  "cron-owner-inspection.postgres.test-support",
+);
+
+export const stateLeasePostgresRuntimeEntrypoint = entrypoint(
+  "openclaw-state-lease.postgres.test-support",
+);

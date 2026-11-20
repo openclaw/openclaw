@@ -160,4 +160,5 @@ function onMessage({ data }: MessageEvent<VideoCompressionRequest>) {
   void compress(data).catch(() => reply({ type: "error", reason: "failed" }));
 }
 
+// The dedicated worker accepts one job; onMessage detaches before encoding it.
 globalThis.addEventListener("message", onMessage);

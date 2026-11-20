@@ -17,7 +17,6 @@ title: "Gateway architecture"
 - One Gateway per host. It is the only place that opens a WhatsApp session.
 - The **hosted widget surface** is served by the Gateway HTTP server under:
   - `/__openclaw__/canvas/` (hosted widget documents)
-  - `/__openclaw__/a2ui/` (A2UI renderer assets)
 
   It uses the same port as the Gateway (default `18789`).
 

@@ -151,23 +151,27 @@ it.each(["resolve", "reject"])(
   },
 );
 
-it("does not advertise a retained terminal after it is detached", async () => {
+it("advertises a cold shell terminal only once its command owner is ready", async () => {
   const { root, runtime } = fixture();
   const workspace = element();
   const terminal = Object.assign(element(), { available: true, updateComplete: Promise.resolve() });
+  let activationReady = false;
   const shell: SolidReadinessShell = {
     element: element("section"),
     shellElement: workspace,
     readiness: undefined,
     activeSessionKey: "agent:main:main",
+    workspaceChromeVisible: false,
     navigationSidebar: Object.assign(element("nav"), { navigationVisible: false }),
     routeOutlet: Object.assign(element(), {
       presentationSettled: true,
       settlePresentation: async () => true,
     }),
     terminalPanel: terminal,
+    get terminalActivationReady() {
+      return activationReady;
+    },
   };
-  workspace.append(terminal);
   shell.element.append(workspace);
   root.append(shell.element);
   document.body.append(root);
@@ -182,12 +186,8 @@ it("does not advertise a retained terminal after it is detached", async () => {
   }));
   onTestFinished(() => owner.disconnect());
   try {
-    for (const [available, change] of [
-      [true, () => {}],
-      [false, () => terminal.remove()],
-      [true, () => workspace.append(terminal)],
-    ] as const) {
-      change();
+    for (const available of [false, true, false]) {
+      activationReady = available;
       owner.commitRoot();
       const expected = { routeReady: true, terminalActivationReady: available };
       await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject(expected));
@@ -196,4 +196,56 @@ it("does not advertise a retained terminal after it is detached", async () => {
     dispose();
     root.remove();
   }
+});
+
+it("waits for a visible lazy sidebar to connect, without blocking hidden navigation", async () => {
+  const { root, runtime } = fixture();
+  const workspace = element();
+  const drawer = element();
+  const sidebar = Object.assign(element("nav"), { navigationVisible: true });
+  const shell: SolidReadinessShell = {
+    element: element("section"),
+    shellElement: workspace,
+    navDrawerElement: drawer,
+    workspaceChromeVisible: true,
+    readiness: undefined,
+    activeSessionKey: "agent:main:main",
+    navigationSidebar: sidebar,
+    routeOutlet: Object.assign(element(), {
+      presentationSettled: true,
+      settlePresentation: async () => true,
+    }),
+  };
+  workspace.append(drawer);
+  shell.element.append(workspace);
+  root.append(shell.element);
+  document.body.append(root);
+  const get = customElements.get.bind(customElements);
+  vi.spyOn(customElements, "get").mockImplementation((name) =>
+    name === "openclaw-app-sidebar" ? HTMLElement : get(name),
+  );
+  const { owner, dispose } = createRoot((disposeRoot) => ({
+    dispose: disposeRoot,
+    owner: createSolidControlUiReadiness(
+      root,
+      runtime,
+      () => {},
+      () => ({ shell }),
+    ),
+  }));
+  onTestFinished(() => {
+    owner.disconnect();
+    dispose();
+    root.remove();
+    vi.restoreAllMocks();
+  });
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: false }));
+  drawer.append(sidebar);
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
+  sidebar.remove();
+  sidebar.navigationVisible = false;
+  owner.commitRoot();
+  await waitForSolid(() => expect(owner.hook.snapshot()).toMatchObject({ routeReady: true }));
 });

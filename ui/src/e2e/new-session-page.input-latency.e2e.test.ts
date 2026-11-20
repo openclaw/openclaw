@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -34,18 +35,13 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "new");
       const modelTrigger = page.locator("[data-chat-model-select]");
       await modelTrigger.click();
-      await page.locator('[data-chat-model-option="fixture/model-1999"]').waitFor({
+      await page.locator('[data-chat-model-option="openai/gpt-5.5"]').waitFor({
         state: "attached",
       });
       await modelTrigger.click();
       const input = page.locator(".new-session-page__message");
       await input.fill("Warmup ");
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await twoFrames(page);
       const sessionKey = "agent:main:dashboard:typing-0";
       const sidebarRow = page.locator(`aside.sidebar [data-session-key="${sessionKey}"]`).first();
       await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");
@@ -53,7 +49,10 @@ suite.define(() => {
       const observation = await page.evaluateHandle(() => {
         let catalogLabelReads = 0;
         const textarea = document.querySelector(".new-session-page__message");
-        const modelOption = document.querySelector('[data-chat-model-option="fixture/model-1999"]');
+        const modelOption = document.querySelector('[data-chat-model-option="openai/gpt-5.5"]');
+        if (!modelOption || !textarea) {
+          throw new Error("Expected the selected model row and composer to remain mounted");
+        }
         // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the original receiver.
         const original = String.prototype.toLocaleLowerCase;
         // Count preparation even when Solid suppresses identical DOM writes.
@@ -72,8 +71,7 @@ suite.define(() => {
             catalogLabelReads,
             sameTextarea: textarea === document.querySelector(".new-session-page__message"),
             sameModelOption:
-              modelOption ===
-              document.querySelector('[data-chat-model-option="fixture/model-1999"]'),
+              modelOption === document.querySelector('[data-chat-model-option="openai/gpt-5.5"]'),
           };
         };
       });

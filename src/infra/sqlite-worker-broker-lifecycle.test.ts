@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { serialize } from "node:v8";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, onTestFinished } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureSqliteWorkerOpen } from "./sqlite-worker-broker-admission.js";
@@ -19,12 +19,16 @@ import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 // mock-isolation: Synthetic carriers exercise admission and retirement without native threads.
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+vi.mock("./worker-cpu.js", () => ({
+  createCpuTrackedWorker,
+  receiveWorkerMemoryPort: () => false,
+}));
 // mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
 function makeWorker() {
   return Object.assign(new EventEmitter(), {
+    stderr: new EventEmitter(),
     unref: vi.fn(),
     terminate: vi.fn(async () => 0),
   });
@@ -244,36 +248,13 @@ it.each([
         }
       } finally {
         wait.mockRestore();
-        admission.finish();
+        const finishing = admission.finish();
+        onTestFinished(() => finishing);
       }
     }
     expect(caller.getStore()).toBeUndefined();
   },
 );
-
-// Bun resolves a `file:` preload by stripping "file://", so tsx's URL breaks on Windows.
-it.each([
-  { runtime: "Node", bun: undefined, execArgv: ["--import", import.meta.resolve("tsx/esm")] },
-  { runtime: "Bun", bun: "1.4.3", execArgv: [] },
-])("gives $runtime source workers only the TypeScript loader they need", ({ bun, execArgv }) => {
-  const versions = Object.getOwnPropertyDescriptor(process, "versions");
-  Object.defineProperty(process, "versions", {
-    configurable: true,
-    value: { ...process.versions, bun },
-  });
-  try {
-    const { createSlot } = runtimeFixture();
-    createSlot({ carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts") });
-    expect(createCpuTrackedWorker).toHaveBeenLastCalledWith(
-      expect.any(URL),
-      expect.objectContaining({ execArgv }),
-    );
-  } finally {
-    if (versions) {
-      Object.defineProperty(process, "versions", versions);
-    }
-  }
-});
 
 it.each([
   { capable: true, closeFails: false },

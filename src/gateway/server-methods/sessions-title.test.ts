@@ -12,6 +12,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { sessionTitleHandlers } from "./sessions-title.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -92,15 +93,9 @@ const refusal = (code: string) => [false, undefined, expect.objectContaining({ c
 function connectedClient(profileId?: string): GatewayClient {
   return {
     connId: "title-preparation-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.write"],
-    },
+    connect: gatewayConnect(["operator.write"]),
     authenticatedUserProfile: profileId
-      ? { profileId, displayName: "Title Test Person", hasAvatar: false, updatedAt: 1 }
+      ? gatewayProfile(profileId, "Title Test Person")
       : undefined,
   };
 }

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionGoalFixture } from "./session-goal.test-support.js";
 
 type SnapshotParams = Parameters<typeof buildGatewaySessionSnapshot>[0];
 type SessionRow = NonNullable<SnapshotParams["sessionRow"]>;
@@ -18,6 +19,27 @@ function wire(value: unknown): unknown {
   // oxlint-disable-next-line unicorn/prefer-structured-clone -- verify the gateway JSON wire shape
   return JSON.parse(JSON.stringify(value));
 }
+
+it.each([false, true])(
+  "keeps the ordered wire envelope separate from its row (lifecycle=%s)",
+  (lifecycle) => {
+    const sessionRow = Object.freeze({ ...row, model: "synthetic", hasActiveSubagentRun: false });
+    const result = buildGatewaySessionSnapshot({ sessionRow, lifecycle });
+    expect(Object.keys(result)[0]).toBe("session");
+    expect(Object.keys(result).slice(-2)).toEqual(["subagentRunState", "hasActiveSubagentRun"]);
+    expect(result.session).not.toBe(sessionRow);
+    expect(result.session).not.toHaveProperty("session");
+    expect(wire(result)).toMatchObject({
+      session: { key: row.key, updatedAt: 1, hasActiveSubagentRun: false },
+      hasActiveSubagentRun: false,
+    });
+    expect(sessionRow.model).toBe("synthetic");
+    if (lifecycle) {
+      expect(result).not.toHaveProperty("model");
+      expect(result.session).not.toHaveProperty("model");
+    }
+  },
+);
 
 it.each([
   ["titlePending", true, false],
@@ -80,17 +102,7 @@ it("scopes the global goal to its resolved agent", () => {
     key: "global",
     kind: "global" as const,
     updatedAt: 6,
-    goal: {
-      schemaVersion: 1 as const,
-      id: "goal-1",
-      objective: "Scoped objective",
-      status: "active" as const,
-      createdAt: 1,
-      updatedAt: 2,
-      tokenStart: 0,
-      tokensUsed: 3,
-      continuationTurns: 0,
-    },
+    goal: createSessionGoalFixture("goal-1", "Scoped objective", { updatedAt: 2, tokensUsed: 3 }),
   };
   const unscoped = buildGatewaySessionSnapshot({ sessionRow });
   expect(unscoped).not.toHaveProperty("goal");

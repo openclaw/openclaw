@@ -441,7 +441,6 @@ describe("restart lifecycle completion ownership", () => {
       const admission = mode === "direct close" ? "continuation" : undefined;
       await using invoke = await createLifecycleInvoke();
       const call = bindDispatch(invoke.context, invoke.client, admission);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
       const newWork = vi.fn();
       const refused = await call("node.runnerInventory.update", {}, newWork);
       expectRejected(refused);

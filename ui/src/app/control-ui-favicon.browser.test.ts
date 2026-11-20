@@ -7,13 +7,14 @@ import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
-import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
+import { initializeControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   applyControlUiFaviconImage,
   applyControlUiFaviconStatus,
   applyControlUiPresentation,
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { client, createGatewayHarness } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "./theme-branding.ts";
@@ -77,16 +78,16 @@ beforeEach(() => {
     [canvas.toDataURL("image/png"), "image/png"],
   ];
   const createIcon = ([href, type]: [string, string]) => {
-    const icon = document.createElement("link");
-    icon.rel = "icon";
-    icon.setAttribute("href", href);
-    icon.setAttribute("type", type);
-    document.head.append(icon);
+    const icon = document.head.appendChild(document.createElement("link"));
+    icon.id = type === "image/svg+xml" ? "openclaw-favicon-svg" : "openclaw-favicon-png";
+    Object.assign(icon, { rel: "icon", href, type });
     return icon;
   };
   svgIcon = createIcon(originals[0]);
   pngIcon = createIcon(originals[1]);
-  bindControlUiDocumentHead({ themeColors: [], favicons: [svgIcon, pngIcon] });
+  initializeControlUiDocumentHead();
+  Object.assign(svgIcon, { href: originals[0][0], type: originals[0][1] });
+  Object.assign(pngIcon, { href: originals[1][0], type: originals[1][1] });
 });
 
 afterEach(() => {
@@ -94,9 +95,8 @@ afterEach(() => {
   applyControlUiFaviconImage(null);
   applyControlUiFaviconStatus("idle");
   applyControlUiPresentation({ environment: null });
-  bindControlUiDocumentHead({ themeColors: [], favicons: [] });
-  svgIcon.remove();
-  pngIcon.remove();
+  [svgIcon, pngIcon].forEach((icon) => icon.remove());
+  initializeControlUiDocumentHead();
   document.head.append(...previousIcons);
   document.title = previousTitle;
   for (const [name, value] of previousAttributes) {
@@ -321,6 +321,21 @@ it("reuses palette reads through session publications while retaining retries an
     expect(styleReads).not.toHaveBeenCalled();
     expect(svgIcon.href).toBe(workingHref);
 
+    for (const property of [
+      "--shell-viewport-height",
+      "--shell-safe-area-bottom",
+      "background-color",
+      ...["assistant", "terminal", "browser", "link-reader", "desktop"].flatMap((owner) => [
+        `--oc-${owner}-reserve-bottom`,
+        `--oc-${owner}-reserve-right`,
+      ]),
+    ]) {
+      root.style.setProperty(property, property === "background-color" ? "#123456" : "123px");
+    }
+    await painted();
+    expect(styleReads).not.toHaveBeenCalled();
+    expect(svgIcon.href).toBe(workingHref);
+
     root.style.setProperty("--accent", "rgb(70, 140, 190)");
     await expectDot("rgb(70, 140, 190)");
     root.style.setProperty("--info", "rgb(20, 100, 180)");
@@ -331,19 +346,27 @@ it("reuses palette reads through session publications while retaining retries an
     await vi.waitFor(() => expect(environmentPath()).not.toBeNull());
     await expectDot("rgb(20, 100, 180)");
     await changePresentation(() => mascot("none"));
-    expectMark("rgb(180, 20, 40)", "rgb(250, 250, 250)");
+    expectMark(
+      "rgb(180, 20, 40)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     expect(environmentPath()).toBeNull();
     expect(dotColor()).toBe("rgb(20, 100, 180)");
     await changePresentation(() => {
       root.dataset.theme = "favicon-neutral";
     });
-    expectMark("rgb(190, 30, 50)", "rgb(240, 240, 240)");
+    expectMark(
+      "rgb(190, 30, 50)",
+      getComputedStyle(root).getPropertyValue("--primary-foreground").trim(),
+    );
     await changePresentation(() => {
       root.style.setProperty("--primary", "rgb(160, 40, 60)");
     });
     expectSvg("rect", "fill", "rgb(160, 40, 60)");
     await changePresentation(() => mascot("claw"));
     expect(environmentPath()).not.toBeNull();
+    // Reset the injected primary color through its owner, independently of environment updates.
+    applyControlUiAccent();
     applyControlUiPresentation({ environment: null });
     await vi.waitFor(() => expect(animations().length).toBeGreaterThan(0));
     await expectDot("rgb(20, 100, 180)");

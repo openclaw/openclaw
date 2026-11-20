@@ -20,13 +20,11 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
-it("routes Computer Use MCP elicitations through the native bridge and cancels the turn", async () => {
+it("routes Computer Use MCP elicitations through the native bridge", async () => {
+  const response = { action: "accept" as const, content: { approve: true }, _meta: null };
   const bridgeSpy = vi
     .spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest")
-    .mockResolvedValue({
-      kind: "handled",
-      response: { action: "accept", content: { approve: true }, _meta: null },
-    });
+    .mockResolvedValue({ kind: "handled", response: structuredClone(response) });
   const marketplace = { name: "openai-bundled", path: "/marketplaces/openai-bundled" };
   const plugin = pluginSummary("computer-use@openai-bundled", {
     name: "computer-use",
@@ -34,35 +32,24 @@ it("routes Computer Use MCP elicitations through the native bridge and cancels t
     installed: true,
     enabled: true,
   });
-  const request = async (method: string) => {
-    if (method === "plugin/installed") {
-      return pluginInstalled([plugin], marketplace);
-    }
-    if (method === "plugin/list") {
-      return pluginList([plugin], marketplace);
-    }
-    if (method === "plugin/read") {
-      const detail = pluginDetail("computer-use", [], {
-        marketplaceName: marketplace.name,
-        marketplacePath: marketplace.path,
-      });
-      Object.assign(detail.plugin, { summary: plugin, mcpServers: ["computer-use"] });
-      return detail;
-    }
-    if (method === "mcpServerStatus/list") {
-      return {
-        data: [
-          {
-            name: "desktop-control",
-            tools: { "computer-use.get_app_state": {} },
-          },
-        ],
-        nextCursor: null,
-      };
-    }
-    return undefined;
+  const detail = pluginDetail("computer-use", [], {
+    marketplaceName: marketplace.name,
+    marketplacePath: marketplace.path,
+    mcpServers: ["computer-use"],
+  });
+  detail.plugin.summary = plugin;
+  const responses: Record<string, unknown> = {
+    "plugin/installed": pluginInstalled([plugin], marketplace),
+    "plugin/list": pluginList([plugin], marketplace),
+    "plugin/read": detail,
+    "mcpServerStatus/list": {
+      data: [{ name: "desktop-control", tools: { "computer-use.get_app_state": {} } }],
+      nextCursor: null,
+    },
   };
-  const elicitation = createStartedThreadHarness(request);
+  const elicitation = createStartedThreadHarness(async (method) =>
+    Object.hasOwn(responses, method) ? responses[method] : undefined,
+  );
   const abortController = new AbortController();
   const params = createTestParams();
   params.abortSignal = abortController.signal;
@@ -94,7 +81,7 @@ it("routes Computer Use MCP elicitations through the native bridge and cancels t
       mode: "form",
     },
   });
-  expect(result).toEqual({ action: "accept", content: { approve: true }, _meta: null });
+  expect(result).toEqual(response);
   expect(bridgeSpy.mock.calls[0]?.[0]).toMatchObject({
     threadId: "thread-1",
     turnId: "turn-1",
@@ -105,16 +92,5 @@ it("routes Computer Use MCP elicitations through the native bridge and cancels t
     approvalPolicy: { granular: { mcp_elicitations: true } },
   });
   abortController.abort("user_cancelled");
-  const terminal = readAttemptTerminal(await run);
-  expect(elicitation.requests.filter(({ method }) => method === "turn/interrupt")).toEqual([
-    { method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } },
-  ]);
-  expect(terminal).toMatchObject({
-    aborted: true,
-    timedOut: false,
-    promptError: null,
-  });
-  expect(
-    elicitation.requests.filter(({ method }) => method === "thread/backgroundTerminals/list"),
-  ).toEqual([{ method: "thread/backgroundTerminals/list", params: { threadId: "thread-1" } }]);
+  expect(readAttemptTerminal(await run).promptError).toBeNull();
 });

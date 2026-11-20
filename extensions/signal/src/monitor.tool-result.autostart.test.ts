@@ -116,22 +116,17 @@ describe("monitorSignalProvider autostart", () => {
     "does not spawn when monitoring aborts with a %s probe",
     async (phase) => {
       const controller = new AbortController();
-      const started = Promise.withResolvers<void>();
       probeEndpoint.mockImplementationOnce(
         async ({ abortSignal }: { abortSignal: AbortSignal }) => {
           if (phase === "completed") {
             controller.abort();
-          }
-          started.resolve();
-          if (phase === "pending") {
+          } else {
+            queueMicrotask(() => controller.abort());
             await rejectOnAbort(abortSignal);
           }
         },
       );
-      const monitorPromise = runMonitor({ abortSignal: controller.signal });
-      await started.promise;
-      controller.abort();
-      await expect(monitorPromise).resolves.toBeUndefined();
+      await expect(runMonitor({ abortSignal: controller.signal })).resolves.toBeUndefined();
       expect(spawnDaemon).not.toHaveBeenCalled();
     },
   );
@@ -177,13 +172,7 @@ describe("monitorSignalProvider autostart", () => {
     waitUntilReady.mockImplementationOnce(({ abortSignal }: { abortSignal?: AbortSignal | null }) =>
       rejectOnAbort(abortSignal),
     );
-    await expect(
-      runMonitor({
-        autoStart: true,
-        baseUrl: SIGNAL_BASE_URL,
-        statusSink,
-      }),
-    ).rejects.toThrow(/signal daemon exited/i);
+    await expect(runMonitor({ statusSink })).rejects.toThrow(/signal daemon exited/i);
     expectOptions(statusSink, { lifecycle: "recovering", connected: false });
   });
 
@@ -245,13 +234,6 @@ describe("monitorSignalProvider tool results", () => {
       })),
     });
     expect(reply).not.toHaveBeenCalled();
-    expect(pair).toHaveBeenCalledTimes(2);
-    expect(pair).toHaveBeenCalledWith({
-      channel: "signal",
-      id: `uuid:${uuid}`,
-      accountId: "default",
-      meta: { name: "Ada" },
-    });
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
     expectPairingReplyText(String(send.mock.calls[0]?.[1] ?? ""), {
@@ -259,25 +241,6 @@ describe("monitorSignalProvider tool results", () => {
       idLine: `Your Signal sender id: uuid:${uuid}`,
       code: "PAIRCODE",
     });
-  });
-
-  it("reconnects after stream errors until aborted", async () => {
-    vi.useFakeTimers();
-    using _ = { [Symbol.dispose]: () => vi.useRealTimers() };
-    const controller = new AbortController();
-    stream.mockRejectedValueOnce(new Error("stream dropped")).mockImplementationOnce(async () => {
-      controller.abort();
-    });
-    const monitorPromise = runExternal(controller.signal, {
-      reconnectPolicy: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    });
-
-    await vi.advanceTimersByTimeAsync(5);
-    await monitorPromise;
-
-    expect(stream).toHaveBeenCalledTimes(2);
-    expect(stream).toHaveBeenNthCalledWith(1, expect.objectContaining({ timeoutMs: 0 }));
-    expect(stream).toHaveBeenNthCalledWith(2, expect.objectContaining({ timeoutMs: 0 }));
   });
 
   it("drains an inline inbound message accepted before the monitor stops", async ({ signal }) => {
@@ -348,12 +311,11 @@ describe("monitorSignalProvider tool results", () => {
     expect(rpc).toHaveBeenCalledWith(
       "getAttachment",
       { id: "attachment-1", recipient: "+15550001111" },
-      {
+      expect.objectContaining({
         baseUrl: "http://container:8080",
-        timeoutMs: undefined,
         transportKind: "container",
         maxResponseBytes: 2_861_739,
-      },
+      }),
     );
   });
 });

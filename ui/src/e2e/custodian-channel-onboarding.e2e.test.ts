@@ -2,9 +2,13 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  createControlUiE2eContextOptions,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Custodian channel onboarding mocked Gateway E2E",
@@ -47,12 +51,7 @@ const emptyChannelSnapshot = {
 suite.define(() => {
   it("offers optional channels after model setup and opens the real Channels hub", async () => {
     await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      },
+      { colorScheme: "dark", ...createControlUiE2eContextOptions() },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           deferredMethods: ["channels.status"],
@@ -67,12 +66,7 @@ suite.define(() => {
             "openclaw.chat",
           ],
           methodResponses: {
-            "channels.pairing.list": {
-              accounts: [],
-              requests: [],
-              commandOwnerConfigured: true,
-              limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-            },
+            "channels.pairing.list": emptyPairingSnapshot(),
             "channels.status": emptyChannelSnapshot,
             "openclaw.setup.detect": {
               candidates: [
@@ -130,7 +124,7 @@ suite.define(() => {
           retryable: true,
         });
         const channelStatusError = page.getByRole("alert").filter({
-          hasText: "Channel status is unavailable",
+          hasText: "Couldn’t check channel status",
         });
         await channelStatusError.waitFor();
         await capture(page, "02-channel-status-error-before-retry");
@@ -188,7 +182,7 @@ suite.define(() => {
           routeId: "channels",
           search: "",
         });
-        await page.getByText("No channels connected yet. Pick one below to get started.").waitFor();
+        await page.getByText("No channels yet.").waitFor();
         await page.getByRole("heading", { name: "Add a channel" }).waitFor();
         expect(new URL(page.url()).searchParams.has("onboarding")).toBe(false);
         await capture(page, "03-after-channels-destination", true);

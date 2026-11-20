@@ -1,6 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { PluginInstanceUnavailableError } from "../../plugins/plugin-instance-error.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PreparedModelRuntimePluginGenerationRetiredError } from "../../agents/prepared-model-runtime-admission-errors.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolvePluginProvidersCore } from "../../plugins/providers.runtime.js";
@@ -11,51 +10,105 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
-import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
-import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import {
+  admitFollowupRunLifecycle,
+  enqueueFollowupRun,
+  scheduleFollowupDrain,
+  type FollowupRun,
+} from "./queue.js";
+import {
+  createQueueTestRun,
+  installQueueRuntimeErrorSilencer,
+  rejectQueuePreparation,
+} from "./queue.test-helpers.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
-afterEach(() => {
-  resetGatewayWorkAdmission();
-});
+afterEach(resetGatewayWorkAdmission);
+afterEach(() => vi.useRealTimers());
 
-it.each(["followup", "collect"] as const)(
-  "resolves the current provider for queued %s input after its predecessor retires",
-  async (mode) => {
-    const released = createDeferred();
-    const started = createDeferred();
-    const key = `generation-reload-${mode}`;
+describe.each(["followup", "collect"] as const)("queued %s", (mode) => {
+  it.each(["unadopted", "adopted", "no-lifecycle"] as const)(
+    "settles a thrown runner with %s custody",
+    async (custody) => {
+      const key = `runner-throw-${mode}-${custody}`;
+      const onAbandoned = vi.fn();
+      const onSettled = vi.fn();
+      const finishCorrelation = vi.fn();
+      const queued = createQueueTestRun({
+        prompt: "accepted before runner failure",
+        turnAdoptionLifecycle:
+          custody === "no-lifecycle" ? undefined : { onAdopted() {}, onAbandoned, onSettled },
+        deliveryCorrelations: [{ begin: () => finishCorrelation }],
+      });
+      const execute = vi.fn(async (run: FollowupRun) => {
+        if (custody === "adopted") {
+          await admitFollowupRunLifecycle(run);
+        }
+        throw new Error("runner failed before returning a disposition");
+      });
+      try {
+        enqueueFollowupRun(key, queued, { mode, debounceMs: 0 });
+        scheduleFollowupDrain(key, execute);
+        await queued.controllerInput!.settlement.promise;
+        await queued.controllerInput!.claim?.settlement.promise;
+        expect(execute).toHaveBeenCalledOnce();
+        expect(onAbandoned).toHaveBeenCalledTimes(custody === "unadopted" ? 1 : 0);
+        expect(onSettled).toHaveBeenCalledTimes(custody === "no-lifecycle" ? 0 : 1);
+        expect(finishCorrelation).toHaveBeenCalledTimes(custody === "unadopted" ? 1 : 0);
+        expect(getExistingFollowupQueue(key)).toBeUndefined();
+      } finally {
+        clearFollowupQueue(key);
+      }
+    },
+  );
+
+  it.each([
+    "replacement",
+    "rollback",
+    "disabled",
+    "cancel",
+    "shutdown",
+    "plain",
+    "retired",
+  ] as const)("settles plugin %s without retrying the unavailable owner", async (outcome) => {
+    vi.useFakeTimers();
+    const key = `generation-reload-${mode}-${outcome}`;
     const original = captureActivePluginRegistrySnapshot();
-    const predecessor = new PluginInstance("queue-generation-fixture");
+    const credential = { type: "api_key" as const, provider: "queue-generation", key: "test" };
+    const predecessor = new PluginInstance(credential.provider);
     const stale = createEmptyPluginRegistry();
     const current = createEmptyPluginRegistry();
-    const retiredHook = predecessor.wrap(() => "retired");
-    stale.providers.push({
-      pluginId: "queue-generation-fixture",
-      source: "synthetic",
-      provider: {
-        id: "queue-generation-fixture",
-        label: "Fixture",
-        auth: [],
-        formatApiKey: retiredHook,
-      },
+    for (const [registry, formatApiKey] of [
+      [stale, predecessor.wrap(() => "retired")],
+      [current, () => "current provider reply"],
+    ] as const) {
+      registry.providers.push({
+        pluginId: credential.provider,
+        source: "synthetic",
+        provider: { id: credential.provider, label: "Fixture", auth: [], formatApiKey },
+      });
+    }
+    const cancellation = new AbortController();
+    const onAbandoned = vi.fn();
+    const queued = createQueueTestRun({
+      prompt: "accepted before reload",
+      abortSignal: cancellation.signal,
+      turnAdoptionLifecycle: { onAdopted() {}, onAbandoned },
     });
-    const currentHook = vi.fn(() => "current provider reply");
-    current.providers.push({
-      pluginId: "queue-generation-fixture",
-      source: "synthetic",
-      provider: {
-        id: "queue-generation-fixture",
-        label: "Fixture",
-        auth: [],
-        formatApiKey: currentHook,
-      },
-    });
-    const queued = createQueueTestRun({ prompt: "accepted before reload" });
-    const delivered: Array<{ prompt: string; reply: string | undefined }> = [];
+    const delivered: Array<string | undefined> = [];
+    const release = ["disabled", "plain", "retired"].includes(outcome)
+      ? undefined
+      : predecessor.reserveReplacement();
+    let settled = false;
+    let attempts = 0;
+    const generic = outcome === "plain" || outcome === "retired";
     try {
+      predecessor.quiesce();
       setActivePluginRegistry(stale);
       withPluginRuntimeGenerationScope(
         {
@@ -65,39 +118,74 @@ it.each(["followup", "collect"] as const)(
         () => {
           expect(enqueueFollowupRun(key, queued, { mode, debounceMs: 0, cap: 50 })).toBe(true);
           scheduleFollowupDrain(key, async (run) => {
-            started.resolve();
-            await released.promise;
-            const provider = resolvePluginProvidersCore({ registryScope: "loaded" })[0];
-            delivered.push({
-              prompt: run.prompt,
-              reply: provider?.formatApiKey?.({
-                type: "api_key",
-                provider: "queue-generation-fixture",
-                key: "synthetic-only",
-              }),
-            });
+            attempts += 1;
+            // Bound the broken implementation instead of letting its retry loop starve the test.
+            if (attempts > (generic ? 20 : 1) && !settled) {
+              return;
+            }
+            expect(run.prompt).toContain("accepted before reload");
+            try {
+              if (!settled && outcome === "plain") {
+                predecessor.retainConsumer().release();
+              }
+              if (!settled && outcome === "retired") {
+                throw new PreparedModelRuntimePluginGenerationRetiredError(
+                  "preparation unavailable",
+                );
+              }
+              const provider = resolvePluginProvidersCore({ registryScope: "loaded" })[0];
+              delivered.push(provider?.formatApiKey?.(credential));
+            } catch (error) {
+              if (!(error instanceof Error)) {
+                throw error;
+              }
+              rejectQueuePreparation(run, error);
+            }
           });
         },
       );
-      await started.promise;
-      expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
-      await predecessor.dispose();
-      expect(() => retiredHook()).toThrow(PluginInstanceUnavailableError);
-      setActivePluginRegistry(current);
-      const claim = queued.controllerInput!.claim!;
-      released.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      const claim = queued.controllerInput!.claim;
+      if (generic) {
+        await vi.advanceTimersByTimeAsync(999);
+        expect(attempts).toBe(4);
+      }
+      if (outcome !== "disabled") {
+        expect(getExistingFollowupQueue(key)?.items).toEqual([queued]);
+        if (outcome === "shutdown") {
+          markGatewayRestartDraining();
+        } else if (outcome === "cancel") {
+          cancellation.abort();
+        } else if (outcome === "replacement" || generic) {
+          setActivePluginRegistry(current);
+        } else {
+          predecessor.resume();
+        }
+      }
+      settled = true;
+      if (outcome !== "cancel" && outcome !== "shutdown") {
+        release?.();
+      }
+      await vi.advanceTimersByTimeAsync(250);
+      if (outcome === "shutdown") {
+        expect(claim?.released).toBe(true);
+        clearFollowupQueue(key);
+        await vi.advanceTimersByTimeAsync(0);
+      }
       await queued.controllerInput!.settlement.promise;
-      await claim.settlement.promise;
-      expect(delivered).toHaveLength(1);
-      expect(delivered[0]?.prompt).toContain("accepted before reload");
-      expect(delivered[0]?.reply).toBe("current provider reply");
-      expect(currentHook).toHaveBeenCalledOnce();
+      await queued.controllerInput!.claim?.settlement.promise;
+      const abandoned = ["disabled", "cancel", "shutdown"].includes(outcome);
+      expect(delivered).toEqual(
+        abandoned ? [] : [outcome === "rollback" ? "retired" : "current provider reply"],
+      );
+      expect(onAbandoned).toHaveBeenCalledTimes(abandoned ? 1 : 0);
       expect(getExistingFollowupQueue(key)).toBeUndefined();
     } finally {
-      released.resolve();
+      release?.();
       clearFollowupQueue(key);
       await predecessor.dispose();
       restoreActivePluginRegistrySnapshot(original);
     }
-  },
-);
+  });
+});
