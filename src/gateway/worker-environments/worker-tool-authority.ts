@@ -140,6 +140,7 @@ export async function resolveWorkerToolAuthority(params: {
         snapshot: turn.skillsSnapshot,
         workspaceDir: turn.bootstrapWorkspaceDir ?? turn.workspaceDir,
         assertCurrent: params.assertCurrent,
+        instructionDelivery: "forwarded",
       });
       presentation.skills = installedSkills.map(({ name, description, location }) => ({
         name,

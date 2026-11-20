@@ -567,7 +567,9 @@ rules.
 
 The Gateway owns catalog writes while it is running. `openclaw models refresh`
 requires exclusive offline ownership and reports the saved download; the next
-Gateway start loads compatible metadata. An explicit Gateway model-list refresh
+Gateway start loads compatible metadata. Without a running Gateway, local
+catalog reads such as `openclaw models list` describe listed models with the
+saved hosted metadata too. An explicit Gateway model-list refresh
 triggers adoption after returning the current rows; it does not wait for adoption
 or another agent's discovery. A corrupt saved bundle leaves the accepted
 generation serving.

@@ -2,6 +2,8 @@
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { prepareRemoteModelCatalogStartupSnapshot } from "../model-catalog/remote-overlay.js";
+import { readRemoteModelCatalogStartupPublication } from "../model-catalog/remote-startup-snapshot.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -389,6 +391,11 @@ async function withPreparedModelCatalogOwnerPolicy<T>(
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     await prepareSharedAuthStoreOwnership(params.env);
   }
+  // Standalone readers describe listed models with the hosted catalog, as Gateway startup does.
+  // Prepared processes stay synchronous so callers join the owner published at call time.
+  if (readRemoteModelCatalogStartupPublication() === undefined) {
+    await prepareRemoteModelCatalogStartupSnapshot({ env: params.env });
+  }
   // Ordinary reads return published rows; explicit refresh keeps its writable default.
   const request = {
     ...params,
@@ -429,6 +436,10 @@ async function loadScopedReadOnlyModelCatalog(
 ): Promise<ModelCatalogSnapshot> {
   if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
     await prepareSharedAuthStoreOwnership(params.env);
+  }
+  // Same hosted catalog preparation as withPreparedModelCatalogOwnerPolicy.
+  if (readRemoteModelCatalogStartupPublication() === undefined) {
+    await prepareRemoteModelCatalogStartupSnapshot({ env: params.env });
   }
   const { activationExact } = resolveInputs(params);
   const prepared = await resolveReadOnlyPublishedModelCatalogOwner(

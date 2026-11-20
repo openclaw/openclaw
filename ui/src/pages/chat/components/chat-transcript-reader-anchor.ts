@@ -3,6 +3,7 @@ import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
+import type { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 import { focusedTranscriptRowKey } from "./chat-transcript-range.ts";
 
 type TranscriptVirtualizer = Virtualizer<HTMLDivElement, HTMLElement>;
@@ -13,7 +14,7 @@ type ReaderAnchorHost = {
   readonly offsetState: TranscriptOffsetState;
   readonly renderer: Pick<ChatTranscriptRenderer, "columnElement" | "queueAfterCommit">;
   readonly initialRange: { readonly pending: boolean };
-  readonly prependAnchor: { readonly messageKey: string | null };
+  readonly prependAnchor: Pick<TranscriptPrependAnchor, "messageKey" | "retainReader">;
   readonly headerHeight: number;
   readonly scrollElement: HTMLDivElement | null;
   readonly contentElement: HTMLDivElement | null;
@@ -80,7 +81,7 @@ export class TranscriptReaderAnchor {
   private owedScroll = 0;
   private observer: ResizeObserver | null = null;
   private readerContent: ReaderContent | null = null;
-  // A landed size before the flow moved its start, and scrollTop with it, this batch.
+  // A measured predecessor changed the virtual flow's start in this batch.
   private flowMoved = false;
   private animatedRow: HTMLElement | null = null;
 
@@ -490,8 +491,10 @@ export class TranscriptReaderAnchor {
         return false;
       }
       if (moves && !owned && !held) {
-        // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
-        this.owedScroll += delta;
+        // Retained messages use committed geometry; other content keeps relative correction.
+        if (!this.host.prependAnchor.retainReader(this.host.scrollElement)) {
+          this.owedScroll += delta;
+        }
         return false;
       }
       if (!above || owned || !held) {
@@ -515,9 +518,8 @@ export class TranscriptReaderAnchor {
   };
 
   /**
-   * Apply corrections collected while virtual-core landed a measurement batch. Returns whether a
-   * landed size moved the flow's start: its scroll adjustment is already written, so the flow
-   * must be redrawn in the same frame.
+   * Reconcile native corrections after virtual-core lands a measurement batch. Returns whether
+   * an out-of-flow predecessor changed the virtual flow's start and needs a geometry projection.
    */
   flush(): boolean {
     const flowMoved = this.flowMoved;
