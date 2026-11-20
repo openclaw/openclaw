@@ -276,6 +276,7 @@ export async function searchWorkspaceEntries(
   // Normalize comparison text only; on-disk filenames stay original.
   const results = searches.map((search) => ({
     query: foldSearchCase(search).normalize("NFC"),
+    // SAFETY: each search starts with an empty list populated only with browser entries.
     entries: [] as SessionFileBrowserEntry[],
     truncated: false,
     open: true,

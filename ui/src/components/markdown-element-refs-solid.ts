@@ -55,6 +55,7 @@ export function linkReaderPrefetchRef(
 export function markdownBlocksRef(
   presented: () => PresentationValue,
   onFileLinks?: (links: HTMLAnchorElement[]) => void,
+  fileLinkScope?: () => string | undefined,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
   const owner = createMemo(() => {
@@ -65,9 +66,10 @@ export function markdownBlocksRef(
   });
   const readPresentation = createPresentationReader(() => owner()?.update(false));
   createEffect(
-    () => [owner(), presented()] as const,
-    ([current, value]) => {
+    () => [owner(), presented(), fileLinkScope?.()] as const,
+    ([current, value, scope]) => {
       const active = readPresentation(value);
+      current?.refreshFileLinks(scope);
       current?.update(active);
     },
   );

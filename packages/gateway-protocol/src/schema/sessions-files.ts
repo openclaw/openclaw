@@ -114,7 +114,7 @@ const SessionFileStatReferenceSchema = closedObject({
   messageEntryId: Type.Optional(NonEmptyString),
 });
 
-/** Checks which transcript file references `sessions.files.get` would open, without reading them. */
+/** Checks which transcript file references `sessions.files.get` would open, using at most a one-byte admission read. */
 export const SessionsFilesStatParamsSchema = closedObject({
   sessionKey: NonEmptyString,
   agentId: Type.Optional(NonEmptyString),

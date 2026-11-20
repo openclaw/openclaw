@@ -6,6 +6,7 @@ import { subscribeDocumentVisibility } from "../lib/reactive/platform.ts";
 import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import { measureCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
+import { markdownFileLinkElement, setMarkdownFileLinkUnavailable } from "./markdown-file-links.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
 
 registerCodeBlocksEnglish();
@@ -14,6 +15,8 @@ let codeBlockRegionSequence = 0;
 const blockSelector = ".code-block-wrapper, .markdown-mermaid";
 const fileLinkSelector = "a[data-file-path]";
 export class MarkdownBlocks {
+  #fileLinkScope: string | undefined;
+  readonly #fileLinks = new Set<HTMLAnchorElement>();
   #observing = false;
   #scanPending = false;
   #presented = false;
@@ -109,6 +112,19 @@ export class MarkdownBlocks {
       }
     }
     this.#codeHighlights?.prune();
+    for (const link of this.#fileLinks) {
+      if (!this.#root.contains(markdownFileLinkElement(link))) this.#fileLinks.delete(link);
+    }
+  }
+
+  refreshFileLinks(scope: string | undefined): void {
+    if (this.#fileLinkScope === scope) return;
+    this.#fileLinkScope = scope;
+    for (const link of this.#fileLinks) {
+      setMarkdownFileLinkUnavailable(link, false);
+    }
+    this.#fileLinks.clear();
+    this.#collectBlocks(this.#root);
   }
 
   update(presented: boolean): void {
@@ -238,8 +254,12 @@ export class MarkdownBlocks {
     for (const element of [root, ...root.querySelectorAll<HTMLElement>(selector)]) {
       if (element.matches(blockSelector)) {
         this.#pendingBlocks.add(element);
-      } else if (this.#onFileLinks && element.matches(fileLinkSelector)) {
-        this.#pendingFileLinks.add(element as HTMLAnchorElement);
+      } else if (
+        this.#onFileLinks &&
+        element instanceof HTMLAnchorElement &&
+        element.matches(fileLinkSelector)
+      ) {
+        this.#pendingFileLinks.add(element);
       }
     }
   }
@@ -250,6 +270,7 @@ export class MarkdownBlocks {
     );
     this.#pendingFileLinks.clear();
     if (links.length) {
+      for (const link of links) this.#fileLinks.add(link);
       this.#onFileLinks?.(links);
     }
   }

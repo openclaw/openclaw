@@ -210,6 +210,7 @@ export type ChatThreadProps = Omit<
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
     /** Receives settled transcript file links; links the Gateway cannot open become text. */
+    workspaceFileLinkScope?: string;
     onWorkspaceFileLinks?: (links: HTMLAnchorElement[]) => void;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;

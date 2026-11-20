@@ -170,3 +170,75 @@ it.each(["visible", "hidden"] as const)(
     }
   },
 );
+
+it("rechecks retained file links when read permissions change, ignoring old answers", async () => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  mockDocumentVisibility();
+  const { checkFileLinkAvailability } =
+    await import("../pages/chat/components/chat-file-link-availability.ts");
+  type Workspace =
+    import("../pages/chat/components/chat-session-workspace-types.ts").SessionWorkspaceState;
+  type Host =
+    import("../pages/chat/components/chat-session-workspace-types.ts").SessionWorkspaceHost;
+  const workspace = { sessionKey: "agent:main:main", agentId: "main" } as Workspace;
+  let finishOld!: (value: {
+    sessionKey: string;
+    files: { path: string; status: "missing" }[];
+  }) => void;
+  const statFiles = vi.fn(async () => ({
+    sessionKey: workspace.sessionKey,
+    files: [{ path: "/tmp/report.md", status: "missing" as const }],
+  }));
+  const state = { sessions: { statFiles } } as unknown as Host;
+  const root = document.createElement("div");
+  root.innerHTML =
+    '<a class="markdown-file-link" href="#" data-file-path="/tmp/report.md"><code>report.md</code></a>';
+  let change!: (scope: string) => void;
+  const view = renderSolidRef(
+    () => {
+      const [scope, setScope] = createSignal("workspace");
+      change = setScope;
+      return markdownBlocksRef(
+        () => true,
+        (links) => {
+          void checkFileLinkAvailability(state, workspace, links, scope());
+        },
+        scope,
+      );
+    },
+    { targetElement: root },
+  );
+  try {
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    statFiles.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        }),
+    );
+    change("guarded");
+    await waitForSolid(() => expect(statFiles).toHaveBeenCalledTimes(2));
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    change("full");
+    await waitForSolid(() => expect(statFiles).toHaveBeenCalledTimes(3));
+    finishOld({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    });
+    await Promise.resolve();
+    expect(root.querySelector("a")?.textContent).toBe("report.md");
+    expect(root.querySelector("a")?.getAttribute("href")).toBe("#");
+  } finally {
+    view.unmount();
+  }
+});

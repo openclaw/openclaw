@@ -1,5 +1,8 @@
 import type { SessionWorkspaceStatResult } from "../../../api/types.ts";
-import { markdownFileLinkFromAnchor } from "../../../components/markdown-file-links.ts";
+import {
+  markdownFileLinkFromAnchor,
+  setMarkdownFileLinkUnavailable,
+} from "../../../components/markdown-file-links.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import type {
   SessionWorkspaceHost,
@@ -11,46 +14,29 @@ type Reference = { path: string; messageEntryId?: string };
 
 // Matches the Gateway's sessions.files.stat request bound.
 const MAX_FILES_PER_REQUEST = 64;
-// Answers live as long as their workspace; failed checks are forgotten so a later render asks again.
-const availabilityByWorkspace = new WeakMap<SessionWorkspaceState, Map<string, Availability>>();
-const waitingByWorkspace = new WeakMap<
+// Answers belong to a workspace and its permission scope; failed checks are forgotten.
+const checksByWorkspace = new WeakMap<
   SessionWorkspaceState,
-  Map<string, Set<HTMLAnchorElement>>
+  {
+    scope: string;
+    availability: Map<string, Availability>;
+    waiting: Map<string, Set<HTMLAnchorElement>>;
+  }
 >();
-
-/** Replaces a link the Gateway cannot open with text that keeps its label and hover path. */
-function unlink(anchor: HTMLAnchorElement) {
-  if (!anchor.isConnected) {
-    return;
-  }
-  const text = document.createElement("span");
-  text.dataset.filePath = anchor.dataset.filePath;
-  text.append(...anchor.childNodes);
-  // A focused link keeps the reader's place without re-entering the tab order.
-  const focused = anchor.ownerDocument.activeElement === anchor;
-  if (focused) {
-    text.tabIndex = -1;
-  }
-  anchor.replaceWith(text);
-  if (focused) {
-    text.focus({ preventScroll: true });
-  }
-}
 
 /** Checks which settled transcript file links `openSessionWorkspaceFile` would open. */
 export async function checkFileLinkAvailability(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
   links: HTMLAnchorElement[],
+  scope = "",
 ) {
-  let availability = availabilityByWorkspace.get(workspace);
-  let waiting = waitingByWorkspace.get(workspace);
-  if (!availability || !waiting) {
-    availability = new Map();
-    waiting = new Map();
-    availabilityByWorkspace.set(workspace, availability);
-    waitingByWorkspace.set(workspace, waiting);
+  let checks = checksByWorkspace.get(workspace);
+  if (!checks || checks.scope !== scope) {
+    checks = { scope, availability: new Map(), waiting: new Map() };
+    checksByWorkspace.set(workspace, checks);
   }
+  const { availability, waiting } = checks;
   const requests = new Map<string, { files: Reference[]; keys: string[] }>();
   for (const anchor of links) {
     const target = markdownFileLinkFromAnchor(anchor);
@@ -62,7 +48,7 @@ export async function checkFileLinkAvailability(
     const key = JSON.stringify([sessionKey, target.messageEntryId ?? null, target.path]);
     const known = availability.get(key);
     if (known === "missing") {
-      unlink(anchor);
+      setMarkdownFileLinkUnavailable(anchor, true);
     } else if (known === "pending") {
       waiting.get(key)?.add(anchor);
     } else if (known === undefined) {
@@ -87,6 +73,9 @@ export async function checkFileLinkAvailability(
       const batch = files.slice(start, start + MAX_FILES_PER_REQUEST);
       const batchKeys = keys.slice(start, start + MAX_FILES_PER_REQUEST);
       const settle = (result: SessionWorkspaceStatResult | null) => {
+        if (checksByWorkspace.get(workspace) !== checks) {
+          return;
+        }
         for (const [index, key] of batchKeys.entries()) {
           const answer = result?.files[index];
           const status = answer?.path === batch[index]?.path ? answer?.status : undefined;
@@ -97,7 +86,7 @@ export async function checkFileLinkAvailability(
           } else {
             availability.set(key, status);
             if (status === "missing") {
-              anchors?.forEach(unlink);
+              anchors?.forEach((anchor) => setMarkdownFileLinkUnavailable(anchor, true));
             }
           }
         }

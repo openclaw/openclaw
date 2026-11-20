@@ -205,10 +205,11 @@ export function openSessionWorkspaceFile(
 export function checkSessionWorkspaceFileLinks(
   state: SessionWorkspaceHost,
   links: HTMLAnchorElement[],
+  scope: string,
 ) {
   const workspace = getSessionWorkspace(state);
   readWorkspaceContent(state, workspace, (runtime) =>
-    runtime.checkFileLinkAvailability(state, workspace, links),
+    runtime.checkFileLinkAvailability(state, workspace, links, scope),
   ).catch(() => {
     // Links stay usable when the check cannot load. main.ts owns lazy-chunk fetch
     // recovery through the Vite preload-error listener.
@@ -672,4 +673,21 @@ export function resolveSessionDiffSidebarContent(
       }
     },
   );
+}
+
+/** One permission scope drives both retained Markdown restoration and availability answers. */
+export function sessionWorkspaceFileLinkProps(
+  state: SessionWorkspaceHost,
+  session: { permissionMode?: string | null } | null | undefined,
+  picker: { defaultMode?: string | null } | undefined,
+) {
+  const scope = JSON.stringify([session?.permissionMode, picker?.defaultMode]);
+  return {
+    workspaceFileLinkScope: scope,
+    onWorkspaceFileLinks: (links: HTMLAnchorElement[]) =>
+      checkSessionWorkspaceFileLinks(state, links, scope),
+    onOpenWorkspaceFile: (target: MarkdownFileLinkTarget) =>
+      void openSessionWorkspaceFile(state, target),
+    onOpenManagedArtifact: (href: string) => openSessionWorkspaceManagedArtifact(state, href),
+  };
 }
