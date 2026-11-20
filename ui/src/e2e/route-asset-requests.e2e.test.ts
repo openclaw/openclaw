@@ -107,6 +107,10 @@ async function visit(page: Page, route: Route) {
   ) {
     throw new Error(`Missing browser-local readiness timing for ${route}`);
   }
+  // Retain the original readiness timestamp even when the Settings sidebar finishes later.
+  if (route === "skill-settings") {
+    await page.locator(".settings-sidebar__item--active").first().waitFor();
+  }
   await finishControlUiPageObserver(page);
   return readControlUiPageObserver(
     page,
@@ -145,11 +149,22 @@ suite.define(() => {
             .waitFor();
           expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
         }
-        const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
-        expect(readyAssets.length).toBeGreaterThan(0);
+        expect(observation.assets.some((asset) => asset.completedByReady)).toBe(true);
+        const sidebar =
+          route === "skill-settings"
+            ? [
+                "ui/src/i18n/locales/en-settings-sidebar.ts",
+                "ui/src/components/sidebar-build-chip.tsx",
+                "ui/src/components/settings-sidebar-shell.tsx",
+              ].map((path) => controlUiE2eBuiltModuleRequest(path))
+            : [];
+        // Count the same physical sidebar requests whether their responses win or lose the race.
+        const budgetedAssets = observation.assets.filter(
+          (asset) => asset.completedByReady || sidebar.some((module) => module.test(asset.name)),
+        );
         expect(
-          readyAssets.length,
-          readyAssets.map((asset) => asset.name).join("\n"),
+          budgetedAssets.length,
+          budgetedAssets.map((asset) => asset.name).join("\n"),
         ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
         if (route === "skills" || route === "skill-settings") {
