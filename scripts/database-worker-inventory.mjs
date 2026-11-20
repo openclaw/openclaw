@@ -2139,13 +2139,14 @@ const reviewedOperations = new Map([
         operations: [
           "readUserPreferences",
           "writeUserPreferences",
+          "upsertUserPreferenceValues",
           "deleteUserPreference",
           "selectUserPreferenceValues",
           "readPreferenceKeys",
           "mergeUserPreferences",
         ],
         evidence:
-          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; private key scans serve these worker writers",
+          "Preference read/write dispatch at user-preferences.worker.ts:52,74; merge/GitHub helpers only in user-profile-writes.worker.ts:375,425,482 and openclaw-state-read.worker.ts:616; acknowledgements and profile merges share the same worker-owned preference upsert",
       },
     ],
   ],

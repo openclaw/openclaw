@@ -98,18 +98,22 @@ function eventGateway(
   snapshot: object,
   connection: Partial<ApplicationGateway["connection"]> = { gatewayUrl: "ws://gateway.test" },
 ) {
-  let listener: Parameters<ApplicationGateway["subscribeEvents"]>[0] | undefined;
+  const listeners = new Set<Parameters<ApplicationGateway["subscribeEvents"]>[0]>();
   return {
     gateway: {
       snapshot,
       connection,
       subscribe: () => () => undefined,
-      subscribeEvents: (next: NonNullable<typeof listener>) => {
-        listener = next;
-        return () => undefined;
+      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
       },
     } as unknown as ApplicationGateway,
-    emit: (event: string) => listener?.({ type: "event", event, payload: {} }),
+    emit: (event: string) => {
+      for (const listener of listeners) {
+        listener({ type: "event", event, payload: {} });
+      }
+    },
   };
 }
 

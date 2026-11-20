@@ -162,6 +162,7 @@ describe("sidebar attention source publication", () => {
     );
     store = harness.attention;
     await vi.advanceTimersByTimeAsync(0);
+    await vi.dynamicImportSettled();
     expect(store.entries).toMatchObject([{ label: "retained" }]);
     const { hello, selfUser } = harness.gateway.snapshot;
     harness.update({ phase: "reconnecting", hello: null, selfUser: undefined });
@@ -248,6 +249,7 @@ describe("sidebar attention source publication", () => {
       const harness = startAuthenticatedStore(request);
       store = harness.attention;
       await vi.advanceTimersByTimeAsync(0);
+      await vi.dynamicImportSettled();
       expectLabels("incident");
 
       failed = true;

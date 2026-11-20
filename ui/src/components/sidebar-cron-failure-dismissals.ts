@@ -1,13 +1,35 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CRON_FAILURE_DISMISSALS_KEY,
   readCronFailureDismissals,
 } from "../../../packages/gateway-protocol/src/schema/cron-failure-dismissals.ts";
 import type { UsersPrefsGetResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import type { ApplicationGateway } from "../app/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { showToast } from "../lib/toast.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import {
+  deferredCronFailurePrefix,
+  loadDismissals,
+  saveDismissals,
+  type SidebarAttentionDismissals,
+} from "./sidebar-attention-dismissals.ts";
+
+/** Remove only an imported v2 job ID. Another tab may have saved unrelated alerts. */
+function retireLegacyCronDismissal(key: string, id: string): SidebarAttentionDismissals {
+  const stored = loadDismissals(key);
+  if (!stored.cronFailed?.includes(id)) {
+    return stored;
+  }
+  stored.cronFailed = stored.cronFailed.filter((candidate) => candidate !== id);
+  if (!stored.cronFailed.length) {
+    delete stored.cronFailed;
+  }
+  saveDismissals(key, stored);
+  return stored;
+}
 
 /** Receipts for one authenticated browser connection and its gateway profile. */
 export class CronFailureDismissals {
@@ -21,14 +43,28 @@ export class CronFailureDismissals {
   #imports = new Set<string>();
   #deferred = new Map<string, number>();
   #retry?: ReturnType<typeof globalThis.setTimeout>;
+  readonly #stopPreferences: () => void;
 
   constructor(
     readonly key: string,
     readonly client: GatewayBrowserClient,
+    gateway: ApplicationGateway,
     private readonly changed: () => void,
     private readonly isCurrent: () => boolean,
-    private readonly retireLegacy: (id: string) => void,
+    private readonly legacyRetired: (dismissals: SidebarAttentionDismissals) => void,
   ) {
+    const profileId = gateway.snapshot.selfUser?.id;
+    this.#stopPreferences = gateway.subscribeEvents((event) => {
+      if (
+        event.event === "users.prefs.changed" &&
+        isRecord(event.payload) &&
+        event.payload.profileId === profileId &&
+        Array.isArray(event.payload.keys) &&
+        event.payload.keys.includes(CRON_FAILURE_DISMISSALS_KEY)
+      ) {
+        void this.refresh();
+      }
+    });
     const storage = getSafeLocalStorage();
     const prefix = this.#deferredKey("");
     if (!storage) {
@@ -50,7 +86,7 @@ export class CronFailureDismissals {
   }
 
   #deferredKey(id: string) {
-    return this.key + ":pending-failure:" + id;
+    return deferredCronFailurePrefix(this.key) + id;
   }
 
   hidden(id: string, at: number, legacy?: readonly string[]): boolean {
@@ -139,8 +175,11 @@ export class CronFailureDismissals {
         at === undefined ? { id, adopt: true } : { id, failedAtMs: at },
       );
       if (!this.#disposed) {
-        if (result.acknowledgedAtMs !== null) {
+        if (typeof result.acknowledgedAtMs === "number") {
           this.#remember(id, result.acknowledgedAtMs);
+          if (at === undefined) {
+            this.legacyRetired(retireLegacyCronDismissal(this.key, id));
+          }
         }
         if (this.#deferred.get(id) === at && at !== undefined) {
           this.#deferred.delete(id);
@@ -148,9 +187,6 @@ export class CronFailureDismissals {
           if (storage?.getItem(this.#deferredKey(id)) === String(at)) {
             storage.removeItem(this.#deferredKey(id));
           }
-        }
-        if (at === undefined) {
-          this.retireLegacy(id);
         }
       }
     } catch (error) {
@@ -194,6 +230,7 @@ export class CronFailureDismissals {
 
   dispose(): void {
     this.#disposed = true;
+    this.#stopPreferences();
     globalThis.clearTimeout(this.#retry);
   }
 }

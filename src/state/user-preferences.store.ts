@@ -267,22 +267,44 @@ function readProfileCronFailureDismissals(db: EngineConnection, profileId: strin
   return readCronFailureDismissals(entries[CRON_FAILURE_DISMISSALS_KEY]);
 }
 
+function upsertUserPreferenceValues(
+  sqlite: EngineConnection,
+  profileId: string,
+  entries: PreparedUserPreferenceUpdate["serialized"],
+) {
+  const updatedAtMs = Date.now();
+  executeSqliteQuerySync(
+    sqlite,
+    getNodeSqliteKysely<UserPreferencesDatabase>(sqlite)
+      .insertInto("user_preferences")
+      .values(
+        entries.map(({ prefKey, valueJson }) => ({
+          profile_id: profileId,
+          pref_key: prefKey,
+          value_json: valueJson,
+          updated_at_ms: updatedAtMs,
+        })),
+      )
+      .onConflict((conflict) =>
+        conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
+          value_json: (eb) => eb.ref("excluded.value_json"),
+          updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
+        }),
+      ),
+  );
+}
+
 function saveProfileCronFailureDismissals(
   db: EngineConnection,
   profileId: string,
   receipts: ReadonlyMap<string, number>,
 ) {
-  const value = {
-    value_json: JSON.stringify(Object.fromEntries(receipts)),
-    updated_at_ms: Date.now(),
-  };
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<UserPreferencesDatabase>(db)
-      .insertInto("user_preferences")
-      .values({ profile_id: profileId, pref_key: CRON_FAILURE_DISMISSALS_KEY, ...value })
-      .onConflict((conflict) => conflict.columns(["profile_id", "pref_key"]).doUpdateSet(value)),
-  );
+  upsertUserPreferenceValues(db, profileId, [
+    {
+      prefKey: CRON_FAILURE_DISMISSALS_KEY,
+      valueJson: JSON.stringify(Object.fromEntries(receipts)),
+    },
+  ]);
   publishUserPreferencesChange(db);
 }
 
@@ -402,27 +424,8 @@ export function writeUserPreferences(
         .where("pref_key", "in", deletionKeys),
     );
   }
-  const updatedAtMs = Date.now();
   if (serialized.length > 0) {
-    executeSqliteQuerySync(
-      sqlite,
-      db
-        .insertInto("user_preferences")
-        .values(
-          serialized.map((entry) => ({
-            profile_id: profileId,
-            pref_key: entry.prefKey,
-            value_json: entry.valueJson,
-            updated_at_ms: updatedAtMs,
-          })),
-        )
-        .onConflict((conflict) =>
-          conflict.columns(["profile_id", "pref_key"]).doUpdateSet({
-            value_json: (eb) => eb.ref("excluded.value_json"),
-            updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-          }),
-        ),
-    );
+    upsertUserPreferenceValues(sqlite, profileId, serialized);
   }
   if (updatesGitCoauthorPreference(update)) {
     publishUserProfileAuthorityChange(sqlite, profileId);

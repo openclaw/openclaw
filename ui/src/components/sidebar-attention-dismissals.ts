@@ -41,6 +41,25 @@ export function resolveSidebarAttentionKey(gateway: ApplicationGateway): string 
     : null;
 }
 
+export function deferredCronFailurePrefix(key: string): string {
+  return key + ":pending-failure:";
+}
+
+export function hasDeferredCronFailure(key: string): boolean {
+  const storage = getSafeLocalStorage();
+  const prefix = deferredCronFailurePrefix(key);
+  try {
+    for (let index = 0; storage && index < storage.length; index++) {
+      if (storage.key(index)?.startsWith(prefix)) {
+        return true;
+      }
+    }
+  } catch {
+    // Browser storage can be denied while the Gateway remains available.
+  }
+  return false;
+}
+
 export function loadDismissals(key: string | null): SidebarAttentionDismissals {
   if (!key) {
     return {};
@@ -71,7 +90,7 @@ export function loadDismissals(key: string | null): SidebarAttentionDismissals {
   }
 }
 
-function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
+export function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissals) {
   if (!key) {
     return;
   }
@@ -217,20 +236,6 @@ export function reconcileSidebarAttentionDismissals(params: {
     saveDismissals(params.key, pruned);
   }
   return pruned;
-}
-
-/** Remove only an imported v2 job ID. Another tab may have saved unrelated alerts. */
-export function retireLegacyCronDismissal(key: string, id: string): SidebarAttentionDismissals {
-  const stored = loadDismissals(key);
-  if (!stored.cronFailed?.includes(id)) {
-    return stored;
-  }
-  stored.cronFailed = stored.cronFailed.filter((candidate) => candidate !== id);
-  if (!stored.cronFailed.length) {
-    delete stored.cronFailed;
-  }
-  saveDismissals(key, stored);
-  return stored;
 }
 
 export function clearSidebarAttentionDismissal(

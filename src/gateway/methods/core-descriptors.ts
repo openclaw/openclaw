@@ -298,7 +298,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["node.invoke.progress", "nodes", "node", "<=2026.7"],
   ["node.invoke.result", "nodes", "node", "<=2026.7"],
   ["node.event", "nodes", "node", "<=2026.7"],
-  ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
   ["cron.get", "cron", "operator.read", "<=2026.7"],
   [
     "cron.list",
@@ -758,4 +757,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["toolUsage.import", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["toolUsage.reset", "tool-usage", "operator.admin", "2026.11", CONTROL_PLANE_WRITE],
   ["sessions.steerActive", "sessions-messaging", "operator.write", "2026.11", OWN_SESSION_WRITE],
+  ["cron.acknowledgeFailure", "cron", "operator.read", "2026.11"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
