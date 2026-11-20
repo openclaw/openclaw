@@ -273,9 +273,21 @@ it("logs safe App refusal origins in the existing request trace without changing
 });
 
 it("prepares the selected App tool environment without exposing signing keys", () => {
-  const overlay = prepareGitHubToolEnvironment({ config, agentId: "main" });
+  const sourceConfig: OpenClawConfig = {
+    ...config,
+    tools: {
+      github: {
+        ...selected,
+        app: {
+          ...selected.app,
+          privateKey: { source: "env", provider: "default", id: "SYNTHETIC_APP_SIGNING_KEY" },
+        },
+      },
+    },
+  };
+  const overlay = prepareGitHubToolEnvironment({ config, sourceConfig, agentId: "main" });
   expect(overlay.appInstallationProfileId).toBe(selected.profileId);
-  expect(overlay.credentialScrubEnv.OPENCLAW_GITHUB_APP_PRIVATE_KEY).toBe("");
+  expect(overlay.credentialScrubEnv.SYNTHETIC_APP_SIGNING_KEY).toBe("");
   expect(overlay.credentialScrubEnv.GITHUB_APP_PRIVATE_KEY).toBe("");
   expect(fetcher).not.toHaveBeenCalled();
 });
@@ -465,6 +477,7 @@ const integrationState = vi.hoisted(() => ({
 vi.mock("../plugins/repository-integration-runtime.js", async (original) => {
   const actual = await original<typeof import("../plugins/repository-integration-runtime.js")>();
   return {
+    ...actual,
     getRepositoryIntegration: (capturedConfig?: OpenClawConfig) =>
       integrationState.real
         ? actual.getRepositoryIntegration(capturedConfig)

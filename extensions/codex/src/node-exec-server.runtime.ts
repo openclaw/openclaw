@@ -144,6 +144,10 @@ function createNodeExecServerProcessOwner(
 /** Runs the one-connection paired-node exec-server after lightweight command admission. */
 export async function runCodexNodeExecServer(params: {
   assertExecAuthorized: () => void;
+  commandEnvironment?: {
+    environment: Record<string, string>;
+    launchEnvironment: () => Record<string, string>;
+  };
   workspace: import("openclaw/plugin-sdk/node-host").OpenClawPluginNodeWorkspaceLease & {
     repositoryReadiness?: { wait(signal: AbortSignal): Promise<void>; assertCurrent(): void };
   };
@@ -234,6 +238,7 @@ export async function runCodexNodeExecServer(params: {
         env: {
           HOME: workspace.homeDir ?? dir,
           CODEX_HOME: codexHome,
+          ...params.commandEnvironment?.environment,
           RUST_LOG:
             "error,opentelemetry_sdk=off,opentelemetry_otlp=off,codex_exec_server::server::transport=info",
           ...(process.platform === "win32" ? { USERPROFILE: workspace.homeDir ?? dir } : {}),
@@ -329,10 +334,21 @@ export async function runCodexNodeExecServer(params: {
     // belongs to this cancellable launch, before that handshake begins.
     const writeInput = (encoded: Buffer) => {
       const write = () => {
+        let message = encoded;
         io.signal.throwIfAborted();
         params.assertExecAuthorized();
         workspace.processEnvironment?.assertCurrent();
-        return writeNodeExecServerMessage(child, encoded, io.signal);
+        if (params.commandEnvironment) {
+          const request: unknown = JSON.parse(encoded.toString("utf8"));
+          if (isRecord(request) && request.method === "process/start" && isRecord(request.params)) {
+            request.params.env = {
+              ...(isRecord(request.params.env) ? request.params.env : {}),
+              ...params.commandEnvironment.launchEnvironment(),
+            };
+            message = Buffer.from(JSON.stringify(request));
+          }
+        }
+        return writeNodeExecServerMessage(child, message, io.signal);
       };
       const operation = writes ? writes.then(write) : write();
       if (!operation) {

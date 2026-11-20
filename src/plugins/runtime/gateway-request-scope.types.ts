@@ -23,6 +23,8 @@ export type PluginRuntimeGatewayRequestScope = {
     agentId: string;
     nodeId: string;
     workspace: OpenClawPluginNodeWorkspace;
+    /** Credential delivery is restricted to an exclusive provider worker. */
+    requireDedicatedWorker?: true;
   }) => void;
   /** In-process admitted owner only; never projected into RPC parameters. */
   invokeWithSessionNodeAuthority?: <T>(

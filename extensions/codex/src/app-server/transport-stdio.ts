@@ -1,5 +1,6 @@
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
+import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
 import {
   materializeWindowsSpawnProgram,
@@ -23,6 +24,37 @@ const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
 ]);
+
+/** Do not project a local managed profile into a remote, sandboxed, or host-bound shell. */
+export function projectCodexAppServerShellEnvironment(
+  preparedEnvironment:
+    | ReturnType<NonNullable<EmbeddedRunAttemptParamsV2["hostCapabilities"]["preparedEnvironment"]>>
+    | undefined,
+  { sandboxed, remoteExec }: { sandboxed: boolean; remoteExec: boolean },
+) {
+  const preparedShellEnvironment = preparedEnvironment
+    ? {
+        ...preparedEnvironment.credentialScrubEnv,
+        ...(sandboxed || remoteExec || preparedEnvironment.hostExecutionRequired
+          ? undefined
+          : preparedEnvironment.localIdentityEnv),
+        ...preparedEnvironment.localProcessEnv,
+      }
+    : undefined;
+  const baseShellEnvironment =
+    preparedShellEnvironment && Object.keys(preparedShellEnvironment).length > 0
+      ? preparedShellEnvironment
+      : undefined;
+  // An empty system-detected overlay intentionally keeps the runtime user's native shell identity.
+  // Selected, scrubbed, or remote identities must not let a later profile replace that decision.
+  const disableLoginShell =
+    remoteExec ||
+    preparedEnvironment?.localProcessEnv !== undefined ||
+    preparedEnvironment?.managedLocalIdentity === true ||
+    (preparedEnvironment !== undefined &&
+      Object.keys(preparedEnvironment.credentialScrubEnv).length > 0);
+  return { baseShellEnvironment, disableLoginShell };
+}
 
 /** Resolves the concrete command/argv/shell settings used to spawn Codex app-server. */
 export function resolveCodexAppServerSpawnInvocation(

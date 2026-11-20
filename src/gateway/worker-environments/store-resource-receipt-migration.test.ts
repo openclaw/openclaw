@@ -65,6 +65,7 @@ it.each(["runtime", "doctor"] as const)(
         scope,
         [
           "worker_environments",
+          "worker_session_placements",
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "schema_meta",
@@ -78,6 +79,7 @@ it.each(["runtime", "doctor"] as const)(
         },
       );
       const database = openOpenClawStateDatabase(options);
+      expect(database.db.prepare("SELECT * FROM worker_session_placements").all()).toEqual([]);
       expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });

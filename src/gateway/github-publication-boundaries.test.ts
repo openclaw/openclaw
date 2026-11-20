@@ -107,7 +107,7 @@ async function cloudFixture() {
 }
 
 describe("Gateway GitHub publication boundaries", () => {
-  installGitHubPublicationTestHarness();
+  const identityFixture = installGitHubPublicationTestHarness();
 
   it.each(["retained", "missing"] as const)(
     "does not rebind a %s receipt lifecycle when replaying after the real reset",
@@ -486,6 +486,7 @@ describe("Gateway GitHub publication boundaries", () => {
     if (fault === "credential") {
       const config = { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } };
       mocks.getConfigSnapshot.mockReturnValue({ config, sourceConfig: config });
+      identityFixture.restoreNativeIdentity();
       const { prepareGitHubPublicationIdentity } = await vi.importActual<
         typeof import("../agents/github-tool-identity.js")
       >("../agents/github-tool-identity.js");

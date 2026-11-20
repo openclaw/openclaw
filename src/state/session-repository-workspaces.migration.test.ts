@@ -60,6 +60,7 @@ function legacyDatabase(refuse = false, repositoryPresent = true) {
     options: { env, path: pathname },
     pathname,
     pending: db.prepare("SELECT * FROM worker_workspace_pending_results").get(),
+    placement: db.prepare("SELECT * FROM worker_session_placements").get(),
     repository: repositoryPresent
       ? db.prepare("SELECT * FROM session_repository_workspaces").get()
       : undefined,
@@ -78,6 +79,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
           "session_repository_workspaces",
           "worker_workspace_pending_results",
           "worker_environments",
+          "worker_session_placements",
           "schema_meta",
           "config_machine_state",
         ],
@@ -89,6 +91,10 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         },
       );
       const database = openOpenClawStateDatabase(f.options);
+      expect(database.db.prepare("SELECT * FROM worker_session_placements").get()).toEqual({
+        ...f.placement,
+        confirmed_loss_recovery_json: null,
+      });
       expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
         user_version: OPENCLAW_STATE_SCHEMA_VERSION,
       });
@@ -110,6 +116,7 @@ it.each(["runtime", "doctor", "absent-repository"] as const)(
         expect(database.db.prepare("SELECT * FROM session_repository_workspaces").get()).toEqual({
           ...f.repository,
           disk_authority_json: null,
+          recovery_json: null,
         });
       } else {
         expect(

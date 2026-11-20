@@ -10,6 +10,8 @@ import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-
 import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { OpenClawPluginNodeWorkspace } from "../../plugins/types.node-host.js";
 import {
   onUserProfilesChanged,
   onUserProfileEmailBindingChanged,
@@ -30,11 +32,12 @@ import type {
 const log = createSubsystemLogger("gateway/worker-github");
 
 /** A native worker receives only the selected execution identity under its current operator and session. */
-export async function prepareWorkerGitHubBindingGrant(params: {
+export async function prepareWorkerGitHubExecutionGrant(params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
   expectedProfileId?: string;
+  workerPlacement?: { runId: string; nodeId: string; workspace: OpenClawPluginNodeWorkspace };
   signal?: AbortSignal;
   assertCurrent?: () => boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -63,8 +66,26 @@ export async function prepareWorkerGitHubBindingGrant(params: {
     (caller?.agentId === params.agentId && caller.sessionKey === params.sessionKey
       ? caller.operatorAuthority
       : undefined);
-  if (repositoryIntegration && !operator) {
+  if ((repositoryIntegration || params.workerPlacement) && !operator) {
     throw new Error("Worker GitHub execution requires the verified operator and session.");
+  }
+  let assertWorkerCurrent: (() => void) | undefined;
+  if (params.workerPlacement) {
+    const worker = params.workerPlacement;
+    const assertPlacementCurrent =
+      getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
+    if (
+      !assertPlacementCurrent ||
+      !params.expectedProfileId ||
+      worker.workspace.sessionId !== params.sessionId ||
+      worker.workspace.sessionKey !== params.sessionKey
+    ) {
+      throw new Error(
+        "Worker GitHub execution requires an admitted App and exact worker placement.",
+      );
+    }
+    assertWorkerCurrent = () =>
+      assertPlacementCurrent({ ...worker, agentId: params.agentId, requireDedicatedWorker: true });
   }
   if (operator) {
     assertAdmittedRunOperatorAuthority(operator);
@@ -79,6 +100,7 @@ export async function prepareWorkerGitHubBindingGrant(params: {
   let closed = false;
   const assertAuthority = () => {
     signal.throwIfAborted();
+    assertWorkerCurrent?.();
     if (params.expectedProfileId) {
       const config = currentGitHubPublicationConfig();
       const selected =
@@ -149,6 +171,9 @@ export async function prepareWorkerGitHubBindingGrant(params: {
       }),
     );
     assertCurrent();
+    if (params.expectedProfileId && identity.profileId !== params.expectedProfileId) {
+      throw new Error("Worker GitHub grant did not bind the selected App.");
+    }
     const scope =
       identity.source === "agent-override"
         ? "agent"

@@ -47,8 +47,9 @@ export function createGitHubIdentityStatusTool(
             }
           : reconnect
             ? {
-                nextAction:
-                  "Ask the operator to connect or reconnect GitHub under Settings → Agents → Tools.",
+                nextAction: githubIdentitySettingsAvailable
+                  ? "Open screen with action github_identity_settings so the operator can connect or reconnect GitHub."
+                  : "Ask the operator to connect or reconnect GitHub under Settings → Profile → GitHub accounts.",
               }
             : {}),
       });

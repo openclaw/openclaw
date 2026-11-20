@@ -509,6 +509,9 @@ export async function executeRemoteExecTurn(params: {
           params.assertRunCurrent?.();
           const placement = params.placements.get(params.placement.sessionId);
           const currentEnvironment = params.environments.get(environment.environmentId);
+          if (request.requireDedicatedWorker && currentEnvironment?.sharedHost !== false) {
+            throw new Error("Managed GitHub App execution requires a dedicated cloud worker.");
+          }
           if (
             !executionActive ||
             params.turn.abortSignal?.aborted ||

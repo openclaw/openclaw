@@ -501,7 +501,7 @@ describe("combined native publication proof", () => {
 });
 
 describe("personal publisher credential custody", () => {
-  installGitHubPublicationTestHarness({
+  const identityFixture = installGitHubPublicationTestHarness({
     creatorEmail: "alice@example.test",
     sandbox: "required",
     realWorktree: true,
@@ -529,6 +529,7 @@ describe("personal publisher credential custody", () => {
     person.config.gateway = {};
     const events: string[] = [];
     const sharedToken = registerPublicationCredentialFixture(person, events);
+    identityFixture.restoreNativeIdentity();
     const actualIdentity = await vi.importActual<
       typeof import("../agents/github-tool-identity.js")
     >("../agents/github-tool-identity.js");

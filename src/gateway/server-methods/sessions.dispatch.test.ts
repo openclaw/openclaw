@@ -235,6 +235,7 @@ describe("sessions.dispatch", () => {
         message:
           "cloudWorkers.projectProfiles mapping github.com/acme/app references unconfigured profile missing",
       }),
+      undefined,
     );
   });
 
@@ -476,7 +477,15 @@ describe("sessions.dispatch", () => {
 
     const respond = await invoke(dispatchContext(dispatch));
 
-    expectDispatchError(respond, "Cloud workspace inventory exceeds its entry limit");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "Cloud workspace inventory exceeds its entry limit",
+      }),
+      undefined,
+    );
   });
 
   it.each(["test", "cloud"])(
@@ -883,6 +892,7 @@ describe("sessions.dispatch", () => {
               outcome === "success"
                 ? undefined
                 : expect.objectContaining({ message: reclaimError.message }),
+              ...(outcome === "success" ? [] : [undefined]),
             );
             await flushPendingSessionsChangedEvents(context);
             expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(

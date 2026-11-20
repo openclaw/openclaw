@@ -1,6 +1,7 @@
 /** Manifest-light commands for an explicitly enrolled dedicated worker. */
 import fs from "node:fs";
 import path from "node:path";
+import { parseWorkerGitHubLaunchBinding } from "openclaw/plugin-sdk/github-worker-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -14,14 +15,21 @@ function parseRequest(value: unknown) {
   if (
     !isRecord(value) ||
     Object.keys(value).some(
-      (key) => !["placement", "authorization", "resourcePreparationRequired"].includes(key),
+      (key) =>
+        !["placement", "authorization", "resourcePreparationRequired", "github"].includes(key),
     ) ||
     value.authorization !== "session-full" ||
     (value.resourcePreparationRequired !== undefined && value.resourcePreparationRequired !== true)
   ) {
     throw new Error("Worker Codex requires an exact Full placement request");
   }
+  const github =
+    value.github === undefined ? undefined : parseWorkerGitHubLaunchBinding(value.github);
+  if (value.github !== undefined && !github) {
+    throw new Error("Worker GitHub binding is invalid");
+  }
   return {
+    github: github ?? undefined,
     workspace: parseCodexNodePlacementWorkspace(value.placement),
     resourcePreparationRequired: value.resourcePreparationRequired === true,
   };
@@ -74,6 +82,7 @@ export function createCodexNodeAppServerCommand(): OpenClawPluginNodeHostCommand
         activeProcesses,
         assertExecAuthorized,
         sessionId: request.workspace.sessionId,
+        github: request.github,
         resourcePreparationRequired: request.resourcePreparationRequired,
       });
     },
@@ -101,7 +110,7 @@ export function createCodexNodeAppServerInvokePolicy(): OpenClawPluginNodeInvoke
       } catch {
         return denied;
       }
-      const { workspace, resourcePreparationRequired } = request;
+      const { workspace, resourcePreparationRequired, github } = request;
       return (
         (await context.invokeNodeWithSessionFull?.({
           workspace,
@@ -114,6 +123,7 @@ export function createCodexNodeAppServerInvokePolicy(): OpenClawPluginNodeInvoke
               sessionKey: workspace.sessionKey,
               ownerEpoch: workspace.ownerEpoch,
             },
+            ...(github ? { github } : {}),
             ...(resourcePreparationRequired ? { resourcePreparationRequired: true } : {}),
           }),
         })) ?? denied

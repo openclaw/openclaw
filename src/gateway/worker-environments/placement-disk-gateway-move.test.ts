@@ -337,8 +337,10 @@ it.each([
           false,
           undefined,
           expect.objectContaining({
+            code: boundary === "revoked" ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: expect.stringContaining(boundary === "revoked" ? "changed" : "interrupted at"),
           }),
+          undefined,
         ],
       ]);
       if (

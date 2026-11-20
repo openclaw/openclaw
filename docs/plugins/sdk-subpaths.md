@@ -200,6 +200,10 @@ readers use it without loading session storage, artifact cleanup, or archive
 compression. Filename parsing shares a pure grammar with the artifact helpers.
 Existing memory session facades retain these exports for installed plugin compatibility.
 
+The private-local `plugin-sdk/github-worker-runtime` prepares the Gateway-owned
+GitHub execution grant for official worker adapters, including acknowledged
+refresh and teardown. It is not a typed public SDK entrypoint.
+
 The private official-plugin runtime `node-crypto-runtime` exposes `sha256Hex`
 for hashing strings or bytes without loading memory indexing helpers. It is a
 JavaScript-only host runtime export, not a typed public Plugin SDK entrypoint.

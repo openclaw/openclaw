@@ -106,7 +106,6 @@ export async function prepareAppGitHubIdentity(
       env: Object.freeze({
         ...withGitHubToken(env, issued.token),
         GH_HOST: host,
-        OPENCLAW_GITHUB_EXECUTION_KIND: "app-installation",
       }),
       accessExpiresAtMs: issued.expiresAtMs,
       revoke: issued.revoke,

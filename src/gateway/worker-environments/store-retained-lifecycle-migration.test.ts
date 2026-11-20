@@ -57,18 +57,25 @@ function legacyDatabase(refusePublication = false) {
     options: { env, path: pathname },
     pathname,
     before: db.prepare("SELECT * FROM worker_environments").get(),
+    repository: db.prepare("SELECT * FROM session_repository_workspaces").get(),
   };
 }
 
 it.each(["runtime", "doctor"] as const)(
   "migrates v38 through %s without changing existing disk custody or inventing retention",
   async (owner) => {
-    const { options, pathname, before } = legacyDatabase();
+    const { options, pathname, before, repository } = legacyDatabase();
     await withStateMigrationBackupForTest(options, async () => {
       using scope = new DatabaseSync(pathname);
       await assertSqliteMigrationScopePreserved(
         scope,
-        ["worker_environments", "schema_meta", "config_machine_state"],
+        [
+          "worker_environments",
+          "session_repository_workspaces",
+          "worker_session_placements",
+          "schema_meta",
+          "config_machine_state",
+        ],
         () => {
           if (owner === "doctor") {
             expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -88,6 +95,11 @@ it.each(["runtime", "doctor"] as const)(
         retention_json: null,
         provision_source_json: null,
       });
+      expect(database.db.prepare("SELECT * FROM session_repository_workspaces").get()).toEqual({
+        ...repository,
+        recovery_json: null,
+      });
+      expect(database.db.prepare("SELECT * FROM worker_session_placements").all()).toEqual([]);
       expect(
         runSqliteReadOperationSync(scope, () =>
           inspectStateDatabaseSchema(scope, {
@@ -113,7 +125,7 @@ it.each(["runtime", "doctor"] as const)(
 );
 
 it("rolls back retention DDL and version publication together", async () => {
-  const { options, pathname, before } = legacyDatabase(true);
+  const { options, pathname, before, repository } = legacyDatabase(true);
   await expect(
     withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
   ).rejects.toThrow("fixture publication refusal");
@@ -124,6 +136,7 @@ it("rolls back retention DDL and version publication together", async () => {
     schema_version: 38,
   });
   expect(db.prepare("SELECT * FROM worker_environments").get()).toEqual(before);
+  expect(db.prepare("SELECT * FROM session_repository_workspaces").get()).toEqual(repository);
 });
 
 it("keeps PostgreSQL v38 backups independent of the nullable v39 retention column", async () => {

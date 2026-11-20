@@ -68,6 +68,19 @@ afterEach(async () => {
 const mocks = githubPublicationTestMocks();
 const url = "https://github.com/owner/repository/pull/12";
 
+it("keeps the already-loaded native identity owner inside the synthetic publication fixture", async () => {
+  const native = await vi.importActual<typeof import("../agents/github-tool-identity.js")>(
+    "../agents/github-tool-identity.js",
+  );
+  // Never probe an actual credential when the fixture failed to cover this module view.
+  expect(vi.isMockFunction(native.prepareGitHubPublicationIdentity)).toBe(true);
+  expect(vi.isMockFunction(native.prepareGitHubPublicationOptionsIdentity)).toBe(true);
+  await expect(
+    native.prepareGitHubPublicationIdentity({ config: getRuntimeConfig(), agentId: "main" }),
+  ).resolves.toMatchObject({ account: { accountId: 42, login: "roboclaw-bot" } });
+  expect(mocks.prepareIdentity).toHaveBeenCalledOnce();
+});
+
 function observeSql() {
   const sql = observeHostDataSql();
   return { ...sql, [Symbol.dispose]: sql.restore };
