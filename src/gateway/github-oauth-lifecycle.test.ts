@@ -107,6 +107,7 @@ vi.mock("./github-cli-preflight.js", async (importOriginal) => {
 
 import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
 import { createGitHubOAuthInventoryReader } from "./github-oauth-lifecycle-helpers.js";
+import { registerGitHubOAuthActivationTests } from "./github-oauth-lifecycle.activation.test-support.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -260,6 +261,10 @@ beforeEach(() => {
       throw new Error("test mutation requires an identity");
     }
     setSelectedIdentity(params.scope, params.agentId, params.identity);
+    if (params.pathPrepend) {
+      const tools = currentConfig.agents!.entries![params.agentId]!.tools!;
+      (tools.exec ??= {}).pathPrepend = params.pathPrepend.value;
+    }
     return currentConfig;
   });
 });
@@ -403,21 +408,14 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(mocks.pollDeviceToken).not.toHaveBeenCalled();
   });
 
-  it("preserves custom Git author data when reconnecting an existing identity", async () => {
-    const previous = identity(OLD_PROFILE, { oauth: true, author: true });
-    currentConfig = configForScope("system", previous);
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "system");
-    mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
-    await advanceToPoll(started.requestId);
-
-    await lifecycle.pollAuthorization(started.requestId);
-
-    expect(selectedIdentity("system")).toEqual({
-      profileId: NEW_PROFILE,
-      kind: "oauth",
-      gitAuthor: previous.gitAuthor,
-    });
+  registerGitHubOAuthActivationTests({
+    createLifecycle,
+    getConfig: () => currentConfig,
+    setConfig: (config) => {
+      currentConfig = config;
+    },
+    advanceToPoll,
+    mocks,
   });
 
   it("applies pending and cumulative server slow_down intervals to the durable record", async () => {
@@ -728,11 +726,13 @@ describe("GitHub OAuth authorization lifecycle", () => {
 
     persistedReadable = true;
     await lifecycle.maintain();
+    await expectStoredOAuth(NEW_PROFILE, { pendingInitial: { requestId: started.requestId } });
+    currentConfig = persisted;
+    await lifecycle.maintain();
     expect(await inspectGitHubOAuthRecord(NEW_PROFILE)).toEqual({
       state: "valid",
       record: expect.not.objectContaining({ pendingInitial: expect.anything() }),
     });
-    currentConfig = persisted;
     expect(selectedIdentity("system")).toMatchObject({ profileId: NEW_PROFILE, kind: "oauth" });
     expect(mocks.removeProfile).not.toHaveBeenCalled();
   });

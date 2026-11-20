@@ -80,9 +80,20 @@ const deviceRecordSchema = strictRecord({
   requestId: requestIdSchema,
   ...githubOAuthDeviceFields,
   ...authorizationFields,
+  activation: strictRecord({
+    expectedAccountId: z.number().int().positive(),
+    resetGitAuthor: z.literal(true).optional(),
+    pathPrepend: z.array(authorValue.max(4096)).max(64).optional(),
+  }).optional(),
+  expectedPathPrepend: z.array(z.string()).nullable().optional(),
 })
   .refine(validAgentBinding)
   .refine(validGitHubDeviceTiming)
+  .refine(
+    (record) =>
+      (!record.activation || record.scope === "agent") &&
+      (record.activation?.pathPrepend !== undefined) === (record.expectedPathPrepend !== undefined),
+  )
   .transform(omitMissingAgentBinding);
 const pendingInitialSchema = strictRecord({
   requestId: requestIdSchema,

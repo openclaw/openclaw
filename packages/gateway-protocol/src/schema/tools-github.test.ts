@@ -1,4 +1,5 @@
 import { describe, it } from "vitest";
+import { accepts, rejects } from "./schema.test-support.js";
 import {
   ToolsGitHubAuthorizeCancelParamsSchema as CancelParams,
   ToolsGitHubAuthorizePollParamsSchema as PollParams,
@@ -7,8 +8,7 @@ import {
   ToolsGitHubAuthorizeStartResultSchema as StartResult,
   ToolsGitHubConfigureParamsSchema as ConfigureParams,
   ToolsGitHubStatusResultSchema as StatusResult,
-} from "./agents-models-skills.js";
-import { accepts, rejects } from "./schema.test-support.js";
+} from "./tools-github.js";
 
 const identityFacts = {
   source: "system-configured",
@@ -25,6 +25,17 @@ const identityFacts = {
 
 describe("GitHub tools protocol", () => {
   const action = { scope: "system", agentId: "main", mode: "managed" };
+
+  it("accepts account-bound activation only for an agent", () => {
+    const activation = { expectedAccountId: 42, resetGitAuthor: true, pathPrepend: ["/agent/bin"] };
+    accepts(StartParams, { scope: "agent", agentId: "main", activation });
+    rejects(
+      StartParams,
+      { scope: "system", agentId: "main", activation },
+      { scope: "agent", agentId: "main", activation: { ...activation, expectedAccountId: 0 } },
+      { scope: "agent", agentId: "main", activation: { ...activation, pathPrepend: [" "] } },
+    );
+  });
 
   it("accepts configure action", () => {
     accepts(ConfigureParams, {

@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, isPending, latest, Loading, Match, Show, Switch } from "solid-js";
-import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/tools-github.js";
 import { ErrorDetails } from "../../components/config-error.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
 import { Icon } from "../../components/solid/icon.tsx";

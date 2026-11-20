@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
+import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/tools-github.ts";
 import type { GatewayBrowserClient as Client } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
