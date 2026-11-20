@@ -2,7 +2,6 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
 import {
-  dispatchGatewayLifecycleMethod,
   bindGatewayLifecycleRequest,
   registerGatewayLifecycleRuntime,
 } from "./server-lifecycle-runtime-context.js";
@@ -15,9 +14,13 @@ function createLifecycleRuntime(result: string) {
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: async <T = unknown>(...args: DispatchArgs) =>
       (await dispatchAgent(...args)) as T,
-    waitForAgent: vi.fn(),
+    waitForAgent: async () => {
+      throw new Error("Expected mocked lifecycle wait");
+    },
     sendNotice: vi.fn(),
   };
+  // Spy after assigning the generic contract; vi.fn erases its return type parameter.
+  vi.spyOn(runtime, "waitForAgent").mockResolvedValue(result);
   return { dispatchAgent, runtime };
 }
 
@@ -54,27 +57,18 @@ it.each(["exact", "stale"] as const)(
     const active = createLifecycleRuntime("active");
     onTestFinished(registerGatewayLifecycleRuntime(active.runtime));
     const exact = createLifecycleRuntime("exact");
-    const params = { message: "completion", idempotencyKey: "completion-1" };
-    const result = dispatchGatewayLifecycleMethod(params, {
-      expectFinal: true,
-      timeoutMs: 1_000,
-      resolveGatewayContext: () =>
-        binding === "exact"
-          ? ({ lifecycleRuntime: exact.runtime } as GatewayRequestContext)
-          : undefined,
-    });
+    const params = { runId: "completion-1" };
+    const context = { lifecycleRuntime: exact.runtime } as GatewayRequestContext;
+    const call = bindGatewayLifecycleRequest(() => (binding === "exact" ? context : undefined));
+    const result = call({ method: "agent.wait", params, timeoutMs: 1_000 });
     if (binding === "stale") {
       await expect(result).rejects.toThrow(
-        "Gateway instance lifecycle dispatch unavailable for agent",
+        "Gateway instance lifecycle dispatch unavailable for agent.wait",
       );
     } else {
       await expect(result).resolves.toBe("exact");
-      expect(exact.dispatchAgent).toHaveBeenCalledWith(
-        { message: "completion", idempotencyKey: "completion-1" },
-        1_000,
-        { expectFinal: true },
-      );
+      expect(exact.runtime.waitForAgent).toHaveBeenCalledWith(params, 1_000, undefined);
     }
-    expect(active.dispatchAgent).not.toHaveBeenCalled();
+    expect(active.runtime.waitForAgent).not.toHaveBeenCalled();
   },
 );
