@@ -821,7 +821,11 @@ describe("operator approval session events", () => {
       expiresAtMs: record.expiresAtMs,
     };
     let managerAvailable = true;
-    const manager = { runtimeEpoch: record.runtimeEpoch, getLiveSnapshot: () => live };
+    const manager = {
+      runtimeEpoch: record.runtimeEpoch,
+      getLiveSnapshot: () => live,
+      listLocalPendingRecords: () => [live],
+    };
     const runtime = createRuntime({
       clients: [],
       getLiveManager: () => (managerAvailable ? manager : undefined),

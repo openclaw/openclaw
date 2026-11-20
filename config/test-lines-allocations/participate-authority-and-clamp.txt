@@ -1,0 +1,9 @@
+# Participate epic, measured against the branch merge-base with origin/main.
+# Together with participate-member-access.txt, this covers the feature's 2,874
+# net test lines above the ordinary 400-line allowance. The additional cases
+# prove independent permission/model/tool clamp intersections, durable input
+# isolation and revocation across storage reopen, host-only creator bindings,
+# direct/unified resolution and merged-identity boundaries, live/reconnect
+# disclosure and pre-limit eligibility, plus producer rollover/recovery/typing
+# lifetime and own-input Stop. Existing shared fixtures and table tests are used.
+2269

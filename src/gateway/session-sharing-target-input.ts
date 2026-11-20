@@ -272,11 +272,11 @@ export function resolveSessionMutationTargets(params: {
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
   if (
+    params.method === "session.typing" &&
     (params.participationRequired ||
       (params.sessionScope === "operator.sessions.write" &&
         resolveOperatorRolePolicy(params.client ?? null, params.context.getRuntimeConfig())
-          ?.sessions.maxInvitedAccess)) &&
-    params.method === "session.typing"
+          ?.sessions.maxInvitedAccess))
   ) {
     const sessionKey = readSessionSharingStringParam(params.requestParams, "sessionKey");
     const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
