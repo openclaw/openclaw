@@ -17,6 +17,8 @@ export type AdmittedRunOperatorAuthority = Readonly<{
     modelPolicy?: PreparedOperatorModelPolicy;
   }>;
   scopes: readonly string[];
+  /** Command-owner decision fixed at this run's start. */
+  requesterOwner?: boolean;
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;

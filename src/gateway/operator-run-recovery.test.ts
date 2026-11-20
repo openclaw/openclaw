@@ -55,7 +55,6 @@ import {
 import {
   createOperatorRecoveryFixture,
   expectCurrent,
-  expectRevoked,
   pairedOperator,
   persistDevices,
   recoveryFixture,
@@ -158,7 +157,7 @@ describe("scheduled authenticated operator source", () => {
       });
     }));
 
-  it("does not derive retained or recovered policy from an opaque membership label", () =>
+  it("does not derive admitted or recovered policy from an opaque membership label", () =>
     withRecovery(async (fixture, _stateDir, profile) => {
       const principal: OpenClawIdTunnelPrincipal = {
         kind: "member",
@@ -201,7 +200,6 @@ describe("scheduled authenticated operator source", () => {
         expect(snapshot).toMatchObject({
           assignedRole: "worker",
           openclawIdPrincipal: principal,
-          rolePolicy: role,
         });
         using restored = {
           ...(await restoreGatewayOperatorSource({
@@ -283,7 +281,7 @@ describe("scheduled authenticated operator source", () => {
         expect(second.operatorAuthority?.source).toBe(restored.authority.source);
         fixture.retire();
         restored.release();
-        expect(restored.authority.assertCurrent).toThrow();
+        expectCurrent(restored.authority);
         expect(first.assertCurrent).not.toThrow();
         expect(second.assertCurrent).not.toThrow();
         invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
@@ -296,7 +294,7 @@ describe("scheduled authenticated operator source", () => {
     }));
 
   it.each(["current", "owner closed"] as const)(
-    "checks independently owned continuation custody after preparation: %s",
+    "checks the new-start owner after preparation: %s",
     (change) =>
       withRecovery(
         async (fixture, _stateDir, profile) => {
@@ -322,18 +320,14 @@ describe("scheduled authenticated operator source", () => {
             return;
           }
           const restored = await restore;
-          const retained = expectDefined(restored.authority.retain, "continuation retention")();
           try {
-            restored.release();
             expect(restored.authority).toMatchObject({
               profileId: profile.id,
               scopes: ["operator.write"],
             });
-            expect(restored.authority.assertCurrent).not.toThrow();
             current = false;
-            expect(restored.authority.assertCurrent).toThrow("Continuation owner closed");
+            expectCurrent(restored.authority);
           } finally {
-            retained();
             restored.release();
           }
         },
@@ -449,7 +443,7 @@ describe("scheduled authenticated operator source", () => {
     );
   });
 
-  it("keeps key-linked authority through edits, resets and other chats; deleting the chat ends it", () =>
+  it("keeps admitted authority independent of chat edits, resets, and deletion", () =>
     withRecovery(async (fixture) => {
       const { agentId, sessionKey, storePath } = fixture.target;
       const restored = await restoreGatewayOperatorSource({
@@ -487,7 +481,7 @@ describe("scheduled authenticated operator source", () => {
         storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
-      expectRevoked(restored.authority);
+      expectCurrent(restored.authority);
     }));
 
   it("keeps restored authority current during unrelated issuance", () =>
@@ -723,11 +717,6 @@ describe("scheduled authenticated operator source", () => {
         profileId: profile.id,
       });
       expect(restored.authority.assertCurrent).not.toThrow();
-      const retain = expectDefined(restored.authority.retain, "recovery retention")();
-      restored.release();
-      expect(restored.authority.assertCurrent).not.toThrow();
-      retain();
-      expect(restored.authority.assertCurrent).toThrow("no longer active");
     }));
 
   it.each([
@@ -769,8 +758,8 @@ describe("scheduled authenticated operator source", () => {
     }),
   );
 
-  it.each(["claim retired", "device revoked", "role changed", "session deleted"] as const)(
-    "keeps cancellation separate from next-start readmission after %s",
+  it.each(["claim retired", "device revoked", "role changed"] as const)(
+    "keeps admitted facts while the next start checks %s",
     (change) =>
       withRecovery(async (fixture) => {
         using restored = await restoreFixture(fixture);
@@ -792,22 +781,9 @@ describe("scheduled authenticated operator source", () => {
             },
           });
         }
-        if (change === "session deleted") {
-          await deleteSessionEntryLifecycle({
-            archiveTranscript: false,
-            storePath: fixture.target.storePath,
-            target: {
-              canonicalKey: fixture.target.sessionKey,
-              storeKeys: [fixture.target.sessionKey],
-            },
-          });
-        }
-        if (change === "device revoked" || change === "role changed") {
-          expectCurrent(restored.authority);
-          await expect(fixture.restore()).rejects.toThrow();
-        } else {
-          expect(restored.authority.assertCurrent).toThrow();
-        }
+        expectCurrent(restored.authority);
+        await expect(fixture.restore()).rejects.toThrow();
+        expectCurrent(restored.authority);
       }),
   );
 
@@ -928,6 +904,7 @@ it.each(["connection", "stop", "revocation"] as const)(
         cfg: fixture.context.getRuntimeConfig(),
         operatorAuthority: restored.authority,
         operationalRunInstance,
+        assertSourceCurrent: () => stop.signal.throwIfAborted(),
         facts: {
           runId,
           agentId: fixture.target.agentId,

@@ -1,11 +1,14 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
+import { prepareGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import {
@@ -28,6 +31,7 @@ function proxyConfig(trustedProxy: Partial<TrustedProxyConfig> = {}): OpenClawCo
     gateway: {
       auth: {
         mode: "trusted-proxy",
+        identityScopes: { "proxy-operator": ["operator.admin"] },
         trustedProxy: {
           userHeader: "x-proxy-identity",
           allowUsers: ["proxy-operator"],
@@ -98,21 +102,42 @@ function withSavedProxySource(
 }
 
 describe("saved proxy-authenticated operator sources", () => {
-  it("keep their authority when proxy admission policy tightens", () =>
-    withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
-      changeConfig(proxyConfig({ requiredHeaders: ["x-proxy-scopes"] }));
+  it.each(["handshake header requirements tighten", "identity grants widen"] as const)(
+    "admit new work when %s",
+    (change) =>
+      withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
+        const next =
+          change === "identity grants widen"
+            ? proxyConfig()
+            : proxyConfig({ requiredHeaders: ["x-proxy-scopes"] });
+        if (change === "identity grants widen") {
+          next.gateway!.auth!.identityScopes = {
+            "proxy-operator": ["operator.admin", "operator.read"],
+          };
+        }
+        changeConfig(next);
 
-      const restored = await restoreSaved();
-      try {
-        expectCurrent(restored.authority);
-      } finally {
-        restored.release();
-      }
-    }));
+        const restored = await restoreSaved();
+        try {
+          expectCurrent(restored.authority);
+        } finally {
+          restored.release();
+        }
+      }),
+  );
 
   it("are refused once the proxy user is no longer allowed", () =>
     withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
       changeConfig(proxyConfig({ allowUsers: ["another-operator"] }));
+
+      await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
+    }));
+
+  it("require a current identity grant when no device token supplies scopes", () =>
+    withSavedProxySource(async ({ changeConfig, restoreSaved }) => {
+      const next = proxyConfig();
+      next.gateway!.auth!.identityScopes = {};
+      changeConfig(next);
 
       await expect(restoreSaved()).rejects.toThrow(GatewayOperatorRecoveryAuthorizationError);
     }));
@@ -125,9 +150,14 @@ describe("saved proxy-authenticated operator sources", () => {
     }));
 });
 
-it.each(["rotated", "removed"] as const)(
-  "refuses new password-fallback work after its credential is %s without cancelling admitted work",
-  async (change) => {
+it.each([
+  { change: "rotated", savedFormat: "captured" },
+  { change: "removed", savedFormat: "captured" },
+  { change: "rotated", savedFormat: "legacy" },
+  { change: "removed", savedFormat: "legacy" },
+] as const)(
+  "refuses $savedFormat password-fallback starts after the credential is $change without cancelling admitted work",
+  async ({ change, savedFormat }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const config = proxyConfig();
       config.gateway!.auth!.password = "fixture-original-password";
@@ -147,16 +177,27 @@ it.each(["rotated", "removed"] as const)(
         config,
         sharedGeneration: generation,
       });
-      const source = decodeQueuedOperatorRecoverySource({
-        kind: "gateway",
-        snapshot: {
-          ...fixture.snapshot,
-          authPolicy: {
-            ...captureGatewayAuthPolicy(config, { role: "operator", authMethod: "password" }),
-            generation: "",
-          },
-        },
+      fixture.client.authPolicy = captureGatewayAuthPolicy(config, {
+        role: "operator",
+        authMethod: "password",
       });
+      const captured = expectDefined(
+        await prepareGatewayOperatorRunAuthority({
+          client: captureAgentTurnPrincipal(fixture.client),
+          context,
+          sourceAuthority: null,
+        }),
+        "password-fallback authority",
+      );
+      using _ = { [Symbol.dispose]: captured.release };
+      const snapshot = structuredClone(
+        expectDefined(captured.authority.recoverySnapshot, "saved password-fallback source"),
+      );
+      expect(snapshot.authPolicy?.fallbackCredentialGeneration).toEqual(expect.any(String));
+      if (savedFormat === "legacy" && snapshot.authPolicy) {
+        delete snapshot.authPolicy.fallbackCredentialGeneration;
+      }
+      const source = decodeQueuedOperatorRecoverySource({ kind: "gateway", snapshot });
       const admitted = await restoreGatewayQueuedOperatorRecovery({
         source,
         context,

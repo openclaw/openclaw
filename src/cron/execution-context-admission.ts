@@ -29,7 +29,6 @@ import {
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { chatRef } from "../sessions/chat-ref.js";
-import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
@@ -328,9 +327,10 @@ export async function admitScheduledOccurrence(
     async mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
-        // Run settings can predate a slot wait; ownership must use the current config owner.
+        // Stored operator sources carry the owner decision frozen by their run admission.
+        // Other requesters use current config because run settings can predate a slot wait.
         const requesterOwner =
-          requester && requester.kind !== "operator-source"
+          !operatorSourceRequester && requester && requester.kind !== "operator-source"
             ? await checkRequesterOwner(await captureRuntimeConfigAsyncReader()(), requester)
             : undefined;
         const facts = assembleScheduledAdmissionFacts(
@@ -346,10 +346,7 @@ export async function admitScheduledOccurrence(
           },
           parentRow,
           operatorSourceRequester
-            ? run.operatorAuthority !== undefined &&
-                (job.operatorSource?.source.kind === "gateway"
-                  ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
-                  : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
+            ? run.operatorAuthority?.requesterOwner === true
             : requesterOwner?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);

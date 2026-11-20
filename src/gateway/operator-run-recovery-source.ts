@@ -10,11 +10,7 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
-import { captureGatewayAuthPolicy } from "./auth-policy.js";
-import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
-import { operatorRoleSubject } from "./operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
-import { sourceRolePolicy } from "./operator-role-source-policy.js";
+import { captureGatewayAuthPolicy, resolveGatewayAuthPolicyGrant } from "./auth-policy.js";
 import {
   decodeQueuedOperatorRecoverySource,
   normalizeGatewayOperatorRecoverySnapshot,
@@ -100,17 +96,6 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       scopes: [...authority.scopes],
       assignedRole: profile.assignedRole,
       githubLogin: profile.githubLogin ?? null,
-      rolePolicy: sourceRolePolicy(
-        openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
-          resolveOperatorRolePolicyForAssignment(
-            profile.profileId,
-            profile.assignedRole,
-            params.config,
-            profile.githubLogin ?? null,
-            operatorRoleSubject(profile),
-          ),
-        ),
-      ),
       modelPolicy,
       grant: authority.gatewayAccessGrant,
       aliasBindingIds: identity.emailBindingIds,
@@ -139,15 +124,17 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   const sourceDevice = client.connect.device;
   const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
   let device = tokenDevice ?? undefined;
-  if (sourceDevice && tokenDevice === undefined) {
+  const tokenlessProxy = !ocid && authPolicy.authMethod === "trusted-proxy" && tokenDevice == null;
+  if (sourceDevice && tokenDevice === undefined && !tokenlessProxy) {
     return { unavailableReason: "device-no-token" };
   }
-  if (sourceDevice && tokenDevice === null && !ocid && authPolicy.authMethod === "trusted-proxy") {
+  if (sourceDevice && tokenlessProxy) {
     const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
-    if (paired) {
-      // Proxy authentication may not issue a token, but an existing pairing still bounds later work.
-      device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
+    if (!paired) {
+      return { unavailableReason: "device-no-token" };
     }
+    // Proxy authentication may not issue a token, but an existing pairing still bounds later work.
+    device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
   }
   const sharedGeneration = client.usesSharedGatewayAuth
     ? client.sharedGatewaySessionGeneration
@@ -166,24 +153,18 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     scopes: [...authority.scopes],
     assignedRole: profile.assignedRole,
     githubLogin: profile.githubLogin ?? null,
-    rolePolicy: sourceRolePolicy(
-      openclawIdSubjectRolePolicy(authority.openclawIdPrincipal, () =>
-        resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          params.config,
-          profile.githubLogin ?? null,
-          operatorRoleSubject(profile),
-        ),
-      ),
-    ),
     modelPolicy,
     grant: authority.gatewayAccessGrant,
     aliasBindingIds: identity.emailBindingIds,
     // Accepted work follows its grant, not unrelated handshake policy changes.
-    authPolicy: { ...authPolicy, generation: "" },
     sharedGeneration,
     device,
+    authPolicy: {
+      ...authPolicy,
+      generation: "",
+      fallbackCredentialGeneration: resolveGatewayAuthPolicyGrant(params.config, authPolicy)
+        .fallbackCredentialGeneration,
+    },
     automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
