@@ -666,7 +666,7 @@ try {
                   identity,
                   buildCacheInputs: [],
                   guard,
-                  branch: "counterfactual",
+                  branch: "openclaw-template",
                   destination,
                 };
                 if (counterfactual === "join") {
@@ -686,7 +686,7 @@ try {
                     temporaryRoot: output,
                     baseCommit: target,
                     retainedCommit: previous.record.sourceCommit,
-                    branch: "counterfactual",
+                    branch: "openclaw-template",
                     signal: guard.signal,
                     assertCurrent: guard.commitGuard,
                     workerAuthority: guard.workerAuthority,

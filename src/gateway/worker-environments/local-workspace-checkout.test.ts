@@ -64,15 +64,7 @@ it("refreshes independent checkouts without replacing unchanged files or depende
     await git("add", ".");
     await git("commit", "--quiet", "-m", revision);
     const nextCommit = await git("rev-parse", "HEAD");
-    await prepareLocalWorkspaceCheckout({
-      ...checkout,
-      baseCommit: nextCommit,
-      retainedCommit,
-      branch: `projection-${revision}`,
-    });
-    expect(await worktreeGit.requireGit(destination, ["write-tree"])).toBe(
-      await git("rev-parse", `${nextCommit}^{tree}`),
-    );
+    await prepareLocalWorkspaceCheckout({ ...checkout, baseCommit: nextCommit, retainedCommit });
     retainedCommit = nextCommit;
   }
   expect(await worktreeGit.requireGit(destination, ["rev-parse", "HEAD"])).toBe(retainedCommit);

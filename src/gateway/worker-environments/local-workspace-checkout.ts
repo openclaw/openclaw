@@ -231,10 +231,6 @@ export async function prepareLocalWorkspaceCheckout(
     await fs.appendFile(path.join(repo, ".git", "shallow"), params.baseCommit + "\n", {
       mode: 0o600,
     });
-    if (params.retainedCommit) {
-      // Rename the retained branch so no old ref keeps superseded source objects reachable.
-      await git(["branch", "-m", params.branch]);
-    }
     await git([
       "checkout",
       "--quiet",
