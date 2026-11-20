@@ -327,20 +327,6 @@ function functionBoundary(node) {
   return null;
 }
 
-function resolvedVariableForIdentifier(scopes, identifier) {
-  for (const scope of scopes) {
-    const reference = scope.references.find(
-      (candidate) =>
-        candidate.identifier.start === identifier.start &&
-        candidate.identifier.end === identifier.end,
-    );
-    if (reference !== undefined) {
-      return reference.resolved;
-    }
-  }
-  return null;
-}
-
 function variableDeclarator(variable) {
   for (const definition of variable.defs) {
     if (definition.type === "Variable" && definition.node.type === "VariableDeclarator") {
@@ -350,7 +336,7 @@ function variableDeclarator(variable) {
   return null;
 }
 
-function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
+function knownValueEvidence(expression, resolveVariable, boundary, visitedVariables) {
   const unwrapped = unwrapExpressionParentheses(expression);
 
   if (isTypeAssertionExpression(unwrapped)) {
@@ -378,7 +364,7 @@ function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
   if (unwrapped.type !== "Identifier") {
     return null;
   }
-  const variable = resolvedVariableForIdentifier(scopes, unwrapped);
+  const variable = resolveVariable(unwrapped);
   if (variable === null || visitedVariables.has(variable)) {
     return null;
   }
@@ -408,13 +394,13 @@ function knownValueEvidence(expression, scopes, boundary, visitedVariables) {
 
   return knownValueEvidence(
     declarator.init,
-    scopes,
+    resolveVariable,
     boundary,
     new Set([...visitedVariables, variable]),
   );
 }
 
-function widenedBinding(variable, scopes, declarator) {
+function widenedBinding(variable, resolveVariable, declarator) {
   const boundary = functionBoundary(declarator);
   const declaredType = declarator.id.typeAnnotation?.typeAnnotation;
   const initializerAssertion = assertionFromExpression(declarator.init);
@@ -430,11 +416,16 @@ function widenedBinding(variable, scopes, declarator) {
     initializerAssertion !== null && initializerBroadKind !== null
       ? assertedExpression(initializerAssertion)
       : declarator.init;
-  const evidence = knownValueEvidence(originalExpression, scopes, boundary, new Set([variable]));
+  const evidence = knownValueEvidence(
+    originalExpression,
+    resolveVariable,
+    boundary,
+    new Set([variable]),
+  );
   return evidence === null ? null : { broadKind, evidence, declaredAt: declarator.end, boundary };
 }
 
-function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
+function resolveWidenedBinding(variable, resolveVariable, boundary, assertedAt) {
   const visitedVariables = new Set();
   let current = variable;
   for (let depth = 0; depth < MAX_TRANSPARENT_ALIAS_DEPTH; depth += 1) {
@@ -455,7 +446,7 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
       return null;
     }
 
-    const widened = widenedBinding(current, scopes, declarator);
+    const widened = widenedBinding(current, resolveVariable, declarator);
     if (widened !== null) {
       return widened;
     }
@@ -472,7 +463,7 @@ function resolveWidenedBinding(variable, scopes, boundary, assertedAt) {
     if (initializer.type !== "Identifier") {
       return null;
     }
-    current = resolvedVariableForIdentifier(scopes, initializer);
+    current = resolveVariable(initializer);
     if (current === null) {
       return null;
     }
@@ -515,7 +506,22 @@ function noWidenThenAssertRule({ roots }) {
         return {};
       }
 
-      let scopes;
+      let variablesByRange;
+      const resolveVariable = (identifier) => {
+        if (variablesByRange === undefined) {
+          variablesByRange = new Map();
+          for (const scope of context.sourceCode.scopeManager.scopes) {
+            for (const reference of scope.references) {
+              const key = `${reference.identifier.start}:${reference.identifier.end}`;
+              // Retain the first match, including unresolved references.
+              if (!variablesByRange.has(key)) {
+                variablesByRange.set(key, reference.resolved);
+              }
+            }
+          }
+        }
+        return variablesByRange.get(`${identifier.start}:${identifier.end}`) ?? null;
+      };
       const checkAssertion = (node) => {
         if (isNestedAssertion(node)) {
           return;
@@ -525,13 +531,12 @@ function noWidenThenAssertRule({ roots }) {
           return;
         }
 
-        scopes ??= context.sourceCode.scopeManager.scopes;
-        const variable = resolvedVariableForIdentifier(scopes, expression);
+        const variable = resolveVariable(expression);
         if (variable === null) {
           return;
         }
         const boundary = functionBoundary(node);
-        const widened = resolveWidenedBinding(variable, scopes, boundary, node.start);
+        const widened = resolveWidenedBinding(variable, resolveVariable, boundary, node.start);
         if (
           widened === null ||
           node.start <= widened.declaredAt ||

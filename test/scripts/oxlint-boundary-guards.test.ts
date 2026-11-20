@@ -22,7 +22,7 @@ const cases = [
   ["no-register-http-handler-call", "boundary-calls.tsx", 1, [5]],
   ["no-raw-window-open-call", "boundary-calls.test-harness.tsx", 0],
   ["no-register-http-handler-call", "boundary-calls.test-harness.tsx", 0],
-  ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 3, [3, 7, 13]],
+  ["no-widen-then-assert", "widen-then-assert-violation.test.ts", 4, [3, 7, 13, 34]],
   ["no-chained-type-assertions", "chained-type-assertions-violation.ts", 3],
 ] satisfies [string, string, number, number[]?][];
 

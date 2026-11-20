@@ -25,3 +25,15 @@ function readOuterAlias() {
 
 forwardAlias as { readonly id: string };
 const forwardAlias = aliasWidened;
+
+{
+  const shadowed = { id: "precise" };
+  shadowed as { readonly id: string };
+  {
+    const shadowed: unknown = source;
+    shadowed as { readonly id: string };
+  }
+  shadowed as { readonly id: string };
+}
+
+unresolvedValue as { readonly id: string };
