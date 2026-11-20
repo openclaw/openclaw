@@ -5,6 +5,24 @@ import { en } from "./en.ts";
 
 const catalog = {
   chat: {
+    sessionSuggestions: {
+      sendNow: "Send {author}'s suggestion now",
+      queue: "Queue {author}'s suggestion",
+      edit: "Edit {author}'s suggestion",
+      dismiss: "Dismiss {author}'s suggestion",
+      typing: "{name} is typing…",
+      typingMany: "{names} are typing…",
+      typingSeveral: "Several people are typing…",
+      typingOthers: "{count} others",
+      otherCollaborators: "Other collaborators",
+      typingDraftState: "is typing…",
+      pausedDraftState: "Draft",
+      state: {
+        pending: "Pending",
+        accepted: "Accepted",
+        dismissed: "Dismissed",
+      },
+    },
     sessionSharing: {
       loweringAccessCancelsQueued: "Lowering access cancels {name}’s queued messages",
       sharedDescription: "Everyone with access can send",
@@ -47,6 +65,7 @@ export const registerChatSessionSharingEnglish = Object.assign(
     registerChatSessionEnglish();
     registerSessionPeopleEnglish();
     Object.assign(en.chat.sessionSharing, catalog.chat.sessionSharing);
+    Object.assign(en.chat.sessionSuggestions, catalog.chat.sessionSuggestions);
   },
   { catalog },
 );

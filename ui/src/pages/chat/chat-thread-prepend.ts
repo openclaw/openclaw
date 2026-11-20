@@ -19,6 +19,7 @@ function isIdleTranscript(input: BuildChatItemsProps): boolean {
     !input.queue?.length &&
     !input.pendingInputs?.length &&
     !input.guardianNotices?.length &&
+    !input.sharingNotices?.length &&
     !input.compactionStatus &&
     !input.subagentWait &&
     !input.runWorking &&

@@ -1,0 +1,6 @@
+# Five independent Participate UI boundaries add 427 net test lines in this change.
+# The 27-line excess covers live author-resolution/render lifecycle and input-history
+# restoration after membership hydration, in addition to file admission, typed
+# refusal reporting, chronological notices, and optional English catalog loading.
+# All use existing fixtures; per-file timing and base-red proof are retained.
+27

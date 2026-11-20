@@ -5,7 +5,6 @@ import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
-import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { uiConversationMatches } from "../../lib/sessions/session-key.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
@@ -21,8 +20,6 @@ export type ChatSharingNotice = {
   access: SessionMemberPermissionLevel;
   actorLabel?: string;
   timestamp: number;
-  /** A live presentation anchor, never a stored conversation message. */
-  afterMessageId: string | null | undefined;
 };
 
 type SharingNoticeScope = Pick<
@@ -110,9 +107,6 @@ export function applyChatSharingNoticeEvent(
     access: source.access,
     actorLabel,
     timestamp: source.ts,
-    afterMessageId: state.chatMessages.length
-      ? (readChatThreadMessageIdentity(state.chatMessages.at(-1))?.id ?? undefined)
-      : null,
   };
   sharingNotices.set(state, {
     client: state.client,

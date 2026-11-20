@@ -12,7 +12,7 @@ import type { AutomationProjection } from "../chat-automation-projection-loader.
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
-import { currentChatSharingNotices, projectChatSharingNotice } from "../chat-sharing-notice.ts";
+import { currentChatSharingNotices } from "../chat-sharing-notice.ts";
 import { indexRecordedSubagentStopNames } from "../chat-subagent-history.ts";
 import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
@@ -125,6 +125,7 @@ export function projectChatTranscript(
     toolMessages: props.toolMessages,
     projectAutomations,
     guardianNotices: props.guardianNotices,
+    sharingNotices,
     streamSegments: props.streamSegments,
     get stream() {
       return props.stream ?? null;
@@ -613,13 +614,6 @@ export function projectChatTranscript(
       content: new GuardedTranscriptItem([content], content),
       after,
     });
-  for (const notice of sharingNotices) {
-    appendContent(
-      `${notice.key}:${locale}`,
-      { kind: "notice", item: projectChatSharingNotice(notice) },
-      notice.afterMessageId ? messageRowKeysById.get(notice.afterMessageId) : notice.afterMessageId,
-    );
-  }
   for (const { afterMessageId, content } of realtimeConversation.blocks()) {
     appendContent(
       afterMessageId === undefined ? "realtime-talk" : `realtime-talk:${afterMessageId ?? ""}`,

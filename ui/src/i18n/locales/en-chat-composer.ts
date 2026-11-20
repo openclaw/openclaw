@@ -14,6 +14,7 @@ const catalog = {
       inviteRead: "Can read",
       inviteSuggest: "Can suggest",
       inviteSend: "Can send",
+      textOnlySuggestions: "Suggestions are text only.",
       composerInput: "Chat composer",
       workspaceRemoved: "This conversation’s workspace was removed.",
       predictionHint: "Tab to complete",

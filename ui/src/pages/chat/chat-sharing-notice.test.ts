@@ -50,7 +50,6 @@ describe("live sharing transcript notices", () => {
       },
       { kind: "notice", label: "Alice Collaborator’s access changed to Read", timestamp: 2_000 },
     ]);
-    expect(notices.map((notice) => notice.afterMessageId)).toEqual(["previous", "previous"]);
     handlePageGatewayEvent(state, sharingEvent({ access: undefined }));
     expect(currentChatSharingNotices(state)).toBe(notices);
     expect(publish).toHaveBeenCalledTimes(2);

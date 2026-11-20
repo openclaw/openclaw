@@ -34,6 +34,7 @@ import {
 import { projectResolvedQuestionPrompts } from "./chat-question-placement.ts";
 import { activeChatReasoning } from "./chat-reasoning.ts";
 import { hasHandoffToolCall, pendingSessionsYield } from "./chat-sessions-yield.ts";
+import { projectChatSharingNotice } from "./chat-sharing-notice.ts";
 import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
@@ -735,5 +736,12 @@ export function buildChatItems(
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
   items = reconcileLiveCanvasPreviews(items, hiddenHistoryKeys, hiddenKeys);
+  // Live sharing events split display groups at their event time, never stored history.
+  if (!searchFiltering && props.sharingNotices?.length) {
+    insertChatItemsByTimestamp(
+      items,
+      props.sharingNotices.map((notice) => ({ item: projectChatSharingNotice(notice) })),
+    );
+  }
   return groupChatDisplayItems(props, items, hidden, facts, streamOnset);
 }

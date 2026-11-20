@@ -214,7 +214,6 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onComposerHoldToRecordChange?: (enabled: boolean) => void;
   onOpenTalkSettings?: () => void;
   onOpenDictationSettings?: () => void;
-  suggestionComposer?: boolean;
   onTypingChange?: (typing: boolean, preview?: string, cursor?: number) => void;
   composerControls?: Parameters<typeof ChatPaneModelControl>[0] & {
     component: typeof ChatPaneModelControl;

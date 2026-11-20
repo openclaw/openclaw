@@ -9,6 +9,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import {
@@ -594,4 +595,23 @@ it("offers a static issue form without including error text or diagnostics", asy
       destination,
     );
   });
+});
+
+it.each([
+  "Remove attachments before submitting a text suggestion.",
+  "You need an invitation to participate in this session.",
+  "This action requires operator.sessions.write access.",
+])("does not offer bug reporting for an expected refusal: %s", async (error) => {
+  const { container } = publishedNotices<TopbarProps>(renderChatTopbarNotices, {
+    error,
+    errorDetail: EXPECTED_CHAT_REFUSAL,
+  });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+  expect(container.textContent).toContain(error);
+  expect(container.querySelector("a.report-issue-link")).toBeNull();
+});
+
+it("keeps bug reporting for unexpected run failures", async () => {
+  const { container } = publishedComposer({ runError: { summary: "Unexpected model failure" } });
+  await waitForSolid(() => expect(container.querySelector("a.report-issue-link")).not.toBeNull());
 });

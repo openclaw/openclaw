@@ -405,7 +405,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         Boolean(this.state?.chatRunId),
       ).branchSwitch;
       if (!access.allowed) {
-        this.publishHeaderError(access.reason);
+        this.publishHeaderError(access.reason, undefined, true);
         return;
       }
       void this.switchToBranch(leafEntryId);

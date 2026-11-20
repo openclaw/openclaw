@@ -279,6 +279,13 @@ export abstract class ChatPaneTaskSuggestions extends ChatPaneSharing {
         (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
           ? this.collaboration.suggestions
           : [],
+      onCloseSessionSuggestion: (id: string) => {
+        this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+          id,
+          false,
+        );
+      },
+      sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
       sessionSuggestionRole: this.collaboration.role,
       sessionSuggestionBusyIds: this.collaboration.busyIds,
       sessionSuggestionsArchived: archived,
