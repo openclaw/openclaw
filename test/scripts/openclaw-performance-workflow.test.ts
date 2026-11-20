@@ -314,11 +314,10 @@ describe("OpenClaw performance workflow", () => {
     const guard = jobs?.vitest_pair_guard;
     const verify = findStep("Verify isolated Vitest pair result", "vitest_pair_guard");
 
-    for (const name of ["resolve_target", "kova", "source_performance"] as const) {
-      expect(jobs?.[name]?.if).toContain("inputs.mode != 'vitest-pair'");
+    expect(jobs?.resolve_target?.if).toContain("inputs.mode != 'vitest-pair'");
+    for (const name of ["kova", "source_performance", "publish", "artifact_only_guard"] as const) {
+      expect(jobs?.[name]?.if).toContain("inputs.mode == 'kova'");
     }
-    expect(jobs?.publish?.if).toContain("inputs.mode != 'vitest-pair'");
-    expect(jobs?.artifact_only_guard?.if).toContain("inputs.mode != 'vitest-pair'");
     expect(guard?.needs).toEqual([
       "resolve_target",
       "kova",
