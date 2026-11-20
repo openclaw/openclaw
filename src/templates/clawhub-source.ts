@@ -445,6 +445,7 @@ async function readClawHubTemplateContents(
                 enabled: job.enabled ?? true,
                 schedule: job.schedule.cron,
                 timezone: job.schedule.timezone,
+                message: job.message,
               })),
             },
             ...(preview ? { preview } : {}),

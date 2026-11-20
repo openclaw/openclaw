@@ -32,12 +32,13 @@ which can be started again.
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
   subjects that deserve one, supersedes status snapshots by their outcome,
-  records outcomes in page State, retires written Timelines, and reviews up to
-  five pages a run so each reads as a current explanation. It runs on its
-  own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
-  nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
-  turn over every unlinked claim, so nightly uses more tokens. Maintenance
-  itself never starts it.
+  records outcomes in page State, retires written Timelines, and reviews pages
+  so each reads as a current explanation. It runs on its own schedule: weekly
+  on Sundays at 3:45 AM in your time zone by default, or nightly at 3:45 AM,
+  after maintenance links what it can. A weekly run works toward retiring 15
+  written Timelines and reviewing 6 pages; a nightly run, 10 and 5. Each run is
+  an agent turn over every unlinked claim, so nightly uses more tokens.
+  Maintenance itself never starts it.
 - **Learn from conversations** saves the decisions, preferences, commitments,
   and lessons in your conversations. Ongoing runs check for newly finished
   conversations daily at 4:00 AM in your time zone. Conversations already
@@ -123,6 +124,7 @@ This scribe keeps Knowledge consolidated: it files each claim that names no page
 
 Settings:
 - Runs weekly, Sundays at 3:45 AM America/Los_Angeles (cron `45 3 * * 0`).
+- Each run: retire 15 written Timelines and review 6 pages.
 
 Steps:
 1. Call knowledge_status. Go on when the scope is private and writes are enabled; a never-written store reports "unprovisioned" and is created by your first Knowledge call. Otherwise stop: ...
@@ -145,6 +147,9 @@ Run message:
 
 ```text
 Scheduled run of the Knowledge scribe "Knowledge Consolidation". Don't ask questions: nobody is watching this turn.
+
+Settings:
+- Each run: retire 15 written Timelines and review 6 pages.
 
 Steps:
 1. Call knowledge_status. ...
@@ -219,6 +224,11 @@ automation cannot tell: whether a once scribe is Done or Failing, whether setup
 succeeded before the page starts the first run, and whether a run needs
 attention. It shows the sentence of the last run's line as its result; answers
 to setup, repair and update turns are not run results.
+
+A scheduled Learn from Granola run works toward ingesting 4 meetings; a
+one-time run ingests every pending meeting. Each amount is a target: a run
+stops short only when nothing is left that something outside the run holds
+back.
 
 A Learn from Granola run reports `needs attention` when it left meetings pending,
 ingested none, and nothing outside the run held them back. A meeting stays

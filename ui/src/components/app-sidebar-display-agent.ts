@@ -1,10 +1,10 @@
 import type { ApplicationContext } from "../app/context.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../lib/sessions/session-key.ts";
-import { resolveActiveSidebarAgent } from "./app-sidebar-session-navigation-logic.ts";
 
 /** Show a provisional chat's owner without changing the selected-agent scope. */
 export function resolveSidebarDisplayAgent(input: {
@@ -16,32 +16,31 @@ export function resolveSidebarDisplayAgent(input: {
   sessionKey: string;
   chipMode: boolean;
 }) {
-  const active = resolveActiveSidebarAgent(input);
-  const creation = input.creation;
-  const sessionAgentId = parseAgentSessionKey(input.sessionKey)?.agentId;
-  if (
-    !input.chipMode ||
-    !creation ||
-    creation.creation.admitted ||
-    !sessionAgentId ||
-    !areUiSessionKeysEquivalent(input.sessionKey, creation.creation.sessionKey)
-  ) {
-    return active;
-  }
-  // An agent being created has no selection yet. Name it from the pending creation,
-  // then from the row its durable admission added, then from the chat that was opened.
-  const agentId = normalizeAgentId(sessionAgentId);
+  const { creation, pending, sessionKey, roster } = input;
+  const findAgent = (id: string) => roster.find((row) => normalizeAgentId(row.id) === id);
+  // Until admission, the displayed recipient belongs to the visible creation, not the selected scope.
+  const sessionAgentId =
+    input.chipMode &&
+    creation &&
+    !creation.creation.admitted &&
+    areUiSessionKeysEquivalent(sessionKey, creation.creation.sessionKey) &&
+    parseAgentSessionKey(sessionKey)?.agentId;
+  const id = sessionAgentId && normalizeAgentId(sessionAgentId);
   const provisional =
-    (input.pending && normalizeAgentId(input.pending.id) === agentId ? input.pending : undefined) ??
-    input.roster.find((agent) => normalizeAgentId(agent.id) === agentId) ??
-    (creation.displayName ? { id: sessionAgentId, name: creation.displayName } : undefined);
-  if (!provisional) {
-    return active;
-  }
+    id &&
+    (pending && normalizeAgentId(pending.id) === id
+      ? pending
+      : (findAgent(id) ??
+        (creation.displayName ? { id: sessionAgentId, name: creation.displayName } : undefined)));
+  const activeId = provisional ? provisional.id : input.activeId;
+  const identities = new Map(
+    input.identities.map((identity) => [identity.agentId, identity] as const),
+  );
   return {
-    ...active,
-    activeId: provisional.id,
-    agent: provisional,
-    identity: active.identities.get(agentId) ?? null,
+    activeId,
+    agent: provisional || findAgent(activeId),
+    agents: listSelectableAgents(roster),
+    identity: identities.get(provisional && id ? id : activeId) ?? null,
+    identities,
   };
 }

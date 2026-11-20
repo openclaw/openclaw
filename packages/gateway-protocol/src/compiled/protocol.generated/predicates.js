@@ -741,7 +741,7 @@ var External = [
     /(^agentId$|^sessionKey$)/u,
     /(^runId$|^timeoutMs$)/u,
     /(^includeSessionPlacement$)/u,
-    /(^name$|^agentId$|^onboarding$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
+    /(^name$|^agentId$|^onboarding$|^locale$|^expectedOwnerId$|^workspace$|^model$|^emoji$|^avatar$)/u,
     /(^agentId$|^name$|^workspace$|^model$|^agentRuntime$|^emoji$|^avatar$)/u,
     /(^agentId$|^prompt$)/u,
     /\S/u,
@@ -1654,7 +1654,7 @@ var External = [
     /(^name$|^kind$|^source$|^ref$|^version$)/u,
     /(^name$|^kind$)/u,
     /(^name$|^kind$|^source$|^path$)/u,
-    /(^name$|^enabled$|^schedule$|^timezone$)/u,
+    /(^name$|^enabled$|^schedule$|^timezone$|^message$)/u,
     /(^verdict$|^auditUrl$)/u,
     /(^packageName$|^version$|^kind$|^name$)/u,
     /(^preview$)/u,
@@ -4261,6 +4261,7 @@ var External = [
     check_6(value.name) &&
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     (value.onboarding === void 0 || !("onboarding" in value) || check_181(value.onboarding)) &&
+    (value.locale === void 0 || !("locale" in value) || check_331(value.locale)) &&
     (value.expectedOwnerId === void 0 ||
       !("expectedOwnerId" in value) ||
       check_63(value.expectedOwnerId)) &&
@@ -20178,13 +20179,15 @@ var External = [
     "enabled" in value &&
     "schedule" in value &&
     "timezone" in value &&
+    "message" in value &&
     Object.getOwnPropertyNames(value).every(
       (unique_2044, unique_2045) => External[1031].test(unique_2044) || check_2(value[unique_2044]),
     ) &&
     check_6(value.name) &&
     check_97(value.enabled) &&
     check_6(value.schedule) &&
-    check_6(value.timezone),
+    check_6(value.timezone) &&
+    check_6(value.message),
   check_3024 = (value) =>
     typeof value == "object" &&
     value !== null &&

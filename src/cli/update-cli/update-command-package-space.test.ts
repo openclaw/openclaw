@@ -65,7 +65,7 @@ it("continues a package update past a pre-migration image that does not fit", as
   expect(fs.readFileSync(file).equals(before)).toBe(true);
 });
 
-it("names retirable recovery copies beside a skipped image without removing them", async () => {
+it("reports retirable recovery copies before terminal cleanup", async () => {
   seedPackageShortfall();
   const copies = writeSucceededUpdateCopies(process.env.OPENCLAW_STATE_DIR!, [
     Date.UTC(2026, 9, 1),
@@ -81,7 +81,7 @@ it("names retirable recovery copies beside a skipped image without removing them
       /^Warning: 1 recovery copy from earlier updates use .+ and can be removed\. Run openclaw update in a terminal to be offered their removal, or stop the Gateway and run openclaw update cleanup to keep a pre-migration image on the next update\.$/u,
     ),
   );
-  expect(copies.map(fs.existsSync)).toEqual([true, true]);
+  expect(copies.map(fs.existsSync)).toEqual([false, true]);
   expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledTimes(1);
 });
 

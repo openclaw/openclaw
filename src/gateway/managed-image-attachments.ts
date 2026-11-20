@@ -590,8 +590,8 @@ async function recordMatchesTranscriptMessage(
       return matches === null ? "unavailable" : matches.has(refKey) ? "match" : "missing";
     },
   );
-  if (result === null) {
-    index.matches = new Set();
+  if (index.matches === undefined) {
+    index.matches = result === null ? new Set() : null;
   }
   return result ?? "missing";
 }

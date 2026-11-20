@@ -744,14 +744,18 @@ describe("Gateway steer FIFO", () => {
   it(
     "withdraws a canceled CLI steer before the active run consumes it",
     async () => {
+      const steerMarker = "CANCELED_STEER_SENTINEL";
       const fixture = await createGatewayFixture("steer-cancellation", {
         cliMode: true,
         holdSecondResponse: true,
+        observeSteering: steerMarker,
       });
-      const { diagnosticsClient: client, modelServer, sessionKey } = fixture;
+      const { diagnosticsClient: client, modelServer, sessionKey, steeringAdmission } = fixture;
+      if (!steeringAdmission) {
+        throw new Error("steering admission observer was not configured");
+      }
       const firstRunId = "initial-held-turn";
       const steerRunId = "canceled-steer";
-      const steerMarker = "CANCELED_STEER_SENTINEL";
       const steerParams = {
         sessionKey,
         message: steerMarker,
@@ -762,6 +766,7 @@ describe("Gateway steer FIFO", () => {
       const historyWithoutSteer = async () => {
         const history = await client.request<{
           messages: Array<{ role: string; content?: unknown }>;
+          pendingInputs?: ChatPendingInputsPage;
           sessionInfo: { hasActiveRun: boolean; status?: string };
         }>("chat.history", { sessionKey, limit: 100 });
         expect(
@@ -790,12 +795,26 @@ describe("Gateway steer FIFO", () => {
           runId: steerRunId,
           status: "started",
         });
+        // The send ACK can precede runtime admission. Keep the model response held
+        // until the real queue has accepted this steer and Stop has withdrawn it.
+        await vi.waitFor(
+          async () => expect(await readTrace(steeringAdmission.receiptPath)).toContain(steerMarker),
+          WAIT_OPTS,
+        );
         await historyWithoutSteer();
 
-        expect(await client.request("chat.abort", { sessionKey, runId: steerRunId })).toEqual({
+        const abort = await client.request("chat.abort", {
+          sessionKey,
+          runId: steerRunId,
+        });
+        expect(abort).toEqual({
           ok: true,
           aborted: true,
           runIds: [steerRunId],
+        });
+        await expect(client.request("chat.send", steerParams)).rejects.toMatchObject({
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "chat-input-cancelled", endCause: "user-stop" },
         });
         expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
           hasActiveRun: true,
@@ -809,7 +828,17 @@ describe("Gateway steer FIFO", () => {
 
         // No response bytes are released until the steer cancellation is acknowledged.
         modelServer.releaseFirst("tool");
-        await vi.waitFor(() => expect(modelServer.requests).toHaveLength(2), WAIT_OPTS);
+        await vi.waitFor(async () => {
+          expect(modelServer.requests).toHaveLength(2);
+          const history = await historyWithoutSteer();
+          expect(history.pendingInputs?.items).toContainEqual(
+            expect.objectContaining({
+              runId: steerRunId,
+              state: "cancelled",
+              endCause: "user-stop",
+            }),
+          );
+        }, WAIT_OPTS);
         const continuation = modelServer.requests[1];
         expect(userInputs(continuation).join("\n")).not.toContain(steerMarker);
         const statusResult = responseInputItems(continuation).find(
@@ -833,11 +862,6 @@ describe("Gateway steer FIFO", () => {
           ),
         ).toEqual([]);
 
-        expect(await client.request("chat.send", steerParams)).toMatchObject({
-          runId: steerRunId,
-          status: "timeout",
-          summary: "aborted",
-        });
         modelServer.releaseSecond();
         await waitForRunTerminal(fixture, firstRunId);
         await vi.waitFor(() => expect(fixture.chatFinalRunIds).toContain(firstRunId), WAIT_OPTS);

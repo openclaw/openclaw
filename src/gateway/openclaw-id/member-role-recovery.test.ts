@@ -66,16 +66,23 @@ it.each(["edited", "deleted"])(
           setRuntimeConfigSnapshot(next);
           publishOperatorRoleConfigChange(fixture.context);
           expect(retained.authority.signal?.aborted).toBe(false);
-          expect(restored.authority.signal?.aborted).toBe(true);
+          expect(restored.authority.signal?.aborted).toBe(false);
           expect(retained.authority.assertCurrent).not.toThrow();
-          expect(restored.authority.assertCurrent).toThrow();
+          expect(restored.authority.assertCurrent).not.toThrow();
+          expect(expectDefined(restored.authority.reauthorize, "fresh member admission")).toThrow(
+            "Restart recovery operator source policy changed.",
+          );
           await expect(fixture.restore()).rejects.toThrow();
+          expect(retained.authority.assertCurrent).not.toThrow();
+          expect(restored.authority.assertCurrent).not.toThrow();
           fixture.setConfig(config);
           setRuntimeConfigSnapshot(config);
           expect(retained.authority.assertCurrent).not.toThrow();
         } finally {
           retained.release();
           restored.release();
+          expect(retained.authority.assertCurrent).toThrow();
+          expect(restored.authority.assertCurrent).toThrow();
         }
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);

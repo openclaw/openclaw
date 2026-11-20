@@ -6,11 +6,12 @@ import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { registerTemplatesEnglish } from "../../i18n/locales/en-templates.ts";
 import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { loadPluginCatalog } from "../../lib/plugins/index.ts";
+import { loadPluginCatalog, loadPluginDiscoveryDetail } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { showToast } from "../../lib/toast.ts";
+import type { TemplatePluginPresentation } from "./template-plugin-icon.tsx";
 import {
   addTemplateAgent,
   receiveTemplateAddFailures,
@@ -46,6 +47,7 @@ class TemplatesCatalogModel {
     request: Promise<void>;
   } | null = null;
   installedPluginPackages: ReadonlySet<string> = new Set();
+  pluginPresentation: Record<string, TemplatePluginPresentation> = {};
   /** Why the last Add of a Template left nothing behind; shown with that Template. */
   addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null = null;
   applying = false;
@@ -77,6 +79,7 @@ class TemplatesCatalogModel {
     this.closePreview();
     this.detailRevision += 1;
     this.installedPluginPackages = new Set();
+    this.pluginPresentation = {};
     this.applying = false;
     this.consentWarning = null;
     this.riskAcknowledged = false;
@@ -107,6 +110,7 @@ class TemplatesCatalogModel {
     const revision = ++this.detailRevision;
     this.detail = null;
     this.installedPluginPackages = new Set();
+    this.pluginPresentation = {};
     const source = { packageName, ...(version ? { version } : {}) };
     this.presentDetailRequest(
       new Promise((resolve, reject) => {
@@ -139,19 +143,52 @@ class TemplatesCatalogModel {
       return;
     }
     try {
-      const result = await loadPluginCatalog(scope.client);
+      const result = await loadPluginCatalog(scope.client).catch(() => null);
       if (!this.gateway.isCurrent(scope) || revision !== this.detailRevision) {
         return;
       }
       this.installedPluginPackages = new Set(
-        result.plugins.flatMap((plugin) =>
+        (result?.plugins ?? []).flatMap((plugin) =>
           plugin.installed && plugin.clawhubPackage && plugin.version
             ? [`${plugin.clawhubPackage}@${plugin.version}`]
             : [],
         ),
       );
+      await Promise.all(
+        (this.detail?.contents.integrations ?? []).map(async (item) => {
+          if (item.kind !== "plugin" || item.source !== "clawhub") {
+            return;
+          }
+          const local = result?.plugins.find(
+            (plugin) => plugin.installed && plugin.clawhubPackage === item.ref,
+          );
+          let presentation: TemplatePluginPresentation;
+          if (local) {
+            presentation = { name: local.name, ...(local.hasIcon ? { pluginId: local.id } : {}) };
+          } else {
+            const id =
+              "ch_" + btoa(item.ref).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+            const remote = await loadPluginDiscoveryDetail(
+              scope.client,
+              id,
+              undefined,
+              item.version,
+            ).catch(() => null);
+            if (!remote || remote.detail.packageName !== item.ref || remote.detail.remoteError) {
+              return;
+            }
+            presentation = {
+              name: remote.plugin.catalog.name,
+              imageUrl: remote.plugin.catalog.imageUrl,
+            };
+          }
+          if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+            this.pluginPresentation = { ...this.pluginPresentation, [item.name]: presentation };
+          }
+        }),
+      );
     } catch {
-      // Contents remain available when the local plugin inventory cannot load.
+      // Contents remain available when optional plugin presentation cannot load.
     }
   }
 
@@ -164,6 +201,7 @@ class TemplatesCatalogModel {
     this.detail = null;
     this.presentDetailRequest(undefined);
     this.installedPluginPackages = new Set();
+    this.pluginPresentation = {};
     this.addFailure = null;
     this.consentWarning = null;
     this.riskAcknowledged = false;
@@ -320,6 +358,7 @@ class TemplatesCatalogModel {
       preview: this.preview,
       onClosePreview: () => this.closePreview(),
       installedPluginPackages: this.installedPluginPackages,
+      pluginPresentation: this.pluginPresentation,
       addFailure: this.addFailure,
       applying: this.applying,
       canAdd: this.canAdd(),

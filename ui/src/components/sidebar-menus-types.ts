@@ -84,5 +84,8 @@ export interface SidebarMenusOwner extends SidebarRouteView {
   findSidebarMenuSessionByKey(sessionKey: string): SidebarRecentSession | undefined;
   getSessionNavigationState(): { selectedAgentId: string };
   selectedVisibleSessions(): SidebarRecentSession[];
-  switchChipAgent(agentId: string): void;
+  switchChipAgent(
+    agentId: string,
+    resolveKey: typeof import("./sidebar-agent-menu-session-key.ts").resolveAgentMenuSessionKey,
+  ): void;
 }

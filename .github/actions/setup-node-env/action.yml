@@ -443,10 +443,12 @@ runs:
 
     - name: Runtime versions
       shell: bash
+      env:
+        PNPM_VERSION: ${{ steps.setup-pnpm.outputs.pnpm-version }}
       run: |
         node -v
         npm -v
-        pnpm -v
+        printf '%s\n' "$PNPM_VERSION"
         if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Install dependencies

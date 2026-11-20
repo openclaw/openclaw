@@ -90,15 +90,13 @@ export function projectAgentActivityItem<
     return { ...item, status: "failed" };
   }
   const args = asRecord(facts.args);
-  // A reply sent to the conversation it came from is already shown there as a message;
-  // a row naming the tool that sent it would only repeat it.
+  // The internal source sink reports sent only after delivery; an intended destination
+  // or a dry-run sourceReply payload does not mean there is a visible duplicate.
   const sourceReply =
     name === "message" &&
-    (asRecord(details?.sourceReply) !== undefined ||
-      (args?.action === "send" &&
-        args.channel === undefined &&
-        args.target === undefined &&
-        args.targets === undefined));
+    item.status === "completed" &&
+    details?.sourceReplySink === "internal-ui" &&
+    details.deliveryStatus === "sent";
   const routine =
     facts.nativeOperation === "wait" ||
     facts.nativeOperation === "process.poll" ||

@@ -77,6 +77,7 @@ export function setPluginRuntimeLoadContext(
   const capturedIdentity = previous?.loaderCacheIdentity ?? loaderCacheIdentity;
   const bound = {
     ...context,
+    fallbackRateLimitModels: new WeakMap(),
     environmentKey: context.environmentKey ?? captureEnvironmentKey(context.env),
     activationInputFingerprint: activationInputFingerprint(context.rawConfig, context.env),
     ...(capturedIdentity ? { loaderCacheIdentity: capturedIdentity } : {}),

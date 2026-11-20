@@ -8,32 +8,54 @@ const messageCall = (status: "running" | "completed" | "failed") => ({
   status,
 });
 
+const send = { action: "send", message: "Hi!" };
+const sentHere = {
+  deliveryStatus: "sent",
+  sourceReplySink: "internal-ui",
+  sourceReply: { text: "Hi!" },
+};
+
 describe("message tool activity", () => {
-  it("hides a reply sent to its source conversation, where the reply itself is shown", () => {
-    expect(
-      projectAgentActivityItem(messageCall("running"), {
-        args: { action: "send", final: false, message: "Hi!" },
-      }),
-    ).toMatchObject({ hideFromChannelProgress: true });
+  it.each([true, false])("hides a delivered current-chat reply (final=%s)", (final) => {
     expect(
       projectAgentActivityItem(messageCall("completed"), {
-        args: { action: "send", final: false, message: "Hi!" },
-        result: { details: { status: "ok", sourceReply: { text: "Hi!" } } },
+        args: { ...send, final },
+        result: { details: sentHere },
       }),
-    ).toMatchObject({ hideFromChannelProgress: true });
+    ).toHaveProperty("hideFromChannelProgress", true);
   });
 
-  it("keeps a send to another conversation and a failed source reply visible", () => {
-    expect(
-      projectAgentActivityItem(messageCall("completed"), {
-        args: { action: "send", channel: "slack", target: "C123", message: "Deployed" },
-        result: { details: { status: "ok" } },
-      }),
-    ).not.toHaveProperty("hideFromChannelProgress");
-    expect(
-      projectAgentActivityItem(messageCall("failed"), {
-        args: { action: "send", message: "Hi!" },
-      }),
-    ).not.toHaveProperty("hideFromChannelProgress");
+  it.each([{}, { to: "C999" }, { channelId: "C999" }, { channel: "slack", target: "C999" }])(
+    "keeps sends visible before delivery and without a current-chat receipt: %j",
+    (destination) => {
+      const args = { ...send, ...destination };
+      expect(projectAgentActivityItem(messageCall("running"), { args })).not.toHaveProperty(
+        "hideFromChannelProgress",
+      );
+      expect(
+        projectAgentActivityItem(messageCall("completed"), {
+          args,
+          result: { details: { deliveryStatus: "sent" } },
+        }),
+      ).not.toHaveProperty("hideFromChannelProgress");
+    },
+  );
+
+  it.each(["dry_run", "failed", "partial_failed", "suppressed"])(
+    "keeps %s results visible even if they contain the source-reply payload",
+    (deliveryStatus) => {
+      expect(
+        projectAgentActivityItem(messageCall("completed"), {
+          args: send,
+          result: { details: { ...sentHere, deliveryStatus } },
+        }),
+      ).not.toHaveProperty("hideFromChannelProgress");
+    },
+  );
+
+  it("keeps failed tool calls visible", () => {
+    expect(projectAgentActivityItem(messageCall("failed"), { args: send })).not.toHaveProperty(
+      "hideFromChannelProgress",
+    );
   });
 });
