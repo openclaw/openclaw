@@ -559,7 +559,7 @@ async function buildGatewayInstallEnvironment(params: {
       params.env.MALLOC_ARENA_MAX ??
       params.existingEnvironment?.MALLOC_ARENA_MAX ??
       "2";
-    environmentValueSources.MALLOC_ARENA_MAX = "file";
+    environmentValueSources.MALLOC_ARENA_MAX = "inline";
   }
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
