@@ -27,6 +27,7 @@ import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { promptDelta } from "./session-prompt-delta.js";
 import { resolvePromptHistoryId } from "./session-prompt-history-id.js";
+import { SYSTEM_PROMPT_UPDATE_HEADER } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   type ToolDefinition,
@@ -379,9 +380,6 @@ export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): voi
  *   session's selected person.
  * The operator refresh is one of these: `/compact`, `/new` or a model switch.
  */
-export const SYSTEM_PROMPT_UPDATE_HEADER =
-  "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.";
-
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;

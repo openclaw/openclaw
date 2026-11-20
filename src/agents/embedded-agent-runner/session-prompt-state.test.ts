@@ -21,6 +21,7 @@ import {
   readSessionSentTools,
   retireSessionSystemPrompt,
 } from "./session-prompt-state.js";
+import { retireUserRowPromptUpdates } from "./session-prompt-update.js";
 import {
   readToolSurfaceCheckpoint,
   resolveSessionToolPolicyDigest,
@@ -849,4 +850,47 @@ describe("embedded session active project keys", () => {
     expect(prepare("session-one", null)).toEqual(["repo-a"]);
     expect(prepare("session-two", null)).toEqual([]);
   });
+});
+
+it("retires user-row prompt deltas sent before the newest rebuild", () => {
+  const row = (text: string, timestamp: number, projection?: string) => ({
+    role: "user" as const,
+    content: [{ type: "text" as const, text }],
+    timestamp,
+    ...(projection
+      ? { __openclaw: { modelPromptProjection: { version: 1, text: projection } } }
+      : {}),
+  });
+  const old = row("before", Date.parse("2026-10-01T00:00:01Z"), `${updateHeading}rule A\n\nbefore`);
+  const hook = row("hooked", Date.parse("2026-10-01T00:00:02Z"), "recalled memory\n\nhooked");
+  const recent = row(
+    "after",
+    Date.parse("2026-10-01T00:00:04Z"),
+    `${updateHeading}rule B\n\nafter`,
+  );
+  const rebuild: SessionEntry = {
+    ...entryMetadata,
+    timestamp: "2026-10-01T00:00:03Z",
+    id: "rebuild",
+    type: "custom",
+    customType: "openclaw.system-prompt",
+    data: { restart: true },
+  };
+  const messages = [old, hook, recent];
+  expect(retireUserRowPromptUpdates(messages, [], false)).toBe(messages);
+  const retained = retireUserRowPromptUpdates(messages, [rebuild], false);
+  expect(retained.map((message) => JSON.stringify(message))).toEqual([
+    JSON.stringify({
+      role: "user",
+      content: old.content,
+      timestamp: old.timestamp,
+      __openclaw: {},
+    }),
+    JSON.stringify(hook),
+    JSON.stringify(recent),
+  ]);
+  // The rebuilding request itself already holds every delta.
+  expect(retireUserRowPromptUpdates(messages, [], true)[2]).not.toHaveProperty(
+    "__openclaw.modelPromptProjection",
+  );
 });
