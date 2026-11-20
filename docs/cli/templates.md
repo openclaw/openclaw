@@ -582,6 +582,13 @@ require their separate explicit acknowledgements.
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
 
+For a new cron automation, Gateway Add uses the time zone reported by the device
+that adds the Template. For example, a 9 AM schedule added from Los Angeles
+runs at 9 AM Los Angeles time, even if the Gateway is in London. If the client
+does not report a valid time zone, Add uses the zone declared in the Template.
+Viewing the Template or retrying setup from another device does not move an
+existing job. Interval automations are unchanged.
+
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
 is `owner` for converted heartbeat jobs and `none` for declared automations.
