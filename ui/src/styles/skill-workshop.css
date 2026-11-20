@@ -1046,14 +1046,18 @@
   }
 }
 
-/* Phone and narrow windows: the learning state takes the subtitle's place, gear at the right. */
-@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+/* Only the floating shell supplies a visual title; keep the page heading for assistive tech. */
+.shell--floating-header {
   .content-header.hub-page-header--untabbed.plugins-hub-header.sw-hub-header {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "actions";
   }
 
   .sw-hub-header .hub-page-header__title {
+    display: contents;
+  }
+
+  .sw-hub-header .page-subtitle {
     display: none;
   }
 
