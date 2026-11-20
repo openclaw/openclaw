@@ -10,9 +10,10 @@ sidebarTitle: "Update methods"
 
 Install-type switching, the source-server reference script, the installer, and manual package-manager updates. Part of the [Updating](/install/updating) guide.
 
-When you ask an agent to update the Gateway, it should identify the running
-installation and use the update procedure authorized by its host. An update
-request alone does not request a switch between installation methods.
+For [updates requested in chat](/install/updating#from-chat), the agent uses the
+built-in updater on standard installations. A directly served Git checkout can
+use its documented, host-authorized in-place procedure without an exact revision.
+An update request alone does not authorize switching installation methods.
 
 ## Switch between npm and git installs
 

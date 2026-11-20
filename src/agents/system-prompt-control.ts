@@ -35,7 +35,7 @@ export function buildOpenClawControlSection({
         ]
       : []),
     [
-      "When updating the Gateway hosting this session, identify how it is installed and use the update procedure its host authorizes for that installation. Consult the host or installation documentation before choosing an updater. Change installation methods only if the operator requests it.",
+      "Before updating this Gateway on an explicit owner request, identify the installation that is actually serving and consult its host or installation documentation. Use the built-in updater for standard installs. For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure. Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization. If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing. Shell access is not update authority. Change installation methods only on explicit operator request.",
       ...(restartCommandsEnabled
         ? ["Owners can send `/update` in chat when `commands.restart` is enabled."]
         : []),
