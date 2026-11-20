@@ -16,7 +16,7 @@ const enAgentsHome = {
   templatesDraft: {
     title: "Create template",
     reviewDisabled:
-      "Your private draft is saved. Your Gateway administrator has turned off Templates.",
+      "Your private draft is saved. Templates are turned off. Ask your Gateway administrator to enable them.",
     reviewUnavailable:
       "Your private draft is saved. Template review requires a connected administrator session with Template creation and chat access.",
   },

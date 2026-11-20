@@ -154,7 +154,9 @@ describe("Templates discovery", () => {
     );
     expect(result).toEqual({ type: "notFound", data: undefined });
     expect(request.mock.calls.map(([method]) => method)).not.toContain("config.get");
-    expect(page.textContent).toContain("Your Gateway administrator has turned off Templates.");
+    expect(page.textContent).toContain(
+      "Templates are turned off. Ask your Gateway administrator to enable them.",
+    );
     expect(page.querySelector("[data-templates-explore]")).toBeNull();
     expect(page.querySelector("[data-templates-confirm]")).toBeNull();
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
@@ -165,7 +167,9 @@ describe("Templates discovery", () => {
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);
     await vi.waitFor(() => expect(page.querySelector("[data-templates-explore]")).toBeNull());
-    expect(page.textContent).toContain("Your Gateway administrator has turned off Templates.");
+    expect(page.textContent).toContain(
+      "Templates are turned off. Ask your Gateway administrator to enable them.",
+    );
   });
 
   it("shows official Templates by default and opens their dedicated route", async () => {

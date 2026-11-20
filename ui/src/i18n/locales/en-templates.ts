@@ -42,7 +42,7 @@ const enTemplates = {
     empty: "No templates match your search.",
     emptyUnfiltered: "No templates yet.",
     unavailable: "Couldn’t load templates from ClawHub. Try again.",
-    disabled: "Your Gateway administrator has turned off Templates.",
+    disabled: "Templates are turned off. Ask your Gateway administrator to enable them.",
     retry: "Retry",
     add: "Add",
     addNamed: "Add {name}",

@@ -95,7 +95,7 @@ it.each([
     const explore = () => view.container.querySelector("[data-templates-explore]");
     expect(loading()).not.toBeNull();
     expect(view.container.textContent).not.toContain(
-      "Your Gateway administrator has turned off Templates.",
+      "Templates are turned off. Ask your Gateway administrator to enable them.",
     );
     expect(explore()).toBeNull();
 
@@ -124,7 +124,7 @@ it.each([
       expect(request.mock.calls.map(([method]) => method)).not.toContain("config.get");
     } else {
       expect(view.container.textContent).toContain(
-        "Your Gateway administrator has turned off Templates.",
+        "Templates are turned off. Ask your Gateway administrator to enable them.",
       );
       expect(request).not.toHaveBeenCalled();
     }

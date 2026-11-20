@@ -231,7 +231,7 @@ it.skipIf(!available).each([true, false, "failed", "bootstrap"] as const)(
       const inline = page.locator('[data-plugin-inline-view="review-template-1"]');
       await inline.waitFor({ state: "attached" });
       const warning = inline.getByText(
-        "Your private draft is saved. Your Gateway administrator has turned off Templates.",
+        "Your private draft is saved. Templates are turned off. Ask your Gateway administrator to enable them.",
         { exact: true },
       );
       await inline.evaluate((element) => element.scrollIntoView());
