@@ -242,7 +242,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             approvals: self.approvals.requests,
             gateways: DashboardGatewayMenuModel.items(from: self.dashboard.gatewayEntries),
             removal: MacOpenClawIDDeviceStore.shared.lastRemoval(),
-            openClawIDAvailable: MacOpenClawIDConfiguration.current() != nil)
+            openClawIDAvailable: MacOpenClawIDFeature.isEnabled && MacOpenClawIDConfiguration.current() != nil)
         if self.updater.isAvailable {
             self.renderer?.onInstallUpdate = { [weak self] in
                 guard let self, self.updater.isAvailable else { return }
