@@ -1446,11 +1446,23 @@ exec "$anchor/scripts/pr" "$@"
   });
 
   itPosix.each([
-    ["changed component", 'printf changed >> "$anchor_exec_dir/.pr-bootstrap/scripts/windows-cmd-helpers.mjs"'],
+    [
+      "changed component",
+      'printf changed >> "$anchor_exec_dir/.pr-bootstrap/scripts/windows-cmd-helpers.mjs"',
+    ],
     ["missing component", 'rm "$anchor_exec_dir/.pr-bootstrap/scripts/windows-cmd-helpers.mjs"'],
-    ["invalid exporter", 'printf invalid > "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"'],
-    ["symlink exporter", 'ln -s "$anchor_exec_dir/scripts/pr-lib/export-tree.py" "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"'],
-    ["changed provenance", 'chmod 600 "$anchor_exec_dir/.pr-bootstrap/source.json"; printf \'{}\' > "$anchor_exec_dir/.pr-bootstrap/source.json"; chmod 400 "$anchor_exec_dir/.pr-bootstrap/source.json"'],
+    [
+      "invalid exporter",
+      'printf invalid > "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"',
+    ],
+    [
+      "symlink exporter",
+      'ln -s "$anchor_exec_dir/scripts/pr-lib/export-tree.py" "$anchor_exec_dir/.pr-bootstrap/scripts/pr-lib/export-tree.py"',
+    ],
+    [
+      "changed provenance",
+      'chmod 600 "$anchor_exec_dir/.pr-bootstrap/source.json"; printf \'{}\' > "$anchor_exec_dir/.pr-bootstrap/source.json"; chmod 400 "$anchor_exec_dir/.pr-bootstrap/source.json"',
+    ],
     ["unexpected entry", 'printf extra > "$anchor_exec_dir/.pr-bootstrap/extra"'],
     ["missing creator descriptor", "exec 9>&-"],
   ])("retains a legacy bootstrap with %s before adding its exporter", (fault, mutation) => {
@@ -1472,7 +1484,8 @@ exec "$anchor/scripts/pr" "$@"
     const component = join(bootstrap, "scripts/windows-cmd-helpers.mjs");
     if (fault === "missing component") expect(existsSync(component)).toBe(false);
     if (fault === "changed component") expect(readScript(component)).toMatch(/changed$/u);
-    if (fault === "changed provenance") expect(readScript(join(bootstrap, "source.json"))).toBe("{}");
+    if (fault === "changed provenance")
+      expect(readScript(join(bootstrap, "source.json"))).toBe("{}");
     if (fault === "unexpected entry") expect(readScript(join(bootstrap, "extra"))).toBe("extra");
   });
 
