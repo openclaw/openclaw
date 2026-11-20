@@ -28,8 +28,16 @@ import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
+import { isMobileNavLayout } from "./mobile-nav-layout.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
+import {
+  isNativeEmbedHost,
+  isNativeMobileHost,
+  isNativeWebChromeHost,
+} from "./native-web-chrome.ts";
 import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
+
+export type ShellNavigationIntent = "sidebar-section";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -85,13 +93,27 @@ export class ShellNavigationOwner {
     );
   }
 
-  readonly navigate = (routeId: string, options?: ApplicationNavigationOptions): void => {
+  readonly navigate = (
+    routeId: string,
+    options?: ApplicationNavigationOptions,
+    intent?: ShellNavigationIntent,
+  ): void => {
     const context = this.host.context;
     if (!context || !isRouteId(routeId)) {
       return;
     }
-    // The new draft owns focus after it mounts; a drawer return must not reclaim it.
-    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session", finishMotion: true });
+    // On mobile web, entering a section reveals its list in the open drawer.
+    // Selecting a destination from that list still gets the usual dismissal.
+    if (
+      intent !== "sidebar-section" ||
+      !isMobileNavLayout() ||
+      isNativeWebChromeHost() ||
+      isNativeMobileHost() ||
+      isNativeEmbedHost()
+    ) {
+      // The new draft owns focus after it mounts; a drawer return must not reclaim it.
+      this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session", finishMotion: true });
+    }
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
