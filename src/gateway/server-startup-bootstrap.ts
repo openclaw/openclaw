@@ -336,7 +336,10 @@ async function prepareGatewayServerBootstrapSelected(input: {
     { omitErrorMessage: true },
   );
   const cfgAtStart = authBootstrap.cfg;
-  initializeWorkerMemoryBudget(initializeGatewayResourceProfile(cfgAtStart.gateway?.resources));
+  initializeWorkerMemoryBudget(
+    initializeGatewayResourceProfile(cfgAtStart.gateway?.resources),
+    cfgAtStart.gateway?.resources,
+  );
   startupTrace.setConfig(cfgAtStart);
   if (!opts.updateCanary) {
     try {

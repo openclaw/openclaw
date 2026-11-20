@@ -23,8 +23,10 @@ function setup(options: {
     direct: options.live?.direct ?? new Map<string, number>(),
   };
   const budget = createWorkerMemoryBudget({
-    // 1000 MiB limit -> 850 MiB budget.
     limitBytes: 1000 * MiB,
+    limitSource: "cgroup-v2",
+    budgetBytes: 850 * MiB,
+    basis: "cgroup-85",
     readUsageBytes: () => usage,
     baselineBytes: (options.baselineMiB ?? 0) * MiB,
     usageSource: "cgroup-v2-working-set",
@@ -182,22 +184,40 @@ describe("worker memory budget", () => {
     expect(budget.snapshot().families[0]!.growth).toBe(0);
   });
 
+  const profile = (
+    selected: "lean" | "standard",
+    memoryLimitSource: "cgroup-v2" | "host" = "host",
+  ): GatewayResourceProfile => ({
+    configured: selected,
+    profile: selected,
+    reason: "explicit",
+    memoryLimitBytes: 4096 * MiB,
+    memoryLimitSource,
+    cpus: 8,
+  });
+
   it("retires the previous Gateway's policy and inherited flag when standard is selected", () => {
-    const profile = (selected: "lean" | "standard"): GatewayResourceProfile => ({
-      configured: selected,
-      profile: selected,
-      reason: "explicit",
-      memoryLimitBytes: 1536 * MiB,
-      memoryLimitSource: "host",
-      cpus: 8,
-    });
-    initializeWorkerMemoryBudget(profile("lean"));
+    initializeWorkerMemoryBudget(profile("lean"), undefined);
     expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBe(true);
-    expect(getWorkerMemoryBudgetSnapshot()?.budgetBytes).toBe(Math.floor(1536 * MiB * 0.85));
-    initializeWorkerMemoryBudget(profile("standard"));
+    expect(getWorkerMemoryBudgetSnapshot()).toBeDefined();
+    initializeWorkerMemoryBudget(profile("standard"), undefined);
     expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBeUndefined();
     expect(getWorkerMemoryBudgetSnapshot()).toBeUndefined();
   });
+
+  it.each([
+    ["cgroup-v2", undefined, "cgroup-85", Math.floor(4096 * MiB * 0.85)],
+    ["host", undefined, "host-40", Math.floor(4096 * MiB * 0.4)],
+    ["cgroup-v2", 900, "configured", 900 * MiB],
+    ["host", 900, "configured", 900 * MiB],
+  ] as const)(
+    "sizes the budget from a %s limit with override %s as %s",
+    (limitSource, memoryBudgetMiB, basis, budgetBytes) => {
+      initializeWorkerMemoryBudget(profile("lean", limitSource), { memoryBudgetMiB });
+      expect(getWorkerMemoryBudgetSnapshot()).toMatchObject({ limitSource, basis, budgetBytes });
+      initializeWorkerMemoryBudget(profile("standard"), undefined);
+    },
+  );
 
   it("counts the measured startup baseline with the floors", () => {
     // 700 MiB baseline + one 38 MiB transcript floor + 150 MiB of unmeasured kinds > 850 MiB.

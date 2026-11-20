@@ -1,28 +1,26 @@
 import { channel } from "node:diagnostics_channel";
-import os from "node:os";
 import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
 import type { WorkerPoolMemoryBudget } from "@openclaw/worker-runtime";
+import type { GatewayConfig } from "../config/types.gateway.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
-import {
-  findCgroupV2MemoryLimitDirectory,
-  readCgroupV2WorkingSetBytes,
-  readProcessAvailableMemoryBytes,
-} from "./host-memory.js";
+import { findCgroupV2MemoryLimitDirectory, readCgroupV2WorkingSetBytes } from "./host-memory.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
 import { forEachTrackedWorker, getWorkerPoolId } from "./worker-cpu.js";
 import { workerScriptName } from "./worker-diagnostic-script.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
-/** Provisional: admission keeps this share of the hard limit free. */
-export const WORKER_MEMORY_BUDGET_MARGIN = 0.15;
+// Provisional shares. A container limit was sized for OpenClaw; host RAM is shared with
+// everything else on the machine.
+export const CGROUP_BUDGET_SHARE = 0.85;
+export const HOST_BUDGET_SHARE = 0.4;
 
 // Worker isolates inherit environment data, never child processes or the process environment.
 const FLOOR_ONLY_KEY = "openclaw.workerMemoryBudget.floorOnly";
 const MiB = 1024 ** 2;
 // Reachable heap per worker after work (lean-ceiling attribution, rounded up). These are
-// heap-graph proxies, not marginal RSS; the margin absorbs isolate overhead and later growth.
+// heap-graph proxies, not marginal RSS; the measured baseline and headroom absorb the rest.
 const estimateMiB: Record<string, number> = {
   "gateway-state-owner-heartbeat.worker.js": 10,
   "openclaw-state-lease-heartbeat.worker.js": 19,
@@ -72,10 +70,11 @@ type PoolEntry = {
 
 export type WorkerMemoryBudgetSnapshot = {
   limitBytes: number;
+  limitSource: "cgroup-v2" | "host";
   budgetBytes: number;
-  margin: number;
+  basis: "cgroup-85" | "host-40" | "configured";
   usageBytes: number | null;
-  usageSource: "cgroup-v2-working-set" | "host-used";
+  usageSource: "cgroup-v2-working-set" | "process-rss";
   floorBytes: number;
   pendingBytes: number;
   /** Working set when admission started: the main isolate and any workers already running. */
@@ -138,6 +137,9 @@ function directFloors(hosted: HostedSlotPredicate): Record<string, number> {
 /** Process-wide admission; pools keep their queues and dispatch. */
 export function createWorkerMemoryBudget(params: {
   limitBytes: number;
+  limitSource: WorkerMemoryBudgetSnapshot["limitSource"];
+  budgetBytes: number;
+  basis: WorkerMemoryBudgetSnapshot["basis"];
   readUsageBytes: () => number | undefined;
   baselineBytes: number;
   usageSource: WorkerMemoryBudgetSnapshot["usageSource"];
@@ -145,7 +147,7 @@ export function createWorkerMemoryBudget(params: {
   poolId: (pool: object) => number;
   hosted: () => HostedSlotPredicate;
 }) {
-  const budgetBytes = Math.floor(params.limitBytes * (1 - WORKER_MEMORY_BUDGET_MARGIN));
+  const { budgetBytes } = params;
   const pools = new Set<PoolEntry>();
   const families = new Map<string, Family>();
   const seenDirect = new Set<string>();
@@ -231,8 +233,9 @@ export function createWorkerMemoryBudget(params: {
     const { floorBytes, pendingBytes } = ledger();
     return {
       limitBytes: params.limitBytes,
+      limitSource: params.limitSource,
       budgetBytes,
-      margin: WORKER_MEMORY_BUDGET_MARGIN,
+      basis: params.basis,
       usageBytes: lastUsage,
       usageSource: params.usageSource,
       floorBytes,
@@ -334,7 +337,10 @@ export function createWorkerMemoryBudget(params: {
 }
 
 /** Start admission once the Gateway has chosen lean; standard installs never create it. */
-export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourceProfile>): void {
+export function initializeWorkerMemoryBudget(
+  profile: Readonly<GatewayResourceProfile>,
+  resources: GatewayConfig["resources"],
+): void {
   state.budget?.retire();
   state.budget = undefined;
   // Workers created from here on inherit this Gateway's choice, never a previous one.
@@ -344,14 +350,29 @@ export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourcePr
   }
   const directory =
     profile.memoryLimitSource === "cgroup-v2" ? findCgroupV2MemoryLimitDirectory() : undefined;
+  // Without a container, measure the Gateway process itself, not other programs on the host.
   const readUsageBytes = directory
     ? () => readCgroupV2WorkingSetBytes(directory)
-    : () => os.totalmem() - readProcessAvailableMemoryBytes();
+    : () => process.memoryUsage.rss();
+  const configured = resources?.memoryBudgetMiB;
+  const basis = configured
+    ? "configured"
+    : profile.memoryLimitSource === "cgroup-v2"
+      ? "cgroup-85"
+      : "host-40";
   state.budget = createWorkerMemoryBudget({
     limitBytes: profile.memoryLimitBytes,
+    limitSource: profile.memoryLimitSource,
+    budgetBytes: configured
+      ? configured * MiB
+      : Math.floor(
+          profile.memoryLimitBytes *
+            (basis === "cgroup-85" ? CGROUP_BUDGET_SHARE : HOST_BUDGET_SHARE),
+        ),
+    basis,
     readUsageBytes,
     baselineBytes: readUsageBytes() ?? 0,
-    usageSource: directory ? "cgroup-v2-working-set" : "host-used",
+    usageSource: directory ? "cgroup-v2-working-set" : "process-rss",
     countLive: () => {
       const pools = new Map<number, number>();
       const direct = new Map<string, number>();
@@ -368,7 +389,7 @@ export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourcePr
     hosted: () => state.hosted,
   });
   log.info(
-    `Lean worker memory budget: ${Math.round(state.budget.budgetBytes / MiB)} MiB of ${Math.round(profile.memoryLimitBytes / MiB)} MiB (${WORKER_MEMORY_BUDGET_MARGIN * 100}% margin); growth beyond each worker floor waits when it would exceed the budget.`,
+    `Lean worker memory budget: ${Math.round(state.budget.budgetBytes / MiB)} MiB (${basis}) of ${Math.round(profile.memoryLimitBytes / MiB)} MiB ${profile.memoryLimitSource}; growth beyond each worker floor waits when it would exceed the budget.`,
   );
 }
 
