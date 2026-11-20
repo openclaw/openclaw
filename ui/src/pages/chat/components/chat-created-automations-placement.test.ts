@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { expect, it, onTestFinished, vi } from "vitest";
 import { projectChatDisplayMessages } from "../../../../../src/gateway/chat-display-projection.js";
-import { projectSessionMessagePayload } from "../../../../../src/gateway/session-transcript-message.js";
 import { createNestedToolActivity } from "../../../../../src/sessions/nested-tool-activity.js";
 import type {
   AutomationCreationPlan,
@@ -188,32 +187,36 @@ it("settles a Code Mode automation from its committed tool result while the turn
   expect(container.querySelector(".chat-created-automations")).toBeNull();
   const publish = (index: number, input: object, isError: boolean, details?: object) => {
     const toolCallId = "add-" + index;
-    const { payload } = projectSessionMessagePayload({
-      sessionKey,
-      runId: "setup",
-      messageId: toolCallId,
-      messageSeq: index,
-      message: createNestedToolActivity({
-        runId: "setup",
-        scopeId: "code-mode",
-        afterEntryId: null,
-        startOrder: index,
-        parentToolCallId: "exec",
-        toolCallId,
-        toolName: "automations",
-        input,
-        result: { content: [], details },
-        isError,
-        startedAt: 100 + index,
-        timestamp: 100 + index,
-      }),
-    });
-    expect(payload).toBeDefined();
-    applySessionMessagePayload(state, payload, true, { kind: "live", activeRunId: "setup" });
+    const [message] = projectChatDisplayMessages([
+      {
+        ...createNestedToolActivity({
+          runId: "setup",
+          scopeId: "code-mode",
+          afterEntryId: null,
+          startOrder: index,
+          parentToolCallId: "exec",
+          toolCallId,
+          toolName: "automations",
+          input,
+          result: { content: [], details },
+          isError,
+          startedAt: 100 + index,
+          timestamp: 100 + index,
+        }),
+        __openclaw: { id: toolCallId, seq: index, runId: "setup" },
+      },
+    ]);
+    expect(message).toBeDefined();
+    applySessionMessagePayload(
+      state,
+      { sessionKey, runId: "setup", messageId: toolCallId, messageSeq: index, message },
+      true,
+      { kind: "live", activeRunId: "setup" },
+    );
     props.messages = state.chatMessages;
     rerender();
   };
-  const input = { action: "add", planId: plan.planId, slotId: "a" };
+  const input = { action: "add", position: 1 };
   publish(2, input, true);
   expect(state.chatMessages).toHaveLength(2);
   expect(container.querySelector(".chat-created-automations")).toBeNull();
