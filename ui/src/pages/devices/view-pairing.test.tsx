@@ -263,6 +263,11 @@ describe("device pairing dialog", () => {
       <Pairing lifecycle={{ phase: "error", source: "create", access: "full", error: refusal }} />
     ));
     expect(view.getByText("Set up secure access")).toBeTruthy();
+    expect(
+      view.getByText(
+        "After the Dashboard reconnects, reopen Connect a device and choose Create setup code.",
+      ),
+    ).toBeTruthy();
     expect(view.queryByText("Couldn’t create a setup code. Try again.")).toBeNull();
     expect(view.getByRole("button", { name: /Retry/ })).toBeTruthy();
 

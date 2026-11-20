@@ -129,7 +129,7 @@ An already paired administrator can create the iOS/Android connection QR without
 
 Creating a setup code requires `operator.admin`; **Connect a device** is disabled in the sidebar identity menu and settings for sessions without it. Operators with `operator.pairing` can still review and approve eligible operator-device requests from **Devices**. A setup code contains a short-lived bootstrap credential, so treat the QR and copied code like a password while they are valid. For remote pairing, the Gateway must resolve to `wss://` (for example, through Tailscale Serve/Funnel); plain `ws://` is limited to loopback and private LAN addresses. See [Pairing](/channels/pairing#pair-from-the-control-ui-recommended) for the full security and fallback details.
 
-A new install listens only on its own computer, so no phone can reach it yet. In that case **Connect a device** shows **Set up secure access** instead of a code: [Tailscale Serve](/gateway/tailscale) is recommended, and the trusted-home-network option explains what `gateway.bind lan` opens and how to undo it. Neither changes your settings; apply one on the Gateway host, restart, then choose **Retry**.
+A new install listens only on its own computer, so no phone can reach it yet. In that case **Connect a device** shows **Set up secure access** instead of a code: [Tailscale Serve](/gateway/tailscale) is recommended, and the trusted-home-network option explains what `gateway.bind lan` opens and how to undo it. The Dashboard does not change your settings. Apply your chosen option on the Gateway host. After restarting the Gateway, wait for the Dashboard to reconnect, reopen **Connect a device**, and choose **Create setup code**.
 
 ## Runtime config endpoint
 

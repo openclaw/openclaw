@@ -94,6 +94,7 @@ function SecureAccessSetup() {
         </summary>
         <p>{t("devices.pairing.secureAccess.publicHint")}</p>
       </details>
+      <p>{t("devices.pairing.secureAccess.afterRestart")}</p>
     </div>
   );
 }
