@@ -33,13 +33,26 @@ vi.mock("../plugins/memory-state.js", () => ({ resolveLoadedMemoryProviderKind: 
 const profiles = vi.hoisted(() => ({ revoked: new Set<string>() }));
 vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
-  captureResidentUserProfileAccess: (profileId: string) => ({
-    assertCurrent: () => {
+  captureResidentUserProfileAccess: (profileId: string) => {
+    const assertCurrent = () => {
       if (profiles.revoked.has(profileId)) {
         throw new Error("profile revoked");
       }
-    },
-  }),
+    };
+    return {
+      assertCurrent,
+      readCurrentFacts: () => {
+        assertCurrent();
+        return {
+          profileId,
+          emails: [],
+          assignedRole: null,
+          githubLogin: null,
+          openclawIdAccountIds: [],
+        };
+      },
+    };
+  },
 }));
 
 const { fakeSessionOwner } = await import("../plugins/memory-audience.test-support.js");

@@ -124,9 +124,13 @@ To let teammates read selected sessions from a personal Gateway without controll
 
 ### Step 5: Bound what each person can do
 
-Configure `gateway.roles.definitions` to govern authenticated profiles. Explicit
-profile assignments apply with or without `gateway.roles.default`; the optional
-default supplies a fallback for people without a matching assignment.
+Configure `gateway.roles.definitions` and `gateway.roles.default` to govern all
+authenticated profiles. The default also supplies a fallback for people without
+a matching assignment. Without a default, explicit assignments govern only
+current OpenClaw ID members through their canonical linked profile, on every
+identified sign-in route. A stored identity link alone is not membership.
+Nonmembers retain their existing access and require a default for named
+`users.setRole` assignments; clearing an assignment remains allowed.
 Each role supplies a policy: which sessions they can touch, which agents they can use, a maximum set of operator scopes, and whether their new sessions must be sandboxed:
 
 ```json5

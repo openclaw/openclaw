@@ -28,5 +28,7 @@
 # nonmember catalog-only fixtures preserve the base contract, and stream startup is covered.
 # Publication and scheduled-source fixtures own their canonical profile catalogs;
 # WebSocket admission fixtures emit real lifecycle events for prepared authority.
-# Measured against the pinned PR base: 3957 net test lines; 400 ordinary + 3557 allocated.
-3557
+# CI repairs retain publication catalogs and give scheduled-owner fixtures current
+# canonical facts, preserving revocation checks rather than bypassing admission.
+# Measured against merged PR base 87e11d62: 4006 net test lines; 400 + 3606 allocated.
+3606

@@ -409,7 +409,7 @@ export async function sendGatewayHello(
       (deviceToken || bootstrapDeviceTokens.length > 0) &&
       state.isDeviceTokenSubjectCurrent?.() === false
     ) {
-      throw new Error("Profile membership changed before credential delivery");
+      throw new Error("Credential delivery requires current profile membership");
     }
     helloWriteStarted = true;
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
