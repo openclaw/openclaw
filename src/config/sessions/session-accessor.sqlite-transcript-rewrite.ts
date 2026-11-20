@@ -78,11 +78,6 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
   const admissionUnchanged = rewrites.every((row) =>
     transcriptRewritePreservesAdmission(row.expectedEventJson, row.eventJson),
   );
-  const navigationUnchanged =
-    !options.legacyTextStorage &&
-    rewrites.every((row) =>
-      transcriptRewriteOnlyChangesUserMetadata(row.expectedEventJson, row.eventJson),
-    );
   const run = () =>
     withSqliteDatabaseWriteScope(database.db, [...writeScopes], () => {
       // Pre-trajectory media repair precedes admission of the current session-row schema.
@@ -142,7 +137,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
         : rotateTranscriptGenerationInTransaction(
             database,
             resolved.sessionId,
-            navigationUnchanged,
+            // Compared only when the generation rotates; admission-preserving rewrites skip it.
+            !options.legacyTextStorage &&
+              rewrites.every((row) =>
+                transcriptRewriteOnlyChangesUserMetadata(row.expectedEventJson, row.eventJson),
+              ),
           );
       if (
         priorWorkspace &&
