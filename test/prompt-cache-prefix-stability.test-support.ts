@@ -87,51 +87,6 @@ function outputTrimmed(before: string, after: string): boolean {
   return changed && JSON.stringify(trimmed) === before;
 }
 
-// Gemini replay also drops the call id of the merged call and of its result; the merged side must
-// carry no id, not a different one.
-const withoutCallIds = (message: string) =>
-  message.replace(/("function(?:Call|Response)":\{.*?),"id":"[^"]*"\}/g, "$1}");
-
-/**
- * True when `current` is `previous` with the text-only assistant message at the first change and
- * the tool-call message after it merged into one message, plus new messages.
- */
-function cronReplyMerged(previous: WireRequest, current: WireRequest): boolean {
-  const at = previous.messages.findIndex((message, index) => current.messages[index] !== message);
-  if (at < 0 || previous.system !== current.system || previous.tools !== current.tools) {
-    return false;
-  }
-  const reply = JSON.parse(previous.messages[at]!) as Record<string, unknown>;
-  const call = JSON.parse(previous.messages[at + 1] ?? "{}") as Record<string, unknown>;
-  // Chat Completions: the call message carries no text of its own, so the merge loses nothing.
-  const merged = Array.isArray(call.tool_calls)
-    ? call.content == null
-      ? { ...reply, tool_calls: call.tool_calls }
-      : undefined
-    : Array.isArray(reply.parts) && Array.isArray(call.parts)
-      ? { ...reply, parts: [...reply.parts, ...call.parts] }
-      : undefined;
-  return (
-    /"text":"ok \d+"/.test(previous.messages[at]!) &&
-    merged !== undefined &&
-    current.messages[at] === withoutCallIds(JSON.stringify(merged)) &&
-    previous.messages
-      .slice(at + 2)
-      .every(
-        (message, index) =>
-          current.messages[at + 1 + index] === message ||
-          (index === 0 && current.messages[at + 1] === withoutCallIds(message)),
-      )
-  );
-}
-
-// The cron reply is written twice: the scheduled turn's own reply, and an automation-result copy
-// (src/auto-reply/reply/session-event-automation.ts) that is stored pending
-// (context_eligible=0) while the cron run is active, then placed into model context by the next
-// request (src/agents/sessions/background-result-placement.ts). On every route the request after
-// the next user turn carries the reply twice; Chat Completions and Gemini then merge the copy
-// with the following tool-call message.
-const CRON_REPLY_TWICE = "https://github.com/openclaw/openclaw/pull/201838";
 // Breaks that main still has. Each entry checks the whole request, so its known change cannot hide
 // another one. Remove an entry when its owner lands; the journey then fails until it goes.
 export const KNOWN_BREAKS: ReadonlyArray<{
@@ -146,13 +101,6 @@ export const KNOWN_BREAKS: ReadonlyArray<{
     chat: "other",
     accepts: (previous, current) => onlyMessagesChanged(previous, current, outputTrimmed),
     owner: "https://github.com/openclaw/openclaw/pull/199530",
-  },
-  { api: "openai-completions", chat: "target", accepts: cronReplyMerged, owner: CRON_REPLY_TWICE },
-  {
-    api: "google-generative-ai",
-    chat: "target",
-    accepts: cronReplyMerged,
-    owner: CRON_REPLY_TWICE,
   },
 ];
 

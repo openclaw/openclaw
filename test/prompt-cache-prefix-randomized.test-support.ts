@@ -173,56 +173,11 @@ export function unknownChange(
 }
 
 // A silent reply is dropped from replay, so the user turns around it merge into one message.
-// - Chat Completions merges only user turns without a runtime-context carrier: here the "System
-//   prompt update" notes after a skill or workspace edit, exec-wake and other host system turns,
-//   and the inter-session and subagent-completion inputs. Owner:
-//   https://github.com/openclaw/openclaw/pull/201843
-// - Bedrock merges every adjacent user pair. Accepted gap (closed
-//   https://github.com/openclaw/openclaw/pull/201654: no production impact on our hosts).
-const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream", "openai-completions"]);
+// Bedrock merges every adjacent user pair. Accepted gap (closed
+// https://github.com/openclaw/openclaw/pull/201654: no production impact on our hosts).
+const SILENT_MERGE_APIS = new Set<Api>(["bedrock-converse-stream"]);
 // The known-break name for that merge.
 const SILENT_MERGE = "silent-merge";
-
-// Anthropic with Tool Search on: after a `config.patch` reload (refreshConfigReloadSkills ->
-// refreshSkillsDiscovery reason "config-change" -> bumpSkillsSnapshotVersion,
-// src/skills/runtime/refresh.ts), a later ordinary turn rebuilds the prompt: skills added
-// mid-session move into the system prompt's skill list, and the "System prompt update" messages that
-// carried them as appended deltas drop out of the history. Seen in seed 6: skills added at steps 9
-// and 12, a model switch at step 14 rebuilt without them (allowed: they arrive as deltas), and the
-// user turn at step 21 rebuilds.
-const SKILL_AFTER_RELOAD = "https://github.com/openclaw/openclaw/issues/202150";
-
-// One `<skill>` entry of the system prompt's skill list (newlines may be JSON-escaped there).
-const SKILL_ENTRY = /(?:\n|\\n) *<skill>(?:\n|\\n)[\s\S]*?<\/skill>/g;
-const PROMPT_UPDATE = /^\{"role":"user","content":\[\{"type":"text","text":"System prompt update\./;
-
-/**
- * True when `current` is `previous` with more skills in the system prompt and without the
- * "System prompt update" messages that announced them, plus new messages: each added skill is named
- * in a dropped update, and nothing else changed.
- */
-export function skillListGrew(previous: WireRequest, current: WireRequest): boolean {
-  const known = new Set(previous.system.match(SKILL_ENTRY));
-  const added = (current.system.match(SKILL_ENTRY) ?? []).filter((entry) => !known.has(entry));
-  const system = current.system.replace(SKILL_ENTRY, (entry) => (known.has(entry) ? entry : ""));
-  const kept = new Set(current.messages);
-  const dropped = previous.messages.filter((message) => !kept.has(message));
-  const name = (entry: string) => `<name>${/<name>(.*?)<\/name>/.exec(entry)?.[1]}</name>`;
-  return (
-    added.length > 0 &&
-    dropped.length > 0 &&
-    dropped.every((message) => PROMPT_UPDATE.test(message)) &&
-    added.every((entry) => dropped.some((message) => message.includes(name(entry)))) &&
-    system === previous.system &&
-    !prefixChange(
-      { ...previous, messages: previous.messages.filter((m) => kept.has(m)) },
-      {
-        ...current,
-        system,
-      },
-    )
-  );
-}
 
 /**
  * True when `current` differs from `previous` only by that merge: the first changed message is a
@@ -308,7 +263,6 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
           (entry) => entry.owner,
         ),
         ...(SILENT_MERGE_APIS.has(surface.api) ? [SILENT_MERGE] : []),
-        ...(surface.api === "anthropic-messages" && surface.toolSearch ? [SKILL_AFTER_RELOAD] : []),
       ];
       expect(known.filter((owner) => !matched.has(owner))).toEqual([]);
     }
@@ -637,7 +591,6 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
         // Each request is compared with the previous request of the same session; the first
         // request of each rebuild step may start a new prefix.
         const unexpected: Array<{ step: number; kind: TurnKind; change: string }> = [];
-        let excused = 0;
         for (let index = 1; index < target.length; index++) {
           const previous = target[index - 1]!;
           const current = target[index]!;
@@ -658,21 +611,10 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
             SILENT_MERGE_APIS.has(api) &&
             journey.slice(0, current.step).includes("silent") &&
             isSilentTurnMerge(previous.request, current.request);
-          // At most one such rebuild per earlier reload.
-          const skillAfterReload =
-            api === "anthropic-messages" &&
-            toolSearch &&
-            !rebuild &&
-            skillListGrew(previous.request, current.request) &&
-            ++excused <=
-              journey.slice(0, current.step).filter((kind) => kind === "toolsChanged").length;
           if (change && !rebuild && silentMerge) {
             matched.add(SILENT_MERGE);
           }
-          if (change && !rebuild && skillAfterReload) {
-            matched.add(SKILL_AFTER_RELOAD);
-          }
-          if (change && !rebuild && !silentMerge && !skillAfterReload) {
+          if (change && !rebuild && !silentMerge) {
             unexpected.push({ step: current.step, kind: current.kind, change });
           }
         }
