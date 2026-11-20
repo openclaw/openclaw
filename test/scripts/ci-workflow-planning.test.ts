@@ -2301,6 +2301,18 @@ describe("ci workflow guards", () => {
           releaseGate,
           changedPaths: paths,
           changedPlannerSource: changedPlannerSource(),
+          ciLintPlan: {
+            core: [],
+            extensions: [],
+            central: {
+              files: [],
+              rootTestFiles: roots,
+              coreStripes: [],
+              extensionStripes: [],
+              groups: [],
+              central: true,
+            },
+          },
           scopeEnv: {
             OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
             OPENCLAW_CI_QUALIFICATION: String(qualification),
