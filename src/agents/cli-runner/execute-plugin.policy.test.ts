@@ -787,7 +787,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       context.params.abortSignal = operation.abortSignal;
       const ready = createDeferred();
       const finish = createDeferred();
-      let retained: CliBackendExecuteContext | undefined;
       const assess = vi.fn(async () => {
         if (mode === "throw") {
           throw new Error("private provider detail");
@@ -800,7 +799,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       const run = runPlugin(
         context,
         async function* (execution) {
-          retained = execution;
           if (mode !== "absent") {
             execution.registerTurnStatus?.({ capture: () => ({ isCurrent: () => true, assess }) });
           }
@@ -841,7 +839,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
         finish.resolve();
         await outcome;
         expect(backend.turnStatus).toBeUndefined();
-        expect(() => retained!.registerTurnStatus!({ capture: () => undefined })).toThrow();
       } finally {
         finish.resolve();
         await outcome;

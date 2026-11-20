@@ -260,8 +260,7 @@ describe("CLI execution cancellation", () => {
         yield { type: "result", result: "completed" };
       });
       if (!cancelled) {
-        context.preparedBackend.backend.command = process.execPath;
-        context.executionTarget = { kind: "plugin", execute: pluginExecute };
+        configurePlugin(context, pluginExecute, process.execPath);
       }
 
       const run = executePreparedCliRun(context);

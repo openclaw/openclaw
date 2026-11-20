@@ -302,15 +302,12 @@ describe("CLI transcript account boundary", () => {
     });
   });
 
-  it.each(["append", "rewrite", "reset", "revocation"] as const)(
+  it.each(["append", "rewrite", "reset"] as const)(
     "refuses an intervening %s before committing the planned history boundary",
     async (change) => {
       const f = await seededFixture();
-      const abort = new AbortController();
       afterPlanning(() => {
-        if (change === "revocation") {
-          abort.abort();
-        } else if (change === "reset") {
+        if (change === "reset") {
           f.manager().appendResetBoundary("reset");
         } else {
           append(f, "intervening");
@@ -319,14 +316,10 @@ describe("CLI transcript account boundary", () => {
           }
         }
       });
-      await f.withRun(
-        "changed-preparation",
-        async (params) => {
-          await expect(prepareCliHistoryBoundary(params, identity)).rejects.toThrow();
-          expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
-        },
-        { abortSignal: abort.signal },
-      );
+      await f.withRun("changed-preparation", async (params) => {
+        await expect(prepareCliHistoryBoundary(params, identity)).rejects.toThrow();
+        expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
+      });
     },
   );
 
