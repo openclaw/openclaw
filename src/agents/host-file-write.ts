@@ -1,8 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { overwriteFileHandle } from "@openclaw/fs-safe/advanced";
+import { overwriteFileHandleWithAuthority } from "@openclaw/fs-safe/advanced";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { ignoreMissingPath } from "../infra/errno.js";
 import { expandOsHomePrefix } from "./sessions/tools/path-utils.js";
+
+export type HostFileMutationPreparer = SessionSourceAssertion["prepareSessionSourceStorageEffect"];
+
+/** File effects retain database custody, independent of policy checked at tool entry. */
+export async function prepareHostFileMutation(
+  prepare: HostFileMutationPreparer,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const prepared = await prepare?.();
+  return {
+    assertCurrent: () => {
+      signal?.throwIfAborted();
+      prepared?.assertCurrent();
+    },
+    [Symbol.asyncDispose]: async () => {
+      await prepared?.release?.();
+    },
+  };
+}
 
 async function openHostFileForUpdate(resolved: string) {
   try {
@@ -18,19 +39,26 @@ export async function writeHostFile(
   absolutePath: string,
   content: string,
   abortSignal?: AbortSignal,
+  prepareMutation?: HostFileMutationPreparer,
 ) {
   const resolved = path.resolve(expandOsHomePrefix(absolutePath));
-  abortSignal?.throwIfAborted();
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
+  {
+    await using effect = await prepareHostFileMutation(prepareMutation, abortSignal);
+    effect.assertCurrent();
+    await fs.mkdir(path.dirname(resolved), { recursive: true });
+  }
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
-    abortSignal?.throwIfAborted();
+    await using effect = await prepareHostFileMutation(prepareMutation, abortSignal);
+    effect.assertCurrent();
     await fs.writeFile(resolved, content, "utf-8");
     return;
   }
   try {
-    await overwriteFileHandle(handle, Buffer.from(content, "utf-8"), {
-      beforeWrite: () => abortSignal?.throwIfAborted(),
+    await using effects = new AsyncDisposableStack();
+    await overwriteFileHandleWithAuthority(handle, Buffer.from(content, "utf-8"), async () => {
+      const effect = effects.use(await prepareHostFileMutation(prepareMutation, abortSignal));
+      return effect.assertCurrent;
     });
   } finally {
     await handle.close().catch(() => undefined);

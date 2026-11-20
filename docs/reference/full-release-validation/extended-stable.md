@@ -10,7 +10,7 @@ read_when:
 
 ## Extended-stable validation
 
-Use the admitted helper with [frozen C/Q/P identities and recovery rules](/reference/RELEASING#frozen-qualification-identity): C owns source/version/baselines; Q owns qualification (default C; reviewed main-ancestor via `--workflow-sha <Q>`); independently trusted P admits/verifies.
+Use the admitted helper with [frozen C/Q/P identities and recovery rules](/reference/RELEASING#frozen-qualification-identity): C owns source/version/baselines; Q owns qualification and grant data (default C; assessed Q or its authorized ledger-only descendant via `--workflow-sha <Q>`); independently trusted P admits/verifies.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"

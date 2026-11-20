@@ -41,16 +41,17 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default  |
-| ---------- | -------- |
-| channels   | disabled |
-| messages   | enabled  |
-| reactions  | enabled  |
-| pins       | enabled  |
-| memberInfo | enabled  |
-| emojiList  | enabled  |
+| Group       | Default  |
+| ----------- | -------- |
+| channels    | disabled |
+| messages    | enabled  |
+| reactions   | enabled  |
+| pins        | enabled  |
+| memberInfo  | enabled  |
+| emojiList   | enabled  |
+| channelInfo | enabled  |
 
-Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, `emoji-list`, and `channel-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 
@@ -81,6 +82,82 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+Use `channel-list` to find conversations to read:
+
+```json
+{ "action": "channel-list", "channel": "slack", "limit": 200 }
+```
+
+It lists conversations the selected account's read token can see. With a bot token,
+results include only conversations the bot is a member of. When `userToken` is
+configured, reads use it and results include every conversation that user can
+access, including public channels they have not joined (`isMember: false`).
+Results stop at conversations that `read` would reject for this caller: explicitly
+disabled channels, and for delegated calls, channels outside the group policy and
+DMs that are not configured.
+
+- `types`: any of `public_channel`, `private_channel`, `mpim`, and `im`. The default
+  is `["public_channel", "private_channel"]`; DMs are listed only on request.
+- `includeArchived`: archived conversations are excluded unless this is `true`.
+- `limit`: Slack page size, default `200`, maximum `1000`.
+- `readAs`: `"bot"` or `"user"`; see [Read token selection](#read-token-selection).
+- `pageToken`: pass the previous `nextPageToken` until it is absent. Filtering runs
+  after Slack returns a page, so a page can hold fewer results than `limit`, or none.
+
+```json
+{
+  "ok": true,
+  "teamId": "T0123456789",
+  "channels": [
+    {
+      "id": "C0123456789",
+      "name": "general",
+      "type": "public_channel",
+      "isMember": true,
+      "isArchived": false,
+      "topic": "Company news",
+      "purpose": "Announcements"
+    },
+    {
+      "id": "D0123456789",
+      "type": "im",
+      "isMember": true,
+      "isArchived": false,
+      "userId": "U0123456789"
+    }
+  ],
+  "nextPageToken": "dGVhbTpDMDEyMzQ1Njc4OQ=="
+}
+```
+
+`teamId` names the workspace the listed IDs belong to, so `teamId` plus `id` is a
+stable conversation key. It is the requested or trusted current workspace, or the
+workspace of the token used: the running Slack monitor's workspace when the token is
+the one the monitor authenticated (the user token for `postAs: "user"`, otherwise the bot
+token), otherwise Slack's `auth.test` answer. A requested `teamId` that differs from the
+token's workspace fails instead of mislabeling results. Workspace-qualified channel
+entries (`team:<team>:channel:<id>`) apply to listed conversations even when the
+caller omits `teamId`; `read` resolves the token's workspace the same way when such
+entries exist.
+
+Pass an entry's `id` as `channelId` to `read`. `channels.slack.actions.channelInfo`
+controls this action. Listing uses `conversations.list`, which needs `channels:read`,
+`groups:read`, `mpim:read`, or `im:read` for each requested type; the default manifest
+includes all four. A missing scope returns Slack's `missing_scope` error with the
+needed scope. In Enterprise Grid, pass `teamId` or call from a Slack conversation in
+the target workspace.
+
+### Read token selection
+
+`read` and `channel-list` accept `readAs` to choose the Slack token explicitly:
+
+- Omitted: the account default. Reads use `userToken` when configured, otherwise the bot token.
+- `"bot"`: the bot token, even when `userToken` is configured. Fails when no bot token is configured.
+- `"user"`: the user token. Fails when `userToken` is not configured.
+
+The selected token also performs the conversation lookups for the read-target check.
+Channel and DM policy apply the same way for every choice.
 
 ## Live policy changes
 
