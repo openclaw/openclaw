@@ -584,8 +584,15 @@ it.each(["active", "empty-tools", "no-tools", "model-change"])(
 );
 
 it("leaves prompt updates out of the summary; the restart after compaction re-renders them", () => {
+  const ids = ["u1", "p1", "u2", "p2", "u3", "u4", "u5", "u6"];
+  const parentId = (id: string) => ids[ids.indexOf(id) - 1] ?? null;
   const entry = (id: string, fields: object) =>
-    ({ id, parentId: null, timestamp: "2026-01-01T00:00:00.000Z", ...fields }) as SessionEntry;
+    ({
+      id,
+      parentId: parentId(id),
+      timestamp: "2026-01-01T00:00:00.000Z",
+      ...fields,
+    }) as SessionEntry;
   const update = (id: string) =>
     entry(id, {
       type: "custom_message",
@@ -596,9 +603,7 @@ it("leaves prompt updates out of the summary; the restart after compaction re-re
     });
   const user = (id: string) =>
     entry(id, { type: "message", message: { role: "user", content: id } });
-  const entries = ["u1", "p1", "u2", "p2", "u3", "u4", "u5", "u6"]
-    .map((id) => (id.startsWith("p") ? update(id) : user(id)))
-    .map((e, i, all) => ({ ...e, parentId: all[i - 1]?.id ?? null }));
+  const entries = ids.map((id) => (id.startsWith("p") ? update(id) : user(id)));
   const result = prepareCompactionPlan(entries, new Map(entries.map((e, i) => [e.id, i])), options);
   expect(
     result.status === "prepared" && result.plan.selections.history.map((r) => r.source),
