@@ -20,6 +20,30 @@ const string = (value: unknown) => (typeof value === "string" ? value : "");
  * Authentication, admission, fetch policy, limits and caching belong to the caller.
  */
 export const nativeWebSearchCodecs = {
+  "perplexity.search": {
+    method: "POST",
+    request(endpoint: string, query: string, count: number) {
+      return { url: endpoint, body: { query, max_results: count } };
+    },
+    results(payload: unknown, count: number) {
+      const rows = asOptionalObjectRecord(payload)?.results;
+      // Rejected rows consume their original slot; never refill from beyond the cap.
+      return (Array.isArray(rows) ? rows.slice(0, count) : []).flatMap((value: unknown) => {
+        const entry = asOptionalObjectRecord(value);
+        if (typeof entry?.url !== "string") {
+          return [];
+        }
+        return [
+          {
+            title: wrapped(string(entry.title)),
+            url: entry.url,
+            snippet: wrapped(string(entry.snippet)),
+            published: string(entry.date) || undefined,
+          },
+        ];
+      });
+    },
+  },
   "brave.search": {
     method: "GET",
     request(endpoint: string, query: string, count: number) {
