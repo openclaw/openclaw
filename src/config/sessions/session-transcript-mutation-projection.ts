@@ -27,11 +27,12 @@ export function projectTranscriptMutationPublication(
   publicationAssistant: SessionTranscriptAuthority["lastAssistantMessage"],
 ): Pick<
   SessionTranscriptAuthority,
-  "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+  "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
 > {
   return {
     ...(rowTranscript
       ? {
+          hasMessages: rowTranscript.hasMessages,
           lastMessagePreview: rowTranscript.lastMessagePreview,
           lastAssistantMessage: rowTranscript.lastAssistantMessage,
           terminalModel: rowTranscript.terminalModel,

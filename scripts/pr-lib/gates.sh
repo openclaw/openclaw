@@ -6,12 +6,11 @@ run_hosted_prepare_gates() {
   local current_head="$2"
   local changelog_only="$3"
   local recent_sha=""
-  local remote_record="${4:-}" remote_head remote_head_ref remote_is_cross_repository
+  local remote_record="${4:-}" remote_head remote_is_cross_repository
   if [ -z "$remote_record" ]; then
     remote_record=$(read_pr_observation "$pr") || return 1
   fi
   remote_head=$(pr_view_string_field "$remote_record" "headRefOid" "$pr" "Re-run prepare-init.") || return 1
-  remote_head_ref=$(printf '%s\n' "$remote_record" | jq -r .headRefName)
   remote_is_cross_repository=$(printf '%s\n' "$remote_record" | jq -r .isCrossRepository)
   if [ "$remote_head" != "$current_head" ]; then
     echo "PR head changed before hosted gate verification (expected $current_head, got $remote_head). Re-run prepare-init."
@@ -92,12 +91,7 @@ EOF_RECOVERY
     cat <<EOF_RECOVERY
 Missing hosted CI recovery:
   scripts/pr ci-dispatch $pr
-Underlying command:
 EOF_RECOVERY
-    printf '  gh workflow run ci.yml --ref %q -f %q -f release_gate=true -f %q\n' \
-      "$remote_head_ref" \
-      "target_ref=$remote_head" \
-      "pull_request_number=$pr"
   fi
   return 1
 }

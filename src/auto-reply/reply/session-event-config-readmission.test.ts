@@ -18,12 +18,15 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { withSessionCompactionPersistenceAsync } from "../../agents/sessions/session-compaction-persistence.js";
+import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
+  persistCompactionBoundaryWithSessionEntryAsync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
@@ -41,6 +44,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -52,12 +56,16 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as agentExecution from "./agent-runner-execution.js";
 import * as routedReplies from "./route-reply.js";
-import { prepareSessionEventDelivery } from "./session-event-delivery.js";
+import { createSessionEventReplyDelivery } from "./session-event-delivery.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
-import { openEventToolHost, startEmbeddedTurn } from "./session-event.test-support.js";
+import {
+  configureEventState,
+  openEventToolHost,
+  startEmbeddedTurn,
+} from "./session-event.test-support.js";
 // mock-isolation: Synthetic model decisions; admission, queue and real tool writes stay real.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -93,14 +101,88 @@ async function attemptRealWrite(
   }
 }
 
+it("continues a resumed turn after compaction and a runtime row notification", async ({
+  signal,
+}) => {
+  await withOpenClawTestState(
+    { label: "restart-runtime-publication", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      await configureEventState(state, completionConfig(state.workspaceDir));
+      const target = { agentId: "main", sessionKey: "agent:main:dashboard:runtime-recovery" };
+      await replaceSessionEntry(target, {
+        sessionId: "runtime-recovery",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
+      });
+      const captured = await captureSessionEventTargetForHost(target.agentId, target.sessionKey);
+      const filePath = path.join(state.workspaceDir, "recovered-after-compaction.txt");
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        const host = await openEventToolHost(params, "resumed turn");
+        try {
+          const scope = {
+            ...target,
+            sessionId: captured.sessionId,
+            storePath: expectDefined(captured.storePath, "captured store path"),
+          };
+          const manager = await SessionManager.openAsync(scope, state.workspaceDir);
+          const kept = await manager.appendMessageAsync({
+            role: "user",
+            content: "retained work",
+            timestamp: 1,
+          });
+          await withSessionCompactionPersistenceAsync(
+            manager,
+            (prepared) =>
+              persistCompactionBoundaryWithSessionEntryAsync(scope, {
+                prepared,
+                transcriptByteCompactionLatch: null,
+              }),
+            () =>
+              manager.appendCompactionAsync(
+                "Continue the recovered work",
+                expectDefined(kept, "retained entry"),
+                100,
+              ),
+          );
+          sessionChanges.emit({ ...scope, scope: "runtime" });
+          await expectDefined(
+            host.tools.find((tool) => tool.name === "write"),
+            "write tool",
+          ).execute("recovery-write", { path: filePath, content: "completed\n" });
+          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+        } finally {
+          host.close();
+        }
+      });
+      try {
+        const receipt = enqueueSessionEventForHost("Resume required work", {
+          ...target,
+          source: "restart",
+          expectedTarget: captured,
+          abortSignal: signal,
+          deliver: false,
+        });
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(await fs.readFile(filePath, "utf8")).toBe("completed\n");
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+      } finally {
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
+      }
+    },
+  );
+});
+
 it("executes a recovery event after its producer's plugin scope closes", async ({ signal }) => {
   await withOpenClawTestState(
     { label: "session-event-plugin-readmission", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
-      const config = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      const config = await configureEventState(state, completionConfig(state.workspaceDir));
       const target = { agentId: "main", sessionKey: "agent:main:plugin-readmission" };
       await replaceSessionEntry(target, {
         sessionId: "plugin-readmission",
@@ -129,13 +211,18 @@ it("executes a recovery event after its producer's plugin scope closes", async (
           .spyOn(routedReplies, "routePreparedReply")
           .mockImplementation(plugin.wrap(async () => ({ ok: true, delivered: true }) as const));
         // A reply drains after its turn's scope closed, like a cron or wake turn's lease.
-        const reply = invocations.run(async () =>
-          (await prepareSessionEventDelivery({ channel: "telegram", to: "-100001" }, () => {}))({
-            cfg: config,
-            sessionKey: target.sessionKey,
-            payload: { text: "Process completed" },
-            replyKind: "final",
-          }),
+        const reply = invocations.run(() =>
+          createSessionEventReplyDelivery({
+            ...target,
+            options: { ...target, source: "restart" },
+            signal,
+            target: () => expectedTarget,
+            route: () => ({ channel: "telegram", to: "-100001" }),
+            prepareCurrent: async () => {},
+            assertCurrent: () => {},
+            assertEffectCurrent: () => {},
+            sourceReplyDelivered: () => false,
+          }).deliver({ text: "Process completed" }, "final"),
         );
         receipt = invocations.run(() =>
           enqueueSessionEventForHost("Resume required work", {
@@ -149,7 +236,7 @@ it("executes a recovery event after its producer's plugin scope closes", async (
         );
         invocations.release();
         expect(() => oldCallback()).toThrow("Plugin event-source consumer is closed");
-        await expect(reply).resolves.toMatchObject({ delivered: true });
+        await expect(reply).resolves.toBeUndefined();
         expect(routed).toHaveBeenCalledOnce();
         // Publication before admission forces the rejection handler to re-admit the occurrence.
         setRuntimeConfigSnapshot({ ...config, tools: { deny: ["exec"] } });
@@ -177,10 +264,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
   await withOpenClawTestState(
     { label: "session-event-visitor-finalization", env: { OPENCLAW_TEST_FAST: "0" } },
     async (state) => {
-      const config = completionConfig(state.workspaceDir);
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
+      const config = await configureEventState(state, completionConfig(state.workspaceDir));
       const target = { agentId: "main", sessionKey: "agent:main:visitor-finalization" };
       await replaceSessionEntry(target, {
         sessionId: "visitor-finalization",
@@ -241,7 +325,7 @@ it("finalizes a failed-before-reply event after its visitor policy scope closes"
         expect(executionScope).toHaveBeenCalledOnce();
         expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
         expect(outcome).toMatchObject({ status: "failed", executionStarted: true });
-        expect(outcome.error).not.toContain("Plugin invocation scope is closed");
+        expect(outcome.error).not.toContain("reloaded or disabled");
         expect(outcome.error).toContain("couldn't finish this reply");
         expect(check.mock.results.some((result) => result.type === "return" && result.value)).toBe(
           true,
@@ -661,7 +745,7 @@ it.for([
           }
           if (locked) {
             expect(completedOutcome.error).toBe(
-              "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+              "⚠️ This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.",
             );
             expect((await readSessionEntryInWorker(scope))?.modelSelectionLocked).toBe(true);
           }

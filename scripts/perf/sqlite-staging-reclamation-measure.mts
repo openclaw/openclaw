@@ -54,14 +54,10 @@ if (
 const nodeArgs = ["--import", loader, "--input-type=module", "--eval"];
 const records: unknown[] = [];
 async function measuredSweep(baseline: boolean) {
-  const { resolvePrivateSqliteSnapshotStagingRoot } = await import(
-    sourceUrl("sqlite-private-directory")
-  );
-  const { reclaimSqliteSnapshotsInProcess } = await import(
+  const { reclaimSqliteSnapshotInstallationInProcess } = await import(
     sourceUrl("sqlite-snapshot-reclamation")
   );
   const { cleanupSnapshotOperations } = await import(sourceUrl("sqlite-readonly-location-cleanup"));
-  const stagingRoot = resolvePrivateSqliteSnapshotStagingRoot();
   const session = new Session();
   session.connect();
   await session.post("HeapProfiler.startSampling", {
@@ -73,7 +69,7 @@ async function measuredSweep(baseline: boolean) {
     at = performance.now();
   const result = baseline
     ? (await cleanupSnapshotOperations(), { removed: 0, bytes: 0, skipped: 0 })
-    : await reclaimSqliteSnapshotsInProcess(stagingRoot);
+    : await reclaimSqliteSnapshotInstallationInProcess();
   const wallMs = performance.now() - at,
     cpu = process.cpuUsage(cpuAt);
   const { profile } = await session.post("HeapProfiler.stopSampling");

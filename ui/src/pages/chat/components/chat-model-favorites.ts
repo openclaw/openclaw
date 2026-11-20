@@ -8,13 +8,14 @@ import { projectAgentSelection, projectGateway } from "../../../lib/reactive/app
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
+import { loadModelPickerFavoritesTab } from "./model-provider-order.ts";
 
 registerEnglishCatalog(registerModelFavoritesEnglish);
 
 type FavoriteSnapshot = { keys: readonly string[]; raw: unknown; ready: boolean; error?: string };
 const empty: FavoriteSnapshot = { keys: [], raw: null, ready: false };
 
-/** Membership lives in users.prefs; this picker only presents its scoped read and write outcome. */
+/** Favorites live in users.prefs; the picker presents its scoped read and write outcome. */
 export function createChatModelFavoritesScope(sessionKey: () => string) {
   const context = useOptionalApplication();
   const gateway = context && projectGateway(context.gateway);
@@ -115,17 +116,20 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
     },
     { loadingValue: undefined },
   );
-  async function toggle(key: string) {
-    const target = scope();
+  async function saveOrder(
+    target: ReturnType<typeof scope>,
+    update: (keys: readonly string[]) => readonly string[],
+  ) {
     const observed = snapshot();
     if (!target || !current(target) || !observed.ready || inFlight === target) {
       return;
     }
+    const nextKeys = update(observed.keys);
+    if (nextKeys === observed.keys) {
+      return;
+    }
     inFlight = target;
     setPendingScope(target);
-    const nextKeys = observed.keys.includes(key)
-      ? observed.keys.filter((entry) => entry !== key)
-      : [...observed.keys, key];
     try {
       const result = await saveUserPreferences(target.client, {
         entries: { [target.key]: nextKeys.length ? nextKeys : null },
@@ -148,6 +152,12 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
         setPendingScope(undefined);
       }
     }
+  }
+  function change(update: (keys: readonly string[]) => readonly string[]) {
+    const target = scope();
+    const result = saveOrder(target, update);
+    void result.catch(() => {});
+    setAttempt({ scope: target, result });
   }
   onSettled(() => {
     const stop = context?.gateway.subscribeEvents((event) => {
@@ -175,10 +185,27 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
     available: () => Boolean(scope()),
     disabled: () => saving() || !snapshot().ready || !scope() || !current(scope()!),
     toggle(key: string) {
-      const target = scope();
-      const result = toggle(key);
-      void result.catch(() => {});
-      setAttempt({ scope: target, result });
+      change((keys) =>
+        keys.includes(key) ? keys.filter((entry) => entry !== key) : [...keys, key],
+      );
+    },
+    move(key: string, destination: string, side: "before" | "after") {
+      change((keys) => {
+        const from = keys.indexOf(key);
+        const to = keys.indexOf(destination);
+        if (from < 0 || to < 0 || from === to) {
+          return keys;
+        }
+        // Move in the full preference so refs absent from the catalog are retained.
+        const index = to - Number(from < to) + Number(side === "after");
+        if (index === from) {
+          return keys;
+        }
+        const next = [...keys];
+        next.splice(from, 1);
+        next.splice(index, 0, key);
+        return next;
+      });
     },
     retry() {
       const target = scope();
@@ -190,7 +217,7 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
   };
 }
 
-/** Presentation order is fixed until dismissal; membership and save outcomes stay live. */
+/** Presentation order and the remembered tab are fixed until dismissal; membership and save outcomes stay live. */
 export function createChatModelFavoritesOpening(
   favorites: ReturnType<typeof createChatModelFavorites>,
   readScope: ReturnType<typeof createChatModelFavoritesScope>["scope"],
@@ -203,6 +230,7 @@ export function createChatModelFavoritesOpening(
     ready: boolean;
     keys: readonly string[];
     selected: string;
+    favoritesTab: boolean;
   }>((previous) => {
     const scope = readScope();
     const open = isOpen();
@@ -210,6 +238,13 @@ export function createChatModelFavoritesOpening(
       return previous;
     }
     const snapshot = favorites.snapshot();
-    return { scope, open, ready: snapshot.ready, keys: snapshot.keys, selected: selected() };
+    return {
+      scope,
+      open,
+      ready: snapshot.ready,
+      keys: snapshot.keys,
+      selected: selected(),
+      favoritesTab: loadModelPickerFavoritesTab(),
+    };
   });
 }

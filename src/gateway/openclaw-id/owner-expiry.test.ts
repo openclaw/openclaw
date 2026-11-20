@@ -18,7 +18,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { createOpenClawIdAuthority } from "./authority.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   linkedClaw,
   nowSeconds,

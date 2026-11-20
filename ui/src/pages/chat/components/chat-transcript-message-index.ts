@@ -11,7 +11,10 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  explicitlyAbortedRunId,
+} from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
@@ -20,6 +23,7 @@ import {
   type buildCachedChatItems,
   findLiveStreamIndex,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getChatItemsGeneration,
   setExpansionState,
 } from "../chat-thread.ts";
@@ -49,6 +53,7 @@ type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  interruptedRunIds: ReadonlySet<string>;
   runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
@@ -70,7 +75,7 @@ type TranscriptIndex = Readonly<{
 
 type TranscriptIndexSource = Pick<
   TranscriptChain,
-  "searchActive" | "transcriptItems" | "continuations" | "live" | "workGroups"
+  "searchActive" | "transcriptItems" | "continuations" | "live"
 >;
 
 type LiveStream = Extract<ReturnType<typeof buildCachedChatItems>[number], { kind: "stream" }>;
@@ -250,7 +255,14 @@ export function projectTranscriptChain(
           }
         : undefined;
   }
+  const interruptedRunIds = new Set(
+    (options.messages ?? []).flatMap((message) => {
+      const runId = explicitlyAbortedRunId(message);
+      return runId ? [runId] : [];
+    }),
+  );
   const value: TranscriptChain = {
+    interruptedRunIds,
     runDurations,
     collapsedItems,
     transcriptItems,
@@ -323,15 +335,17 @@ function messageRevision(message: object): string {
 
 export function projectTranscriptIndex(
   chain: TranscriptIndexSource,
-  expandedToolCards: Map<string, boolean>,
+  sharedExpansion: Map<string, boolean>,
   props: Pick<
     ChatThreadProps,
     "assistantName" | "currentAgentId" | "agents" | "userId" | "userName" | "messageReactions"
   >,
+  readerExpandedWork?: ReadonlySet<string>,
 ): TranscriptIndex {
   const cacheKey = [
-    expandedToolCards,
-    getExpansionStateVersion(expandedToolCards),
+    sharedExpansion,
+    getExpansionStateVersion(sharedExpansion),
+    readerExpandedWork,
     props.assistantName,
     props.currentAgentId,
     props.agents,
@@ -340,6 +354,13 @@ export function projectTranscriptIndex(
     props.messageReactions,
   ];
   return indexes(chain, cacheKey, (): TranscriptIndex => {
+    // This derived view is pane-local; it never publishes automatic expansion.
+    const expandedToolCards = readerExpandedWork?.size ? new Map(sharedExpansion) : sharedExpansion;
+    for (const key of readerExpandedWork ?? []) {
+      if (getExplicitToolExpansion(sharedExpansion, key) === undefined) {
+        expandedToolCards.set(key, true);
+      }
+    }
     // Smaller transcripts scroll more cheaply without repeatedly mounting fragments.
     let sourceCount = 0;
     const prepareIdleFrameFragments = chain.transcriptItems.some((item) => {
@@ -395,24 +416,10 @@ export function projectTranscriptIndex(
       });
       return { kind: "item", key, item, revision };
     };
-    const workRowKeys = new Map<string, string>();
-    const after = new Map<string, MessageGroup[]>();
-    for (const work of chain.workGroups) {
-      for (const group of work.groups) {
-        workRowKeys.set(group.key, `${work.key}:${group.key}`);
-        if (expandedToolCards.get(work.key)) {
-          const anchor = work.workAfterGroup?.get(group.key) ?? work.key;
-          const pending = after.get(anchor) ?? [];
-          pending.push(group);
-          after.set(anchor, pending);
-        }
-      }
-    }
-    const transcriptItems = chronologicalWorkItems(chain.transcriptItems, after);
-    for (const item of transcriptItems) {
+    for (const item of chain.transcriptItems) {
       const rendered =
         windowCompletedFrames && item.kind === "agent-run-frame"
-          ? completedFrameRows(item, prepareIdleFrameFragments ? 1 : 2)
+          ? completedFrameRows(item, expandedToolCards, prepareIdleFrameFragments ? 1 : 2)
           : [item];
       for (const rowItem of rendered) {
         // Rich work sources include their Markdown and paired tool output.
@@ -434,11 +441,16 @@ export function projectTranscriptIndex(
               ? estimateMessageGroupSize(rowItem)
               : undefined;
         rows.push({
-          ...row(rowItem, workRowKeys.get(rowItem.key) ?? rowItem.key),
+          ...row(rowItem),
           estimatedSize,
           retainDom,
           prewarm: rowItem.kind === "group" || (fragment && !prepareIdleFrameFragments),
         });
+      }
+      if (item.kind === "work-group" && expandedToolCards.get(item.key)) {
+        for (const group of item.groups) {
+          rows.push(row(group, `${item.key}:${group.key}`));
+        }
       }
       const parts = item.kind === "agent-run-frame" ? item.parts : [item];
       const groups = chatItemGroups(item);
@@ -474,7 +486,7 @@ export function projectTranscriptIndex(
           const rowKey =
             item.kind === "work-group" && expandedToolCards.get(item.key)
               ? item.key + ":" + group.key
-              : (workRowKeys.get(item.key) ?? item.key);
+              : item.key;
           for (const source of group.messages) {
             const sourceRowKey = fragmentKeys.get(source.key) ?? rowKey;
             transcriptMessageKeys.set(source.key, sourceRowKey);
@@ -492,11 +504,10 @@ export function projectTranscriptIndex(
       }
     }
     const positionIndex = projectChatPositions(
-      transcriptItems,
+      chain.transcriptItems,
       expandedToolCards,
       messageRowKeysById,
       chain.searchActive,
-      true,
     );
     return {
       messageRowKeysById,
@@ -509,26 +520,9 @@ export function projectTranscriptIndex(
   });
 }
 
-// The disclosure owns all work for its label and outcomes; mounted rows follow
-// the visible answer recorded by the folding pass, not the disclosure's position.
-function chronologicalWorkItems(
-  items: readonly ChatRenderItem[],
-  after: ReadonlyMap<string, MessageGroup[]>,
-): ChatRenderItem[] {
-  const project = (item: ChatRenderItem): ChatRenderItem[] => {
-    if (item.kind === "agent-run-frame") {
-      const parts = item.parts.flatMap((part) => [part, ...(after.get(part.key) ?? [])]);
-      if (parts.length !== item.parts.length) {
-        return [{ ...item, parts }, ...(after.get(item.key) ?? [])];
-      }
-    }
-    return [item, ...(after.get(item.key) ?? [])];
-  };
-  return items.flatMap(project);
-}
-
 function completedFrameRows(
   frame: AgentRunFrameRenderItem,
+  expanded: ReadonlyMap<string, boolean>,
   messageLimit: number,
 ): AgentRunFrameRenderItem[] {
   // Without an answer, the summary keeps the original row through disclosure changes.
@@ -600,6 +594,12 @@ function completedFrameRows(
     if (part.kind === "work-group") {
       finishChunk();
       chunks.push([part]);
+      if (expanded.get(part.key)) {
+        for (const group of part.groups) {
+          append(group);
+        }
+        finishChunk();
+      }
     } else {
       // A single activity disclosure remains atomic; never duplicate its summary/ARIA identity.
       append(part);

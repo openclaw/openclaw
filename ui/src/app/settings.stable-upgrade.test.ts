@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { createProfilePrefsServer } from "./server-prefs.test-support.ts";
@@ -55,7 +56,7 @@ it("preserves stable browser settings without reviving retired navigation when g
     locale: "de",
     pinnedAgentIds: ["research"],
     sessionKey: "agent:main:saved",
-    sidebarEntries: [],
+    sidebarEntries: DEFAULT_SIDEBAR_ENTRIES,
     personalSessionGroups: [],
   });
   patchSettings({ personalSessionGroups: [group] });
@@ -74,7 +75,7 @@ it("preserves stable browser settings without reviving retired navigation when g
   expect(JSON.parse(localStorage.getItem(settingsKey)!)).toMatchObject({
     sidebarEntries: ["session:agent:main:saved", "route:cron"],
   });
-  expect(loadSettings().sidebarEntries).toEqual([]);
+  expect(loadSettings().sidebarEntries).toEqual(DEFAULT_SIDEBAR_ENTRIES);
 });
 
 it.each(["stable", "personal-pins"])(

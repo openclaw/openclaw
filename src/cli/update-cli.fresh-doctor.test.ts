@@ -21,15 +21,18 @@ import { packageTargetStatus } from "./update-cli/update-cli-package.test-suppor
 import { runtimeFixture } from "./update-cli/update-command-fixtures.test-support.js";
 import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.test-support.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });

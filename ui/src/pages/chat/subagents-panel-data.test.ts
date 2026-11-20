@@ -412,8 +412,15 @@ describe("Subagents panel data ownership", () => {
     }
     publish({ ...item, progressText: "Public progress" });
     expect(view(f)?.activity).toBe("Public progress");
-    publish({ ...item, itemId: "next-item", toolCallId: "next-call", meta: "Next tool purpose" });
-    expect(view(f)?.activity).toBe("Next tool purpose");
+    // A read shows its detail like any other tool purpose.
+    publish(
+      execItem("next-item", "src/benchmark.ts", {
+        toolCallId: "next-call",
+        name: "read",
+        title: "Read",
+      }),
+    );
+    expect(view(f)?.activity).toBe("src/benchmark.ts");
   });
 
   it("keeps previous-run steps out of a continuation headline while counting the whole session", async () => {

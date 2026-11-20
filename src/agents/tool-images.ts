@@ -4,17 +4,7 @@ import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-co
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
-import {
-  buildImageResizeSideGrid,
-  getImageMetadata,
-  IMAGE_REDUCE_QUALITY_STEPS,
-  isImageProcessorUnavailableError,
-  MAX_IMAGE_INPUT_PIXELS,
-  readImageMetadataFromHeader,
-  resizeToJpeg,
-  type ImageMetadata,
-} from "../media/media-services.js";
+import type { ImageMetadata } from "../media/image-ops.js";
 import { isTextContentBlock } from "./content-blocks.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
@@ -113,6 +103,7 @@ function imageWithinLimits(
   metadata: ImageMetadata | null,
   maxDimensionPx: number,
   maxBytes: number,
+  maxInputPixels: number,
 ): boolean {
   return (
     metadata !== null &&
@@ -121,7 +112,7 @@ function imageWithinLimits(
     buffer.byteLength <= maxBytes &&
     metadata.width <= maxDimensionPx &&
     metadata.height <= maxDimensionPx &&
-    metadata.width * metadata.height <= MAX_IMAGE_INPUT_PIXELS
+    metadata.width * metadata.height <= maxInputPixels
   );
 }
 
@@ -175,13 +166,16 @@ function inferImageFileName(params: {
   return undefined;
 }
 
-async function verifyImageDecodability(buffer: Buffer): Promise<boolean> {
+async function verifyImageDecodability(
+  buffer: Buffer,
+  imageOps: typeof import("../media/image-ops.js"),
+): Promise<boolean> {
   try {
     // Rastermill probes only headers; discard a tiny encode to verify full decodability.
-    await resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
+    await imageOps.resizeToJpeg({ buffer, maxSide: 1, quality: 1, withoutEnlargement: true });
     return true;
   } catch (err) {
-    if (!isImageProcessorUnavailableError(err)) {
+    if (!imageOps.isImageProcessorUnavailableError(err)) {
       throw err;
     }
     return false;
@@ -215,6 +209,10 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
     const canonicalData = prepared.canonicalData ?? prepared.data;
+    // Only actual image work loads the backend; text replay stays data-only.
+    const imageOps = await import("../media/image-ops.js");
+    const { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } =
+      await import("../media/image-processor-config.js");
 
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
@@ -233,13 +231,16 @@ export async function sanitizeContentBlocksImages(
             : { base64: cached, mimeType: "image/jpeg" };
         }
         const buf = Buffer.from(canonicalData, "base64");
-        const meta = readImageMetadataFromHeader(buf) ?? (await getImageMetadata(buf));
+        const meta =
+          imageOps.readImageMetadataFromHeader(buf) ?? (await imageOps.getImageMetadata(buf));
         const overBytes = buf.byteLength > maxBytes;
         const overDimensions =
           meta !== null && (meta.width > maxDimensionPx || meta.height > maxDimensionPx);
-        if (imageWithinLimits(buf, meta, maxDimensionPx, maxBytes)) {
+        if (
+          imageWithinLimits(buf, meta, maxDimensionPx, maxBytes, imageOps.MAX_IMAGE_INPUT_PIXELS)
+        ) {
           // An unavailable backend passes images through unverified; never record that.
-          if (cacheKey !== undefined && (await verifyImageDecodability(buf))) {
+          if (cacheKey !== undefined && (await verifyImageDecodability(buf, imageOps))) {
             verifiedImageOutcomes.set(cacheKey, null);
           }
           return {
@@ -250,7 +251,7 @@ export async function sanitizeContentBlocksImages(
 
         const maxDim = meta ? Math.max(meta.width, meta.height) : maxDimensionPx;
         const sideStart = maxDim > 0 ? Math.min(maxDimensionPx, maxDim) : maxDimensionPx;
-        const sideGrid = buildImageResizeSideGrid(maxDimensionPx, sideStart);
+        const sideGrid = imageOps.buildImageResizeSideGrid(maxDimensionPx, sideStart);
 
         const sourcePixels = meta ? `${meta.width}x${meta.height}px` : "unknown";
         const sourceWithFile = fileName ? `${fileName} ${sourcePixels}` : sourcePixels;
@@ -264,9 +265,9 @@ export async function sanitizeContentBlocksImages(
         };
         let smallestSize: number | undefined;
         for (const side of sideGrid) {
-          for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
+          for (const quality of imageOps.IMAGE_REDUCE_QUALITY_STEPS) {
             // Every candidate is downscaled to maxDimensionPx, so oversized sources stay admissible.
-            const candidateBuffer = await resizeToJpeg({
+            const candidateBuffer = await imageOps.resizeToJpeg({
               buffer: buf,
               maxSide: side,
               quality,

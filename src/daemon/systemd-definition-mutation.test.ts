@@ -388,6 +388,18 @@ describe.skipIf(process.platform === "win32")("systemd definition mutation owner
     await expectNoTemporaryFiles(path.dirname(unitPath), stateDir);
   });
 
+  it("admits unit drop-ins provisioned before a first publication, not later ones", async () => {
+    const dropIn = path.join(`${unitPath}.d`, "10-limits.conf");
+    managerDefinition(unitPath, [dropIn], [], exists);
+    afterRename(unitPath, () => writeFixtureFile(dropIn, policy(60)), true);
+    await changed(stage());
+    await missing(unitPath);
+
+    await writeFixtureFile(dropIn, policy(30));
+    await expect(stage()).resolves.toMatchObject({ unitPath });
+    expect(await read(dropIn)).toBe(policy(30));
+  });
+
   it("rejects changed uid between lstat and open", async () => {
     await writeFixtureFile(unitPath, baseUnit);
     onTargetOpen(unitPath, (handle) =>

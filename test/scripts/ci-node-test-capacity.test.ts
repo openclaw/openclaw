@@ -1,6 +1,39 @@
 import { expect, it } from "vitest";
-import { resolveSelectedNodeTestRunner } from "../../scripts/lib/ci-node-test-capacity.mts";
+import {
+  resolveBoatNodeJobBudget,
+  resolveSelectedNodeTestRunner,
+} from "../../scripts/lib/ci-node-test-capacity.mts";
 import type { CompactNodeTestShard } from "../../scripts/lib/ci-node-test-plan.mts";
+
+it("paces Boat starts across the day and preserves included headroom", () => {
+  const limits = {
+    canStart: true,
+    starts: {
+      day: { limit: 2400, used: 0, remaining: 2400 },
+      hour: { limit: 600, used: 0, remaining: 600 },
+      minute: { limit: 90, used: 0, remaining: 90 },
+    },
+  };
+  expect(resolveBoatNodeJobBudget(limits)).toBe(20);
+  limits.starts.hour.used = 75;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(5);
+  limits.starts.hour.used = 80;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+  limits.starts.hour.used = 0;
+  limits.starts.day.used = 1918;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(2);
+  limits.starts.day.used = 1920;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+  limits.starts.day.used = 5610;
+  limits.starts.day.remaining = 0;
+  expect(resolveBoatNodeJobBudget(limits)).toBe(0);
+});
+
+it("uses no Boat starts when quota or account readiness is unknown", () => {
+  expect(resolveBoatNodeJobBudget({})).toBe(0);
+  expect(resolveBoatNodeJobBudget({ canStart: false })).toBe(0);
+  expect(resolveBoatNodeJobBudget({ canStart: true, starts: {} })).toBe(0);
+});
 
 function selectedCliJob(
   family = "cli",

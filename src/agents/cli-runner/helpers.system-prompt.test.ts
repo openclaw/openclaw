@@ -172,7 +172,7 @@ describe("buildCliAgentSystemPrompt", () => {
           content: "Figure out who you are, then delete this file.",
         },
       ],
-      bootstrapMode: "full",
+      bootstrap: { bootstrapMode: "full", bootstrapCompleted: false },
       modelDisplay: "test/model",
     });
 
@@ -184,7 +184,7 @@ describe("buildCliAgentSystemPrompt", () => {
     const prompt = await buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       tools: [],
-      bootstrapMode: "limited",
+      bootstrap: { bootstrapMode: "limited", bootstrapCompleted: false },
       modelDisplay: "test/model",
     });
 

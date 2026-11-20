@@ -1,6 +1,6 @@
 import { mkdir, writeFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { StorageBase } from "./storage-base.js";
@@ -20,13 +20,19 @@ it("reads observation metadata once per scan while retaining rename, deletion an
         const prepare = db.prepare.bind(db);
         db.prepare = (sql) => {
           const statement = prepare(sql);
-          const writer = sql.startsWith("SELECT provenance,agent_id,sequence FROM history");
-          if (writer || /^SELECT .* FROM "?observations"?\b/i.test(sql)) {
+          const writer = /^SELECT/i.test(sql) && /\b(?:FROM|JOIN)\s+"?history"?\b/i.test(sql);
+          if (writer || /^SELECT .* FROM "?observations"? WHERE/i.test(sql)) {
             const count = <Method extends (...args: never[]) => unknown>(method: Method): Method =>
               new Proxy(method, {
                 apply(target, receiver, args) {
                   if (writer) {
                     writerReads++;
+                    const competitor = new DatabaseSync(config.statePath, { timeout: 0 });
+                    try {
+                      competitor.exec("BEGIN IMMEDIATE; COMMIT");
+                    } finally {
+                      competitor.close();
+                    }
                   } else {
                     reads++;
                   }
@@ -66,9 +72,11 @@ it("reads observation metadata once per scan while retaining rename, deletion an
   await writeFile(b, raw("record-b"));
   const scan = async () => {
     reads = 0;
+    writerReads = 0;
     const result = await storage.run(access, (vault) => vault.scan());
     expect(result.issues).toEqual([]);
     expect(reads).toBe(1);
+    expect(writerReads).toBeLessThanOrEqual(1);
     return result.records
       .map(({ id, revision }) => ({ id, revision }))
       .toSorted((left, right) => left.id.localeCompare(right.id));
@@ -77,11 +85,16 @@ it("reads observation metadata once per scan while retaining rename, deletion an
     { id: "record-a", revision: 1 },
     { id: "record-b", revision: 1 },
   ]);
-  expect(writerReads).toBe(0);
+  // A new filesystem stamp triggers observation even though the content is unchanged.
+  await writeFile(a, raw("record-a"));
+  expect(await scan()).toEqual([
+    { id: "record-a", revision: 1 },
+    { id: "record-b", revision: 1 },
+  ]);
+  expect(writerReads).toBe(1);
   await rename(a, a + "-renamed.md");
   await rm(b);
   expect(await scan()).toEqual([{ id: "record-a", revision: 2 }]);
-  expect(writerReads).toBe(0);
   await writeFile(b, raw("record-b"));
   expect(await scan()).toEqual([
     { id: "record-a", revision: 2 },

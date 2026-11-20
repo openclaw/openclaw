@@ -507,17 +507,25 @@ describe("placement standing grants", () => {
       expect(invoke).toHaveBeenCalledTimes(2);
 
       placementDatabase(databaseOptions).updatePlacement({ transition_generation: 5 });
-      const { record: staleApproval, pending: staleLaunch } = await requestApproval();
-      placementAuthorityActive = false;
-      expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(false);
-      await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
-      placementAuthorityActive = true;
-
       const { record: movedApproval, pending: movedLaunch } = await requestApproval();
       expect(movedApproval.id).not.toBe(firstApproval.id);
       expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 5 });
       expect(await manager.resolve(movedApproval.id, "deny")).toBe(true);
       await expect(movedLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      const { record: staleApproval, pending: staleLaunch } = await requestApproval();
+      placementAuthorityActive = false;
+      // Resolution records the verdict without re-checking the requesting run.
+      expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(true);
+      await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+
+      // A later request must not reuse the retained grant through a closed owner.
+      const { record: closedApproval, pending: closedLaunch } = await requestApproval();
+      expect(closedApproval.request.allowedDecisions).not.toContain("allow-always");
+      expect(closedApproval.request.placementGrant).toBeNull();
+      expect(await manager.resolve(closedApproval.id, "deny")).toBe(true);
+      await expect(closedLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
+      placementAuthorityActive = true;
+
       expect(invoke).toHaveBeenCalledTimes(2);
     });
   });

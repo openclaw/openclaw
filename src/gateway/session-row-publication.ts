@@ -74,20 +74,13 @@ export function prepareSessionRowPublicationView(
         }
         // Unaffected immutable vectors remain comparison witnesses after selection retires.
         retained.revision = undefined;
-        for (const list of retained.lists.values()) {
-          list.selection = undefined;
-          retained.lists.update(list);
-        }
+        retained.lists.invalidateSelections();
       });
       projection.onFactsChange((change) => {
         retained.factsRevision++;
         // Facts can change without retiring the view (for example, broad run activity).
         // Keep its comparison history; selection/config/identity resets still retire the view.
-        for (const list of retained.lists.values()) {
-          if (change.kind === "reset" || list.rows?.some((row) => row.key === change.key)) {
-            retained.lists.retireRows(list);
-          }
-        }
+        retained.lists.invalidateRows(change.kind === "reset" ? undefined : change.key);
       });
     } else {
       // Exact row publications cannot mask a preceding profile/configuration invalidation.
@@ -101,10 +94,7 @@ export function prepareSessionRowPublicationView(
         publication.lists.clear();
       } else if (publication.revision !== undefined && publication.revision !== revision) {
         // A new selection cannot make frozen, previously served rows unsafe to compare.
-        for (const list of publication.lists.values()) {
-          list.selection = undefined;
-          publication.lists.update(list);
-        }
+        publication.lists.invalidateSelections();
       }
       publication.revision = revision;
       publication.cfg = cfg;

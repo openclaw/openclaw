@@ -10,6 +10,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
+  SqliteWorkerExecuteOptions,
 } from "./sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "./sqlite-worker-identity.js";
 import type {
@@ -46,6 +47,7 @@ export type Job = {
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
+  finishing?: true;
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;
@@ -139,7 +141,7 @@ export type StoreClient = {
   scopes: Set<Promise<void>>;
   execute(
     command: { type: PropertyKey; input: unknown },
-    options: { signal?: AbortSignal },
+    options: SqliteWorkerExecuteOptions,
     scope?: OperationScope,
   ): Promise<unknown>;
 };

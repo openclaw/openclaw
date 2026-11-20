@@ -228,10 +228,7 @@ describe("CLI transcript account boundary", () => {
                     agentId: f.target.agentId,
                     jobId: "catch-up",
                     runStartedAt: 1,
-                    conversation: {
-                      ...f.target,
-                      lifecycleRevision: loadSessionEntryReadOnly(f.target)?.lifecycleRevision,
-                    },
+                    conversation: f.target,
                     payloads: [{ text: markers[0] }],
                     deliveryAttemptFence: null,
                   }),

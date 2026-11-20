@@ -12,7 +12,12 @@ const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePrepare
 afterEach(() => vi.useRealTimers());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function runFixture(command: string, args: string[], abortSignal: AbortSignal) {
+async function runFixture(
+  command: string,
+  args: string[],
+  abortSignal: AbortSignal,
+  env?: Record<string, string>,
+) {
   const execute: CliBackendExecute = async function* (context) {
     const { stdout } = await execa(context.command, context.args, {
       argv0: context.argv0,
@@ -27,9 +32,11 @@ async function runFixture(command: string, args: string[], abortSignal: AbortSig
     yield { type: "result", subtype: "success", result: stdout };
   };
   const context = buildPreparedCliRunContext({
+    workspaceDir: path.dirname(command),
     backend: {
       command,
       args,
+      env,
       modelArg: undefined,
       sessionArgs: undefined,
       systemPromptFileArg: undefined,
@@ -83,3 +90,34 @@ it.skipIf(process.platform === "win32")("preserves symlink argv0", async ({ sign
     runFixture(command, ["-e", "process.stdout.write(process.argv0)"], signal),
   ).resolves.toMatchObject({ text: command });
 });
+
+it.skipIf(process.platform === "win32").for([false, true])(
+  "routes local CLI temp files and respects explicit overrides (%s)",
+  async (explicit, { signal }) => {
+    const root = await fs.realpath(tempDirs.make("openclaw-cli-temp-"));
+    const command = path.join(root, "cli-fixture");
+    await fs.symlink(process.execPath, command);
+    const scratchRoot = path.join(root, explicit ? "short-temp" : ".openclaw/tmp");
+    if (explicit) {
+      await fs.mkdir(scratchRoot);
+    }
+    const result = await runFixture(
+      command,
+      [
+        "-e",
+        `
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const os = require("node:os");
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "validation-"));
+    process.stdout.write(JSON.stringify([directory, process.env.TMP, process.env.TEMP]));
+  `,
+      ],
+      signal,
+      explicit ? { TMPDIR: scratchRoot, TMP: scratchRoot, TEMP: scratchRoot } : undefined,
+    );
+    const [directory, tmp, temp] = JSON.parse(result.text!);
+    expect(path.dirname(directory)).toBe(scratchRoot);
+    expect([tmp, temp]).toEqual([path.dirname(directory), path.dirname(directory)]);
+  },
+);

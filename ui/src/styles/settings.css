@@ -850,10 +850,6 @@ openclaw-appearance-background .settings-background-preview .session-background_
   border-radius: 0;
 }
 
-.settings-tab-icon__preview[data-avatar-shape="rounded"] {
-  clip-path: inset(0 round 25%);
-}
-
 .settings-tab-icon__preview[data-avatar-shape="circle"] {
   clip-path: circle(50%);
 }

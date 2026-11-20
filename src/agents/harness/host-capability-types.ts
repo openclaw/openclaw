@@ -130,6 +130,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
+  /**
+   * Fits a current request over the runtime's hard per-turn text cap. The harness
+   * passes its own placement-aware preparer, so the full request becomes an
+   * attachment only where the runtime can read it; otherwise its middle is cut.
+   */
+  fitCurrentInput?: (request: {
+    prompt: string;
+    maxChars: number;
+    stageAttachment?: import("./current-input-budget.js").StageCurrentInputAttachment;
+  }) => Promise<string>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (
     request: AgentHarnessContextMediaRequest,
@@ -176,6 +186,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
   }>;
   /** Closure-bound non-secret maps prepared before harness placement. */
   preparedEnvironment?: () => AgentHarnessPreparedEnvironment;
+  /** Prepare disposable scratch only after selecting an admitted local execution root. */
+  prepareLocalExecScratch?: (
+    workspace: Readonly<{ cwd: string }>,
+  ) => Promise<Readonly<Record<"TMPDIR" | "TMP" | "TEMP", string>>>;
   /** Current bounded presence hint; physical activity does not identify the message source. */
   activeComputerContext?: () => string;
   /** Applies the exact host caller binding to a plugin-built tool surface. */

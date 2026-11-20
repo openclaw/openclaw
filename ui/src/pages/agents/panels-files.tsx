@@ -20,7 +20,11 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import "../../components/modal-dialog.tsx";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsLoadingSkeleton,
+  SettingsSection,
+} from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
@@ -237,7 +241,12 @@ export function AgentFiles(
         }
       >
         {!list() ? (
-          <SettingsEmpty message={t("agents.files.loadHint")} />
+          <Show
+            when={inventoryPending()}
+            fallback={<SettingsEmpty message={t("agents.files.loadHint")} />}
+          >
+            <SettingsLoadingSkeleton rows={1} />
+          </Show>
         ) : files().length === 0 ? (
           <SettingsEmpty message={t("agents.files.empty")} />
         ) : (

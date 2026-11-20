@@ -118,7 +118,7 @@ export function createGitHubPublicationRecoveryBackoff() {
       return failure && (result.status === "requested" || result.status === "publishing")
         ? {
             ...result,
-            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil((failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
+            message: `Automatic recovery deferred; next attempt in ${Math.max(0, Math.ceil(Math.min(failure.delayMs, failure.retryAtMs - performance.now()) / 1_000))} seconds. Recorded effects are retained; do not request another publication. ${failure.diagnostic}`,
           }
         : result;
     },

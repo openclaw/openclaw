@@ -30,7 +30,7 @@ import {
 } from "./sqlite-database-admission.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion, writeSqliteUserVersion } from "./sqlite-user-version.js";
@@ -38,7 +38,7 @@ import { readDatabaseIdentityBirthtime, resolveDatabasePathKey } from "./sqlite-
 import {
   runUpdateSqliteMigration,
   runUpdateSqliteMigrationAsync,
-} from "./update-doctor-migration-attribution.js";
+} from "./update-doctor-migration-context.js";
 export type {
   ClientTokenRecord,
   ClientSocketRecord,

@@ -142,7 +142,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps the loading model picker beside the microphone", async () => {
+  it("keeps the model picker beside the microphone while the catalog is pending", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         subscriptionInitialHistory: false,
@@ -154,7 +154,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const model = composer.locator('[data-chat-model-select="true"]');
       const voice = page.getByRole("button", { name: "Start voice input" });
-      await polledAttribute(model, "aria-busy").toBe("true");
+      await polledAttribute(model, "aria-busy").toBe("false");
       await polledVisible(voice).toBe(true);
 
       const measureGap = async () => {

@@ -3,6 +3,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   getOrLoadSqliteDatabaseAdmissionForPath,
   getSqliteDatabaseAdmission,
+  peekSqliteDatabaseAdmissionForPath,
   prepareSqliteDatabaseAdmissionForPath,
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
@@ -32,9 +33,7 @@ export function getAgentDeletionDiscovery(database: EngineConnection) {
 }
 
 export function getPreparedAgentDeletionDiscovery(statePath: string) {
-  return (
-    getOrLoadSqliteDatabaseAdmissionForPath(statePath, discoveryKey, () => undefined) ?? undefined
-  );
+  return peekSqliteDatabaseAdmissionForPath(statePath, discoveryKey) ?? undefined;
 }
 
 /** Recovery receipt writers invalidate the same discovery fact as journal writers. */

@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
@@ -21,7 +23,6 @@ import {
   seedClaim,
   turnRequests,
 } from "./worker-turn-rpc-fixtures.test-support.js";
-import { registerWorkerNativeInferenceRpcTests } from "./worker-turn-rpc.native-inference.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
 const fenced = { ok: false, closeReason: "placement-mismatch" };
@@ -587,4 +588,67 @@ describe("worker environment service", () => {
       }),
     );
   });
+
+  function registerWorkerNativeInferenceRpcTests(): void {
+    it.each([
+      { providerId: "device", inference: "worker" },
+      { providerId: "custom-provider", inference: { mode: "remote" } },
+    ])(
+      "honors provider-owned inference grammar after exact RPC binding %j",
+      async ({ providerId, inference }) => {
+        const executeInference = vi.fn<WorkerEnvironmentServiceOptions["executeInference"]>(
+          async () => ({ type: "error", reason: "provider-error", message: "fixture completed" }),
+        );
+        const { identity, placementStore, workerService } = await support.placementHarness(
+          "worker-local-proxy-denial",
+          "session-local-proxy-denial",
+          { executeInference },
+        );
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<StateDatabase>(db)
+                .updateTable("worker_environments")
+                .set({
+                  provider_id: providerId,
+                  profile_snapshot_json: JSON.stringify({ settings: { inference } }),
+                })
+                .where("environment_id", "=", identity.environmentId),
+            );
+            publishWorkerEnvironmentFixture(db, identity.environmentId);
+          },
+          { database: support.testState.stateDb },
+        );
+        expect(support.testState.store.get(identity.environmentId)).toMatchObject({
+          providerId,
+          profileSnapshot: { settings: { inference } },
+        });
+        expect(workerService.validateWorkerConnection(identity)).toBeNull();
+        const request = support.inferenceRequest(identity);
+        const send = vi.fn();
+        const sink = { connectionId: "worker-local-proxy-attempt", send };
+        const start = (overrides: Partial<typeof request> = {}) =>
+          workerService.startInference(identity, { ...request, ...overrides }, sink);
+
+        placementStore.validateWorkerTurn.mockReturnValue(false);
+        expect(await start()).toEqual({
+          ok: false,
+          closeReason: "placement-mismatch",
+        });
+        placementStore.validateWorkerTurn.mockReturnValue(true);
+        const started = await start();
+        expect(executeInference).not.toHaveBeenCalled();
+        expect(send).not.toHaveBeenCalled();
+        if (providerId === "device") {
+          expect(started).toEqual({ ok: false, reason: "model-not-approved" });
+        } else {
+          assert(started.ok, "opaque provider inference was refused");
+          started.launch();
+          await support.waitForFast(() => expect(send).toHaveBeenCalledOnce());
+          expect(executeInference).toHaveBeenCalledOnce();
+        }
+      },
+    );
+  }
 });

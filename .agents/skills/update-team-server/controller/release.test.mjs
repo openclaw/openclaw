@@ -462,6 +462,11 @@ function adoptNativeRecovery(f, record, backupDirectory, refusals, delegated = f
 function adoptSteadySuccessor(f, retainedJournal, target) {
   const runtimeEnv = f.env;
   f.env = f.adoptionEnv;
+  // /run is recreated after reboot; completed historical gates must not pin its inode.
+  const lock = descriptor(f.lockFile);
+  renameSync(f.lockFile, f.lockFile + ".previous-boot");
+  writeFileSync(f.lockFile, "", { mode: 0o600 });
+  assert.notEqual(descriptor(f.lockFile).inode, lock.inode);
   const gatePath = join(f.serving, "journal", "controller-adoption.json");
   const gateBytes = readFileSync(gatePath), gate = JSON.parse(gateBytes);
   const intent = JSON.parse(readFileSync(gate.intent.path));

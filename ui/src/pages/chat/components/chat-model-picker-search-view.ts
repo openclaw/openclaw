@@ -1,4 +1,7 @@
 import { createMemo, createProjection, createSignal, createStore, onSettled } from "solid-js";
+import { findMenuShortcut, registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import {
   chatModelSearchState,
   type createChatModelSearch,
@@ -32,7 +35,7 @@ function modelMatchRank(row: ChatModelSearchRow, query: string): number | null {
   return normalizeSearch(row.reference).includes(query) ? 5 : null;
 }
 
-/** The retained lazy panel owns ranking and disclosure; input/shortcut admission stays eager. */
+/** The retained lazy panel owns ranking, disclosure, row focus, and shortcuts. */
 export function createChatModelSearchView(
   search: ReturnType<typeof createChatModelSearch>,
   read: () => ChatModelSearchCatalog,
@@ -43,7 +46,7 @@ export function createChatModelSearchView(
   const scope = createMemo(() => ({ active: read().activeProvider, providers: read().providers }), {
     equals: (a, b) => a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
   });
-  // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+  // Closing and selection reset provider defaults; catalog refreshes retain each surviving choice.
   const [disclosure, updateDisclosure] = createStore<{
     active: string | undefined;
     selected?: string;
@@ -139,6 +142,63 @@ export function createChatModelSearchView(
   });
   const filtering = createMemo(() => Boolean(query().trim()));
   const view = {
+    focusSearch(this: void) {
+      const details = state.details;
+      if (state.pendingSearchFocus === undefined || !details) {
+        return;
+      }
+      if (
+        !details.isConnected ||
+        !details.open ||
+        details.ownerDocument.activeElement !== state.pendingSearchFocus
+      ) {
+        state.pendingSearchFocus = undefined;
+      } else if (state.input?.isConnected) {
+        state.pendingSearchFocus = undefined;
+        state.input.focus({ preventScroll: true });
+      }
+    },
+    inputRef() {
+      return elementRef<HTMLInputElement>((element) => {
+        state.input = element;
+        queueMicrotask(view.focusSearch);
+        return () => {
+          if (state.input === element) {
+            state.input = undefined;
+          }
+        };
+      });
+    },
+    closeAfterSelection(event: MouseEvent) {
+      // Option buttons live inside the picker overlay; its summary lives outside it.
+      if (event.currentTarget instanceof Element) {
+        findOverlayParent(event.currentTarget)?.request(false);
+      }
+      if (event.detail === 0) {
+        state.summary?.focus({ preventScroll: true });
+      }
+    },
+    onPickerKeydown: handleModelPickerKeydown,
+    rowRef(readKey: () => string) {
+      let element: HTMLElement;
+      onSettled(() => {
+        // The keyed row keeps this identity for its mounted lifetime.
+        const initialKey = readKey();
+        state.rows.set(initialKey, element);
+        if (state.focusRow === initialKey) {
+          state.focusRow = undefined;
+          if (state.details?.open) {
+            element.focus({ preventScroll: true });
+          }
+        }
+        return () => {
+          if (state.rows.get(initialKey) === element) {
+            state.rows.delete(initialKey);
+          }
+        };
+      });
+      return (node: HTMLElement) => (element = node);
+    },
     matches,
     selectable,
     reveal,
@@ -156,6 +216,12 @@ export function createChatModelSearchView(
     toggleProvider(provider: string) {
       updateDisclosure((draft) => {
         draft.selected = provider;
+      });
+    },
+    resetProvider() {
+      const current = scope();
+      updateDisclosure((draft) => {
+        draft.selected = current.active ?? current.providers[0];
       });
     },
     expandMore(provider: string, event: MouseEvent) {
@@ -184,7 +250,24 @@ export function createChatModelSearchView(
       }
     },
   };
-  search.bindView(view);
+  const state = search.bindView(view);
+  onSettled(() =>
+    state.details
+      ? registerMenuShortcuts(state.details, () => {
+          const items = selectable()
+            .slice(0, 9)
+            .flatMap(({ row }, index) => {
+              const element = state.rows.get(row.key);
+              return row.hasShortcut && element ? [{ element, key: String(index + 1) }] : [];
+            });
+          // The document-level typing handler must leave search activation to this picker.
+          if (state.input) {
+            items.push({ element: state.input, key: "/" });
+          }
+          return items;
+        })
+      : undefined,
+  );
   return view;
 }
 
@@ -233,25 +316,39 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** A disappearing refresh control can return focus; catalog presentation is already derived. */
-export function restoreChatModelRefreshFocus(details: Element | undefined): void {
-  if (!(details instanceof HTMLDetailsElement) || !details.open) {
+function handleModelPickerKeydown(event: KeyboardEvent): void {
+  const state = chatModelSearchState(event.currentTarget);
+  const details = state?.details;
+  if (
+    !state ||
+    event.defaultPrevented ||
+    !details?.open ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    event.target instanceof HTMLInputElement ||
+    event
+      .composedPath()
+      .some(
+        (target) =>
+          target instanceof HTMLElement &&
+          target !== details &&
+          target.matches('[role="menu"][popover], details[data-chat-native-picker]'),
+      )
+  ) {
     return;
   }
-  const state = chatModelSearchState(details);
-  const active = details.ownerDocument.activeElement;
-  if (!state || !active?.closest("[data-chat-model-refresh]") || !details.contains(active)) {
+  const target = findMenuShortcut(details, event.key);
+  if (!target) {
     return;
   }
-  queueMicrotask(() => {
-    if (
-      !active.isConnected &&
-      details.isConnected &&
-      details.open &&
-      details.ownerDocument.activeElement === details.ownerDocument.body
-    ) {
-      const target = state.input && !state.input.disabled ? state.input : state.summary;
-      target?.focus({ preventScroll: true });
-    }
-  });
+  event.preventDefault();
+  event.stopPropagation();
+  if (target instanceof HTMLInputElement) {
+    target.focus({ preventScroll: true });
+  } else {
+    target.click();
+  }
 }

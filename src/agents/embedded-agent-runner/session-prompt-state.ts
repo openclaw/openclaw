@@ -1,12 +1,9 @@
 /** Transcript-backed prompt projection state cached by an embedded session lifecycle. */
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
-import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { retainOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import type { Message } from "../../llm/types.js";
+import type { Message, ToolResultMessage } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { gateAgentToolExecution } from "../agent-tool-availability.js";
@@ -28,8 +25,13 @@ import {
 } from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
-
-type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+import { promptDelta } from "./session-prompt-delta.js";
+import {
+  readToolSurfaceCheckpoint,
+  type ToolDefinition,
+  type ToolSurface,
+} from "./session-tool-checkpoint.js";
+import { describeSessionToolDefinition, sameToolParameters } from "./session-tool-definition.js";
 
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
@@ -123,19 +125,6 @@ function changedPromptRoutePart(previous: unknown, current: string): SystemPromp
   return part ? `route:${part}` : "new";
 }
 
-type ToolDefinition = Pick<AnyAgentTool, "name" | "description" | "parameters">;
-type PublicationListing = ToolDefinition &
-  Pick<AnyAgentTool, "label" | "async" | "catalogMode"> & { scope?: string };
-
-type ToolSurface = {
-  routeKey: string;
-  historyId: string | null;
-  /** Digest of the tool policy config; a policy change starts a new pin. */
-  toolPolicy: string;
-  tools: ToolDefinition[];
-  publicationListing?: PublicationListing;
-};
-
 type ToolSurfaceInput = {
   state: EmbeddedSessionPromptState;
   routeKey: string;
@@ -144,14 +133,6 @@ type ToolSurfaceInput = {
   historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 };
-
-function describeTool(tool: AnyAgentTool): ToolDefinition {
-  // Published schemas are detached, frozen JSON; checkpointing must not copy them per session.
-  if (getPublishedRuntimeToolInputSchema(tool.parameters)) {
-    retainOwnedTranscriptPayload(tool.parameters);
-  }
-  return { name: tool.name, description: tool.description, parameters: tool.parameters };
-}
 
 function resolvePromptHistoryId(params: {
   state: EmbeddedSessionPromptState;
@@ -256,19 +237,6 @@ export function getSessionToolUsageRanking(
   return sessionPromptStates.get(sessionId)?.usageRanking?.snapshot;
 }
 
-function sameToolParameters(left: unknown, right: unknown): boolean {
-  if (left === right) {
-    return true;
-  }
-  const a = getPublishedRuntimeToolInputSchema(left);
-  const b = getPublishedRuntimeToolInputSchema(right);
-  // Restored transcript pins have no publication fact; derive only their side.
-  return a || b
-    ? (a?.canonicalFingerprint ?? sha256Hex(stableStringify(left))) ===
-        (b?.canonicalFingerprint ?? sha256Hex(stableStringify(right)))
-    : stableStringify(left) === stableStringify(right);
-}
-
 function resolveSessionToolSurface(params: ToolSurfaceInput) {
   const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
@@ -319,17 +287,20 @@ export function prepareSessionPublicationToolListing(
       ? previous
       : {
           scope,
-          ...describeTool(current),
+          ...describeSessionToolDefinition(current),
           label: current.label,
           async: current.async,
           catalogMode: current.catalogMode,
         };
   if (listing !== previous) {
+    const { name, description, parameters } = listing;
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
-      tools: known?.tools ?? [],
+      tools: known?.tools?.map((tool) =>
+        tool.name === name ? { name, description, parameters } : tool,
+      ),
       publicationListing: listing,
     };
   }
@@ -355,46 +326,43 @@ export function prepareSessionPublicationToolListing(
   );
 }
 
-/**
- * The session pins every tool definition it has sent, so a turn that builds fewer
- * tools keeps the provider prefix: retained definitions refuse their calls. New or
- * changed definitions extend the pin once and are written with the next checkpoint.
- */
-export function prepareSessionToolSurface(params: ToolSurfaceInput): AnyAgentTool[] {
+/** The series' first request pins tools and definitions; unbuilt pinned tools refuse calls. */
+export function prepareSessionToolSurface(
+  params: ToolSurfaceInput & { admitNewTools?: boolean },
+): AnyAgentTool[] {
   const { known, historyId } = resolveSessionToolSurface(params);
-  const pinned = new Map(known?.tools.map((tool) => [tool.name, tool]));
-  // Sibling guidance in a description follows the tools a turn built; the pin keeps
-  // the session's wording while the parameters match.
-  let changed = !known;
-  const tools = params.tools.map((tool) => {
-    const pin = pinned.get(tool.name);
-    // Computer discovery supplies live execution facts, not a new session definition.
-    if (pin && tool.name === "computer") {
-      return copyAgentToolMetadata(tool, { ...tool, ...pin });
-    }
-    if (changed && pin?.description === tool.description) {
-      return tool;
-    }
-    const sameParameters = pin && sameToolParameters(pin.parameters, tool.parameters);
-    changed ||= !sameParameters;
-    return sameParameters && pin.description !== tool.description
-      ? copyAgentToolMetadata(tool, { ...tool, description: pin.description })
-      : tool;
-  });
-  const built = new Set(tools.map((tool) => tool.name));
-  const retained = [...pinned.values()].filter((tool) => !built.has(tool.name));
-  if (changed) {
-    const current = tools.map(describeTool);
+  const previous = new Map(known?.tools?.map((pin) => [pin.name, pin]));
+  // Surfaces that still filter per turn admit new tools and changed schemas, as before.
+  const admitted =
+    !known?.tools || params.admitNewTools
+      ? params.tools.filter(
+          (tool) =>
+            !previous.has(tool.name) ||
+            // Computer discovery supplies live facts, never a new session definition.
+            (tool.name !== "computer" &&
+              !sameToolParameters(previous.get(tool.name)?.parameters, tool.parameters)),
+        )
+      : [];
+  let pinned = known?.tools;
+  if (!pinned || admitted.length > 0) {
+    const definitions = new Map([
+      ...previous,
+      ...admitted.map((tool) => [tool.name, describeSessionToolDefinition(tool)] as const),
+    ]);
+    pinned = [...definitions.values()].toSorted((a, b) => a.name.localeCompare(b.name));
     params.state.pendingToolSurface = {
       routeKey: params.routeKey,
       historyId,
       toolPolicy: params.toolPolicy,
       publicationListing: known?.publicationListing,
-      // oxlint-disable-next-line unicorn/no-array-sort -- The combined definitions array is private.
-      tools: [...current, ...retained].sort((a, b) => a.name.localeCompare(b.name)),
+      tools: pinned,
     };
   }
-  return [...tools, ...retained.map(refusePinnedTool)];
+  const built = new Map(params.tools.map((tool) => [tool.name, tool]));
+  return pinned.map((pin) => {
+    const tool = built.get(pin.name);
+    return tool ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : refusePinnedTool(pin);
+  });
 }
 
 function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
@@ -404,34 +372,7 @@ function refusePinnedTool(tool: ToolDefinition): AnyAgentTool {
   );
 }
 
-/** The latest checkpointed pin, unless a later model change retired it. */
-function readToolSurfaceCheckpoint(entries: SessionEntry[]) {
-  const markerIndex = entries.findLastIndex(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
-  const entry = entries[markerIndex];
-  const data = entry?.type === "custom" ? entry.data : undefined;
-  return isRecord(data) &&
-    Array.isArray(data.tools) &&
-    !entries.slice(markerIndex + 1).some((later) => later.type === "model_change")
-    ? {
-        routeKey: data.routeKey,
-        historyId: data.historyId,
-        toolPolicy: data.toolPolicy,
-        // SAFETY: this module alone writes the tool definitions and publication listing checkpoint.
-        tools: data.tools as ToolDefinition[],
-        // SAFETY: this module alone checkpoints PublicationListing values; older pins omit the field.
-        publicationListing: data.publicationListing as PublicationListing | undefined,
-      }
-    : undefined;
-}
-
-/**
- * The tool definitions this session last sent to the provider, or undefined before its
- * first pin. Compaction estimates its replacement request with these: deferred catalog
- * tools stay registered but never reach the provider. Accepted edge case: a history or
- * tool policy change since the pin is counted from the next turn's pin.
- */
+/** Tools last sent to the provider (undefined before a pin), for compaction estimates. */
 export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | undefined {
   return readToolSurfaceCheckpoint(entries)?.tools.map(refusePinnedTool);
 }
@@ -440,33 +381,6 @@ export function readSessionSentTools(entries: SessionEntry[]): AnyAgentTool[] | 
 export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): void {
   state.pendingSystemPrompt = undefined;
   state.historyBoundary = undefined;
-}
-
-function promptSections(text: string): Map<string, string> {
-  const sections = new Map<string, string>();
-  for (const section of text.split(/(?=^## )/m)) {
-    const lineEnd = section.indexOf("\n");
-    const heading = section.startsWith("## ")
-      ? section.slice(0, lineEnd < 0 ? section.length : lineEnd)
-      : "";
-    sections.set(heading, (sections.get(heading) ?? "") + section);
-  }
-  return sections;
-}
-
-function promptDelta(previous: string, current: string): string[] {
-  const before = promptSections(previous);
-  const sections: string[] = [];
-  for (const [heading, section] of promptSections(current)) {
-    if (before.get(heading) !== section) {
-      sections.push(section);
-    }
-    before.delete(heading);
-  }
-  for (const heading of before.keys()) {
-    sections.push(`${heading}\n(removed)`);
-  }
-  return sections;
 }
 
 /**

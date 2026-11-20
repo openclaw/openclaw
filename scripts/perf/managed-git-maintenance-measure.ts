@@ -26,9 +26,11 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     packs: { type: "string", default: "32" },
     "promisor-packs": { type: "string", default: "0" },
+    "hardlinked-packs": { type: "string", default: "0" },
     passes: { type: "string", default: "1" },
     "blobs-per-pack": { type: "string", default: "128" },
     "revision-bytes": { type: "string" },
+    "delta-revisions": { type: "boolean" },
     consolidate: { type: "boolean" },
     help: { type: "boolean" },
   },
@@ -47,6 +49,12 @@ For repeated bounded convergence use --packs 1536 --blobs-per-pack 1 at prepare
 time and --passes 3 at measure time (48 MiB payload).
 Add --promisor-packs 1257 at prepare time for mixed promisor/ordinary pack groups;
 markers are added only after generation, to the first N packs in filename order.
+--hardlinked-packs N prepares three local clones sharing N packs with the measured
+repository. Other packs are copied to independent inodes in those clones. Use
+--packs 65 --hardlinked-packs 23 --blobs-per-pack 32 for a mixed-link inventory,
+or --hardlinked-packs 65 for shared-only proof. Measure with --passes 6; each pass
+reports Python statvfs available-byte delta and new versus single-link retired
+pack bytes. Use a quiet, isolated filesystem for meaningful free-space deltas.
 To model separately fetched versions of one large file, prepare with
 --revision-bytes 4194304 --packs 32 --blobs-per-pack 1. Each pack contains the same
 deterministic incompressible payload with eight revision bytes changed. The
@@ -68,6 +76,10 @@ and unique added blob, then runs full fsck. The checkout has 62000 tracked 18KiB
 The workspace adds one pack to the requested fragmented pack count.
 Optional --owner-module <path> selects a frozen owner module for baseline proof;
 its imports must resolve to the original dependencies. Use a fresh fixture for each arm.
+--delta-revisions creates 4-KiB revisions within each pack and packs them with
+native Git offset deltas before measurement. Use --packs 16 --blobs-per-pack 2048
+for 128 MiB of payload. Combine with --hardlinked-packs and augment-backlog for
+shared-pack and production-sized checkout proof; keep the added workspace pack.
 Add --registration-delay-ms 5000 to delay the first real verify-pack command and
 start six concurrent addManagedWorktree calls once verification starts. These use
 deferred checkout to measure registration independently of copying 62000 files.
@@ -116,6 +128,7 @@ const trace = path.join(root, "maintenance.trace.jsonl");
 const summary = path.join(root, "maintenance.json");
 const packCount = Number(values.packs);
 const promisorPackCount = Number(values["promisor-packs"]);
+const hardlinkedPackCount = Number(values["hardlinked-packs"]);
 const passCount = Number(values.passes);
 const blobsPerPack = Number(values["blobs-per-pack"]);
 const registrationDelayMs = Number(values["registration-delay-ms"] ?? 0);
@@ -131,7 +144,9 @@ assert(
     (revisionBytes === 0 || (revisionBytes >= 8 && !nativeMidx && !backlog)),
   "--revision-bytes must be an integer >=8 for the ordinary owner fixture",
 );
-const blobBytes = nativeMidx || backlog ? 16 : revisionBytes || 32 * 1024;
+assert(!values["delta-revisions"] || (!nativeMidx && !backlog && !revisionBytes));
+const blobBytes =
+  nativeMidx || backlog ? 16 : values["delta-revisions"] ? 4096 : revisionBytes || 32 * 1024;
 const payloadBytes = (backlog ? blobsPerPack + packCount : packCount * blobsPerPack) * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
 assert(
@@ -141,6 +156,13 @@ assert(
   "--promisor-packs must be an integer between 0 and --packs",
 );
 assert(!nativeMidx || promisorPackCount === 0, "Promisor packs require the owner benchmark");
+assert(
+  Number.isSafeInteger(hardlinkedPackCount) &&
+    hardlinkedPackCount >= 0 &&
+    hardlinkedPackCount <= packCount &&
+    (!hardlinkedPackCount || values.mode === "prepare"),
+  "--hardlinked-packs requires ordinary prepare and a count between 0 and --packs",
+);
 assert(Number.isSafeInteger(passCount) && passCount >= 1, "--passes must be a positive integer");
 assert(
   Number.isSafeInteger(blobsPerPack) && blobsPerPack >= 1,
@@ -230,6 +252,7 @@ if (values.mode === "prepare-backlog") {
     await configureProjectCheckoutMaintenance(repo, { env: process.env });
   }
   const objects: string[] = [];
+  const deltaPacks: string[] = [];
   const sampleStride = Math.max(1, Math.floor((packCount * blobsPerPack) / 4096));
   let parent: string | undefined;
   for (let index = 0; index < packCount; index++) {
@@ -239,12 +262,14 @@ if (values.mode === "prepare-backlog") {
       // Deterministic incompressible data gives paired fixtures identical bytes.
       const nonce = Buffer.alloc(16);
       nonce.writeUInt32LE(revisionBytes ? 0 : index, 0);
-      nonce.writeUInt32LE(blob, 4);
+      nonce.writeUInt32LE(values["delta-revisions"] ? 0 : blob, 4);
       const bytes = nativeMidx
         ? nonce
         : createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(Buffer.alloc(blobBytes));
       if (revisionBytes) {
         bytes.writeBigUInt64LE(BigInt(index));
+      } else if (values["delta-revisions"]) {
+        bytes.writeUInt32LE(blob);
       }
       commands.push(
         Buffer.from(`blob\n${nativeMidx ? "" : `mark :${blob + 1}\n`}data ${blobBytes}\n`),
@@ -271,14 +296,39 @@ if (values.mode === "prepare-backlog") {
           "\ndone\n",
       ),
     );
+    const directory = path.join(repo, ".git/objects/pack");
+    const before = values["delta-revisions"] ? new Set(await fs.readdir(directory)) : undefined;
     await git(["fast-import", "--quiet", "--done"], Buffer.concat(commands));
+    if (before) {
+      const imported = (await fs.readdir(directory)).filter((name) => !before.has(name));
+      const input = imported.filter((name) => name.endsWith(".pack"));
+      const hash = await git(
+        [
+          "pack-objects",
+          "--stdin-packs",
+          "--no-reuse-delta",
+          "--delta-base-offset",
+          "--threads=1",
+          path.join(directory, "pack"),
+        ],
+        `${input.join("\n")}\n`,
+      );
+      deltaPacks.push(`pack-${hash}.pack`);
+      for (const name of imported.filter((file) => !file.startsWith(`pack-${hash}.`))) {
+        await fs.rm(path.join(directory, name));
+      }
+    }
     parent = await git(["rev-parse", "HEAD"]);
     objects.push(...(await git(["ls-tree", "-r", "--format=%(objectname)", "HEAD"])).split("\n"));
   }
   assert.equal(await packs(), packCount);
   if (promisorPackCount > 0) {
     const directory = path.join(repo, ".git", "objects", "pack");
-    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+    // Promisor history must include its ancestors, or index-pack promotes ordinary
+    // ancestors into additional packs and measures a different write workload.
+    const names = values["delta-revisions"]
+      ? deltaPacks
+      : (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
     for (const name of names.slice(0, promisorPackCount)) {
       await fs.writeFile(path.join(directory, name.replace(/\.pack$/, ".promisor")), "");
     }
@@ -286,6 +336,31 @@ if (values.mode === "prepare-backlog") {
   if (nativeMidx) {
     const inventory = await git(["count-objects", "-v"]);
     assert.equal(Number(/^in-pack: (\d+)$/m.exec(inventory)?.[1]), packCount * blobsPerPack);
+  }
+  if (hardlinkedPackCount) {
+    const directory = path.join(repo, ".git/objects/pack");
+    const names = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+    for (let clone = 0; clone < 3; clone++) {
+      const destination = path.join(root, `local-clone-${clone}`);
+      await git(["clone", "--local", "--no-checkout", repo, destination]);
+      for (const name of names.slice(hardlinkedPackCount)) {
+        for (const extension of ["pack", "idx"]) {
+          const file = path.join(
+            destination,
+            ".git/objects/pack",
+            name.replace(/pack$/, extension),
+          );
+          await fs.copyFile(file, `${file}.private`);
+          await fs.rename(`${file}.private`, file);
+        }
+      }
+    }
+    for (const [index, name] of names.entries()) {
+      assert.equal(
+        (await fs.stat(path.join(directory, name))).nlink,
+        index < hardlinkedPackCount ? 4 : 1,
+      );
+    }
   }
   if (!nativeMidx) {
     const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
@@ -313,8 +388,10 @@ if (values.mode === "prepare-backlog") {
     policy: values.policy,
     packs: packCount,
     promisorPacks: promisorPackCount,
+    hardlinkedPacks: hardlinkedPackCount,
     blobBytes,
     payloadBytes,
+    deltaRevisions: values["delta-revisions"] ?? false,
     ...(revisionBytes ? { revisionBytes } : {}),
     ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
     objects,
@@ -327,6 +404,7 @@ if (values.mode === "prepare-backlog") {
     policy: string;
     packs: number;
     promisorPacks?: number;
+    hardlinkedPacks?: number;
     blobBytes: number;
     payloadBytes: number;
     objects: string[];
@@ -539,6 +617,25 @@ if (values.mode === "prepare-backlog") {
     const started = performance.now();
     const cpuStarted = process.cpuUsage();
     const passes = [];
+    const inventory = async () => {
+      const directory = path.join(repo, ".git/objects/pack");
+      return Promise.all(
+        (await fs.readdir(directory))
+          .filter((name) => name.endsWith(".pack"))
+          .map(async (name) => {
+            const { size, nlink } = await fs.stat(path.join(directory, name));
+            return { name, size, nlink };
+          }),
+      );
+    };
+    const availableBytes = async () =>
+      Number(
+        await run("python3", [
+          "-c",
+          "import os,sys; s=os.statvfs(sys.argv[1]); print(s.f_bavail*s.f_frsize)",
+          repo,
+        ]),
+      );
     try {
       for (let pass = 1; pass <= passCount; pass++) {
         await checkDirty();
@@ -546,12 +643,16 @@ if (values.mode === "prepare-backlog") {
         const packBytesBefore = await packBytes();
         const promisorPacksBefore = await promisorPacks();
         const progress = new WorktreeGcProgress();
+        const before = fixture.hardlinkedPacks ? await inventory() : undefined;
+        const freeBefore = before ? await availableBytes() : 0;
         const passStarted = performance.now();
         const maintenance = createWorktreeGitMaintenance(process.env);
         const registrations = registrationDelayMs
           ? await measureRegistrations(pass, (signal) => maintenance({ progress, signal }))
           : await maintenance({ progress });
         const elapsedMs = performance.now() - passStarted;
+        const freeAfter = before ? await availableBytes() : 0;
+        const after = before ? await inventory() : [];
         assert.equal(progress.result.issueCount, 0, JSON.stringify(progress.result.issues));
         assert.equal(progress.result.gitMaintenance?.stage, "completed");
         const packsAfter = await packs();
@@ -570,6 +671,20 @@ if (values.mode === "prepare-backlog") {
           promisorPacksBefore,
           promisorPacksAfter,
           registrations,
+          ...(before
+            ? {
+                freeBytesDelta: freeAfter - freeBefore,
+                writtenBytes: after
+                  .filter((pack) => !before.some((old) => old.name === pack.name))
+                  .reduce((sum, pack) => sum + pack.size, 0),
+                freedBytes: before
+                  .filter(
+                    (pack) => pack.nlink === 1 && !after.some((next) => next.name === pack.name),
+                  )
+                  .reduce((sum, pack) => sum + pack.size, 0),
+                sharedPacks: after.filter((pack) => pack.nlink > 1).length,
+              }
+            : {}),
         });
         await fs.writeFile(
           summary,
@@ -599,6 +714,7 @@ if (values.mode === "prepare-backlog") {
     }
   } else {
     await checkDirty();
+    const objectsBefore = await git(["cat-file", "--batch-all-objects", "--batch-check"]);
     await fs.writeFile(trace, "");
     const beforeReads = backlog ? await measureReads("before", fixture.objects) : undefined;
     const timeOutput = path.join(root, "maintenance.time.txt");
@@ -638,7 +754,9 @@ if (values.mode === "prepare-backlog") {
     }
     const afterReads = backlog ? await measureReads("after", fixture.objects) : undefined;
     const packsAfter = await packs();
-    assert(packsAfter < fixture.packs, "The owner did not consolidate the fixture");
+    if (!fixture.hardlinkedPacks) {
+      assert(packsAfter < fixture.packs, "The owner did not consolidate the fixture");
+    }
     const retained = await git(
       ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
       `${fixture.objects.join("\n")}\n`,
@@ -660,6 +778,7 @@ if (values.mode === "prepare-backlog") {
       );
       assert.equal(checked, shared.map((oid) => `${oid} blob 16`).join("\n"));
     }
+    assert.equal(await git(["cat-file", "--batch-all-objects", "--batch-check"]), objectsBefore);
     await git(["fsck", "--full", "--no-dangling"]);
     console.log(
       JSON.stringify(

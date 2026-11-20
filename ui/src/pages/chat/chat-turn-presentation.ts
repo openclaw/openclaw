@@ -1,6 +1,9 @@
+import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isTranscriptArtifactProvider } from "../../../../packages/agent-core/src/harness/session/transcript-model.js";
+import { isLegacyCodexProviderId } from "../../../../src/config/legacy-codex-provider.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
@@ -9,7 +12,6 @@ import {
   normalizeRoleForGrouping,
   resolveMessageRole,
 } from "../../lib/chat/message-normalizer.ts";
-import { readToolApprovalReviews } from "../../lib/chat/tool-approval-reviews.ts";
 import { hasVisiblePreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
@@ -20,6 +22,7 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "./chat-assistant-reply.ts";
+import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import {
   assistantGroupIsIndependentBoundary,
   chatItemStartsUserTurn,
@@ -42,13 +45,13 @@ export function isActivityMessageGroup(group: MessageGroup, bubbleMode = false):
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
+  // Keep one activity owner as the first call gains live facts or more calls.
+  // Its renderer can simplify a settled singleton without replacing the owner.
   return (
     bubbleMode ||
     group.messages.length > 1 ||
-    cards.length > 1 ||
-    (cards.length === 0 &&
-      group.messages.some(({ message }) => hasVisiblePreparedActivity(message))) ||
-    cards.some((card) => readToolApprovalReviews(card.details).length > 0)
+    cards.length > 0 ||
+    group.messages.some(({ message }) => hasVisiblePreparedActivity(message))
   );
 }
 
@@ -110,8 +113,6 @@ export type WorkGroupRenderItem = {
   replyRunId?: string;
   /** No visible reply owns this rollup; nested execution identities must not frame it. */
   ownerless?: true;
-  /** Folded group -> preceding visible output, for chronological expanded rows. */
-  workAfterGroup?: ReadonlyMap<string, string>;
   durationMs: number | null;
 };
 
@@ -132,25 +133,7 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
-// Assistant text stays out of completed work unless its provider labels all of it
-// commentary. An absent phase is unknown, and a toolUse stop is not narration.
-// Host-authored transcript artifacts retain their existing work classification.
-function isUnlabeledAssistantText(item: MessageGroup): boolean {
-  return (
-    item.role.toLowerCase() === "assistant" &&
-    item.visibleContent === "text" &&
-    !item.messages.some(({ message }) => asRecord(message)?.stopReason === "error") &&
-    item.messages.some(
-      ({ message }) =>
-        !isTranscriptArtifactProvider(asRecord(message)?.provider) &&
-        resolveAssistantReplyPhase(message) !== "commentary",
-    )
-  );
-}
-
-// The pre-existing work classification. Placement and run ownership still follow it,
-// so text that now stays visible keeps the position and timing it had as work.
-function isLegacyWorkGroup(item: TurnRenderItem): item is MessageGroup {
+function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
     item.isStreaming ||
@@ -196,6 +179,65 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
     assistantGroupCanOwnActiveRunStatus(item) &&
     assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "commentary"
   );
+}
+
+// The saved response, not the current picker or the (possibly OpenAI-compatible) API,
+// identifies which model answered. The imported history placeholder is not a model ID.
+function isRecordedOpenAIModel(record: Record<string, unknown>): boolean {
+  const model = normalizeLowercaseStringOrEmpty(record.model);
+  const provider = normalizeLowercaseStringOrEmpty(record.provider);
+  if (!provider || !model || model === "native-history") {
+    return false;
+  }
+  const served = normalizeLowercaseStringOrEmpty(record.responseModel);
+  const direct = provider === "openai" || isLegacyCodexProviderId(provider);
+  const upstream = (id: string) =>
+    parseProviderModelRef(
+      !direct && id.startsWith(`${provider}/`) ? id.slice(provider.length + 1) : id,
+    );
+  const requested = upstream(model);
+  const actual = upstream(served);
+  if (actual) {
+    return actual.provider === "openai";
+  }
+  if (direct) {
+    return !requested || requested.provider === "openai";
+  }
+  // A router can return a bare upstream ID. It confirms the requested vendor only
+  // when it matches the qualified route; an unrelated bare reroute is unknown.
+  return (
+    requested?.provider === "openai" &&
+    (!served ||
+      served === requested.model ||
+      served.replace(/-\d{4}-\d{2}-\d{2}$/, "") === requested.model)
+  );
+}
+
+// A single Worked row can cover several runs: don't put another model's output inside it.
+function isOpenAIWorkSegment(turn: TurnRenderItem[], start: number, end: number): boolean {
+  let foundAuthor = false;
+  for (let index = start; index <= end; index++) {
+    const item = turn[index]!;
+    if (item.kind !== "group") {
+      continue;
+    }
+    for (const { message } of item.messages) {
+      const record = asRecord(message);
+      if (
+        record?.role !== "assistant" ||
+        isTranscriptArtifactProvider(record.provider) ||
+        isKeyedAssistantStreamFallbackMessage(record) ||
+        messageSubagentCompletions(record).length > 0
+      ) {
+        continue;
+      }
+      if (!isRecordedOpenAIModel(record)) {
+        return false;
+      }
+      foundAuthor = true;
+    }
+  }
+  return foundAuthor;
 }
 
 function turnUserMessages(turn: TurnRenderItem[]): unknown[] {
@@ -375,7 +417,7 @@ export function collapseCompletedTurnWork(
         trailing.length > 0 &&
         trailing.every(
           (item) =>
-            isLegacyWorkGroup(item) &&
+            isCollapsibleWorkGroup(item) &&
             item.runId === terminalReply.runId &&
             !groupHasFailedResult(item) &&
             !groupEndsRunInFailure(item),
@@ -414,6 +456,10 @@ export function collapseCompletedTurnWork(
       }
       segmentEnd += 1;
     }
+    if (!isOpenAIWorkSegment(turn, segmentStart, segmentEnd)) {
+      result.push(...turn);
+      continue;
+    }
     // The last-visible-reply policy applies per run. A later run in the same
     // turn, such as a subagent completion the agent answered without new user
     // input, must not demote an earlier run's reply to work. A run that ended
@@ -436,8 +482,6 @@ export function collapseCompletedTurnWork(
     }
     const groups: MessageGroup[] = [];
     const answers: TurnRenderItem[] = [];
-    const workAfterGroup = new Map<string, string>();
-    let precedingAnswerKey: string | undefined;
     // CLI runtimes import tool rows and interim text without a run id; only the
     // persisted reply that follows them carries it. Such rows belong to that run.
     const workRunIds = new Set<string | undefined>();
@@ -447,15 +491,11 @@ export function collapseCompletedTurnWork(
       // Share the renderer's error classification, including structured results.
       if (
         index !== finalReplyIndex &&
-        isLegacyWorkGroup(item) &&
-        !isUnlabeledAssistantText(item) &&
+        isCollapsibleWorkGroup(item) &&
         !earlierRunReplies.has(item) &&
         (index < finalReplyIndex || (!groupHasFailedResult(item) && !groupEndsRunInFailure(item)))
       ) {
         groups.push(item);
-        if (precedingAnswerKey) {
-          workAfterGroup.set(item.key, precedingAnswerKey);
-        }
         if (earlierRunReplies.size > 0) {
           let runId = item.runId;
           for (let next = index + 1; runId === undefined && next <= segmentEnd; next += 1) {
@@ -466,7 +506,6 @@ export function collapseCompletedTurnWork(
         }
       } else {
         answers.push(item);
-        precedingAnswerKey = item.key;
       }
     }
     if (groups.length === 0) {
@@ -478,17 +517,7 @@ export function collapseCompletedTurnWork(
     // runs keep their replies, the rollup sits above the first of them; that
     // reply owns it only when all of the work belongs to its run. Work across
     // several runs stays outside any run frame.
-    // Text that is visible only because it lacks a commentary label never owns the
-    // rollup: ownership and elapsed time stay with the replies that owned them before.
-    const ownerCandidates = answers.filter(
-      (answer) =>
-        answer === terminalReply ||
-        (answer.kind === "group" && earlierRunReplies.has(answer)) ||
-        !(isLegacyWorkGroup(answer) && isUnlabeledAssistantText(answer)),
-    );
-    const firstAnswer = ownerCandidates.find(
-      (answer): answer is MessageGroup => answer.kind === "group",
-    );
+    const firstAnswer = answers.find((answer): answer is MessageGroup => answer.kind === "group");
     const ownerReply =
       earlierRunReplies.size === 0
         ? terminalReply
@@ -499,8 +528,8 @@ export function collapseCompletedTurnWork(
       ownerReply &&
       !hasForwardedSource(ownerReply) &&
       !groups.some(hasForwardedSource) &&
-      ownerCandidates
-        .slice(0, ownerCandidates.indexOf(ownerReply))
+      answers
+        .slice(0, answers.indexOf(ownerReply))
         .every(
           (answer) =>
             answer.kind === "group" &&
@@ -521,7 +550,6 @@ export function collapseCompletedTurnWork(
       // Above several runs' replies, work owned by none of them stays unframed
       // even when its rows share one run.
       ...(earlierRunReplies.size > 0 && !replyRunId ? { ownerless: true as const } : {}),
-      ...(workAfterGroup.size > 0 ? { workAfterGroup } : {}),
       durationMs,
     });
     result.push(...answers, ...turn.slice(segmentEnd + 1));
@@ -583,7 +611,9 @@ export function joinActivityRuns(
         : undefined;
   const before = groupsOf(first);
   const after = groupsOf(next);
-  return before && after ? activityRun([...before, ...after]) : undefined;
+  return before && after && !after[0]?.startsActivityGroup
+    ? activityRun([...before, ...after])
+    : undefined;
 }
 
 /** Presentation-only rollup for tool groups separated by projected turn boundaries. */
@@ -601,11 +631,14 @@ export function coalesceActivityRuns(
     if (!first) {
       return;
     }
-    result.push(groups.length === 1 ? first : activityRun(groups));
+    result.push(activityRun(groups));
     groups = [];
   };
   for (const item of items) {
     if (item.kind === "group" && isActivityGroup(item)) {
+      if (item.startsActivityGroup) {
+        flush();
+      }
       groups.push(item);
       continue;
     }

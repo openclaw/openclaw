@@ -1,14 +1,80 @@
-import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  buildGenericCliContextEngineHostSupport,
+  type ContextEngineHostSupport,
+} from "../../context-engine/host-compat.js";
+import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
+import { resolveContextEngine } from "../../context-engine/registry.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
 } from "../harness/context-engine-lifecycle.js";
+import { beginContextEngineLogicalTurn } from "../harness/context-engine-turn-begin.js";
+import { runCliCleanup } from "./cleanup.js";
+import { cliBackendLog } from "./log.js";
 import { loadCliSessionContextEngineMessages } from "./session-history.js";
-import type { PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
+
+/** The caller must register owned cleanup before validating the engine's host support. */
+export async function prepareCliContextEngine(options: {
+  run: RunCliAgentParams;
+  config: OpenClawConfig;
+  agentDir: string;
+  workspaceDir: string;
+  host: ContextEngineHostSupport;
+}): Promise<{
+  engine: ContextEngine;
+  deferDisposalUntil?: PreparedCliRunContext["deferContextEngineDisposalUntil"];
+  cleanup?: () => Promise<void>;
+}> {
+  const { run, config, agentDir, workspaceDir, host } = options;
+  const lease = run.contextEngineLogicalTurnLease;
+  if (lease) {
+    const effective = await beginContextEngineLogicalTurn({
+      lease,
+      host,
+      recorder: run.userTurnTranscriptRecorder,
+      sessionTarget: run.sessionTarget,
+    });
+    return { engine: effective.engine, deferDisposalUntil: lease.deferDisposalUntil };
+  }
+  const trackDisposal = captureAsyncWorkTracker();
+  const engine = await resolveContextEngine(config, {
+    initialize: ensureContextEnginesInitialized,
+    agentDir,
+    workspaceDir,
+  });
+  const disposalHolds = new Set<Promise<void>>();
+  const deferDisposalUntil = (promise: Promise<void>) => {
+    disposalHolds.add(promise);
+    void promise.finally(() => disposalHolds.delete(promise)).catch(() => {});
+  };
+  return {
+    engine,
+    deferDisposalUntil,
+    cleanup: async () => {
+      if (disposalHolds.size > 0) {
+        // Queued maintenance may need this foreground turn to release its lane first.
+        void trackDisposal(async () => {
+          await Promise.allSettled(disposalHolds);
+          await runCliCleanup(run, "cli-context-engine-release", async () => {
+            await engine.dispose?.();
+          });
+        }).catch((error: unknown) => {
+          cliBackendLog.warn(`CLI context engine cleanup failed: ${String(error)}`);
+        });
+      } else {
+        await engine.dispose?.();
+      }
+    },
+  };
+}
 
 /**
  * Bootstraps the turn's context engine, then assembles it for its system prompt addition.

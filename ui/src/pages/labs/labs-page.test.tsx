@@ -5,9 +5,13 @@ import { onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ConfigSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
+import {
+  invalidateConfigConnection,
+  type ConfigAutoSaveStatus,
+} from "../../lib/config/config-state-model.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -16,10 +20,12 @@ import { LabsPage } from "./labs-page.tsx";
 type RuntimeConfigState = {
   connected: boolean;
   configLoading: boolean;
+  configAutoSaveStatus: ConfigAutoSaveStatus;
   configSnapshot: {
     hash: string;
     sourceConfig: Record<string, unknown>;
     valid?: boolean;
+    warnings?: ConfigSnapshot["warnings"];
   } | null;
   lastError: string | null;
 };
@@ -49,6 +55,7 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   const state: RuntimeConfigState = {
     connected: true,
     configLoading: false,
+    configAutoSaveStatus: "idle",
     configSnapshot: { hash: "config-hash", sourceConfig },
     lastError: null,
   };
@@ -270,6 +277,44 @@ describe("LabsPage", () => {
     expect(page.textContent).not.toContain("Invite someone");
   });
 
+  it("shows the Gateway activation warning and clears it with the config snapshot", async () => {
+    const message =
+      "OpenClaw ID is on, but the Access page stays off: plugins.deny includes openclaw-id-access. Remove that deny entry yourself if you want the page.";
+    const plugins = { deny: ["openclaw-id-access"] };
+    const { page, runtimeConfig } = await mountPage({ plugins });
+    const toggle = labToggle(page, "OpenClaw ID remote access");
+    expect(page.textContent).not.toContain(message);
+    runtimeConfig.patch.mockImplementationOnce(async () => {
+      runtimeConfig.state.configSnapshot = {
+        hash: "activated-config-hash",
+        sourceConfig: { ...openclawId({ enabled: true }), plugins },
+        warnings: [
+          { path: "gateway.openclawId.enabled", message },
+          { path: "plugins.other", message: "An unrelated config warning" },
+        ],
+      };
+      runtimeConfig.notify();
+      return true;
+    });
+
+    changeToggle(toggle, true);
+    await waitForSolid(() => {
+      expect(page.querySelector('[role="status"]')?.textContent ?? "").toContain(message);
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+    });
+    expect(page.textContent).not.toContain("An unrelated config warning");
+    runtimeConfig.state.configSnapshot = {
+      hash: "unblocked-config-hash",
+      sourceConfig: openclawId({ enabled: true }),
+      warnings: [],
+    };
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(page.querySelector('[role="status"]')).toBeNull());
+    expect(toggle.checked).toBe(true);
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+  });
+
   it("does not publish a retired save failure after a same-client reconnect", async () => {
     const { gateway, page, runtimeConfig, pendingPatch, toggle } = await startSave();
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
@@ -362,10 +407,16 @@ describe("LabsPage Decision assistance", () => {
       expect(toggle.hasAttribute("aria-disabled")).toBe(true);
     });
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
+    runtimeConfig.state.configAutoSaveStatus = "rejected";
+    runtimeConfig.state.lastError = "The setting was rejected";
+    runtimeConfig.notify();
     pendingPatch.resolve(false);
     await pendingPatch.promise;
     await waitForSolid(() => {
-      expect(toggle.checked).toBe(false);
+      expect(labToggle(page, "Decision assistance").checked).toBe(false);
+      expect(labRow(page, "Decision assistance").textContent).not.toContain(
+        "Couldn’t load this setting",
+      );
       expect(page.querySelector('[role="alert"]')).not.toBeNull();
     });
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();

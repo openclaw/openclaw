@@ -686,7 +686,7 @@ it("rejects an oversized transcript page before returning it over node.invoke", 
   const command = transcriptCommand(control, CODEX_APP_SERVER_THREAD_TURNS_LIST_COMMAND);
 
   await expect(command.run({ threadId: "thread-1", limit: 50 })).rejects.toThrow(
-    "Codex app-server transcript is unavailable",
+    "Codex app-server chat history is unavailable",
   );
 });
 

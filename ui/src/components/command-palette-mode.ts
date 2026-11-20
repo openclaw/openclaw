@@ -1,4 +1,8 @@
+import { getSafeLocalStorage } from "../local-storage.ts";
 import type { CommandPaletteMode, CommandPaletteOpenInput } from "./command-palette-contract.ts";
+
+// This browser preference stores only the explicit mode, never the draft or files.
+const MODE_STORAGE_KEY = "openclaw.command-palette.mode.v1";
 
 // Text this long, or on more than one line, reads as a prompt rather than a search.
 const PROMPT_ENTER_CHARS = 60;
@@ -32,6 +36,14 @@ export class CommandPaletteModes {
 
   /** An entry point that names a mode is a choice; a retained file or draft may still move it. */
   open(input: Pick<CommandPaletteOpenInput, "mode" | "submitRequested"> = {}) {
+    try {
+      const saved = getSafeLocalStorage()?.getItem(MODE_STORAGE_KEY);
+      if (saved === "search" || saved === "compose") {
+        this.chosen = saved;
+      }
+    } catch {
+      // Storage may be disabled; keep the choice for this window.
+    }
     if (input.mode) {
       this.chosen = input.mode;
       this.keepSearch = input.mode === "search" && this.hooks.draft().prompt;
@@ -64,6 +76,11 @@ export class CommandPaletteModes {
     }
     if (choice) {
       this.chosen = mode;
+      try {
+        getSafeLocalStorage()?.setItem(MODE_STORAGE_KEY, mode);
+      } catch {
+        // Mode switching still works when browser storage is unavailable.
+      }
       this.keepSearch = mode === "search" && this.hooks.draft().prompt;
     }
     this.automatic = !choice && mode === "compose";

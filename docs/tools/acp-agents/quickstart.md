@@ -49,7 +49,7 @@ using the old location for that process; the warning names the override to set.
   <Accordion title="First-run gotchas">
     - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`, or the installed ACP backend is intentionally blocked (`/acp doctor` reports the missing allowlist entry).
     - The Codex ACP adapter ships with the `acpx` plugin and launches locally when possible.
-    - Codex ACP runs with an isolated `CODEX_HOME`. OpenClaw copies trusted project trust entries plus safe model/provider routing config (`model`, `model_provider`, `model_reasoning_effort`, `sandbox_mode`, and safe `model_providers.<name>` fields) from the host Codex config; auth, notifications, and hooks stay on the host config only.
+    - Codex ACP runs with an isolated `CODEX_HOME`. OpenClaw copies trusted project trust entries plus safe model, context-window, and provider routing config (`model`, `model_provider`, `model_reasoning_effort`, `model_context_window`, `sandbox_mode`, and safe `model_providers.<name>` fields) from the host Codex config; auth, notifications, and hooks stay on the host config only.
     - Other target harness adapters may be fetched on demand with `npx` on first use.
     - Vendor auth must already exist on the host for that harness.
     - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.

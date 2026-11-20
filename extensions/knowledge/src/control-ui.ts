@@ -32,7 +32,7 @@ export default defineControlUiPlugin({
       id: "knowledge",
       label: "Knowledge",
       page: { id: "overview" },
-      icon: "book",
+      icon: "knowledge",
     });
     const removePage = host.ui.registerPage({
       id: "overview",

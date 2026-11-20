@@ -102,6 +102,13 @@ private final class PairingGatewayFixture: @unchecked Sendable {
                 }
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
                 socket.emitReceiveSuccess(.data(Data(response.utf8)))
+            }, receiveHook: { socket, receiveIndex in
+                if receiveIndex == 0 {
+                    return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                }
+                return .data(GatewayWebSocketTestSupport.connectOkData(
+                    id: socket.snapshotConnectRequestID() ?? "connect",
+                    scopes: ["operator.pairing"]))
             })
         }
         self.session = session
