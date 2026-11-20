@@ -52,6 +52,14 @@ export const MentionableUserSchema = closedObject({
   displayName: MentionLabelSchema,
   avatarUrl: Type.Optional(MentionAvatarUrlSchema),
   online: Type.Boolean(),
+  /** Present only when mentioning this person will invite a ceiling-role member. */
+  inviteAccessOptions: Type.Optional(
+    Type.Array(SessionMemberPermissionLevelSchema, {
+      minItems: 1,
+      maxItems: 3,
+      uniqueItems: true,
+    }),
+  ),
 });
 export const UsersMentionableResultSchema = closedObject({
   users: Type.Array(MentionableUserSchema, { maxItems: MAX_MENTIONABLE_USERS }),

@@ -103,3 +103,13 @@ describe("human mention text ownership", () => {
     },
   );
 });
+
+it("retains invitation levels through draft recovery and submission trimming", () => {
+  const mentions = [{ profileId: "alex", start: 2, end: 7, access: "suggest" as const }];
+  expect(readHumanMentions("  @Alex ", mentions)).toEqual(mentions);
+  expect(trimHumanMentions("  @Alex ", mentions)).toEqual({
+    text: "@Alex",
+    mentions: [{ ...mentions[0], start: 0, end: 5 }],
+  });
+  expect(readHumanMentions("  @Alex ", [{ ...mentions[0], access: "admin" }])).toBeUndefined();
+});

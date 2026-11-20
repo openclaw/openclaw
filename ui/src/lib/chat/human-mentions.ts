@@ -19,6 +19,10 @@ export type HumanMentionInput = {
 function isHumanMention(text: string, entry: unknown, previousEnd: number): entry is HumanMention {
   if (
     !isRecord(entry) ||
+    (entry.access !== undefined &&
+      entry.access !== "read" &&
+      entry.access !== "suggest" &&
+      entry.access !== "send") ||
     typeof entry.profileId !== "string" ||
     !entry.profileId.trim() ||
     entry.profileId.length > 256 ||
@@ -57,7 +61,12 @@ export function readHumanMentions(
     if (!isHumanMention(text, entry, previousEnd)) {
       return undefined;
     }
-    mentions.push({ profileId: entry.profileId, start: entry.start, end: entry.end });
+    mentions.push({
+      profileId: entry.profileId,
+      start: entry.start,
+      end: entry.end,
+      ...(entry.access ? { access: entry.access } : {}),
+    });
     previousEnd = entry.end;
   }
   return mentions;

@@ -15,7 +15,11 @@ import {
   EffectiveSessionCommunicationPolicySchema,
 } from "./sessions-communication.js";
 import { SessionProviderReviewProjectionSchema } from "./sessions-provider-review.js";
-import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import {
+  SessionMemberPermissionLevelSchema,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+} from "./sessions-sharing-values.js";
 
 /** Existing directory on a paired session host; never a Gateway-owned checkout. */
 export const SessionDeviceFolderSchema = closedObject({
@@ -290,6 +294,8 @@ export const SessionRowSchema = Type.Object(
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),
+    /** Recipient-local invitation level, only for ceiling-role participants. */
+    invitedAccess: Type.Optional(SessionMemberPermissionLevelSchema),
     /** Recipient-local send admission; null explicitly clears a previous restriction. */
     sendDisabledReason: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     /** Recipient-local workspace admission; null clears a previous read restriction. */
