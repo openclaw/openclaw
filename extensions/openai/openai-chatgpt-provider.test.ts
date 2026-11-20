@@ -19,7 +19,8 @@ vi.mock("./openai-chatgpt-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
 }));
 
-vi.mock("./openai-chatgpt-oauth.runtime.js", () => ({
+vi.mock("./openai-chatgpt-oauth.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./openai-chatgpt-oauth.runtime.js")>()),
   loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
 }));
 
