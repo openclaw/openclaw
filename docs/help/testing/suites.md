@@ -127,7 +127,8 @@ the `unaccent`, `pg_trgm`, and `vector` extensions. It runs
 on scheduled main CI, manual CI validations, and PRs touching `src/infra/database-engine/**`,
 `src/infra/postgres-sync/**`, `src/infra/sql-connection.ts`,
 `src/infra/sql-query-compiler.ts`, `src/infra/kysely-sync*.ts`,
-`src/infra/sqlite-transaction.ts`, `extensions/workboard/**`,
+`src/infra/sqlite-transaction.ts`, the Gateway lock and PostgreSQL custody code,
+`extensions/workboard/**`,
 `src/config/zod-schema.database.ts`, or `scripts/test-database-conformance*.mjs`.
 Unknown PR paths conservatively select it; older targets without the runner
 omit it. All selected shards are required by `openclaw/ci-gate`.
