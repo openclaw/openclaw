@@ -3,8 +3,8 @@ import {
   errorShape,
   validateSessionsSteerActiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { matchesSessionSteeringTarget } from "../../config/sessions/session-active-steer.js";
-import { captureSessionSteeringEnablement } from "../session-steering-policy.js";
 import { handleActiveSteerChat } from "./chat-send-handler.js";
 import {
   hasCurrentPersonalGatewaySource,
@@ -22,10 +22,8 @@ export const sessionSteerActiveHandlers: GatewayRequestHandlers = {
     ) {
       return;
     }
-    let assertEnabled;
-    try {
-      assertEnabled = captureSessionSteeringEnablement();
-    } catch {
+    // The opt-in admits this request; later config changes apply to the next one.
+    if (readRuntimeConfig().gateway?.sessionControl?.steeringEnabled !== true) {
       respond(
         false,
         undefined,
@@ -77,8 +75,6 @@ export const sessionSteerActiveHandlers: GatewayRequestHandlers = {
           },
         },
         undefined,
-        undefined,
-        assertEnabled,
       ),
       { runId: params.runId, profileId },
     );

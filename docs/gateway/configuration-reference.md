@@ -251,5 +251,8 @@ re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).
 
 `gateway.sessionControl.steeringEnabled` permits authenticated people to steer an
 existing run only when set to `true`. It defaults to off, independently of
-publication reader access. Disabling it retires pending steering admissions,
-including across an off/on transition. It does not start idle sessions.
+publication reader access. Each request checks the opt-in when it starts.
+Disabling it denies new requests without revoking one already admitted, including
+across an off/on transition. Retries still require admission and must keep the
+original message ID; disabling the feature never makes uncertain delivery safe
+to repeat. It does not start idle sessions.
