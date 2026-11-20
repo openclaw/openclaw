@@ -2,14 +2,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { requireGit } from "../../agents/worktrees/git.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { captureWorkspaceManifest } from "./workspace-manifest-worker.js";
-import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import {
+  serializeWorkerWorkspaceManifest,
+  type WorkerWorkspaceReconciliationJournal,
+} from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
-  type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
 import {
   hasWorkerWorkspaceResultRef,
@@ -159,6 +162,8 @@ it.each([
   ["removes disposable scratch without warning when cleanup succeeds", false, false],
 ])("%s", async (_name, cleanupFails, publicationFails) => {
   const f = await workspace();
+  // Keep result refs local even when the test temp directory is inside a checkout.
+  await requireGit(f.root, ["init", "--quiet", "--object-format=sha1"]);
   const publicationError = new Error("accepted publication rejected");
   const ref = workerWorkspaceResultRef("claim-staging-cleanup");
   const hasRef = (stagedResultRef: string) =>

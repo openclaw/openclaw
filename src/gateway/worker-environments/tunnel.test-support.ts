@@ -12,11 +12,9 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { WorkerSshProcess, WorkerSshRunner } from "./tunnel-ssh-runner.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
+import type { WorkerWorkspaceReconciliationJournal } from "./workspace-manifest.js";
 import { workspaceProcessTestEntrypoints } from "./workspace-process-runtime.test-support.js";
-import type {
-  WorkerWorkspaceReconciliationJournal,
-  WorkerWorkspaceReconciliationJournalAdapter,
-} from "./workspace-reconcile.js";
+import type { WorkerWorkspaceReconciliationJournalAdapter } from "./workspace-reconcile.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
 type WorkerSshProcessExit = Awaited<WorkerSshProcess["exited"]>;

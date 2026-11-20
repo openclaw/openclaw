@@ -11,6 +11,7 @@ import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
+  type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
 import {
   assertWorkspaceMatchesManifest,
@@ -18,7 +19,6 @@ import {
   MAX_RECONCILIATION_TOTAL_BYTES,
   changedPaths,
   recoverWorkerWorkspaceReconciliation,
-  type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-reconcile.js";
 import {
   applyWorkspace,

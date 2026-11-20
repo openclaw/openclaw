@@ -29,7 +29,6 @@ export {
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
-  type WorkerWorkspaceReconciliationJournal,
   type WorkerWorkspaceReconciliationJournalAdapter,
 } from "./workspace-manifest.js";
 
