@@ -16,7 +16,7 @@ import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { selectWarmWorktree, isWarmWorktreeClean } from "./checkout-pool.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
-import { addManagedWorktree } from "./checkout.js";
+import { addManagedWorktree, prepareManagedWorktreeTemplate } from "./checkout.js";
 import { commandError, worktreePathExists } from "./git.js";
 import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { provisionIncludedFiles } from "./provisioned-files.js";
@@ -26,9 +26,9 @@ import {
   type RepositoryCreationParams,
   type prepareWorktreeDestination,
 } from "./service-preparation.js";
-import { prepareWorktreeTemplate } from "./template-cache.js";
+import { prepareWorktreeTemplate, retainWorktreeTemplate } from "./template-cache.js";
 import { readTemplateAsync } from "./template-registry-async.js";
-import type { WorktreeWarmPoolRequest } from "./template-registry.js";
+import { worktreeTemplateMutationKey, type WorktreeWarmPoolRequest } from "./template-registry.js";
 import type { CreateManagedWorktreeParams } from "./types.js";
 
 export type MaterializedRepositoryWorktree = {
@@ -273,11 +273,55 @@ export async function prepareWarmWorktree(
   const { template, sourceOnly } = request;
   const current = await readTemplateAsync(
     env,
-    template.cacheKey,
+    worktreeTemplateMutationKey(template.cacheKey),
     guard.commitGuard,
     undefined,
     guard.workerAuthority,
   );
+  if (request.targetCommit) {
+    if (current?.status !== "ready") {
+      throw new Error("Managed template recipe is no longer ready");
+    }
+    // Keep the policy checkout alive while its owner derives the target content key.
+    const source = await retainWorktreeTemplate(
+      env,
+      current,
+      guard.commitGuard,
+      undefined,
+      guard.workerAuthority,
+    );
+    if (!source) {
+      throw new Error("Managed template recipe lost reader custody");
+    }
+    let outcome: unknown;
+    try {
+      const prepared = await prepareManagedWorktreeTemplate({
+        ...guard,
+        env,
+        now: Date.now,
+        enabled: true,
+        repoRoot: template.repoRoot,
+        commonDir: template.commonDir,
+        worktreeRoot: template.worktreeRoot,
+        destination: source.path,
+        base: request.targetCommit,
+        sourceOnly,
+        useWarmPool: false,
+        backgroundUsedAt: request.backgroundUsedAt,
+        requireSpace,
+      });
+      if (!prepared) {
+        throw new Error("Managed template checkout policy is unavailable");
+      }
+      await prepared.record.release();
+    } catch (error) {
+      outcome = error;
+      throw error;
+    } finally {
+      await source.release(outcome);
+    }
+    return;
+  }
   if (current?.id !== template.id || current.contentKey !== template.contentKey) {
     return;
   }
