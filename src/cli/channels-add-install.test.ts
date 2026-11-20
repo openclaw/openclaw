@@ -6,7 +6,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { withTempHome } from "../config/home-env.test-harness.js";
 import { ExitError } from "../runtime.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import * as clackPrompter from "../wizard/clack-prompter.js";
 import { registerChannelsCli } from "./channels-cli.js";
+import { createCliTtyMock } from "./test-runtime-capture.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -14,14 +16,20 @@ afterEach(() => {
 });
 
 async function expectInstallFailure(
-  install: { npmSpec?: string; clawhubSpec?: string },
+  install: { npmSpec?: string; clawhubSpec?: string; localPath?: string },
   cause: string,
   privateText?: string,
 ) {
   await withTempHome("openclaw-channels-add-", async (home) => {
     const configPath = path.join(home, "openclaw.json");
     const catalogPath = path.join(home, "catalog.json");
-    const config = '{"gateway":{"mode":"local"}}\n';
+    const workspace = path.join(home, "workspace");
+    if (install.localPath) {
+      await fs.mkdir(path.join(workspace, ".git"), { recursive: true });
+      await fs.mkdir(path.join(workspace, install.localPath), { recursive: true });
+    }
+    const config =
+      JSON.stringify({ gateway: { mode: "local" }, agents: { defaults: { workspace } } }) + "\n";
     await fs.writeFile(configPath, config);
     await fs.writeFile(
       catalogPath,
@@ -88,29 +96,14 @@ it("fails channel addition when the catalog has no usable install source", async
   );
 });
 
-it("fails channel addition with the registry cause and leaves config unchanged", async () => {
-  const fixtureToken = "synthetic-fixture-token-only-2026";
-  let sentAuthorization: string | undefined;
+async function withRegistry(handler: http.RequestListener, run: () => Promise<void>) {
   const registry = await reserveTestPortListener({
     offsets: [0],
-    createListener: () =>
-      http.createServer((request, response) => {
-        sentAuthorization = request.headers.authorization;
-        response
-          .writeHead(400)
-          .end("\x1b[31mFixture registry denied the package.\x1b[0m " + fixtureToken);
-      }),
+    createListener: () => http.createServer(handler),
   });
   try {
     vi.stubEnv("OPENCLAW_CLAWHUB_URL", "http://127.0.0.1:" + registry.claim.port);
-    vi.stubEnv("CLAWHUB_TOKEN", fixtureToken);
-    vi.stubEnv("CLAWHUB_AUTH_TOKEN", undefined);
-    await expectInstallFailure(
-      { clawhubSpec: "clawhub:@fixture/fixture-chat" },
-      "Fixture registry denied the package.",
-      fixtureToken,
-    );
-    expect(sentAuthorization).toBe("Bearer " + fixtureToken);
+    await run();
   } finally {
     try {
       await registry.releaseListener();
@@ -118,4 +111,62 @@ it("fails channel addition with the registry cause and leaves config unchanged",
       await registry.claim.release();
     }
   }
+}
+
+it("fails channel addition with the registry cause and leaves config unchanged", async () => {
+  const fixtureToken = "synthetic-fixture-token-only-2026";
+  let sentAuthorization: string | undefined;
+  vi.stubEnv("CLAWHUB_TOKEN", fixtureToken);
+  vi.stubEnv("CLAWHUB_AUTH_TOKEN", undefined);
+  await withRegistry(
+    (request, response) => {
+      sentAuthorization = request.headers.authorization;
+      response
+        .writeHead(400)
+        .end("\x1b[31mFixture registry denied the package.\x1b[0m " + fixtureToken);
+    },
+    () =>
+      expectInstallFailure(
+        { clawhubSpec: "clawhub:@fixture/fixture-chat" },
+        "Fixture registry denied the package.",
+        fixtureToken,
+      ),
+  );
+  expect(sentAuthorization).toBe("Bearer " + fixtureToken);
 });
+
+it.each([false, true])(
+  "offers the local fallback only at a terminal (TTY: %s)",
+  async (interactive) => {
+    const tty = createCliTtyMock();
+    const prompter = clackPrompter.createClackPrompter();
+    const confirm = vi.spyOn(prompter, "confirm").mockResolvedValue(false);
+    vi.spyOn(clackPrompter, "createClackPrompter").mockReturnValue(prompter);
+    let requests = 0;
+    try {
+      tty.set(interactive);
+      await withRegistry(
+        (_request, response) => {
+          requests++;
+          response.writeHead(404).end();
+        },
+        () =>
+          expectInstallFailure(
+            { clawhubSpec: "clawhub:@fixture/fixture-chat", localPath: "plugins/fixture-chat" },
+            "Package not found on ClawHub.",
+          ),
+      );
+    } finally {
+      tty.restore();
+    }
+    expect(requests).toBe(1);
+    expect(confirm).toHaveBeenCalledTimes(interactive ? 1 : 0);
+    if (interactive) {
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("Use local plugin path instead?"),
+        }),
+      );
+    }
+  },
+);
