@@ -310,63 +310,53 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it.for(["runtime", "bridged approval"] as const)(
-    "rejects plugin dispatch when %s authority closes during pairing recheck",
-    (authority, testContext) => {
-      let active = true;
-      const entered = createDeferred();
-      const pairingCheck = createDeferred();
-      let operation: ReturnType<typeof invokeDemoPolicy> | undefined;
-      authorityScenario = runQaGatewayTestFixture(
-        testContext,
-        async () => {
-          setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
-          const { context, invoke } = createContext(
-            authority === "runtime" ? { validateAgentRuntimeApprovalAuthority: () => active } : {},
-          );
-          const client =
-            authority === "runtime"
-              ? createRuntimeClient("run-node-policy-race")
-              : createOperatorClient();
-          operation = invokeDemoPolicy(context, client, {
-            isInvocationCurrent: async () => {
-              entered.resolve();
-              await pairingCheck.promise;
-              return true;
-            },
-            ...(authority === "bridged approval"
-              ? { isApprovalAuthorityActive: () => active }
-              : {}),
-          });
-          await withinTest(
-            awaitGateBeforeSettlement(
-              entered.promise,
-              operation,
-              "Plugin invocation ended before pairing recheck",
-            ),
-            testContext.signal,
-          );
-          active = false;
-          pairingCheck.resolve();
-          await withinTest(
-            expect(operation).resolves.toMatchObject({
-              ok: false,
-              code: "APPROVAL_AUTHORITY_CLOSED",
-              details: { nodeCommandDispatched: false },
-            }),
-            testContext.signal,
-          );
-          expect(invoke).not.toHaveBeenCalled();
-        },
-        () => {
-          active = false;
-          pairingCheck.resolve();
-        },
-        () => Promise.allSettled(operation ? [operation] : []),
-      );
-      return authorityScenario;
-    },
-  );
+  it("rejects plugin dispatch when bridged approval authority closes during pairing recheck", (testContext) => {
+    let active = true;
+    const entered = createDeferred();
+    const pairingCheck = createDeferred();
+    let operation: Promise<unknown> | undefined;
+    authorityScenario = runQaGatewayTestFixture(
+      testContext,
+      async () => {
+        setDangerousDemoCommandRegistry([createDemoPolicy((ctx) => ctx.invokeNode())]);
+        const { context, invoke } = createContext();
+        const client = createOperatorClient();
+        operation = invokeDemoPolicy(context, client, {
+          isInvocationCurrent: async () => {
+            entered.resolve();
+            await pairingCheck.promise;
+            return true;
+          },
+          isApprovalAuthorityActive: () => active,
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            entered.promise,
+            operation,
+            "Plugin invocation ended before pairing recheck",
+          ),
+          testContext.signal,
+        );
+        active = false;
+        pairingCheck.resolve();
+        await withinTest(
+          expect(operation).resolves.toMatchObject({
+            ok: false,
+            code: "APPROVAL_AUTHORITY_CLOSED",
+            details: { nodeCommandDispatched: false },
+          }),
+          testContext.signal,
+        );
+        expect(invoke).not.toHaveBeenCalled();
+      },
+      () => {
+        active = false;
+        pairingCheck.resolve();
+      },
+      () => Promise.allSettled(operation ? [operation] : []),
+    );
+    return authorityScenario;
+  });
 
   it.each([false, true])(
     "reports actual dispatch state for a failed policy (dispatched=%s)",
@@ -615,6 +605,24 @@ describe("applyPluginNodeInvokePolicy", () => {
       await expectApprovalResolution(resultPromise, manager, record);
     });
   });
+
+  it.for(["before the prompt", "while awaiting the decision"])(
+    "finishes the approval when the upload gate closes %s",
+    async (stage, testContext) => {
+      const fixture = createPolicyApprovalFixture(testContext);
+      let uploadAllowed = stage !== "before the prompt";
+      await fixture.run(async () => {
+        setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+        const { record, pending } = await fixture.request(createOperatorClient(), {
+          isApprovalAuthorityActive: () => uploadAllowed,
+        });
+        uploadAllowed = false;
+
+        await expectApprovalResolution(pending, fixture.manager, record);
+        expect(fixture.invoke).not.toHaveBeenCalled();
+      });
+    },
+  );
 
   it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
     const fixture = createPolicyApprovalFixture(testContext);

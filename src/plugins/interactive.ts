@@ -1,3 +1,4 @@
+import { agentControlValue } from "../interactive/agent-control.js";
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
   resolvePluginInteractiveRegistrationsMatch,
@@ -19,6 +20,7 @@ type PluginInteractiveDispatchRegistration = {
 /** Resolved interactive handler match passed to plugin callback dispatch. */
 type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
   registration: RegisteredInteractiveHandler & TRegistration;
+  data: string;
   namespace: string;
   payload: string;
 };
@@ -55,10 +57,12 @@ export async function dispatchPluginInteractiveHandler<
   | { matched: false; handled: false; duplicate: false }
   | { matched: true; handled: boolean; duplicate: boolean; result?: TResult }
 > {
+  // A plugin claims an agent-authored control by its value, never by its mark.
+  const data = agentControlValue(params.data) ?? params.data;
   const match = resolvePluginInteractiveRegistrationsMatch(
     getActivePluginRegistry()?.interactiveHandlers ?? [],
     params.channel,
-    params.data,
+    data,
   );
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
@@ -71,7 +75,10 @@ export async function dispatchPluginInteractiveHandler<
 
   try {
     await params.onMatched?.();
-    const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    const resolved = await params.invoke({
+      ...match,
+      data,
+    } as PluginInteractiveMatch<TRegistration>);
     // Channel post-processing stays inside the dedupe claim. Committing first
     // would swallow a retry after a retryable post-handler failure.
     await params.afterInvoke?.(resolved);
@@ -140,7 +147,7 @@ export function createChannelInteractiveDispatcher<
       dedupeId: params.dedupeId,
       onMatched: params.onMatched,
       afterInvoke: params.afterInvoke,
-      invoke: ({ registration, namespace, payload }) => {
+      invoke: ({ registration, data, namespace, payload }) => {
         const dispatchInteractiveKey = config.dispatchInteractiveKey ?? config.interactiveKey;
         const { [dispatchInteractiveKey]: interactiveContext, ...handlerContext } = params.ctx;
         const conversation = params.conversation ?? {
@@ -170,7 +177,7 @@ export function createChannelInteractiveDispatcher<
           channel: config.channel,
           [config.interactiveKey]: {
             ...interactiveContext,
-            data: params.data,
+            data,
             namespace,
             payload,
           },

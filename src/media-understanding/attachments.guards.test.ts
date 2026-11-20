@@ -1,29 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeAttachments } from "./attachments.normalize.js";
 import { selectAttachments } from "./attachments.select.js";
 import type { MediaAttachment } from "./types.js";
 
 describe("media-understanding selectAttachments guards", () => {
   it("returns no selections when incoming media is not an array", () => {
-    const context = { media: { malformed: true } } as unknown as MsgContext;
+    const media = { malformed: true };
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: normalizeAttachments(context),
+        // @ts-expect-error Exercise malformed non-array media at the runtime boundary.
+        attachments: normalizeAttachments(media),
         policy: { prefer: "url" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });
   });
 
   it("returns no selections for malformed incoming media entries", () => {
-    const context = {
-      media: [null, { path: 123 }, { url: true }, { contentType: { nope: true } }],
-    } as unknown as MsgContext;
+    const media = [null, { path: 123 }, { url: true }, { contentType: { nope: true } }];
     expect(
       selectAttachments({
         capability: "audio",
-        attachments: normalizeAttachments(context),
+        // @ts-expect-error Exercise malformed media entries at the runtime boundary.
+        attachments: normalizeAttachments(media),
         policy: { prefer: "path" },
       }),
     ).toStrictEqual({ selected: [], droppedAttachmentIndexes: [] });

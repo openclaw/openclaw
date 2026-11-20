@@ -8,11 +8,6 @@ import {
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import {
-  answerCliHistoryOwnerProbe,
-  cliHistoryWriterFacts,
-  getCliHistoryWriter,
-} from "./cli-history-boundary.js";
-import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
 } from "./goals-operation-policy.js";
@@ -33,10 +28,8 @@ import type {
 import type {
   SessionActorAuthority,
   SessionActorAuthorityFacts,
-  SessionActorPhaseResults,
 } from "./session-actor-contract.js";
 import type { SessionActorMemoryTurnReads } from "./session-actor-memory-turn-contract.js";
-import { runSessionActorCommand } from "./session-actor-scope.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { getSessionInputActor, throwSessionInputActorFailure } from "./session-input-actor.js";
 import { prepareSessionInputFromReplica } from "./session-input-preparation.js";
@@ -50,7 +43,6 @@ import {
   type SessionSourceValidation,
 } from "./session-source-authority.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
-import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
 import {
   acceptSessionTurnFreshAuthority,
@@ -93,7 +85,6 @@ export async function appendSessionTurnInWorker(
   const execution = inputActor ? undefined : captureOpenClawAgentDatabaseExecution(database);
   const ownerSource = options.ownerSource;
   const custody = captureSessionPendingInputWorkerCustody();
-  const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
   const mentionCommitGuards: Array<(() => void) | undefined> = [];
@@ -109,7 +100,6 @@ export async function appendSessionTurnInWorker(
     if (options.sessionTurnMutation) {
       assertSessionGoalOperationTime(options.sessionTurnMutation.operation, Date.now());
     }
-    cliWriter?.assertCurrent();
     for (const guard of freshCommitGuards) {
       guard();
     }
@@ -142,8 +132,6 @@ export async function appendSessionTurnInWorker(
           }
         : undefined,
     },
-    // The worker asks the host to confirm the owner inside its commit transaction.
-    cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     ownerSources: ownerSource?.checks.map(({ predicate }) => predicate),
     custody: custody?.facts,
     relocation: custody?.relocation,
@@ -169,12 +157,10 @@ export async function appendSessionTurnInWorker(
     plan.sessionKey = selected.sessionKey;
     plan.options = { ...plan.options, ...selection };
   };
-  let inputExpectedState = options.expectedSessionState;
   const fixedMessages =
     !actor &&
     !memory &&
     !custody &&
-    !cliWriter &&
     !options.sessionTurnMutation &&
     !options.sessionLifecyclePatch &&
     !options.initialSessionEntry &&
@@ -249,9 +235,6 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(this: void, facts) {
-        if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
-          return true;
-        }
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
           if (!ownerSource) {
             throw new Error("Session turn omitted its owner source authority");
@@ -315,9 +298,6 @@ export async function appendSessionTurnInWorker(
           }
           if (ownerSource) {
             acceptSessionSourceValidation(ownerSource, prepared.ownerSourceValidation);
-          }
-          if (actor) {
-            inputExpectedState ??= prepared.expectedSessionState;
           }
           return prepared;
         };
@@ -566,65 +546,48 @@ export async function appendSessionTurnInWorker(
             );
           },
           async () => {
-            let expectedState = inputExpectedState;
+            inputActor.assertCurrent();
             let candidate: SessionTurnCommitted | undefined;
-            const actorOutcome = await runSessionActorCommand<
-              SessionActorPhaseResults["acceptInput" | "adoptRun"]
-            >(
-              { ...actor, snapshot: (current) => inputActor.snapshot(current) },
-              authority,
-              async (snapshot) => {
-                // Metadata may advance; the writer checks the captured lifecycle at commit.
-                if (snapshot) {
-                  expectedState ??= buildSessionTranscriptTurnExpectedState(
-                    snapshot.entry ?? { sessionId: options.expectedSessionId, updatedAt: 0 },
+            const record = (turn: SessionTurnCommitted | undefined) => {
+              if (!turn) {
+                throw new Error("Input actor omitted its committed turn");
+              }
+              candidate = turn;
+              try {
+                operation.onAcknowledged(turn);
+              } finally {
+                if (!memory && turn.result.sessionEntry && inputActor.target.readSource) {
+                  publishCommittedSessionIdentity(
+                    scope.agentId,
+                    inputActor.target.readSource.databaseIdentity,
+                    new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
+                    new Map([[scope.sessionKey, turn.result.sessionEntry]]),
                   );
                 }
-                if (!expectedState) {
-                  throw new Error("Input preparation omitted its lifecycle expectation");
-                }
-                const record = (turn: SessionTurnCommitted | undefined) => {
-                  if (!turn) {
-                    throw new Error("Input actor omitted its committed turn");
-                  }
-                  candidate = turn;
-                  try {
-                    operation.onAcknowledged(turn);
-                  } finally {
-                    if (!memory && turn.result.sessionEntry && inputActor.target.readSource) {
-                      publishCommittedSessionIdentity(
-                        scope.agentId,
-                        inputActor.target.readSource.databaseIdentity,
-                        new Map(previousEntry ? [[scope.sessionKey, previousEntry]] : []),
-                        new Map([[scope.sessionKey, turn.result.sessionEntry]]),
-                      );
-                    }
-                  }
-                };
-                const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
-                const command = {
-                  commandId: randomUUID(),
-                  phaseId: `${phase}:${options.expectedSessionId}`,
-                  expectedState,
-                  lifecycle: {},
-                  turn: plan,
-                };
-                return phase === "acceptInput"
-                  ? actor.acceptInput(command, authority, {
-                      committed: (commit) => record(commit.value.turn),
-                    })
-                  : actor.adoptRun(
-                      {
-                        ...command,
-                        sessionId: options.expectedSessionId,
-                      },
-                      authority,
-                      {
-                        committed: (commit) => record(commit.value),
-                      },
-                    );
-              },
-            );
+              }
+            };
+            const phase = options.initialSessionEntry ? "acceptInput" : inputActor.phase;
+            const command = {
+              commandId: randomUUID(),
+              phaseId: `${phase}:${options.expectedSessionId}`,
+              expectedState: options.expectedSessionState,
+              lifecycle: {},
+              turn: plan,
+            };
+            const actorOutcome = await (phase === "acceptInput"
+              ? actor.acceptInput(command, authority, {
+                  committed: (commit) => record(commit.value.turn),
+                })
+              : actor.adoptRun(
+                  {
+                    ...command,
+                    sessionId: options.expectedSessionId,
+                  },
+                  authority,
+                  {
+                    committed: (commit) => record(commit.value),
+                  },
+                ));
             if (actorOutcome.kind !== "committed") {
               throwSessionInputActorFailure(actorOutcome, authorityFailure);
             }

@@ -169,9 +169,11 @@ export function createExecApprovalHandlers(
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "approval run already aborted", {
-              details: { reason: "EXEC_APPROVAL_RUN_ABORTED" },
-            }),
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "The approval run was stopped. Start a new turn to request approval again.",
+              { details: { reason: "EXEC_APPROVAL_RUN_ABORTED" } },
+            ),
           );
           return;
         }
@@ -345,7 +347,6 @@ export function createExecApprovalHandlers(
               })
             : null,
         };
-        // An abort that lands during preparation may leave this record pending until expiry.
         let record: ReturnType<typeof manager.create>;
         try {
           record = manager.create(request, timeoutMs, explicitId);
@@ -387,6 +388,24 @@ export function createExecApprovalHandlers(
           workerOwner,
         });
         if (!registration) {
+          return;
+        }
+        if (requestRunId && context.chatRunState.hasAbortMarker(requestRunId)) {
+          await manager.forceDenyDetailed(
+            record.id,
+            "run-aborted",
+            { kind: "system", id: null },
+            "cancelled",
+          );
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "The approval run was stopped. Start a new turn to request approval again.",
+              { details: { reason: "EXEC_APPROVAL_RUN_ABORTED" } },
+            ),
+          );
           return;
         }
         await handlePendingApprovalRequestWithDelivery({

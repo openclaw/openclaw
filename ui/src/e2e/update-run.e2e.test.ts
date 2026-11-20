@@ -88,6 +88,87 @@ suite.define(() => {
     },
   );
 
+  it("labels a standalone repair and keeps the failed update it repaired visible", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
+      async ({ page }) => {
+        const now = Date.now();
+        const failure =
+          "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: SQLite migration publication could not be verified: database is locked";
+        const run = {
+          ...createUpdateRunFixture(),
+          trigger: "cli",
+          phase: "finished",
+          status: "succeeded",
+          reason: null,
+          target: { kind: "package", version: "2026.11.5" },
+          before: {},
+          after: { version: "2026.11.5" },
+          verification: {},
+          finishedAtMs: now,
+          steps: [
+            {
+              step: "requested",
+              status: "completed",
+              startedAtMs: now - 60_000,
+              endedAtMs: now - 59_000,
+            },
+            {
+              step: "repairing",
+              status: "completed",
+              startedAtMs: now - 59_000,
+              endedAtMs: now - 1_000,
+            },
+            {
+              step: "finalize:repaired-run",
+              status: "completed",
+              endedAtMs: now - 59_000,
+              detail: failure,
+            },
+            { step: "finalize:doctor", status: "completed", endedAtMs: now - 2_000 },
+          ],
+        } as const;
+        const schedule = {
+          channel: "stable",
+          autoEnabled: false,
+          install: { kind: "package" },
+        } as const;
+        const gateway = await installMockGateway(page, {
+          communityInvite: false,
+          serverVersion: "2026.11.5",
+          updateAvailable: null,
+          updateSchedule: schedule,
+          methodResponses: {
+            "config.get": configResponse(
+              { update: { channel: "stable", auto: { enabled: false } } },
+              "repair-run",
+            ),
+            "update.status": { lastRun: run, schedule },
+            "update.runs.get": { run },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        const surface = page.locator("openclaw-update-run-view");
+        await surface.locator(".update-run-view__report").waitFor();
+        const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+          animations: "disabled",
+          scrollTo: surface,
+        });
+        await writeFile(path.join(suite.artifactDir, "repair-run.png"), frame.png);
+
+        await text(surface, "✅ OpenClaw repair completed for 2026.11.5.").first().waitFor();
+        await text(surface, `Repaired update: ${failure}`).waitFor();
+        expect(await surface.textContent()).not.toContain("OpenClaw updated to");
+        const phases = surface.locator(".update-run-view__phases > li");
+        expect(await phases.evaluateAll((items) => items.map((item) => item.dataset.step))).toEqual(
+          ["requested", "repairing", "finished"],
+        );
+        await text(surface, "3 of 3 phases complete").waitFor();
+      },
+    );
+  });
+
   it("requires confirmation and keeps long update output keyboard accessible", async () => {
     await suite.withPage(
       {

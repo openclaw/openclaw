@@ -346,9 +346,13 @@ export function prepareGroupedMessage(
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
   const inlineViewBlocks = normalizedMessage.content.filter((item) => item.type === "plugin_view");
+  const automationPlan = normalizedMessage.content.find(
+    (item) => item.type === "automation_creation_card",
+  )?.plan;
   const hasImagesOrNotices = hasImages || expiredPairingQrCount !== 0 || omittedMedia.length !== 0;
   const hasMediaContent =
     hasImagesOrNotices ||
+    automationPlan !== undefined ||
     visibleAttachments.length !== 0 ||
     assistantViewBlocks.length !== 0 ||
     inlineViewBlocks.length !== 0;
@@ -492,6 +496,7 @@ export function prepareGroupedMessage(
     inlineViewBlocks,
     clawHubCards,
     templatePluginCards,
+    automationPlan,
     reasoningMarkdown,
     markdown,
     markdownRenderOptions,

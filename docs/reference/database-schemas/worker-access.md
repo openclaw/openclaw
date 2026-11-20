@@ -72,14 +72,12 @@ stores and cross-store conversation guards retain their existing discovery check
 Profile authority readers retain shared-cell views, never a cached allow decision;
 each use checks the exact lifetime, generation, and mutation publication.
 
-Host file writes prepare retained session-generation authority at their final
-effect boundary, after overwrite rollback capture. The existing session worker
-validates physical sources and refreshes facts after committed native mutations;
-the final host assertion checks the retained generation, native handle and revision,
-and live owner. Lifecycle adapters preserve that preparation through indirect
-settings reads. Ordinary synchronous assertions, opaque callback sources, and
-uncommitted native transactions retain their existing checks; an async wrapper
-alone does not move those callbacks off the main thread.
+Host file writes prepare retained database custody at their final effect boundary,
+after overwrite rollback capture. The existing session worker validates physical
+sources; the final host assertion checks the retained owner's lifetime and database
+admission identity without synchronous filesystem probes or SQL. Lifecycle adapters
+preserve this explicit storage capability. An admitted tool call can finish after a
+permission change; storage preparation does not replay policy or opaque callbacks.
 
 Finished worker admissions release publication observers and request callbacks.
 Committed facts remain available for lost-reply recovery, which runs
@@ -789,12 +787,13 @@ reads scan transiently and retain no full-history navigation cache. Payload-size
 projections remain in SQL, and the bounded reader's limits and output are unchanged.
 
 Cold input preparation uses the turn planner instead of fetching a full actor
-replica first. The planner carries its recovery expectation into the input
-command; prepared, explicit, and warm replica expectations remain fixed across
-version retries. Transcript input and restart recovery still
-commit atomically under the existing writer FIFO, source checks, final host
-COMMIT authorization, and receipt settlement. Schemas, durability, and update
-behavior are unchanged.
+replica first. Ordinary transcript input selects its implicit lifecycle expectation
+inside the owning actor command, after preceding run completion can settle. This
+applies to durable and memory sessions. Caller-supplied lifecycle expectations stay
+fixed, including restart recovery and queued-input adoption. Transcript input and
+restart recovery still commit atomically under the existing writer FIFO, source
+checks, final host COMMIT authorization, and receipt settlement. Schemas,
+durability, and update behavior are unchanged.
 
 Pending-input staging selects its lifecycle expectation inside the same writer
 FIFO. A current published entry supplies those fields without a preliminary full

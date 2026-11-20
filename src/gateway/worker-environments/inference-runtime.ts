@@ -16,7 +16,12 @@ import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fa
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { registerProviderStreamForModel } from "../../agents/provider-stream.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
-import { normalizeUsage, hasObservedModelUsage, toDiagnosticUsage } from "../../agents/usage.js";
+import {
+  hasObservedModelUsage,
+  hasRecordedUsageCost,
+  normalizeUsage,
+  toDiagnosticUsage,
+} from "../../agents/usage.js";
 import { emitAgentEventForRunContext } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -321,12 +326,10 @@ export const executePreparedWorkerInference = async (
       if (!hasObservedModelUsage(usage)) {
         return;
       }
-      const costUsd =
-        usage.cost?.total ??
-        estimateUsageCost({
-          usage,
-          cost: costConfig,
-        });
+      // One call prices exactly in any tier; an all-zero transport cost is only a placeholder.
+      const costUsd = hasRecordedUsageCost(usage.cost)
+        ? usage.cost?.total
+        : estimateUsageCost({ usage, cost: costConfig });
       emitTrustedDiagnosticEvent({
         type: "model.usage",
         trace: freezeDiagnosticTraceContext(trace),

@@ -564,6 +564,8 @@ jobs:
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'
         working-directory: openclaw.ai
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           for installer in public/install.sh public/install-cli.sh; do
             bash -n "$installer"

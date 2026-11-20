@@ -290,7 +290,7 @@ export async function runReleasePublishPreflight(
   if (evidenceRequired) {
     const run = await check(
       "validation.run",
-      "Exact qualification attempt selected; strict publication verification follows.",
+      "Exact successful validation attempt selected.",
       "Supply the successful Full Release Validation run and exact attempt; use pnpm frv status --run <id> to inspect.",
       () => {
         if (!POSITIVE_ID.test(options.fullReleaseValidationRunId)) {
@@ -319,7 +319,7 @@ export async function runReleasePublishPreflight(
     if (!manifest && run) {
       manifest = await check(
         "validation.manifest",
-        "Authenticated qualification evidence acquired.",
+        "Validation manifest downloaded once.",
         "Restore the exact unexpired full-release-validation-<run>-<attempt> artifact.",
         async () => {
           const loaded = client.loadManifest(options.fullReleaseValidationRunId, Number(attempt));

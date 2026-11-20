@@ -904,6 +904,19 @@ it("binds preflight to an exact source SHA without release-publish approval", ()
   expect(sourceSetup.uses).toBe("./.github/actions/setup-node-env");
   expect(sourceSetup.if).toBe("inputs.prepared_artifact == ''");
   expect(preparedSetup.if).toBe("inputs.prepared_artifact != ''");
+  expect(preparedSetup.uses).toBe("./.release-tooling/.github/actions/setup-pnpm-store-cache");
+  expect(preparedSetup.with).toMatchObject({
+    "cache-mode": "off",
+    "package-manager-file": ".release-tooling/package.json",
+    "lockfile-path": ".release-tooling/pnpm-lock.yaml",
+    "node-version": "${{ env.NODE_VERSION }}",
+  });
+  expect(preparedInstall.if).toBe(preparedSetup.if);
+  expect(preparedInstall["working-directory"]).toBe(".release-tooling");
+  expect(preparedInstall.env).toMatchObject({ CI: "true" });
+  expect(preparedInstall.run).toBe(
+    "pnpm install --frozen-lockfile --prefer-offline --ignore-scripts",
+  );
   expect(preparedPlan.if).toBe(preparedSetup.if);
   expect(preparedInstall.if).toBe(preparedSetup.if);
   expect(preparedInstall["working-directory"]).toBe(".release-tooling");

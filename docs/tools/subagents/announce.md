@@ -26,6 +26,10 @@ fact directly.
 An ordinary requester run ending or a later follow-up taking over does not discard
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
+Public completion delivery resolves the requester's current session admission.
+If that turn is still preparing its backend after recovery, delivery waits for
+readiness before steering, rather than queuing the result behind the waiting parent.
+An idle requester receives a fresh completion input.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.
@@ -44,12 +48,23 @@ itself still owes its result; this quiet settlement applies to the parent review
 
 A requester completion turn commits the child results to the requester transcript
 before it calls the model. A committed result is never dispatched again. If the turn
-then fails before it answers (for example the provider is unavailable), the result
-is delivered: the turn shows its own error in the chat, and the next turn reads the
-results from the transcript. If the turn answered but the answer did not reach the
+owes a visible reply and fails before answering (for example the provider is
+unavailable), OpenClaw appends the saved child result as a visible fallback before
+settling delivery. Private handoffs without an outstanding visible final settle
+on committed input alone and do not expose the child result.
+This also covers an announcing turn that ends in `sessions_yield` without a visible
+reply. If the fallback cannot be recorded, the result stays owed across restart;
+the already committed model input is not replayed. The next turn reads that input
+from the transcript. If the turn answered but the answer did not reach the
 channel, or the turn ended for a recorded reason, that outcome is kept. An
 unconfirmed channel send stays ambiguous even after the requester consumes the
 child result.
+
+When a child interrupted by Gateway restart cannot resume or deliver its outcome,
+its failure notice identifies the child session and run so the requester can
+start replacement work. That notice is recorded before delete cleanup retires the
+completion record and is available to the requester model if it never consumed
+the original result.
 
 Results that no turn committed stay owed. Cancellation before dispatch, worker
 timeout, preparation invalidation and other retryable refusals keep the wake pending
@@ -144,8 +159,9 @@ record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
 Completion failures retain the concrete delivery error in the run's delivery state.
-A required parent completion that permanently fails also records a visible failure
-notice in the original requester conversation, without starting another agent turn.
+When automatic delivery expires, a visible delay notice explains that the saved result
+may still arrive through requester settlement. Failed settlement, permanent failure, or
+final discard records a failure notice, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. A completion
@@ -219,6 +235,11 @@ the original requester turn and use after-turn self-archive when appropriate,
 rather than asking a notification-only turn to acquire owner privileges.
 Use `sessions_send` with `mode: "notify"` for context-only updates; a normal peer
 follow-up still follows the destination conversation’s reply requirements.
+
+Child follow-up results retain access to the same requester session when its
+lifecycle revision advances. Each delivery attempt still checks current session
+access and requester authority; revoked authority cannot receive the continuation.
+Private completions continue to wait behind an active requester turn.
 
 Use a build that supports this option throughout the run. Older builds cannot
 resume private completion handoffs and may discard them after a downgrade;

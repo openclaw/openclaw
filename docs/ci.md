@@ -489,6 +489,10 @@ Control UI E2E skips Vitest requirement discovery when its selected files cannot
 include a WebKit or Gateway-runtime suite. Matching or unspecified selections
 retain the existing shard discovery before installing WebKit or preparing runtime.
 
+WebKit system-package downloads retry without the first mirror after a timeout.
+Recovery uses APT's configured local text mirror list, then restores it on success
+or failure. Package installation itself runs without a download deadline.
+
 The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 15.2.0 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.

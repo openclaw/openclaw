@@ -2324,17 +2324,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
 }
 
-/**
- * @param {{
- *   client: ReturnType<typeof createReleaseEvidenceClient>,
- *   preloadedRun?: Record<string, unknown>,
- *   expectedRunAttempts?: Map<string, number>,
- *   manifestPath?: string,
- *   repository: string,
- *   runId: string,
- * }} options
- */
-export async function loadPublicationParentEvidence({
+async function loadValidatedParentEvidence({
   client,
   preloadedRun,
   expectedRunAttempts,
@@ -2785,7 +2775,7 @@ export async function validateReleaseRunEvidence(
     });
     return { ...evidence, qualification: qualificationFacts(evidence) };
   }
-  const currentEvidence = await loadPublicationParentEvidence({
+  const currentEvidence = await loadValidatedParentEvidence({
     client: evidenceClient,
     preloadedRun: selectedRun,
     expectedRunAttempts: remainingExpectedRunAttempts,
@@ -2986,7 +2976,7 @@ export async function validateReleaseRunEvidence(
   let selectedEvidence = currentEvidence;
   const reuse = currentEvidence.manifest.evidenceReuse;
   if (reuse) {
-    rootEvidence = await loadPublicationParentEvidence({
+    rootEvidence = await loadValidatedParentEvidence({
       client: evidenceClient,
       expectedRunAttempts: remainingExpectedRunAttempts,
       repository: normalizedRepository,
@@ -2995,7 +2985,7 @@ export async function validateReleaseRunEvidence(
     selectedEvidence =
       reuse.selectedRunId === reuse.runId
         ? rootEvidence
-        : await loadPublicationParentEvidence({
+        : await loadValidatedParentEvidence({
             client: evidenceClient,
             expectedRunAttempts: remainingExpectedRunAttempts,
             repository: normalizedRepository,
@@ -3684,7 +3674,7 @@ async function main() {
   if (options.acquirePublicationManifest) {
     // Acquisition is not a qualification verdict. Every publisher still runs
     // the strict validation owner and its existing approval/consumption gates.
-    const evidence = await loadPublicationParentEvidence({
+    const evidence = await loadValidatedParentEvidence({
       client: createReleaseEvidenceClient(repository),
       repository,
       runId,

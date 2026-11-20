@@ -267,7 +267,7 @@ src/agents/agent-harness-completion-scope.ts	2
 src/agents/agent-run-approval-wait.ts	2
 src/agents/agent-run-terminal-receipt.ts	2
 src/agents/agent-team.ts	1
-src/agents/agent-tool-source-execution-guard.ts	2
+src/agents/agent-tool-source-execution-guard.ts	1
 src/agents/auth-profiles/authorization-enrollment.ts	1
 src/agents/auth-profiles/inline-usage.ts	1
 src/agents/auth-profiles/oauth-manager.ts	1
@@ -295,8 +295,7 @@ src/agents/cli-runner/cli-run-transcript.ts	30
 src/agents/cli-runner/execute-plugin.ts	3
 src/agents/cli-runner/execute-process.ts	1
 src/agents/cli-runner/execute.ts	3
-src/agents/cli-runner/execution-target.ts	1
-src/agents/cli-runner/history-boundary.ts	63
+src/agents/cli-runner/history-boundary.ts	6
 src/agents/cli-runner/prepare.ts	3
 src/agents/cli-runner/session-history.ts	10
 src/agents/cli-runner/tool-authority.ts	1
@@ -836,7 +835,6 @@ src/gateway/mention-inbox-recording.ts	5
 src/gateway/mention-inbox.ts	4
 src/gateway/message-action-turn-capability.ts	8
 src/gateway/node-claude-skill-runtime.ts	20
-src/gateway/node-invoke-plugin-approval.ts	2
 src/gateway/node-invoke-plugin-policy.ts	4
 src/gateway/node-registry-pairing.ts	2
 src/gateway/node-registry-private.ts	7
@@ -1247,7 +1245,7 @@ src/infra/agent-run-approval-leases.ts	3
 src/infra/agent-run-registry-state.ts	4
 src/infra/agent-run-registry.automation.ts	1
 src/infra/agent-run-registry.ts	5
-src/infra/agent-run-terminal-writes.ts	2
+src/infra/agent-run-terminal-writes.ts	1
 src/infra/client-credential-migration.ts	3
 src/infra/deferred-plugin-session-empty.ts	4
 src/infra/deferred-plugin-session-source-recovery.worker.ts	1

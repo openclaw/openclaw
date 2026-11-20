@@ -1,17 +1,20 @@
 import { ServerResponse } from "node:http";
 import { afterEach, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { ensureCanonicalUserProfileForOpenClawIdIdentity } from "../state/user-profile-openclaw-id.js";
+import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeScopedGatewayHttpRequestOrReply } from "./http-auth-utils.js";
 import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { AUTH_TOKEN, createRequest } from "./server-http.test-harness.js";
 
 const OWNER_KEY = `iroh:${"1a".repeat(32)}`;
@@ -24,12 +27,18 @@ afterEach(() => {
   membership.clear();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
 });
 
 function publishMembership() {
   setRuntimeConfigSnapshot({
-    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+    gateway: { openclawId: { enabled: true }, roles: { definitions: MEMBER_ROLE_PRESETS } },
   });
+  setOpenClawIdMemberAccountLookup((accountId) =>
+    [...membership.values()].some(
+      (principal) => principal.kind === "member" && principal.accountId === accountId,
+    ),
+  );
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => membership.get(peerKey));
   setOpenClawIdTunnelPrincipalLookup((peerKey) => membership.get(peerKey));
 }
@@ -47,8 +56,8 @@ async function admitTunnelRequest(peerKey: string) {
     req,
     res,
     auth: AUTH_TOKEN,
-    cfg: {},
-    getRuntimeConfig: () => ({}),
+    cfg: getRuntimeConfigSnapshot()!,
+    getRuntimeConfig: () => getRuntimeConfigSnapshot()!,
     operatorMethod: "agent",
   });
   if (!admitted) {
@@ -81,37 +90,46 @@ it("an admitted tunnel request loses authority when its device is removed before
 });
 
 it("a member's request loses authority when the role changes, and when OpenClaw ID turns off", async () => {
-  await withOpenClawTestState({ label: "openclaw-id-http-role" }, async () => {
-    const operator: OpenClawIdTunnelPrincipal = {
-      kind: "member",
-      peerKey: MEMBER_KEY,
-      accountId: "acct_op",
-      role: "operator",
-    };
-    membership.set(MEMBER_KEY, operator);
-    publishMembership();
-    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
-      accountId: operator.accountId,
-      name: "Member",
-      email: "member@example.test",
-    });
-    const first = await admitTunnelRequest(MEMBER_KEY);
-    try {
-      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
-      expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
-      membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
-      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
-    } finally {
-      first.close();
-    }
-    membership.set(MEMBER_KEY, operator);
-    const second = await admitTunnelRequest(MEMBER_KEY);
-    try {
-      expect(second.requestAuth.hasCurrentClientAuthority()).toBe(true);
-      setOpenClawIdTunnelPrincipalLookup(undefined);
-      expect(second.requestAuth.hasCurrentClientAuthority()).toBe(false);
-    } finally {
-      second.close();
-    }
-  });
+  await withOpenClawTestState(
+    { label: "openclaw-id-http-role", prepareProfileCatalog: true },
+    async () => {
+      const operator: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: MEMBER_KEY,
+        accountId: "acct_op",
+        role: "operator",
+      };
+      membership.set(MEMBER_KEY, operator);
+      publishMembership();
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: operator.accountId,
+        name: "Member",
+        email: "member@example.test",
+      });
+      await setCanonicalUserProfileRole(profile.id, "operator");
+      const first = await admitTunnelRequest(MEMBER_KEY);
+      try {
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
+        membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        await setCanonicalUserProfileRole(profile.id, "viewer", {
+          onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+        });
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
+      } finally {
+        first.close();
+      }
+      membership.set(MEMBER_KEY, operator);
+      await setCanonicalUserProfileRole(profile.id, "operator");
+      const second = await admitTunnelRequest(MEMBER_KEY);
+      try {
+        expect(second.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        expect(second.requestAuth.hasCurrentClientAuthority()).toBe(false);
+      } finally {
+        second.close();
+      }
+    },
+  );
 });

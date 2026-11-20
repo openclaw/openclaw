@@ -148,6 +148,7 @@ it("keeps a linked owner's accepted work when the person's stored role changes",
     expect(() => owner.authority.assertCurrent()).not.toThrow();
     expect(personal.authority.signal?.aborted).toBe(false);
     expect(personal.authority.assertCurrent).not.toThrow();
+    expect(personal.authority.reauthorize).toThrow();
     await expect(capture()).rejects.toThrow();
     const nextOwner = await capture(OWNER);
     expect(nextOwner.authority.profileId).toBe(person.id);

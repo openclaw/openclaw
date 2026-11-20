@@ -2,8 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * On an OpenClaw-owned npm prefix the package path is a link to one release:
- * `<prefix>/lib/node_modules/<name> -> <prefix>/releases/<id>/lib/node_modules/<name>`.
+ * On a prefix OpenClaw owns, the package path is a link to one release, which keeps
+ * the package at the same path below its own directory:
+ * npm: `<prefix>/lib/node_modules/<name> -> <prefix>/releases/<id>/lib/node_modules/<name>`;
+ * Git: `<prefix>/<name> -> <prefix>/releases/<id>/<name>`, outside any `node_modules`, where
+ * Node refuses to strip the types of the release's plugin sources (#201874).
  * The link is the only record of which release is selected. POSIX only: Windows
  * launchers are files, so Windows keeps a plain package directory.
  */
@@ -33,6 +36,19 @@ function prefixOfGlobalRoot(globalRoot: string): string | null {
 }
 
 /**
+ * The release directory a path lies in: the nearest ancestor whose parent is `releases/`.
+ * A release keeps its package where the link sits below the install prefix.
+ */
+export function packageReleasePrefixOfRoot(root: string): string | null {
+  for (let dir = path.dirname(root); dir !== path.dirname(dir); dir = path.dirname(dir)) {
+    if (path.basename(path.dirname(dir)) === PACKAGE_RELEASES_DIR) {
+      return dir;
+    }
+  }
+  return null;
+}
+
+/**
  * Recognize a package path that is a link into a release of the same prefix and owner.
  * An operator's `npm link` to a checkout, or a plain directory, is not a release slot.
  */
@@ -47,18 +63,15 @@ export function readPackageReleaseSlotSync(packagePath: string): PackageReleaseS
       return null;
     }
     const slot = path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
-    const prefix = prefixOfGlobalRoot(path.dirname(slot));
-    if (!prefix) {
-      return null;
-    }
+    // npm keeps its link at `lib/node_modules/<name>`; a Git install keeps it at `<name>`.
+    const prefix = prefixOfGlobalRoot(path.dirname(slot)) ?? path.dirname(slot);
     const releaseRoot = fs.realpathSync.native(slot);
     const releasesDir = path.join(prefix, PACKAGE_RELEASES_DIR);
     const releaseId = path.relative(releasesDir, releaseRoot).split(path.sep)[0];
     if (
       !releaseId ||
       releaseId.startsWith(".") ||
-      releaseRoot !==
-        path.join(packageReleaseGlobalRoot(path.join(releasesDir, releaseId)), path.basename(slot))
+      releaseRoot !== path.join(releasesDir, releaseId, path.relative(prefix, slot))
     ) {
       return null;
     }
@@ -84,13 +97,13 @@ export function resolvePackageReleaseSlotForRootSync(root: string): string | nul
     return null;
   }
   const resolved = path.resolve(root);
-  const releasePrefix = prefixOfGlobalRoot(path.dirname(resolved));
-  const releasesDir = releasePrefix && path.dirname(releasePrefix);
-  if (!releasesDir || path.basename(releasesDir) !== PACKAGE_RELEASES_DIR) {
+  const releasePrefix = packageReleasePrefixOfRoot(resolved);
+  if (!releasePrefix) {
     return null;
   }
+  const prefix = path.dirname(path.dirname(releasePrefix));
   const slot = readPackageReleaseSlotSync(
-    path.join(packageReleaseGlobalRoot(path.dirname(releasesDir)), path.basename(resolved)),
+    path.join(prefix, path.relative(releasePrefix, resolved)),
   );
   try {
     return slot && slot.releaseRoot === fs.realpathSync.native(resolved) ? slot.slot : null;

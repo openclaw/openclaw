@@ -1,12 +1,8 @@
 section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   -webkit-line-clamp: 1;
 }
-.templates-add-consent {
-  display: grid;
-  gap: 12px;
-}
 
-.templates-add-consent__actions {
+.template-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -16,24 +12,16 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   display: grid;
   gap: 10px;
   margin-bottom: 20px;
-}
-
-.templates-content-skeleton__title {
-  width: min(220px, 60%);
-  height: 22px;
-}
-
-.templates-content-skeleton__row {
-  height: 58px;
-}
-
-.templates-content-skeleton .skeleton {
-  background: var(--bg-elevated);
-}
-
-@media (max-width: 560px) {
-  .templates-content-skeleton__row {
-    height: 52px;
+  & > .skeleton {
+    background: var(--bg-elevated);
+    height: 58px;
+    @media (max-width: 560px) {
+      height: 52px;
+    }
+  }
+  & > .skeleton-title {
+    width: min(220px, 60%);
+    height: 22px;
   }
 }
 
@@ -51,30 +39,22 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
       line-height: 20px;
     }
   }
-  /* The route omits settings.css; reserve the existing 18px navigation lane. */
+  /* Shared settings controls supply the glyph and state; retain the 18px lane. */
   .settings-row__chevron {
-    display: grid;
-    place-items: center;
-    flex: 0 0 18px;
+    --list-row-icon-size: 13px;
     width: 18px;
     height: 18px;
-    color: var(--muted);
-    opacity: 0.5;
-    svg {
-      width: 13px;
-      height: 13px;
-    }
+    justify-content: center;
   }
   .templates-workspace-file__title {
-    display: flex;
-    align-items: center;
     gap: 4px;
   }
-  :where(button) {
-    padding: 0;
-    border: 0;
-    background: transparent;
-  }
+}
+.templates-workspace-file :where(button),
+.agents-home__template-card-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 .templates-workspace-file__open {
   min-width: 0;
@@ -95,17 +75,10 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 .templates-workspace-file__info {
   position: relative;
   z-index: 1;
-  display: grid;
-  place-items: center;
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
+  --art-size: 28px;
+  --glyph-size: 14px;
   border-radius: var(--radius-sm);
   color: var(--muted);
-  svg {
-    width: 14px;
-    height: 14px;
-  }
   &:hover,
   &:focus-visible {
     color: var(--accent);
@@ -125,19 +98,20 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     gap: 16px;
     padding: 24px;
     overflow: hidden;
-    & > div > p:last-child {
-      margin: 0;
-      font-size: 13px;
-      line-height: 1.5;
-    }
-    & > div > p:not(:last-child) {
-      margin: 4px 0 8px;
-      color: var(--muted);
-      font-size: 12px;
-    }
     & > div {
       flex: 1;
       min-width: 0;
+      & p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.5;
+      }
+      & p:not(:last-child) {
+        margin: 4px 0 8px;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: inherit;
+      }
     }
     & h2 {
       margin: 0;
@@ -155,27 +129,30 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     overscroll-behavior: contain;
   }
 }
-.template-package-art {
+:where(.template-art) {
+  width: var(--art-size);
+  height: var(--art-size);
+  flex: none;
   display: grid;
   place-items: center;
-  height: 56px;
-  flex: 0 0 56px;
   color: var(--accent);
   & svg {
-    width: 32px;
-    height: 32px;
-  }
-  & img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    border-radius: inherit;
+    width: var(--glyph-size, 100%);
+    height: var(--glyph-size, 100%);
   }
 }
+.template-art img,
+.template-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: inherit;
+}
+.template-package-art {
+  --art-size: 56px;
+  --glyph-size: 32px;
+}
 .template-package-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
   width: 100%;
   min-height: 68px;
   padding: 12px 8px;
@@ -183,7 +160,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   background: transparent;
   text-align: start;
   &:hover {
-    background: var(--bg-hover);
+    background: var(--surface-hover);
   }
   & > span:not([class]) {
     flex: 1;
@@ -202,9 +179,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     margin-top: 4px;
     font-size: 12px;
     color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   & > svg:last-child {
     color: var(--muted);
@@ -228,10 +202,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   border-radius: 0;
   border-bottom: 1px solid var(--border);
 }
-.template-creator__status-anchor {
-  float: inline-end;
-  margin-inline-start: 8px;
-}
 .template-creator__status {
   display: flex;
   align-items: center;
@@ -247,27 +217,38 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: var(--muted);
+    flex: none;
+    background: currentColor;
   }
-  &[data-state="pending"]::before {
-    background: var(--warn);
+  &:not([data-state]) {
+    float: inline-end;
+    margin-inline-start: 8px;
   }
-  &[data-state="published"]::before {
-    background: var(--ok);
+  &[data-state] {
+    padding: 4px 9px;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    font-size: 11px;
+    font-weight: 600;
+  }
+  &[data-state="pending"] {
+    color: var(--info);
+  }
+  &[data-state="published"] {
+    color: var(--ok);
+  }
+  &[data-state="unconfirmed"] {
+    color: var(--warn);
+  }
+  &[data-state="notPublished"],
+  &[data-state="draftUnavailable"] {
+    color: var(--danger);
   }
 }
 .template-creator__row-icon {
-  display: grid;
-  place-items: center;
-  height: 34px;
-  flex: 0 0 34px;
+  --art-size: 34px;
+  --glyph-size: 22px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  color: var(--accent);
-  & svg {
-    width: 22px;
-    height: 22px;
-  }
 }
 .template-creator__category,
 .template-creator__preview {
@@ -276,18 +257,11 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   gap: 20px;
 }
 .template-creator__category-icon {
-  display: grid;
-  place-items: center;
+  --art-size: 56px;
+  --glyph-size: 28px;
   align-self: center;
-  width: 56px;
-  height: 56px;
   border-radius: 16px;
   background: var(--card-highlight);
-  color: var(--accent);
-  & svg {
-    width: 28px;
-    height: 28px;
-  }
 }
 .template-creator__hint {
   margin: 0;
@@ -297,11 +271,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   line-height: 21px;
 }
 .template-creator__category {
-  & .template-creator__contents {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
   & .template-creator__row {
     min-height: 60px;
     padding: 14px 16px;
@@ -318,7 +287,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
     }
   }
 }
-.template-creator__message {
+.template-automation-message {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.template-preview__detail .code-chunk,
+.templates-trust-warning > span {
   white-space: pre-wrap;
 }
 .template-creator__detail-group {
@@ -374,36 +348,86 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   margin: 16px auto;
 }
 
+.template-publish-card {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 14px;
+  width: 600px;
+  max-width: 100%;
+  padding: 20px;
+  background: var(--card);
+  color: var(--text);
+  overflow-wrap: anywhere;
+
+  & > header {
+    display: grid;
+    --art-size: 38px;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 12px;
+
+    & h2 {
+      margin: 0;
+      color: var(--text-strong);
+      font-size: 17px;
+      line-height: 1.25;
+    }
+    & p {
+      margin: 4px 0 0;
+      font-size: 12px;
+    }
+  }
+
+  & > .template-summary {
+    display: -webkit-box;
+    margin: 0;
+    overflow: hidden;
+    color: var(--muted);
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  & > p[role="status"] {
+    margin: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    font-size: 13px;
+  }
+  & > footer {
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 4px;
+  }
+}
+
 .template-preview__contents {
   border-bottom: 1px solid var(--border);
 }
-.template-preview .templates-workspace-file .settings-row__desc {
-  display: block;
+.template-package-row small,
+.template-preview header h2,
+.template-preview .settings-row__desc,
+.template-creator--detail h2,
+.agents-home__template-identity h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.template-preview .settings-row__desc {
+  display: block;
 }
 
 .template-preview {
   height: min(680px, var(--openclaw-modal-height-limit));
   & > header {
-    & h2 {
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
     &.template-preview__header--detail {
       align-items: center;
       & > div {
         text-align: center;
       }
     }
-  }
-  & img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    border-radius: inherit;
   }
   & > footer {
     height: 72px;
@@ -438,9 +462,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
       font-size: 14px;
       line-height: 1.6;
     }
-    & .code-chunk {
-      white-space: pre-wrap;
-    }
   }
   @media (max-width: 640px) {
     & > header {
@@ -457,47 +478,23 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
 }
 
 .template-creator {
-  width: 620px;
-  max-width: 100%;
-  height: 565px;
+  width: min(620px, 100%);
+  height: min(565px, var(--openclaw-modal-height-limit));
   background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: inherit;
 
-  .template-import-dialog > & {
-    max-height: var(--openclaw-modal-height-limit);
-    border: 0;
-    border-radius: inherit;
-  }
-
-  & > header {
-    & h2 {
-      overflow-wrap: anywhere;
-    }
+  & h2 {
+    overflow-wrap: anywhere;
   }
   & > footer {
     min-height: 64px;
     padding: 12px 20px;
-
-    & > .template-creator__actions {
-      display: flex;
-      justify-content: flex-end;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
-      & > [role="status"] {
-        font-size: 12px;
-        color: var(--muted);
-      }
-    }
   }
   &:where(.template-creator--detail) {
     grid-template-rows: 60px minmax(0, 1fr) auto;
-    & .template-creator__body {
+    & > div {
       padding: 24px;
     }
-    border-radius: 20px;
-
     & > :where(header) {
       align-items: center;
       position: relative;
@@ -506,9 +503,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
       & h2 {
         font: 500 16px/24px var(--font-body);
         text-align: center;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
       }
       & > button {
         position: absolute;
@@ -522,129 +516,73 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   }
 }
 
-.agents-home__template-card {
-  position: relative;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elevated);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.agents-home__template-card-link {
-  position: absolute;
-  z-index: 1;
-  inset: 0;
-  padding: 0;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-}
-
-.agents-home__template-card-link:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: -3px;
-}
-
+/* Catalog rows share the Plugins row; the Template's artwork fills its tile. */
 .agents-home__template-card-link:disabled {
   cursor: default;
 }
-
-.agents-home__template-head {
-  position: relative;
-  z-index: 2;
-  display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 60px;
-  align-items: center;
-  gap: 12px;
-  min-height: 64px;
-  pointer-events: none;
-}
-
-.agents-home__template-head .btn {
-  position: relative;
-  z-index: 3;
-  justify-self: end;
-  pointer-events: auto;
-}
-
 .agents-home__template-art {
-  display: grid;
-  width: 64px;
-  height: 64px;
-  place-items: center;
+  --glyph-size: 22px;
+}
+
+/* Template page: the artwork sits on a tonal tile, the soul reads as its personality. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__icon {
+  padding: 5px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  box-shadow: none;
   color: var(--accent);
-}
-
-.agents-home__template-art img,
-.agents-home__template-art svg {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-.agents-home__template-content {
-  display: grid;
-  min-width: 0;
-  gap: 6px;
-}
-
-.agents-home__template-identity {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  gap: 8px;
-  height: 20px;
-}
-
-.agents-home__template-identity h3 {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  font-size: 15px;
-  line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-home__template-identity span {
-  max-width: 40%;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.agents-home__template-summary {
-  display: -webkit-box;
-  min-height: 2.8em;
-  margin: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.agents-home__explore .plugin-catalog-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-@media (max-width: 900px) {
-  .agents-home__explore .plugin-catalog-grid {
-    grid-template-columns: minmax(0, 1fr);
+  & > svg {
+    width: 60%;
+    height: 60%;
+    margin: auto;
   }
 }
 
-openclaw-templates-detail-view .plugin-catalog-detail__icon {
-  background: transparent;
-  border-radius: 0;
+/* The Add action stays beside the name, as on wide screens. */
+openclaw-templates-detail-view .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
+  flex: none;
+}
+/* Rows that only have a name sit centred on their tile. */
+openclaw-templates-detail-view .plugin-capabilities .settings-row__text {
+  align-self: center;
+}
+
+/* The excerpt is plain text without its headings: a short preview reads better than a long one. */
+.templates-personality {
+  --plugin-readme-clamp: 96px;
+}
+
+.templates-personality__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.templates-personality__file {
+  position: relative;
+  padding: 2px 7px;
+  border: 0;
+  border-radius: calc(7px * var(--openclaw-corner-radius-scale));
+  background: color-mix(in srgb, var(--text) 4.5%, transparent);
+  color: var(--muted-strong);
+  font: 11.5px/1.4 var(--mono);
+  cursor: var(--cursor-action);
+  &:hover {
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+    color: var(--text);
+  }
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}
+.templates-personality__text {
+  margin: 0;
+  max-width: 680px;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 /* Featured, search results and loading placeholders have no "View all" action;
@@ -656,7 +594,7 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
 .agents-home__template-error {
   position: relative;
   z-index: 2;
-  margin: 0;
+  margin: 0 0 0 54px;
   overflow-wrap: anywhere;
   color: var(--danger);
   font-size: 13px;
@@ -666,26 +604,19 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
 
 .agents-home__template-empty {
   margin: 0 0 16px;
-  color: var(--muted);
 }
 
 .templates-trust-warning {
   min-width: 0;
   max-width: 100%;
   overflow-wrap: anywhere;
-}
-
-.templates-trust-warning__title {
-  display: block;
-}
-
-.templates-trust-warning a {
-  color: inherit;
-  text-decoration: underline;
-}
-
-.templates-trust-warning__plain {
-  white-space: pre-wrap;
+  & strong {
+    display: block;
+  }
+  & a {
+    color: inherit;
+    text-decoration: underline;
+  }
 }
 
 /* Hover references share this deferred template presentation sheet. */
@@ -695,23 +626,20 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--bg-elevated);
-  color: var(--text);
   box-shadow: var(--shadow-lg);
-  & header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
+  & .template-art {
+    --art-size: 36px;
+    border-radius: 8px;
   }
-  & strong,
-  & small {
-    display: block;
+  & .btn {
+    width: 100%;
+  }
+  & header > :last-child {
+    display: grid;
+    gap: 3px;
   }
   & strong {
     font-size: 15px;
-  }
-  & small {
-    margin-top: 3px;
-    color: var(--muted);
   }
   & p {
     margin: 16px 0;
@@ -719,21 +647,78 @@ openclaw-templates-detail-view .plugin-catalog-detail__icon {
     line-height: 1.6;
   }
 }
-.template-reference-card__art {
-  display: grid;
-  place-items: center;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
-  color: var(--accent);
-  & img {
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    border-radius: 8px;
+
+/* Phone: five lines of the personality preview; small text controls keep a finger-sized target. */
+@container (max-width: 560px) {
+  .templates-personality {
+    --plugin-readme-clamp: 120px;
+  }
+
+  .templates-personality__file::after {
+    position: absolute;
+    inset: -7px -4px;
+    content: "";
+  }
+
+  .plugin-catalog-detail--rail .templates-trust-warning a {
+    display: inline-block;
+    margin-block: -7px;
+    padding-block: 7px;
   }
 }
-.template-reference-card__view {
-  width: 100%;
-  justify-content: center;
+
+/* An automation's prompt opens under its row: the row's text column and description type. */
+openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+  margin: -6px 28px 0 46px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* The whole soul reads as the plugin page's Readme does; status lines sit under the excerpt. */
+.templates-personality__markdown {
+  max-width: 680px;
+  font-size: 14.5px;
+  line-height: 1.65;
+  & > :first-child {
+    margin-top: 0;
+  }
+}
+/* Headings inside the soul stay at reading size: no page-title type, no rules. */
+.templates-personality__markdown.sidebar-markdown h1,
+.templates-personality__markdown.sidebar-markdown h2,
+.templates-personality__markdown.sidebar-markdown h3,
+.templates-personality__markdown.sidebar-markdown h4,
+.templates-personality__markdown.sidebar-markdown h5,
+.templates-personality__markdown.sidebar-markdown h6 {
+  margin: 18px 0 6px;
+  padding: 0;
+  border: 0;
+  font-size: 14.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.templates-personality__markdown.sidebar-markdown h1 {
+  font-size: 16px;
+}
+.templates-personality__markdown.sidebar-markdown .lit-content > :first-child {
+  margin-top: 0;
+}
+.templates-personality__markdown.sidebar-markdown li {
+  font-size: inherit;
+  line-height: inherit;
+}
+.templates-personality__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@container (max-width: 560px) {
+  openclaw-templates-detail-view .plugin-capability__details > .template-automation-message {
+    margin: -6px 26px 0 42px;
+  }
 }

@@ -37,6 +37,7 @@ import {
   visibleChild,
 } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import type { RequesterWakeFixture } from "./subagent-registry.requester-wake-session.test-support.js";
+import { registerRequesterRestartDeliveryTests } from "./subagent-registry.restart-delivery.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -64,6 +65,20 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
   setReleaseAgentCallGate: (release: () => void) => void;
   useGlobalSessionScope: () => void;
 }): void {
+  registerRequesterRestartDeliveryTests({
+    requesterSessionKey,
+    getFixture,
+    prepareChildSession,
+    callGatewayMock,
+    spawnVisibleChild,
+    settleTurn,
+    flushOwnedWork,
+    waitForDeliveredCleanup,
+    getRequesterWakeCalls,
+    createGatewayContext,
+    getLifecycleHandler,
+  });
+
   it.each(["never bound", "binding retired", "restored"])(
     "delivers the bound member of a frozen batch with a %s member",
     async (binding) => {
