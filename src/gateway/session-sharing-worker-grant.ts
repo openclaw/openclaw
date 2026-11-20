@@ -127,6 +127,7 @@ export async function prepareSessionSharingWorkerGrant(params: {
           storageTarget: retained!.storageTarget,
           members: [],
           isMember: (id) => facts.membership.has(id),
+          memberAccess: (id) => facts.memberAccess?.[id],
           assertCurrent: () => {
             retained!.readCurrent(params.request.context.getRuntimeConfig());
           },
@@ -173,6 +174,8 @@ export async function prepareSessionSharingWorkerGrant(params: {
                 client: params.request.client,
                 profiles,
                 isMember: (_target, id) => facts.members.some((member) => member.identityId === id),
+                memberAccess: (_target, id) =>
+                  facts.members.find((member) => member.identityId === id)?.access,
               });
               const error = authorizeGatewaySessionCreation(
                 {

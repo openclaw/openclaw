@@ -1,5 +1,6 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { runtimeConfigPublication } from "../config/runtime-config-publication.js";
 import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
@@ -33,6 +34,7 @@ import {
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { resolveSessionMemberAccess } from "./session-member-access.js";
 import {
   SessionMutationAuthorizationChangedError,
   SessionSharingProfileFactsChangedError,
@@ -127,6 +129,11 @@ export function prepareSessionSharing(
     aliases: ReadonlySet<string>;
     sessionCap: ReturnType<typeof operatorSessionCap>;
     isMember: (target: SessionSharingTarget, identityId: string) => boolean;
+    memberAccess?: (
+      target: SessionSharingTarget,
+      identityId: string,
+    ) => SessionMemberPermissionLevel | undefined;
+    policy?: ReturnType<typeof resolveOperatorRolePolicy>;
   },
 ) {
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
@@ -142,6 +149,24 @@ export function prepareSessionSharing(
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
+  const policy = prepared
+    ? prepared.policy
+    : params.cfg && resolveOperatorRolePolicy(params.client, params.cfg);
+  const accessForTarget = (target: SessionSharingTarget) => {
+    const role = roleForTarget(target);
+    return resolveSessionMemberAccess({
+      policy: policy || (sessionCap ? { sessions: { others: sessionCap }, scopes: [] } : undefined),
+      scopes: params.client?.connect.scopes ?? [],
+      creator: role === "owner",
+      admin: role === "admin",
+      member: {
+        present: Boolean(identity && prepared?.isMember(target, identity.id)),
+        access: identity ? prepared?.memberAccess?.(target, identity.id) : undefined,
+      },
+      visibility: resolveSessionVisibility(target.entry),
+      incognito: target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey),
+    });
+  };
   return {
     identity,
     isCreator,
@@ -154,8 +179,18 @@ export function prepareSessionSharing(
         Boolean(sessionCap === "invited" && identity && prepared?.isMember(target, identity.id)),
       ) ?? true,
     roleForTarget,
-    authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
-      authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
+    accessForTarget,
+    invitedAccessCeiling:
+      policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined,
+    authorizeTarget: (
+      target: SessionSharingTarget,
+      role = roleForTarget(target),
+      participation = false,
+    ) =>
+      authorizeSessionSharingTarget(
+        { ...params, target, participation },
+        { ...cap, role, access: accessForTarget(target) },
+      ),
   };
 }
 
@@ -173,6 +208,7 @@ export type PreparedMutationSharing = {
   storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
   members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
   isMember?: (identityId: string) => boolean;
+  memberAccess?: (identityId: string) => SessionMemberPermissionLevel | undefined;
   assertCurrent: () => void;
 };
 
@@ -192,6 +228,9 @@ export function createSessionSharingConsumption(params: {
       ? (current.sharing.isMember?.(id) ??
         current.sharing.members.some((member) => member.identityId === id))
       : (current.members?.includes(id) ?? false);
+  const memberAccess = (_target: SessionSharingTarget, id: string) =>
+    current.sharing?.memberAccess?.(id) ??
+    current.sharing?.members.find((member) => member.identityId === id)?.access;
   return Object.assign(current, {
     policy: (cfg: OpenClawConfig, members?: readonly string[]) => {
       const policy =
@@ -201,6 +240,7 @@ export function createSessionSharingConsumption(params: {
               client: params.client,
               profiles: current.profiles,
               isMember,
+              memberAccess,
               owner: current,
             })
           : undefined;
@@ -410,6 +450,10 @@ export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
+  memberAccess?: (
+    target: SessionSharingTarget,
+    identityId: string,
+  ) => SessionMemberPermissionLevel | undefined;
   profiles?: Pick<PreparedSessionSharingProfiles, "readCurrent">;
   /** Retained consumers lend current membership; viewer facts still revalidate on every call. */
   owner?: object;
@@ -485,10 +529,11 @@ export function prepareProjectedSessionSharing(params: {
       facts[17] === roleProfile?.role &&
       facts[18] === roleProfile?.githubLogin &&
       facts[19] === roleProfile?.profileId &&
-      facts.length === 20 + (scopes?.length ?? 0)
+      facts[20] === (params.owner ? params.memberAccess : undefined) &&
+      facts.length === 21 + (scopes?.length ?? 0)
     ) {
       let i = 0;
-      while (i < (scopes?.length ?? 0) && facts[20 + i] === scopes?.[i]) {
+      while (i < (scopes?.length ?? 0) && facts[21 + i] === scopes?.[i]) {
         i++;
       }
       if (i === (scopes?.length ?? 0)) {
@@ -516,6 +561,7 @@ export function prepareProjectedSessionSharing(params: {
       roleProfile?.role,
       roleProfile?.githubLogin,
       roleProfile?.profileId,
+      params.owner ? params.memberAccess : undefined,
     ];
     const snapshot = { facts: scopes?.length ? next.concat(scopes) : next };
     projectedSharingKeys.set(viewer, snapshot);
@@ -529,7 +575,9 @@ export function prepareProjectedSessionSharing(params: {
     ...prepareSessionSharing(params, {
       aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
+      policy,
       isMember,
+      memberAccess: params.memberAccess,
     }),
     policy,
     /** Connection facts follow config/access publications, independently of row revisions. */

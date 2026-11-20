@@ -342,6 +342,9 @@ export async function prepareGatewaySessionAccessAuthority(request: {
           {
             aliases: new Set(profile?.aliases ?? []),
             sessionCap: role?.sessions.others,
+            policy: role,
+            memberAccess: (row, identity) =>
+              projection.memberAccess(row.storePath, row.storeKey, identity),
             isMember: (row, identity) =>
               projection.hasMembership(row.storePath, row.storeKey, identity),
           },
@@ -354,7 +357,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
               expectedProfileId: profileId,
               isCreator: sharing.isCreator,
             })) ||
-          sharing.authorizeTarget(current)
+          sharing.authorizeTarget(current, undefined, false)
         ) {
           denied();
         }

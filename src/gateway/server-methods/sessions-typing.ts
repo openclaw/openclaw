@@ -20,9 +20,7 @@ import { authorizeOwnSessionMutation } from "../session-sharing-policy.js";
 import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   authorizeIncognitoSessionTarget,
-  canManageSessionSharing,
   prepareProjectedSessionSharing,
-  resolveSessionVisibility,
 } from "../session-sharing.js";
 import { resolveSessionSubscriptionKeys as subscriptionKeys } from "../session-subscription-keys.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -91,6 +89,10 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     prepareProjectedSessionSharing({
       cfg: projection.getPolicyConfig(),
       client,
+      memberAccess: (value, id) =>
+        actorFacts
+          ? actorFacts.readCurrent().memberAccess[id]
+          : projection.memberAccess(value.storePath, value.storeKey, id),
       isMember: (value, identity) =>
         actorFacts
           ? actorFacts.readCurrent().membership.has(identity)
@@ -130,13 +132,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     ) {
       return false;
     }
-    const role = access.roleForTarget(current);
-    const visibility = resolveSessionVisibility(current.entry);
-    return (
-      !(role === "viewer" && access.sessionCap === "view") &&
-      (visibility !== "draft" || canManageSessionSharing(role)) &&
-      (role !== "viewer" || visibility === "shared" || visibility === "suggest")
-    );
+    return access.accessForTarget(current).canType;
   };
   if (
     params.sessionId !== target.entry.sessionId ||

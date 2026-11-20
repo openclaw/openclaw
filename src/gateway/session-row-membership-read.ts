@@ -236,6 +236,7 @@ export function createSessionRowMembershipReadAccess(params: {
       }
       return { status: "ready" as const, target };
     },
+    memberAccess: membership.access,
     hasMembership: (storePath: string, key: string, identity: string) =>
       membership.membership(storePath, key)?.includes(identity) ?? false,
     needsExactMembershipPreparation(

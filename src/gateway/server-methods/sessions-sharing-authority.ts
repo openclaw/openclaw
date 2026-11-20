@@ -72,6 +72,7 @@ export async function prepareSessionSharingAccess(
         cfg: policyConfig,
         client,
         isMember: (_target, identityId) => current.membership.has(identityId),
+        memberAccess: (_target, identityId) => current.memberAccess?.[identityId],
       });
       // Synthetic profile and role preparation may invoke authority callbacks.
       const preparedProfile = client?.preparedSessionProfile;

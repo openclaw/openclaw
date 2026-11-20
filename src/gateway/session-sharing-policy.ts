@@ -5,6 +5,7 @@ import {
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -28,6 +29,7 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import { resolveSessionMemberAccess } from "./session-member-access.js";
 import {
   captureSessionSharingMemoryFacts,
   readSessionSharingMemoryFacts,
@@ -270,6 +272,7 @@ export type SessionSharingRoleParams = {
   client: GatewayClient | null;
   target: SessionSharingTarget;
   isMember?: boolean;
+  memberAccess?: SessionMemberPermissionLevel;
 };
 
 export function sharingIdentity(
@@ -455,10 +458,18 @@ export async function authorizeResolvedSessionMutationAsync(params: {
       ...params,
       profiles,
       isMember: (_target, identityId) => members.some((member) => member.identityId === identityId),
+      memberAccess: (_target, identityId) =>
+        members.find((member) => member.identityId === identityId)?.access,
     });
     return authorizePreparedSessionMutation(
       params,
-      { target, membership: new Set(members.map((member) => member.identityId)) },
+      {
+        target,
+        membership: new Set(members.map((member) => member.identityId)),
+        memberAccess: Object.fromEntries(
+          members.flatMap((member) => (member.access ? [[member.identityId, member.access]] : [])),
+        ),
+      },
       { policy: sharing.policy, aliases: profiles.readCurrent().profile?.aliases ?? new Set() },
     );
   });
@@ -512,13 +523,26 @@ export function authorizePreparedSessionMutation(
   const sharing = { cfg: params.cfg, client: params.client, target };
   const identity = sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client));
   const cap = { value: prepared.policy?.sessions.others };
+  const role = resolveSessionSharingRole(
+    { ...sharing, isMember: Boolean(identity && facts.membership.has(identity.id)) },
+    cap,
+    prepareSessionCreatorProfile(identity?.id, prepared.aliases),
+  );
   return authorizeSessionSharingTarget(sharing, {
     ...cap,
-    role: resolveSessionSharingRole(
-      { ...sharing, isMember: Boolean(identity && facts.membership.has(identity.id)) },
-      cap,
-      prepareSessionCreatorProfile(identity?.id, prepared.aliases),
-    ),
+    role,
+    access: resolveSessionMemberAccess({
+      policy: prepared.policy,
+      scopes: params.client?.connect.scopes ?? [],
+      creator: role === "owner",
+      admin: role === "admin",
+      member: {
+        present: Boolean(identity && facts.membership.has(identity.id)),
+        access: identity ? facts.memberAccess?.[identity.id] : undefined,
+      },
+      visibility: resolveSessionVisibility(target.entry),
+      incognito: target.entry.incognito,
+    }),
   });
 }
 
@@ -581,8 +605,16 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  params: SessionSharingRoleParams & { requireOwner?: boolean; ownerAction?: string },
-  prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
+  params: SessionSharingRoleParams & {
+    requireOwner?: boolean;
+    ownerAction?: string;
+    participation?: boolean;
+  },
+  prepared?: {
+    value: ReturnType<typeof operatorSessionCap>;
+    role: SessionSharingRole;
+    access?: ReturnType<typeof resolveSessionMemberAccess>;
+  },
 ): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
   const sessionCap = prepared
@@ -601,12 +633,30 @@ export function authorizeSessionSharingTarget(
       `Only the session creator or an admin can ${params.ownerAction ?? "archive or restore this session"}.`,
     );
   }
-  const capped = sessionCap === "invited" || sessionCap === "view" || sessionCap === "suggest";
-  // Draft membership is inactive, while an explicit role caps even shared visibility.
-  const canMutate =
-    visibility === "draft"
-      ? canManageSessionSharing(role)
-      : role !== "viewer" || (visibility === "shared" && !capped);
+  const policy = !prepared && params.cfg && resolveOperatorRolePolicy(params.client, params.cfg);
+  const access =
+    prepared?.access ??
+    resolveSessionMemberAccess({
+      policy: policy || (sessionCap ? { sessions: { others: sessionCap }, scopes: [] } : undefined),
+      scopes: params.client?.connect.scopes ?? [],
+      creator: role === "owner",
+      admin: role === "admin",
+      member: { present: role === "member", access: params.memberAccess },
+      visibility,
+      incognito:
+        params.target.entry.incognito === true || isIncognitoSessionKey(params.target.canonicalKey),
+    });
+  if (
+    access.invitedAccessCeiling &&
+    !canManageSessionSharing(role) &&
+    params.participation !== true
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Only the session creator or an admin can manage this session.",
+    );
+  }
+  const canMutate = access.canMutate;
   return canMutate
     ? null
     : errorShape(ErrorCodes.INVALID_REQUEST, `session is ${visibility} for this connection`, {
@@ -616,4 +666,32 @@ export function authorizeSessionSharingTarget(
           visibility,
         },
       });
+}
+
+/** Only direct participation uses a send grant; every other mutation remains management. */
+export function authorizeSessionMutationTargetPolicy(
+  params: SessionSharingRoleParams & {
+    method: string;
+    requireOwner?: boolean;
+    ownerAction?: string;
+    policy?: Pick<
+      ReturnType<typeof import("./session-sharing-read.js").prepareProjectedSessionSharing>,
+      "sessionCap" | "roleForTarget" | "accessForTarget"
+    >;
+  },
+): ErrorShape | null {
+  const { policy } = params;
+  return authorizeSessionSharingTarget(
+    {
+      ...params,
+      participation: ["chat.send", "chat.abort", "session.typing"].includes(params.method),
+    },
+    policy
+      ? {
+          value: policy.sessionCap,
+          role: policy.roleForTarget(params.target),
+          access: policy.accessForTarget(params.target),
+        }
+      : undefined,
+  );
 }

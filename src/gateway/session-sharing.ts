@@ -42,7 +42,7 @@ import {
   authorizeIncognitoSessionTarget,
   authorizeOwnSessionMutation,
   authorizeSessionAgentRun,
-  authorizeSessionSharingTarget,
+  authorizeSessionMutationTargetPolicy,
   hiddenSessionNotFound,
   resolveIncognitoSessionSharingTarget,
   sharingIdentity,
@@ -176,21 +176,17 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           ) !== false;
       return !visible ? hiddenSessionNotFound(target.canonicalKey) : null;
     }
-    return policy
-      ? authorizeSessionSharingTarget(
-          { cfg, client: params.client, target, ...targetOwnership },
-          {
-            value: policy.sessionCap,
-            role: policy.roleForTarget(target),
-          },
-        )
-      : authorizeSessionSharingTarget({
-          cfg,
-          client: params.client,
-          target,
-          ...targetOwnership,
-          isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
-        });
+    return authorizeSessionMutationTargetPolicy({
+      cfg,
+      client: params.client,
+      target,
+      ...targetOwnership,
+      method: params.method,
+      policy,
+      isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
+      memberAccess:
+        identity && projection?.memberAccess(target.storePath, target.storeKey, identity.id),
+    });
   };
   const resolveAuthorizedTarget = (targetRef: SessionMutationTarget) => {
     if (params.preparedTargets) {
