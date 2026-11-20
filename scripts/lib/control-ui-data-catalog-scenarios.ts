@@ -37,13 +37,12 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1, uninstalledIndex?: number | "all") {
-  const isInstalled = (index: number) => uninstalledIndex !== "all" && index !== uninstalledIndex;
+function createDataCatalogInventory(revision = 1) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    catalogId: `data-catalog-${suffix(index)}`,
+    catalogId: `installed-data-catalog-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
-    packageName: `@synthetic/data-plugin-${suffix(index)}`,
+    packageName: `@synthetic/installed-data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
     origin: "global",
     kind: ["tool"],
@@ -52,6 +51,7 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number | "a
     state: "enabled",
     removable: true,
   }));
+  // Browsing hides installed plugins; keep discovery separate from the Settings inventory.
   const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
     id: `data-catalog-${suffix(index)}`,
     catalog: {
@@ -64,19 +64,15 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number | "a
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: isInstalled(index) ? plugin.id : undefined,
-      present: isInstalled(index),
-      installed: isInstalled(index),
-      enabled: isInstalled(index),
-      state: isInstalled(index) ? "enabled" : "not-installed",
-      action: isInstalled(index) ? "manage" : "install",
+      present: false,
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      action: "install",
     },
   }));
   return {
-    plugins:
-      uninstalledIndex === undefined
-        ? plugins
-        : plugins.filter((_plugin, index) => isInstalled(index)),
+    plugins,
     entries,
   };
 }
@@ -97,11 +93,8 @@ function catalogPage(
   };
 }
 
-function createDataCatalogFixture(
-  revision = 1,
-  uninstalledIndex?: number | "all",
-): InteractionFixtureOverrides {
-  const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
+function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
+  const { plugins, entries } = createDataCatalogInventory(revision);
   const groups: ToolsCatalogResult["groups"] = Array.from(
     { length: toolGroupCount },
     (_, groupIndex) => ({
@@ -775,13 +768,12 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
 function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
   return {
     ...fixture,
-    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     id: `data-catalog-first-render${roundTripMs ? "-100ms" : ""}`,
     route: pathForRoute("new-session"),
     expected: "The initial catalog request presents the eight-card Tools overview shelf.",
     rowSelector: ".plugin-catalog-card",
     createRequestHandlers: () => {
-      const { entries } = createDataCatalogInventory(1, "all");
+      const { entries } = createDataCatalogInventory();
       return {
         "plugins.catalog.browse": async (params: unknown): Promise<PluginDiscoveryResult> => {
           if (
@@ -850,7 +842,6 @@ function catalogScenario(
   const retainedByPage = new WeakMap<Page, JSHandle<(Element | null)[]>>();
   return {
     ...fixture,
-    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     id: `data-catalog-${action}${roundTripMs ? "-100ms" : ""}`,
     route: pathForRoute("plugins"),
     expected: append
@@ -859,7 +850,7 @@ function catalogScenario(
     rowSelector: ".plugin-catalog-card",
     createRequestHandlers: roundTripMs
       ? () => {
-          const { entries } = createDataCatalogInventory(1, "all");
+          const { entries } = createDataCatalogInventory();
           return {
             "plugins.catalog.browse": async (params: unknown): Promise<PluginDiscoveryResult> => {
               if (!isRecord(params)) {
@@ -982,7 +973,6 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     explicitOnly: true,
     route: pathForRoute("plugins"),
     expected: "Catalog search works before installed inventory permits installation.",
-    fixtureOverrides: () => createDataCatalogFixture(1, 900),
     prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
     run: async (page) => {
       const search = page.getByRole("searchbox", { name: "Search plugins" });
@@ -1017,7 +1007,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         inventoryLoadingVisible,
         inventoryReadyAtMs: await page.evaluate(() => performance.now()),
         matchingPlugins: 100,
-        installedPlugins: inventorySize - 1,
+        installedPlugins: inventorySize,
       };
     },
   },
@@ -1026,8 +1016,6 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-catalog-category-first-render",
-    // Catalog browsing lists plugins available to install, not installed inventory.
-    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     route: pathForRoute("plugins"),
     expected: "Opening Tools presents the first 100 entries of the 1,000-entry catalog.",
     rowSelector: ".plugin-catalog-card",
@@ -1130,7 +1118,6 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   {
     ...fixture,
     id: "data-catalog-scroll",
-    fixtureOverrides: () => createDataCatalogFixture(1, "all"),
     route: pathForRoute("plugins"),
     expected:
       "All 1,000 sorted catalog entries remain reachable after scrolling through the window.",

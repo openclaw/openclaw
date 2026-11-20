@@ -51,11 +51,11 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -877,13 +877,11 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    // The first visit summarizes the installed inventory; opening it is a separate action.
     ready: ".skill-discovery .skill-installed-shelf",
-    rows: { selector: ".skill-discovery .skill-installed-shelf", minimum: 1 },
     action: {
-      label: "Open all 1,000 installed skills, then filter to one match",
-      run: async (page) => {
-        await page.locator(".skill-installed-shelf").click();
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: async (page) => {
+        await page.locator(".skill-discovery .skill-installed-shelf").click();
         await page.waitForFunction(() => {
           const discovery = document.querySelector(".skill-discovery");
           return (
@@ -893,6 +891,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
             discovery.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") === "1000"
           );
         });
+      },
+      run: async (page) => {
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
@@ -2179,6 +2179,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);
