@@ -445,6 +445,7 @@ export function renderChatComposerView(
               </ChatLazyBoundary>
             ) : undefined}
             <div class="agent-chat__composer-lede">
+              <regions.ComposerInviteAccess composer={props} context={context()} />
               {props.sessionAdmitted === false ? undefined : (
                 <>
                   <McpAppCatalog

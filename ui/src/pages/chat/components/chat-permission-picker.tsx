@@ -25,6 +25,8 @@ type PermissionSelection = SessionPermissionMode | null;
 
 export type ChatPermissionPickerProps = {
   canSelectFull: boolean;
+  participant?: boolean;
+  setBy?: string;
   disabled?: boolean;
   disabledReason?: string;
   mode?: SessionPermissionMode;
@@ -79,8 +81,18 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const disabled = createMemo(() => props.disabled || pending());
   const selectedMode = createMemo(() => props.mode ?? null);
   const defaultMode = createMemo(() => props.defaultMode);
+  const participant = createMemo(() => props.participant, { lazy: true });
   const canSelectFull = createMemo(() => props.canSelectFull, { lazy: true });
   const selectMode = (mode: PermissionSelection) => {
+    if (
+      props.participant &&
+      (mode === null ||
+        mode === "workspace" ||
+        mode === "full" ||
+        (props.mode === "read-only" && mode !== "read-only"))
+    ) {
+      return;
+    }
     if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
       // The owner reports failures; keep its pending choice visible until settlement.
       const result = props.onSelect(mode);
@@ -105,7 +117,12 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
         attributes: { target: EXTERNAL_LINK_TARGET, rel: buildExternalLinkRel() },
         class: "oc-menu-heading__action chat-controls__permission-learn-more learn-more-link",
       },
-      ...PERMISSION_OPTIONS.map((mode, index): MenuItem => {
+      ...PERMISSION_OPTIONS.filter(
+        (mode) =>
+          !participant() ||
+          mode === "read-only" ||
+          (mode === "guarded" && selectedMode() !== "read-only"),
+      ).map((mode, index): MenuItem => {
         const value = mode ?? DEFAULT_PERMISSION_VALUE;
         const selected = selectedMode() === mode;
         const locked = mode === "full" && !canSelectFull();
@@ -241,7 +258,12 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
           </span>
           {/* "Default (...)" belongs to the menu row; the trigger names the effective mode. */}
           <span class="chat-controls__inline-select-label chat-controls__permission-label">
-            {modeLabel(props.mode ?? props.defaultMode)}
+            {props.participant
+              ? t("chat.permissionControls.setByCreator", {
+                  mode: modeLabel(props.mode ?? "guarded"),
+                  name: props.setBy ?? t("chat.permissionControls.creator"),
+                })
+              : modeLabel(props.mode ?? props.defaultMode)}
           </span>
         </>
       }

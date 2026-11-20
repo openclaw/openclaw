@@ -63,6 +63,7 @@ import {
   ComposerWidthEdge,
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
+import { ChatInviteAccess } from "../chat/components/chat-invite-access.tsx";
 import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
@@ -593,6 +594,16 @@ export function NewSessionComposer(props: {
         </Show>
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
+        <Show when={frame().mentionDirectory?.inviteAccessAvailable}>
+          <ChatInviteAccess
+            text={frame().visibleMessage}
+            mentions={frame().mentionMenuHost.getMentions()}
+            options={textarea.mentionMenu.selectedInviteOptions}
+            onChange={(mentions) =>
+              frame().mentionMenuHost.commitDraft(frame().visibleMessage, mentions)
+            }
+          />
+        </Show>
         <Show when={!options().nativeTerminal}>
           <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>

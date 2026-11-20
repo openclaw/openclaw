@@ -218,18 +218,22 @@ export class SessionParticipationTracker {
     catalog: boolean;
     listLoading: boolean;
     sessionKey: string;
-    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility" | "invitedAccess"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
     }
     if (params.session) {
       const blocked =
-        params.session.visibility === "draft"
-          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
-          : params.session.visibility !== undefined &&
-            params.session.visibility !== "shared" &&
-            params.session.sharingRole === "viewer";
+        params.session.invitedAccess !== undefined &&
+        params.session.sharingRole !== "owner" &&
+        params.session.sharingRole !== "admin"
+          ? params.session.invitedAccess !== "send"
+          : params.session.visibility === "draft"
+            ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+            : params.session.visibility !== undefined &&
+              params.session.visibility !== "shared" &&
+              params.session.sharingRole === "viewer";
       this.lastBlocked.delete(params.sessionKey);
       this.lastBlocked.set(params.sessionKey, blocked);
       if (this.lastBlocked.size > MAX_TRACKED_SESSION_ROWS) {
