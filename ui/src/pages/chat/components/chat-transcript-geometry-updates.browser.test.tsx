@@ -474,6 +474,36 @@ it.each([
   },
 );
 
+it("keeps measured rows aligned when the cold viewport admits a shorter predecessor", async () => {
+  const { host, viewport, virtualizer } = await mountPane(
+    true,
+    72,
+    undefined,
+    0,
+    geometryMessages(30),
+  );
+  const incoming = '.chat-virtual-row[data-index="23"]:not([data-prepared-row])';
+  expect(host.querySelector(incoming)).toBeNull();
+  const retained = requireElement(host, '.chat-virtual-row[data-index="28"]');
+  const before = retained.getBoundingClientRect().top;
+  const offset = viewport.scrollTop;
+  const distance = 72;
+  // A native offset update during disclosure can extend the cold window before
+  // the first reader gesture. Sample its row commit before resize delivery.
+  requestAnimationFrame(() => {
+    virtualizer.scrollToOffset(offset - distance, { behavior: "instant" });
+    viewport.dispatchEvent(new Event("scroll"));
+  });
+  const firstFrame = await new Promise<number>((resolve) => {
+    requestAnimationFrame(() => resolve(retained.getBoundingClientRect().top));
+  });
+  expect(Math.abs(firstFrame - (before + distance))).toBeLessThanOrEqual(2);
+  await expect.poll(() => host.querySelector(incoming)?.getBoundingClientRect().height).toBe(72);
+  expect(Math.abs(retained.getBoundingClientRect().top - (before + distance))).toBeLessThanOrEqual(
+    2,
+  );
+});
+
 it.each([120, 360, 1200])(
   "prepares only the tail window while initial %ipx rows settle",
   async (rowHeight) => {
