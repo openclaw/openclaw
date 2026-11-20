@@ -4,6 +4,7 @@ read_when:
   - You want Knowledge to learn from your conversations or from Memory without asking each time
   - You are turning on the scheduled consolidation of unlinked claims
   - You want Granola meetings ingested into Knowledge automatically
+  - You want Knowledge to learn from your Slack channels
   - A scribe shows Failing or Conversation not found on the Scribes tab
   - A scribe shows New run instructions after you update OpenClaw
 title: "Knowledge scribes"
@@ -28,6 +29,7 @@ which can be started again.
 | Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
 | Learn from Granola       | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
 | Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
+| Learn from Slack         | Once or ongoing | Starting 7 days, 30 days, or today; Slack user token; direct messages            | `knowledge-source-ingest`       |
 
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
@@ -55,6 +57,16 @@ which can be started again.
   from the last 7 days.
 - **Learn from Memory** brings `memory-core` notes into Knowledge once. Memory
   itself is not changed.
+- **Learn from Slack** reads Slack channels through the
+  [Slack plugin](#the-slack-plugin) and saves the decisions, commitments, and
+  project news discussed there, updating the people, companies, and projects
+  involved. Ongoing runs check for new messages on weekdays at 9:30 AM,
+  1:30 PM, and 5:30 PM in your time zone. Messages already in Knowledge are
+  skipped. It keeps a checkpoint page,
+  `Knowledge scribe checkpoint · Learn from Slack`, with the newest message
+  ingested in each channel, so a run continues where the last one stopped.
+  Defaults are every channel the Slack bot is a member of, from the last 7
+  days, without the user token or direct messages.
 
 ### The Granola plugin
 
@@ -79,6 +91,40 @@ The scribe keeps the meeting's Granola ID (the UUID in its
 `notes.granola.ai/d/…` link) on the meeting page. It retains the meeting notes
 and the full transcript as originals; a meeting without a transcript is not
 ingested.
+
+### The Slack plugin
+
+Learn from Slack reads with the bundled Slack channel plugin's `message`
+actions: `channel-list` to find channels and `read` for their messages and
+threads. It never posts, reacts, or changes anything in Slack, and needs no
+separate Slack token. The Scribes tab checks that the plugin is installed and
+on, and that its default Slack account is configured and running:
+
+| Shown                                 | Control            |
+| ------------------------------------- | ------------------ |
+| Needs the Slack plugin, not installed | **Install Slack…** |
+| Needs the Slack plugin, turned off    | **Turn on Slack…** |
+| Installed, no running Slack account   | **Connect Slack…** |
+| Slack connected                       | None               |
+
+**Connect Slack…** opens **Settings → Channels**, where you add or start the
+Slack account. **Set up…** stays disabled until the account is running.
+
+The start dialog offers:
+
+- **Starting from**: the last 7 days (default), the last 30 days, or today.
+- **Also channels your user token can access** (off by default): also reads
+  every channel the Slack account's user token can access, beyond the channels
+  the bot is a member of. The option is disabled when the account has no user
+  token. Without it, the scribe reads only channels the bot is in.
+- **Direct messages and group DMs** (off by default): also reads the direct
+  messages and group DMs the token can read.
+
+Archived channels are skipped. Each channel is one source in Knowledge, keyed
+`slack:<team>/<channel>`, with retained snapshot manifests, so later runs
+reconcile edited messages instead of saving them twice. A message missing from
+a later read is never treated as deleted unless that read covered the whole
+interval.
 
 ## Start a scribe
 
@@ -230,6 +276,10 @@ one-time run ingests every pending meeting. Each amount is a target: a run
 stops short only when nothing is left that something outside the run holds
 back.
 
+A scheduled Learn from Slack run works toward ingesting 6 channels with new
+messages, oldest checkpoint first, so every channel gets its turn; a one-time
+run ingests every channel. Channels without new messages don't count.
+
 A Learn from Granola run reports `needs attention` when it left meetings pending,
 ingested none, and nothing outside the run held them back. A meeting stays
 pending only while it is still being recorded, its transcript is not ready, or
@@ -238,8 +288,8 @@ verification still fails after a fix attempt.
 ## Controls
 
 Open a scribe for its schedule, next and last run, model, failure alert, and
-recent runs. Learn from Granola also shows the Granola plugin's state as its
-source.
+recent runs. Learn from Granola and Learn from Slack also show their plugin's
+state as their source; for Slack, it says whether the account has a user token.
 
 | Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
