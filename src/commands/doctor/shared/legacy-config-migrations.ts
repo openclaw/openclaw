@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { LegacyConfigMigrationSpec, LegacyConfigRule } from "../../../config/legacy.shared.js";
 import { selectLegacyHeartbeatVisibility } from "./channel-legacy-config-migrate.js";
+import { LEGACY_CONFIG_MIGRATIONS_AGENT_PROFILES } from "./legacy-config-migrations.agent-profiles.js";
 import { LEGACY_CONFIG_MIGRATIONS_AUDIO } from "./legacy-config-migrations.audio.js";
 import { LEGACY_CONFIG_MIGRATIONS_CHANNELS } from "./legacy-config-migrations.channels.js";
 import { LEGACY_PLUGIN_PROMPT_PERMISSION } from "./legacy-config-migrations.plugin-prompts.js";
@@ -34,6 +35,8 @@ export const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigrationSpec[] = [
   ...LEGACY_CONFIG_MIGRATIONS_QQBOT,
   ...LEGACY_CONFIG_MIGRATIONS_AUDIO,
   ...LEGACY_CONFIG_MIGRATIONS_RUNTIME,
+  // After the runtime group: its retired rule removes onboarding-owned lean first.
+  ...LEGACY_CONFIG_MIGRATIONS_AGENT_PROFILES,
   ...LEGACY_CONFIG_MIGRATIONS_WEB_SEARCH,
   LEGACY_CONFIG_MIGRATION_TOOLS_BY_SENDER,
 ];

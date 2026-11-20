@@ -177,7 +177,8 @@ Replace model IDs with exact names from `ollama list` or
   <Accordion title="Small local model profile">
     Local Ollama models automatically use structured [Tool Search](/tools/tool-search)
     when `tools.toolSearch` is unset. This keeps optional capabilities available
-    while loading their schemas only when needed. Setup does not enable lean mode.
+    while loading their schemas only when needed. Select `openclaw/small` when you
+    also want bounded workspace context and a smaller capability set.
     App, interactive CLI, and non-interactive setup use a 32,768-token runtime
     context, or the model's native window if smaller. The advertised native window
     is retained separately; known cloud routes keep their hosted context.
@@ -219,8 +220,9 @@ Replace model IDs with exact names from `ollama list` or
     Explicit `tools.toolSearch` settings take precedence, including `false`.
     Tool Search does not change Ollama's context or thinking mode. Ollama thinking
     defaults to off; an explicit thinking setting can change that independently.
-    If you previously enabled `localModelLean`, set it to `false` to restore
-    optional tools while retaining automatic Tool Search.
+    Set `agents.defaults.agentProfileId: "openclaw/small"` to use the built-in
+    small-model profile. Select `openclaw/base` to restore the full capability set
+    while retaining automatic Tool Search.
 
     Use `compat.supportsTools: false` only when the model or server reliably
     fails on tool schemas; it disables tool use entirely. For a deliberately
