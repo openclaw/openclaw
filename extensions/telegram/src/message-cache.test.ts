@@ -178,6 +178,37 @@ describe("telegram message cache", () => {
     expect(chain.map((node) => node.messageId)).toEqual(["9"]);
   });
 
+  it("treats the forum topic service link as no reply and stops ancestry before it", async () => {
+    const forum = { id: -1003, type: "supergroup", title: "Forum", is_forum: true };
+    const topicRoot = message(202, "Ada", {
+      chat: forum,
+      message_thread_id: 202,
+      forum_topic_created: { name: "Models", icon_color: 7_322_096 },
+    });
+    const inTopic = (id: number, fields: Record<string, unknown>) =>
+      message(id, "Ada", {
+        chat: forum,
+        message_thread_id: 202,
+        is_topic_message: true,
+        ...fields,
+      });
+    const earlier = botMessage(250, "Earlier answer", {
+      chat: forum,
+      message_thread_id: 202,
+      is_topic_message: true,
+      reply_to_message: topicRoot,
+    });
+
+    expect(
+      await replyChain(inTopic(300, { text: "Plain", reply_to_message: topicRoot }), forum.id),
+    ).toEqual([]);
+    const chain = await replyChain(
+      inTopic(301, { text: "About that", reply_to_message: earlier }),
+      forum.id,
+    );
+    expect(chain.map((node) => node.messageId)).toEqual(["250"]);
+  });
+
   it("persists prompt-context projection provenance across cache restart", async () => {
     const marker = projection("assistant-projection-restart");
     const text = "  indented\nnext  \n";
