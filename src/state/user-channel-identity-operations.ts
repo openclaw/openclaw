@@ -68,7 +68,7 @@ export async function readCanonicalUserChannelIdentityProfileId(
 ): Promise<string | undefined> {
   const reply = await executeExistingOpenClawStateRead(options, {
     type: "userProfiles.channelIdentity.resolve",
-    identity,
+    identity: { ...identity },
   });
   return reply?.linked?.profileId;
 }
