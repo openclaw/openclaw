@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -262,7 +263,7 @@ describe("persisted subagent requester wakes", () => {
       db.value = await reopenOwners();
       expect(currentRun(input).delivery?.status).toBe("suspended");
       const notices = (await loadTranscriptEvents(scope)).filter(
-        (event) => event.type === "custom_message",
+        (event) => isRecord(event) && event.type === "custom_message",
       );
       expect(notices).toHaveLength(1);
       expect(notices[0]).toMatchObject({ customType: "subagent-delivery-delayed", display: true });
@@ -275,7 +276,7 @@ describe("persisted subagent requester wakes", () => {
       db.value = await reopenOwners();
       expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
       const settled = (await loadTranscriptEvents(scope)).filter(
-        (event) => event.type === "custom_message",
+        (event) => isRecord(event) && event.type === "custom_message",
       );
       expect(settled).toHaveLength(delivered ? 1 : 2);
       expect(settled[0]).toEqual(notices[0]);
