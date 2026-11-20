@@ -2,7 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { GatewayProbeServerSummary } from "../gateway/probe.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
-import { projectUpdateRunHistory } from "../infra/update-run-history-projection.js";
+import { projectUpdateRunHistory } from "../infra/update-run-history-report.js";
 import { getUpdateRun, getUpdateRunAsync } from "../infra/update-run-ledger.js";
 import { isAcknowledgedAbandonedUpdateRun } from "../infra/update-run-record.js";
 import {

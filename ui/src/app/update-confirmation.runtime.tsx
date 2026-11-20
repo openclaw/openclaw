@@ -9,7 +9,7 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
 import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
-import { projectUpdateRunHistory } from "../../../src/infra/update-run-history-projection.ts";
+import { resolveUpdateRunServingChange } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -174,7 +174,9 @@ export async function confirmAndStartUpdateRuntime(
         : params.existingServing;
       const failed =
         current.kind === "failed" ||
-        (run !== null && isReportableUpdateRun(run) && !projectUpdateRunHistory(run, serving));
+        (run !== null &&
+          isReportableUpdateRun(run) &&
+          !resolveUpdateRunServingChange(run, serving));
       const showRecovery =
         failed || Boolean(readError) || (current.kind !== "confirm" && statusRead !== null);
       const disconnected = latestProgress?.connected === false;

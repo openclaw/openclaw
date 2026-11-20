@@ -255,8 +255,9 @@ suite.define(() => {
         await gateway.deferNext("update.status", { refreshCheckout: true });
         await button(page, "Retry update").click();
         await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
-        expect(await confirmationDialog(page).count()).toBe(1);
-        expect(await button(page, "Retry update").isDisabled()).toBe(true);
+        const report = page.getByRole("dialog", { name: "Update report", exact: true });
+        expect(await report.count()).toBe(1);
+        expect(await button(report, "Retry update").isDisabled()).toBe(true);
         await gateway.rejectDeferred("update.status", {
           code: "UNAVAILABLE",
           message: "Latest target unavailable.",

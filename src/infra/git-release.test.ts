@@ -6,8 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
-import { withCommandProcessScope } from "../process/exec-spawn.js";
-import * as gatewayOwner from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
   GIT_RELEASE_TRIAL,
@@ -16,14 +14,8 @@ import {
   resolveGitReleaseLauncherForEntrypoint,
   usesGitReleases,
 } from "./git-release-paths.js";
-import {
-  createGitReleaseDirs,
-  publishGitRelease,
-  settleGitReleaseTrial,
-  waitForGitReleaseSuccessor,
-} from "./git-release.js";
+import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
-import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -57,77 +49,6 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
-    describe("waiting for a cooperative restart", () => {
-      const incumbent = {
-        owner: "before",
-        host: os.hostname(),
-        pid: 1234,
-        startedAt: 1,
-        port: 18789,
-        mode: "supervised",
-        supervisor: { kind: "launchd", name: "test-gateway" },
-        state: "live",
-        expired: false,
-      } as const;
-      const options = {
-        serviceEnv: {},
-        gatewayPort: incumbent.port,
-        allowGitReleaseRestartSignal: true,
-      };
-      afterEach(() => {
-        vi.restoreAllMocks();
-        vi.useRealTimers();
-      });
-      it("does not verify the incumbent while the restart is deferred for active work", async () => {
-        vi.useFakeTimers();
-        const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
-        const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-          // An inconclusive process probe during deferral is not a replacement.
-          owner.mockReturnValueOnce({ ...incumbent, state: "unknown" });
-          setTimeout(
-            () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
-            resolveGatewayRestartDeferralTimeoutMs(),
-          );
-          return true;
-        });
-        const verified = vi.fn();
-        const wait = waitForGitReleaseSuccessor(options).then(() => verified(owner()?.pid));
-        await vi.advanceTimersByTimeAsync(90_000);
-        expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
-        expect(verified).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(resolveGatewayRestartDeferralTimeoutMs());
-        await wait;
-        expect(verified).toHaveBeenCalledExactlyOnceWith(2345);
-      });
-      it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
-        vi.useFakeTimers();
-        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
-        const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-        const wait = waitForGitReleaseSuccessor({
-          ...options,
-          allowGitReleaseRestartSignal: false,
-        });
-        await vi.advanceTimersByTimeAsync(35_000);
-        await wait;
-        expect(kill).not.toHaveBeenCalled();
-      });
-      it("honors command-scope cancellation without an explicit update deadline", async () => {
-        vi.useFakeTimers();
-        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
-        const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-        const controller = new AbortController();
-        const wait = withCommandProcessScope(
-          () => waitForGitReleaseSuccessor(options),
-          controller.signal,
-        );
-        const rejection = expect(wait).rejects.toThrow();
-        await vi.advanceTimersByTimeAsync(1_000);
-        controller.abort();
-        await rejection;
-        expect(kill).not.toHaveBeenCalled();
-      });
-    });
-
     it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
       const { prefix } = await setup();
       const root = (await createGitReleaseDirs(prefix)).releaseRoot;

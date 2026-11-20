@@ -158,7 +158,6 @@ export type UpdateServiceRestartParams = {
   originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   shouldRestart: boolean;
   observePackageReplacement?: boolean;
-  allowGitReleaseRestartSignal?: boolean;
   result: UpdateRunResult;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;

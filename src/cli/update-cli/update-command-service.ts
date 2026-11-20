@@ -465,15 +465,15 @@ export async function maybeRestartService(
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Restarting service..."));
   }
-  // Give the serving Gateway time to complete its cooperative restart before verifying.
-  // A native restart from inside its service job (update.run) would end this updater.
+  // A Git release's Gateway notices its link moved and restarts into the new release
+  // itself. A native restart from inside its service job (update.run) would end this updater.
   if (
     preserveDefinition &&
     activation.result.mode === "git" &&
     readPackageReleaseSlotSync(activation.result.root ?? "")
   ) {
     recordPhase("restarting");
-    await waitForGitReleaseSuccessor(activation);
+    await waitForGitReleaseSuccessor(activation.serviceEnv, run?.deadline?.signal);
     assertCurrent();
     const outcome = await verifyRestartedGateway(
       normalizeOptionalString(expectedIdentity?.version),

@@ -1,4 +1,4 @@
-import { projectUpdateRunHistory } from "../../../src/infra/update-run-history-projection.ts";
+import { resolveUpdateRunServingChange } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -87,7 +87,7 @@ export function resolveSidebarUpdateAttention(
   const historical =
     run &&
     context.gateway.snapshot.phase === "connected" &&
-    projectUpdateRunHistory(run, context.gateway.snapshot.hello?.server);
+    resolveUpdateRunServingChange(run, context.gateway.snapshot.hello?.server);
   // A new release is a different action, not a retry of the recorded run. Give each
   // its own row so a dismissal (or a busy campaign) applies only to its owner.
   const separateHistory = historical && (!finishing || campaignPendingHydration);

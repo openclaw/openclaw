@@ -123,6 +123,8 @@ function authText(element: ParentNode) {
 
 async function openPanel(element: ParentNode, trigger: HTMLButtonElement) {
   trigger.click();
+  // The first click loads the panel; its module transform isn't a DOM-readiness deadline.
+  await import("./sidebar-attention-panel.runtime.tsx");
   await waitForFast(() => expect(issues(element, "panel")).not.toBeNull());
 }
 

@@ -39,7 +39,7 @@ import {
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
-import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
+import { projectUpdateRunHistory } from "../../infra/update-run-history-report.js";
 import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
 import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";

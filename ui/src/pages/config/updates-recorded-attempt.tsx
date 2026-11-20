@@ -1,5 +1,5 @@
 import { action, createOptimistic, For, Show } from "solid-js";
-import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
+import { resolveUpdateRunServingChange } from "../../../../src/infra/update-run-history-projection.ts";
 import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
 import {
   classifyUpdateOutcome,
@@ -39,7 +39,7 @@ export function RecordedAttempt(
   const failed = () => {
     const currentRun = run();
     return currentRun
-      ? !projectUpdateRunHistory(currentRun, serving()) &&
+      ? !resolveUpdateRunServingChange(currentRun, serving()) &&
           !isAcknowledgedAbandonedUpdateRun(currentRun) &&
           isReportableUpdateRun(currentRun)
       : !props.update.recordedUpdateAttempt ||
