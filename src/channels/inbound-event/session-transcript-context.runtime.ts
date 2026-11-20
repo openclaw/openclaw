@@ -56,8 +56,9 @@ function mergeableChatWindowEntries(ctx: FinalizedMsgContext) {
  * A platform-selected recent window keeps its own rows, except rows the model
  * already answered as user turns of this session: the conversation (and a
  * native runtime thread fed by it) holds them, so quoting them again on every
- * later turn only duplicates context. Only completed answers cover the preceding
- * request. Changed platform text and requests with incomplete output stay eligible.
+ * later turn only duplicates context. Completed answers cover their admitted run
+ * inputs, or the preceding request when run identity is unavailable. Changed
+ * platform text and requests with incomplete output stay eligible.
  */
 async function omitAnsweredRecentHistory(params: {
   agentId: string;
@@ -81,20 +82,33 @@ async function omitAnsweredRecentHistory(params: {
     limit: candidates * 2,
     includeMessageToolSourceReplies: true,
   });
-  // A reply proves only the user row right before it; earlier rows in the same gap
-  // (a failed turn, or collected extras) stay, since a duplicate beats lost context.
+  // Accepted steering belongs to the completed run even with intervening user rows.
+  // Without that identity, retain the conservative nearest-user fallback: an
+  // unrelated earlier request must not disappear merely because a later one finished.
   const answered = new Map<string, string>();
+  const completedRuns = new Set<string>();
   let replied = false;
+  let unidentifiedReply = false;
   for (let index = turns.length - 1; index >= 0; index--) {
     const turn = turns[index]!;
     if (turn.role === "assistant") {
       replied ||= turn.isCompletedAnswer === true;
+      if (turn.isCompletedAnswer && turn.runId) {
+        completedRuns.add(turn.runId);
+      }
+      unidentifiedReply ||= turn.isCompletedAnswer === true && !turn.runId;
       continue;
     }
-    if (replied && turn.messageId && !answered.has(turn.messageId)) {
+    const runId = turn.steerTargetRunId ?? turn.runId;
+    if (
+      ((replied && (!runId || unidentifiedReply)) || (runId && completedRuns.has(runId))) &&
+      turn.messageId &&
+      !answered.has(turn.messageId)
+    ) {
       answered.set(turn.messageId, turn.text);
     }
     replied = false;
+    unidentifiedReply = false;
   }
   if (answered.size > 0) {
     params.ctx.InboundHistory = history.filter(
