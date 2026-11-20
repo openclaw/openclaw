@@ -3,7 +3,8 @@ import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
-import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
+import { GIT_RELEASE_LAUNCHER, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
@@ -47,7 +48,8 @@ import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 /**
  * The installer's `openclaw` wrapper for a checkout: retired after a switch to a package,
  * or pointed at the launcher beside `replacementRoot` (the release link) once a Git install runs
- * from releases. `previousRoot` is the checkout the installer wrote the wrapper for.
+ * from releases. `previousRoot` is the checkout the installer wrote the wrapper for; a wrapper an
+ * earlier Git update pointed at this installation's launcher is recognized too.
  */
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -60,7 +62,10 @@ export async function retireStandaloneGitWrapper(params: {
   const wrapperName = platform === "win32" ? "openclaw.cmd" : "openclaw";
   const searchDirs = params.searchDirs ?? (process.env.PATH ?? "").split(path.delimiter);
   const pathApi = platform === "win32" ? path.win32 : path;
-  const expectedEntries = [pathApi.join(params.previousRoot, "dist", "entry.js")];
+  const expectedEntries = [
+    pathApi.join(params.previousRoot, "dist", "entry.js"),
+    pathApi.join(resolveGitReleasePrefix(), GIT_RELEASE_LAUNCHER),
+  ];
   const seen = new Set<string>();
 
   for (const directory of searchDirs) {
@@ -448,8 +453,11 @@ export async function updateGitInstall(params: {
     // `openclaw` on PATH resolves through the npm package path or the installer's wrapper, both
     // written for the checkout; they now run the release. A release-driven update (the Control
     // UI, or `openclaw` started from a release) names the release link as its root, so the
-    // checkout comes from the release's Git common directory.
-    const checkoutRoot = await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout);
+    // checkout comes from the release's Git common directory: the main repository, so PATH
+    // entries written for a linked-worktree checkout are matched only from that checkout.
+    const checkoutRoot = readPackageReleaseSlotSync(gitRoot)
+      ? await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout)
+      : gitRoot;
     const packageRoot =
       installTarget?.packageRoot ??
       (await findGlobalPackageLinkedTo(checkoutRoot, effectiveTimeout));

@@ -147,6 +147,7 @@ describe("retireStandaloneGitWrapper", () => {
       { mode: 0o755 },
     );
     const prefix = path.join(base, "state", "git-install");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(base, "state"));
     const release = async (name: string) => {
       const { releaseRoot } = await createGitReleaseDirs(prefix);
       await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
@@ -182,6 +183,13 @@ describe("retireStandaloneGitWrapper", () => {
     expect(run("--", "gateway", "run")).toBe("new index.js\n");
     expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
     expect(run("--version")).toBe("new entry.js\n");
+
+    // A later switch back to npm retires the wrapper this install's launcher now runs.
+    await expect(
+      retireStandaloneGitWrapper({ previousRoot: checkout, searchDirs: [base] }),
+    ).resolves.toEqual({});
+    await expect(fs.access(wrapper)).rejects.toThrow();
+    vi.unstubAllEnvs();
   });
 });
 
