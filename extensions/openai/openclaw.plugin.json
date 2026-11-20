@@ -580,7 +580,7 @@
       "capabilities": ["image", "audio"],
       "defaultModels": {
         "image": "gpt-6-astra",
-        "audio": "gpt-4o-transcribe"
+        "audio": "gpt-transcribe"
       },
       "autoPriority": {
         "image": 20,

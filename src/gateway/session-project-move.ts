@@ -17,15 +17,10 @@ import { resolveSessionProjectRootForRecord } from "./session-project-source.js"
 import { isSessionOwnRequester } from "./session-sharing-policy.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { describeSessionWorkspaceBlocker } from "./session-work-blocker.js";
-import {
-  deleteCarryRef,
-  importCarriedWork,
-  type CarrySource,
-  type ImportedWork,
-} from "./session-workspace-carry.js";
+import { deleteCarryRef, importCarriedWork, type CarrySource } from "./session-workspace-carry.js";
 
 /** Who asks: the operator driving the run, or the Gateway itself for owner runs. */
-export type SessionProjectRequester =
+type SessionProjectRequester =
   | { profileId: string | undefined; scopes: readonly string[] }
   | undefined;
 
@@ -148,16 +143,17 @@ export async function moveSessionIntoProject(params: {
   }
   // Earlier messages keep opening the files they named in the original workspace.
   const oldFiles = await prepareSessionFileWorkspace(cfg, target.agentId, target.sessionKey, entry);
-  const facts = await readSessionTranscriptAnchorsAsync(
+  const { watermark } = await readSessionTranscriptAnchorsAsync(
     { ...target, sessionId: entry.sessionId },
     { entryIds: [], includeWatermark: true },
     signal,
   );
-  if (!oldFiles.root || !facts.watermark) {
+  const fileRoot = oldFiles.root;
+  if (!fileRoot || !watermark) {
     throw new Error("The conversation's earlier files are unavailable; retry the move.");
   }
   assertCurrent();
-  const carried: ImportedWork | undefined = params.checkout
+  const carried = params.checkout
     ? await importCarriedWork({
         source: params.carrySource,
         checkout: params.checkout,
@@ -186,8 +182,8 @@ export async function moveSessionIntoProject(params: {
           ...(carried ? { carried: { ref: carried.refName, work: carried.work } } : {}),
           prior: {
             workspaceDir,
-            fileRoot: oldFiles.root!,
-            through: facts.watermark!,
+            fileRoot,
+            through: watermark,
           },
         },
       };

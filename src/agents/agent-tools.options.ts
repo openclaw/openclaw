@@ -80,10 +80,7 @@ export type OpenClawCodingToolsOptions = {
   modelCompat?: ModelCompatConfig;
   /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
   suppressManagedWebSearch?: boolean;
-  /**
-   * Auth mode for the current provider. We only need this for Anthropic OAuth
-   * tool-name blocking quirks.
-   */
+  /** Compatibility no-op; tool selection does not use model auth mode. */
   modelAuthMode?: ModelAuthMode;
   /** Normalized conversation id exposed to tool hooks. Defaults to currentChannelId. */
   hookChannelId?: string;

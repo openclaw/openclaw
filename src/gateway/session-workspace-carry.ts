@@ -12,7 +12,7 @@ export type CarrySource =
   | { kind: "host"; workspaceDir: string };
 
 /** A checkout's work, held in the project repository under a private ref until it is opened. */
-export type ImportedWork = {
+type ImportedWork = {
   refName: string;
   /** The checkout's own commit; the new worktree branch starts here. */
   commit: string;
@@ -282,8 +282,7 @@ export async function applyUnsavedWork(work: string, worktreePath: string) {
   );
 }
 
-// Lists Git checkouts one or two folders deep, as NUL-separated records:
-// path, HEAD, origin URL, HEAD subject, unsaved path count.
+// Lists Git checkouts one or two folders deep as NUL-separated path and origin URL pairs.
 const SANDBOX_LIST = String.raw`set -u
 export GIT_NO_LAZY_FETCH=1 GIT_NO_REPLACE_OBJECTS=1 GIT_TERMINAL_PROMPT=0
 git() { command git -c core.hooksPath=/dev/null -c core.fsmonitor=false "$@"; }
@@ -298,7 +297,7 @@ done
 `;
 
 /** A folder with a commit to carry, and the origin that matches it to a project. */
-export type CarryCheckout = { path: string; originUrl: string };
+type CarryCheckout = { path: string; originUrl: string };
 
 const MAX_LISTED_CHECKOUTS = 32;
 
