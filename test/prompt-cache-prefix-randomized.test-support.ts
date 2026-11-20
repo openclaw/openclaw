@@ -574,7 +574,7 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
                     );
                     return (
                       toolNames(request.tools).includes("web_fetch") ||
-                      /- web_fetch \(/.test(directory)
+                      directory.includes("- web_fetch (")
                     );
                   }),
                 `step ${step} toolsChanged`,
