@@ -564,13 +564,20 @@ describe("ChatGPT token-sharing authorization", () => {
   });
 
   it.each([
-    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED" }),
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
     new TypeError("fetch failed", {
       cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
         code: "ECONNREFUSED",
+        syscall: "connect",
       }),
     }),
-    Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), { code: "ENOTFOUND" }),
+    Object.assign(new Error("getaddrinfo ENOTFOUND auth.openai.com"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+    }),
   ])("marks provably undispatched refresh failures as not-attempted: %s", async (failure) => {
     const credential = await loginCredential();
     request.mockClear();

@@ -279,14 +279,24 @@ describe("xAI OAuth", () => {
   });
 
   it.each([
-    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED" }),
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
     new TypeError("fetch failed", {
       cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
         code: "ECONNREFUSED",
+        syscall: "connect",
       }),
     }),
-    Object.assign(new Error("getaddrinfo ENOTFOUND auth.x.ai"), { code: "ENOTFOUND" }),
-    Object.assign(new Error("getaddrinfo EAI_AGAIN auth.x.ai"), { code: "EAI_AGAIN" }),
+    Object.assign(new Error("getaddrinfo ENOTFOUND auth.x.ai"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+    }),
+    Object.assign(new Error("getaddrinfo EAI_AGAIN auth.x.ai"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+    }),
   ])("marks provably undispatched refresh failures as not-attempted: %s", async (failure) => {
     fetchImpl.mockRejectedValueOnce(failure);
     const error = await refresh().catch((cause: unknown) => cause);
@@ -314,6 +324,7 @@ describe("xAI OAuth", () => {
       .mockRejectedValueOnce(
         Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
           code: "ECONNREFUSED",
+          syscall: "connect",
         }),
       );
     const error = await refresh().catch((cause: unknown) => cause);

@@ -1,5 +1,6 @@
 // Provider OAuth runtime tests cover PKCE redirects, callback parsing, and token exchange helpers.
 import { describe, expect, it } from "vitest";
+import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
   createNotAttemptedOAuthRefreshError,
   generateOAuthState,
@@ -73,15 +74,25 @@ describe("provider OAuth runtime", () => {
   });
 
   it.each([
-    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), { code: "ECONNREFUSED" }),
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
     new TypeError("fetch failed", {
       cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
         code: "ECONNREFUSED",
+        syscall: "connect",
       }),
     }),
-    Object.assign(new Error("getaddrinfo ENOTFOUND auth.x.ai"), { code: "ENOTFOUND" }),
-    Object.assign(new Error("getaddrinfo EAI_AGAIN auth.x.ai"), { code: "EAI_AGAIN" }),
-    Object.assign(new Error("Blocked private network"), { name: "SsrFBlockedError" }),
+    Object.assign(new Error("getaddrinfo ENOTFOUND auth.x.ai"), {
+      code: "ENOTFOUND",
+      syscall: "getaddrinfo",
+    }),
+    Object.assign(new Error("getaddrinfo EAI_AGAIN auth.x.ai"), {
+      code: "EAI_AGAIN",
+      syscall: "getaddrinfo",
+    }),
+    new SsrFBlockedError("Blocked private network"),
   ])("classifies provably undispatched refresh failures as not-attempted: %s", (failure) => {
     const error = createNotAttemptedOAuthRefreshError("xAI OAuth refresh", failure);
     expect(error).toMatchObject({
@@ -99,6 +110,15 @@ describe("provider OAuth runtime", () => {
   it.each([
     Object.assign(new Error("reset before headers"), { code: "ECONNRESET" }),
     Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" }),
+    new TypeError("fetch failed", {
+      cause: new AggregateError([
+        Object.assign(new Error("connect refused"), {
+          code: "ECONNREFUSED",
+          syscall: "connect",
+        }),
+        Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" }),
+      ]),
+    }),
     new Error("unknown provider failure"),
     Object.assign(new Error("aborted"), { name: "AbortError" }),
   ])("leaves ambiguous refresh transport failures unclassified: %s", (failure) => {
