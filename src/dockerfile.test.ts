@@ -252,9 +252,13 @@ describe("Dockerfile", () => {
     expect(slice).toContain('[ "$docker_gpg_pub_count" != "1" ]');
   });
 
-  it("pre-creates named-volume mount points before switching to the node user", async () => {
+  it("keeps the home traversable for custom UIDs and named-volume mount points private", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const homeTraversalIndex = dockerfile.indexOf(
+      "RUN chmod 0755 /home/node" + String.fromCharCode(10),
+      runtimeStageIndex,
+    );
     const parentConfigDirIndex = dockerfile.indexOf(
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
@@ -266,6 +270,8 @@ describe("Dockerfile", () => {
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
 
     expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(homeTraversalIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(homeTraversalIndex).toBeLessThan(parentConfigDirIndex);
     // Regression: /home/node/.config parent must be created with node ownership
     // before the leaf .config/openclaw dir (issue #85968).
     expect(parentConfigDirIndex).toBeGreaterThan(-1);
@@ -275,6 +281,7 @@ describe("Dockerfile", () => {
     expect(parentConfigDirIndex).toBeLessThan(stateDirIndex);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
+    expect(dockerfile).not.toMatch(/chmod\s+(?:-R\s+0755|0755\s+-R)\s+\/home\/node/u);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
     expect(dockerfile).toContain("/home/node/.openclaw/workspace");
     expect(dockerfile).toContain("/home/node/.config/openclaw");
