@@ -138,7 +138,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     session: GatewaySessionRow | undefined,
   ): void {
     const signature = session
-      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}`
+      ? `${this.connectionGeneration}\0${agentId}\0${session.key}\0${session.sessionId ?? ""}\0${session.visibility ?? "shared"}\0${session.sharingRole ?? "owner"}\0${session.invitedAccess ?? ""}`
       : "";
     if (signature === this.sessionSuggestionTargetSignature) {
       return;
@@ -183,7 +183,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (
       !scope ||
       !row ||
-      !this.hasMultipleIdentities() ||
+      (!this.hasMultipleIdentities() && row.invitedAccess === undefined) ||
       !isGatewayMethodAdvertised(scope.context.gateway.snapshot, "session.suggestions.list")
     ) {
       this.collaboration.suggestions = [];
@@ -222,7 +222,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
   }
 
   protected handleSessionSuggestionEvent(event: SessionSuggestionEvent): void {
-    if (!this.hasMultipleIdentities() || !this.suggestionMatchesCurrentSession(event.suggestion)) {
+    if (
+      (!this.hasMultipleIdentities() &&
+        (!this.state || selectedChatSessionRow(this.state)?.invitedAccess === undefined)) ||
+      !this.suggestionMatchesCurrentSession(event.suggestion)
+    ) {
       return;
     }
     const shouldRefresh =
@@ -262,7 +266,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       !scope ||
       !text.trim() ||
       this.collaboration.addOperation ||
-      !this.hasMultipleIdentities()
+      (!this.hasMultipleIdentities() &&
+        selectedChatSessionRow(scope.state)?.invitedAccess !== "suggest")
     ) {
       return;
     }

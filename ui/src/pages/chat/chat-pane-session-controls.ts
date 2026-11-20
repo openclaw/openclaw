@@ -406,6 +406,11 @@ export function renderChatPaneComposerControls(params: {
     },
     permissionPicker: {
       canSelectFull,
+      participant:
+        selectedSession?.invitedAccess === "send" &&
+        selectedSession.sharingRole !== "owner" &&
+        selectedSession.sharingRole !== "admin",
+      setBy: selectedSession?.createdActor?.label,
       defaultMode: agents
         ? agents.agents.find((agent) => agent.id === resolveChatAgentId(state))
             ?.defaultPermissionMode
@@ -420,7 +425,13 @@ export function renderChatPaneComposerControls(params: {
         ? currentChange.nextMode
         : permissionSnapshot
           ? permissionSnapshot.permissionMode
-          : selectedSession?.permissionMode,
+          : selectedSession?.invitedAccess === "send" &&
+              selectedSession.sharingRole !== "owner" &&
+              selectedSession.sharingRole !== "admin"
+            ? selectedSession.permissionMode === "read-only"
+              ? "read-only"
+              : "guarded"
+            : selectedSession?.permissionMode,
       pending: permissionPending,
       onSelect: async (permissionMode) => {
         const activeChange = selection.pending;

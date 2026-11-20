@@ -26,6 +26,7 @@ type MentionEngineOwner = {
   timer: ReturnType<typeof setTimeout> | undefined;
   setState: StoreSetter<MentionMenuState>;
   selectedAvatars: Map<string, string>;
+  selectedInviteOptions: Map<string, NonNullable<MentionPerson["inviteAccessOptions"]>>;
   cancelSearch: () => void;
   update: (draft: MentionMenuState, input: MentionInput, intent?: MentionIntent) => void;
   close: (draft: MentionMenuState) => void;
@@ -226,6 +227,9 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
       }),
       {
         profileId: person.profileId,
+        ...(owner.directory?.inviteAccessAvailable && person.inviteAccessOptions?.length
+          ? { access: "read" as const }
+          : {}),
         start: target.start + prefix.length,
         end: target.start + prefix.length + label.length,
       },
@@ -241,6 +245,11 @@ export function createHumanMentionEngine(owner: MentionEngineOwner) {
       owner.selectedAvatars.set(person.profileId, person.avatarUrl);
     } else {
       owner.selectedAvatars.delete(person.profileId);
+    }
+    if (owner.directory?.inviteAccessAvailable && person.inviteAccessOptions?.length) {
+      owner.selectedInviteOptions.set(person.profileId, person.inviteAccessOptions);
+    } else {
+      owner.selectedInviteOptions.delete(person.profileId);
     }
     host.commitDraft(next, mentions);
     const caret = target.start + replacement.length;

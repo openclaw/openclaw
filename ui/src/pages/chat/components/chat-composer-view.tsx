@@ -34,7 +34,12 @@ import { createComposerMobileInteraction } from "./chat-composer-mobile-interact
 import { ChatComposerPluginContributions } from "./chat-composer-plugin-contributions.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
+import {
+  ComposerQueue,
+  ComposerInputScope,
+  ComposerProgress,
+  ComposerInviteAccess,
+} from "./chat-composer-regions.tsx";
 import { presentComposerTasks } from "./chat-composer-state.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { ComposerTaskSlot } from "./chat-composer-task-slot.tsx";
@@ -479,6 +484,7 @@ export function renderChatComposerView(
               </ChatLazyBoundary>
             ) : undefined}
             <div class="agent-chat__composer-lede">
+              <ComposerInviteAccess composer={props} context={context()} />
               {props.sessionAdmitted === false ? undefined : (
                 <>
                   <McpAppCatalog

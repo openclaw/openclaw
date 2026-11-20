@@ -1,6 +1,10 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  canSuggestInSession,
+  hasOperatorAdminAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
@@ -275,6 +279,10 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
     const catalogCanContinue = this.history.catalogSession?.canContinue === true;
     const hasWriteScope = hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null);
+    const suggestionViewer = canSuggestInSession(gatewaySnapshot, selectedSession, {
+      multiIdentity,
+      archived: selectedSessionArchived,
+    });
     const composerAccess = catalogKey
       ? hasWriteScope ||
         (catalogKey.catalogId === "beam" &&
@@ -283,15 +291,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
             "beam.owned.continue",
             "operator.sessions.write",
           ))
-      : hasWriteScope || mutationAccess.composeScope.allowed;
-    const suggestionViewer =
-      multiIdentity &&
-      !selectedSessionArchived &&
-      hasWriteScope &&
-      selectedSession?.visibility === "suggest" &&
-      selectedSession.sharingRole === "viewer" &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
-      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
+      : hasWriteScope || mutationAccess.composeScope.allowed || suggestionViewer;
     const nativeConversation = !catalog && !suggestionViewer;
     // Placement progress explains its gate; other gates need a reason or a banner.
     const disabledReason = nativeConversation
@@ -378,7 +378,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
       persistCommentary: state.settings.chatPersistCommentary !== false,
-      // A locally created session can still be preparing its first input.
       loading: catalogKey
         ? this.history.catalogLoading
         : (!state.connected && !state.currentSessionId) ||
@@ -482,6 +481,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               // Separately hydrated session-list metadata must not cancel an active query.
               ownerKey: JSON.stringify([state.connectionEpoch, selfProfileId]),
               params: { sessionKey: state.sessionKey, agentId: currentAgentId },
+              inviteAccessAvailable:
+                isGatewayMethodAdvertised(gatewaySnapshot, "session.members.setAccess") === true,
             }
           : undefined,
       modelCatalog: state.chatModelCatalog,

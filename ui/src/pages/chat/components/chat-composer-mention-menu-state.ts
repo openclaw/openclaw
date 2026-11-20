@@ -11,6 +11,7 @@ export type HumanMentionDirectory = {
   client: GatewayBrowserClient;
   ownerKey: string;
   params: UsersMentionableParams;
+  inviteAccessAvailable?: boolean;
 };
 
 export type HumanMentionMenuHost = {
@@ -96,6 +97,10 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     selectedProfileId: undefined,
   });
   const selectedAvatars = new Map<string, string>();
+  const selectedInviteOptions = new Map<
+    string,
+    NonNullable<MentionPerson["inviteAccessOptions"]>
+  >();
   const selectedAvatarUrls: ReadonlyMap<string, string> = selectedAvatars;
   let latestInput: MentionInput | undefined;
   let engine:
@@ -119,6 +124,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
         },
         setState,
         selectedAvatars,
+        selectedInviteOptions,
         cancelSearch,
         update,
         close,
@@ -132,6 +138,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     return (
       directory?.client === next?.client &&
       directory?.ownerKey === next?.ownerKey &&
+      directory?.inviteAccessAvailable === next?.inviteAccessAvailable &&
       JSON.stringify(directory?.params) === JSON.stringify(next?.params)
     );
   }
@@ -145,6 +152,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     setState(close);
     engine?.clear();
     selectedAvatars.clear();
+    selectedInviteOptions.clear();
     // Each lifetime owns a fresh descriptor, even if a caller reuses A after A → B → A.
     // Old requests must never become current again or retire a replacement query.
     directory = next ? { ...next } : undefined;
@@ -173,6 +181,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     engineImport.dispose();
     engine?.clear();
     selectedAvatars.clear();
+    selectedInviteOptions.clear();
   }
 
   function update(
@@ -320,6 +329,7 @@ export function createHumanMentionMenu(onOpenChange?: (nextOpen: boolean) => voi
     },
     state,
     selectedAvatarUrls,
+    selectedInviteOptions,
     externalAccess,
     syncDirectory,
     update: (input: MentionInput, intent: MentionIntent = "selection") =>

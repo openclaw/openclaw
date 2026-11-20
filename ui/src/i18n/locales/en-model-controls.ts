@@ -135,6 +135,8 @@ const enModelControls = {
       },
     },
     permissionControls: {
+      setByCreator: "{mode} · set by {name}",
+      creator: "creator",
       label: "Permissions",
       help: "Choose what the agent can read, edit, and run in this session.",
       default: "Default",
