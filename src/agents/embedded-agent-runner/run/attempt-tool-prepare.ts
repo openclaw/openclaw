@@ -24,6 +24,7 @@ import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
+import { resolveContextSerialization } from "../../context-serialization/resolve.js";
 import { prepareConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
 import { gateBoundTool } from "../../harness/host-bound-tool.js";
@@ -128,6 +129,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     sessionKey: attempt.sessionKey,
     modelSizeClass: resolveProfileModelSizeClass(attempt.model),
   });
+  const contextSerialization = resolveContextSerialization({ resolvedProfile: agentProfile });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
     trigger: attempt.trigger,
@@ -559,6 +561,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       additionalInheritedToolNamesRef,
       agentProfile,
       agentProfilePreserveToolNames,
+      contextSerialization,
       replaySafetyOptions,
       runtimeCapabilityProfile,
       releaseTools,

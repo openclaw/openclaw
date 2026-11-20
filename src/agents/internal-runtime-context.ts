@@ -28,8 +28,11 @@ export const INTERNAL_RUNTIME_CONTEXT_END = RUNTIME_CONTEXT_END_MARKER;
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_BEGIN = "[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]";
 const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]";
 
+/** Header used when a runtime event is surfaced as its own context block. */
+export const RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
+
 /** Notice inserted into runtime-generated context blocks. */
-const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
 export const RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
@@ -83,10 +86,19 @@ export function projectRuntimeContextFragments(fragments: RuntimeContextFragment
 
 export type CurrentInboundPromptContext = {
   text: string;
+  /** Compact projection owned by the context producer. */
+  compactText?: string;
   /** Producer-owned fragments for model projection; text remains the legacy rendering. */
   fragments?: RuntimeContextFragment[];
+  /** Fragments of the compact projection, with instructions kept apart from conversation data. */
+  compactFragments?: RuntimeContextFragment[];
   resumableText?: string;
+  compactResumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";
+  serializationStats?: {
+    removedSessionMessages: number;
+    deduplicatedMessages: number;
+  };
   /** Generated goal blocks owned by inbound-context assembly, never user text. */
   injectedGoalContexts?: string[];
 };

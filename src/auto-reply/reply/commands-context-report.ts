@@ -403,6 +403,17 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
   const detailed = sub === "detail" || sub === "deep";
+  const contextSerializationLine = report.contextSerialization
+    ? [
+        `Context serialization: ${report.contextSerialization.mode} (${report.contextSerialization.source})`,
+        `Inbound context: ${formatInt(report.contextSerialization.serializedChars)} chars from ${formatInt(report.contextSerialization.defaultChars)} default chars; removed ${formatInt(report.contextSerialization.removedSessionMessages)} transcript duplicate(s) and ${formatInt(report.contextSerialization.deduplicatedMessages)} duplicate history item(s)`,
+        ...(report.contextSerialization.providerInputTokens !== undefined
+          ? [
+              `Provider input tokens (turn): ${formatInt(report.contextSerialization.providerInputTokens)}`,
+            ]
+          : []),
+      ]
+    : [];
   const workspaceContextLines = report.workspaceContext
     ? [
         `Agent Profile workspace context: ${formatInt(report.workspaceContext.injectedChars)} / ${formatInt(report.workspaceContext.totalMaxChars)} chars; ${formatInt(report.workspaceContext.truncatedChars)} chars removed`,
@@ -425,6 +436,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     ...workspaceContextLines,
     sandboxLine,
     systemPromptLine,
+    ...contextSerializationLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),
     ...(nativeUnverifiedWarningLines.length ? ["", ...nativeUnverifiedWarningLines] : []),
     "",

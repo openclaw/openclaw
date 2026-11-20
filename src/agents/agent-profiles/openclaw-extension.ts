@@ -1,5 +1,9 @@
 import type { AgentProfileResource } from "agentprofiles";
 import { z } from "zod";
+import {
+  CONTEXT_SERIALIZATION_MODES,
+  type ContextSerialization,
+} from "../../config/context-serialization.js";
 
 const AGENT_PROFILE_EXTENSION_SECTION = "openclaw.ai";
 
@@ -28,6 +32,7 @@ const workspaceContextSchema = z
 
 const openClawAgentProfileExtensionSchema = z
   .object({
+    contextSerialization: z.enum(CONTEXT_SERIALIZATION_MODES).optional(),
     toolProfile: z.literal("compact").optional(),
     prompt: z
       .object({
@@ -42,6 +47,7 @@ export type OpenClawWorkspaceContextSection = z.infer<typeof workspaceContextSec
 export type OpenClawWorkspaceContext = z.infer<typeof workspaceContextSchema>;
 
 export type OpenClawAgentProfileExtension = {
+  contextSerialization?: ContextSerialization;
   toolProfile?: "compact";
   prompt?: {
     workspaceContext?: OpenClawWorkspaceContext;

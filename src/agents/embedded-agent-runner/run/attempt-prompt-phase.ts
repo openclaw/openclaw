@@ -237,6 +237,7 @@ export async function runEmbeddedAttemptPromptPhase(
       isRawModelRun,
       ...(preparedUserTurnMessage ? { preparedUserTurnMessage } : {}),
       sessionAgentId,
+      contextSerialization: prepared.toolBase?.contextSerialization,
       ...(systemPromptReport ? { systemPromptReport } : {}),
       systemPromptText,
       toolResultPromptProjectionState,
@@ -247,6 +248,10 @@ export async function runEmbeddedAttemptPromptPhase(
     }
     promptAssembly.assertHostActive?.();
     const { hookMessagesForCurrentPrompt, promptForModel, systemPromptForHook } = promptContext;
+    trajectoryRecorder?.recordEvent(
+      "context.serialization",
+      promptContext.contextSerializationReport,
+    );
     sessionRuntimeState.prePromptMessageCount = promptContext.prePromptMessageCount;
     setCurrentUserTimestampOverride(promptContext.currentUserTimestampOverride);
     const imageResult = await prepareEmbeddedAttemptPromptExecution({

@@ -15,6 +15,7 @@ import { settleCurrentReadPreparations } from "../../shared/current-read-authori
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildCliSessionDriftNote } from "../cli-session-drift.js";
+import type { ResolvedContextSerialization } from "../context-serialization/resolve.js";
 import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
@@ -278,7 +279,11 @@ export async function prepareCliSystemPrompt({
 export function buildCliCurrentPrompt(
   params: Pick<RunCliAgentParams, "currentInboundContext" | "inputProvenance">,
   reusableCliSession: CliReusableSession,
-  notes: { sessionGapContext?: string; privateContext?: boolean } = {},
+  notes: {
+    sessionGapContext?: string;
+    privateContext?: boolean;
+    serialization?: ResolvedContextSerialization;
+  } = {},
 ) {
   const privateContext = notes.privateContext === true;
   let context = params.currentInboundContext;
@@ -291,8 +296,14 @@ export function buildCliCurrentPrompt(
       ? {
           ...context,
           text: [note, context.text].join("\n\n"),
+          ...(context.compactText !== undefined
+            ? { compactText: [note, context.compactText].join("\n\n") }
+            : {}),
           ...(context.resumableText
             ? { resumableText: [note, context.resumableText].join("\n\n") }
+            : {}),
+          ...(context.compactResumableText !== undefined
+            ? { compactResumableText: [note, context.compactResumableText].join("\n\n") }
             : {}),
         }
       : { text: note };
@@ -321,7 +332,12 @@ export function buildCliCurrentPrompt(
         annotateInterSessionPromptText(
           privateContext
             ? prompt
-            : buildCurrentInboundPrompt({ context, prompt, preferResumableText }),
+            : buildCurrentInboundPrompt({
+                context,
+                prompt,
+                preferResumableText,
+                serialization: notes.serialization,
+              }),
           params.inputProvenance,
         ),
         privateContext ? undefined : { prependContext: notes.sessionGapContext },

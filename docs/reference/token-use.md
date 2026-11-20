@@ -357,8 +357,31 @@ If you authenticate Anthropic with OAuth/subscription tokens
 headers while stripping the retired `context-1m-*` beta if it remains in
 older config.
 
+## Context serialization
+
+The selected Agent Profile sets the serialization mode (`default` or `compact`).
+`default` keeps the existing provider-visible representation. `compact` keeps
+required conversation and delivery facts but removes proven duplicate session
+history and shortens current-turn metadata. The built-in `openclaw/small` Agent
+Profile selects `compact`; `openclaw/base` keeps `default`.
+
+`/context detail` shows the selected value, its source, serialized character
+counts, durable-ID removal counts, and provider input tokens when available.
+It does not show raw message content.
+
+The opt-in target-Qwen measurement is:
+
+```bash
+node --import tsx scripts/benchmark-context-serialization.ts
+```
+
+The script builds final OpenAI Chat Completions requests, applies the running
+llama.cpp model's chat template, and counts the resulting tokens with that same
+runtime. It uses synthetic Discord fixtures and does not send a completion.
+
 ## Tips for reducing token pressure
 
+- Select the `openclaw/small` Agent Profile for smaller current-turn channel context.
 - Use `/compact` to summarize long sessions.
 - Trim large tool outputs in your workflows.
 - Lower `agents.defaults.imageMaxDimensionPx` for screenshot-heavy sessions.

@@ -36,6 +36,9 @@ function makeParams(
     storePath?: string;
     agentId?: string;
     currentTurn?: NonNullable<SessionEntry["systemPromptReport"]>["currentTurn"];
+    contextSerialization?: NonNullable<
+      NonNullable<SessionEntry["systemPromptReport"]>["contextSerialization"]
+    >;
     workspaceContext?: NonNullable<
       NonNullable<SessionEntry["systemPromptReport"]>["workspaceContext"]
     >;
@@ -75,6 +78,9 @@ function makeParams(
         sandbox: { mode: "off", sandboxed: false },
         systemPrompt: { chars: 1_000, projectContextChars: 500, nonProjectContextChars: 500 },
         ...(options?.currentTurn ? { currentTurn: options.currentTurn } : {}),
+        ...(options?.contextSerialization
+          ? { contextSerialization: options.contextSerialization }
+          : {}),
         ...(options?.workspaceContext ? { workspaceContext: options.workspaceContext } : {}),
         injectedWorkspaceFiles: [
           {

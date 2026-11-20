@@ -831,6 +831,8 @@ const rootEntries = [
   "scripts/lib/release-plan-child-runner.mjs!",
   "scripts/full-release-publication-observations.mts!",
   "scripts/release-verify-publish.ts!",
+  // Invoked directly by the context serialization benchmark plan.
+  "scripts/benchmark-context-serialization.ts!",
   // Spawned by the agent concurrency benchmark; no static import edge exists.
   "scripts/bench-agent-concurrency-worker.ts!",
   "scripts/bench-sqlite-reliability.ts!",

@@ -17,6 +17,10 @@ import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { formatTelegramCurrentMessageContext } from "./inbound-meta.current-message.js";
 import {
+  buildInboundHistoryMediaPromptPayload,
+  buildLocationContextPayload,
+} from "./inbound-meta.payloads.js";
+import {
   MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS,
   normalizePromptMetadataString,
   normalizePromptMetadataStringArray,
@@ -102,17 +106,27 @@ export function refreshActiveGoalContext(
     injectedGoals,
     activeGoalContext,
   );
+  const refreshVariant = (text: string | undefined) =>
+    text === undefined
+      ? undefined
+      : refreshActiveGoalContextText(text, injectedGoals, activeGoalContext);
+  const refreshedCompactText = refreshVariant(context.compactText);
   const refreshedResumableText = context.resumableText
     ? refreshActiveGoalContextText(context.resumableText, injectedGoals, activeGoalContext)
     : undefined;
+  const refreshedCompactResumableText = refreshVariant(context.compactResumableText);
   if (!refreshedText) {
     return undefined;
   }
   return {
     ...context,
     text: refreshedText,
+    ...(refreshedCompactText !== undefined ? { compactText: refreshedCompactText } : {}),
     ...(refreshedResumableText !== undefined
       ? { resumableText: refreshedResumableText || undefined }
+      : {}),
+    ...(refreshedCompactResumableText !== undefined
+      ? { compactResumableText: refreshedCompactResumableText }
       : {}),
     injectedGoalContexts: activeGoalContext ? [activeGoalContext] : undefined,
   };
@@ -296,6 +310,209 @@ export function buildInboundMetaSystemPrompt(
   return deliveryFormat ? `${messageContext}\n${deliveryFormat}` : messageContext;
 }
 
+export type CompactInboundContextProjection = {
+  text: string;
+  /** The same projection without the history a resumed turn already holds. */
+  resumableText?: string;
+  removedSessionMessages: number;
+  deduplicatedMessages: number;
+};
+
+function readCompactMessageId(value: unknown): string | undefined {
+  return isRecord(value) ? sanitizeTranscriptText(value["message_id"]) : undefined;
+}
+
+function formatCompactHistoryMessage(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = readCompactMessageId(value);
+  const sender = sanitizeTranscriptText(value["sender"]) ?? "unknown sender";
+  const replyToId = sanitizeTranscriptText(value["reply_to_id"]);
+  const body = sanitizeTranscriptText(value["body"], "body");
+  const mediaType = sanitizeTranscriptText(value["media_type"]);
+  const mediaPath =
+    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptText(value["media_ref"]);
+  const media = mediaType ? `[${mediaType}${mediaPath ? ` ${mediaPath}` : ""}]` : undefined;
+  const content = [body, media].filter(Boolean).join(" ");
+  if (!content) {
+    return undefined;
+  }
+  const prefix = [
+    id ? `#${id}` : undefined,
+    value["is_reply_target"] === true ? "[reply target]" : undefined,
+    replyToId ? `->#${replyToId}` : undefined,
+    `${sender}:`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `${prefix} ${content}`;
+}
+
+/** Builds the allowlisted inbound context used by compact context serialization. */
+export function buildCompactInboundUserContextPrefix(
+  ctx: TemplateContext,
+  sessionEntry?: SessionEntry,
+): CompactInboundContextProjection {
+  const blocks: string[] = [];
+  const chatType = normalizeChatType(ctx.ChatType);
+  const isDirect = !chatType || chatType === "direct";
+  const messageId =
+    normalizePromptMetadataString(ctx.MessageSid) ??
+    normalizePromptMetadataString(ctx.MessageSidFull);
+  const senderName =
+    normalizePromptMetadataString(ctx.SenderName) ??
+    normalizePromptMetadataString(ctx.SenderUsername);
+  const senderId = normalizePromptMetadataString(ctx.SenderId);
+  const requester = getRequesterProfile(ctx);
+  const compactFacts = {
+    // Host tools tell the model to pass requester_profile.id (assign_owner, steering).
+    requester_profile: requester
+      ? { id: requester.id, display_name: sanitizeTranscriptText(requester.displayName) }
+      : undefined,
+    message_id: messageId,
+    sender: !isDirect
+      ? {
+          name: senderName,
+          id: senderId,
+          is_bot: ctx.SenderIsBot === true ? true : undefined,
+        }
+      : undefined,
+    reply_to_id: normalizePromptMetadataString(ctx.ReplyToId),
+    thread_id:
+      ctx.MessageThreadId != null
+        ? normalizePromptMetadataString(String(ctx.MessageThreadId))
+        : undefined,
+    thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+    was_mentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
+  };
+  if (Object.values(compactFacts).some((value) => value !== undefined)) {
+    blocks.push(`Context: ${JSON.stringify(compactFacts)}`);
+  }
+
+  const replyBody = sanitizeTranscriptText(ctx.ReplyToBody, "body");
+  const replySender = normalizePromptMetadataString(ctx.ReplyToSender);
+  if (replyBody || replySender) {
+    blocks.push(
+      `Reply target: ${JSON.stringify({
+        sender: replySender,
+        body: replyBody,
+        is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
+      })}`,
+    );
+  }
+
+  const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
+  if (threadStarterBody) {
+    blocks.push(`Thread starter: ${JSON.stringify({ body: threadStarterBody })}`);
+  }
+
+  const forwardedFrom = normalizePromptMetadataString(ctx.ForwardedFrom);
+  if (forwardedFrom) {
+    blocks.push(
+      `Forwarded: ${JSON.stringify({
+        from: forwardedFrom,
+        type: normalizePromptMetadataString(ctx.ForwardedFromType),
+        username: normalizePromptMetadataString(ctx.ForwardedFromUsername),
+        title: normalizePromptMetadataString(ctx.ForwardedFromTitle),
+      })}`,
+    );
+  }
+
+  const location = buildLocationContextPayload(ctx);
+  if (location) {
+    blocks.push(`Location: ${JSON.stringify(location)}`);
+  }
+
+  const seenMessageIds = new Set<string>();
+  const historyLines: string[] = [];
+  let removedSessionMessages = 0;
+  let deduplicatedMessages = 0;
+  const addHistoryMessage = (value: unknown) => {
+    const id = readCompactMessageId(value);
+    if (id?.startsWith("session:")) {
+      removedSessionMessages += 1;
+      return;
+    }
+    if (id && seenMessageIds.has(id)) {
+      deduplicatedMessages += 1;
+      return;
+    }
+    const line = formatCompactHistoryMessage(value);
+    if (!line) {
+      return;
+    }
+    if (id) {
+      seenMessageIds.add(id);
+    }
+    historyLines.push(line);
+  };
+
+  for (const entry of ctx.ChannelStructuredContext ?? []) {
+    if (isChatWindowStructuredContext(entry)) {
+      for (const message of Array.isArray(entry.payload["messages"])
+        ? entry.payload["messages"]
+        : []) {
+        addHistoryMessage(message);
+      }
+      continue;
+    }
+    blocks.push(
+      formatContextJsonBlock(`${sanitizeTranscriptText(entry.label) ?? "Channel context"}:`, {
+        type: normalizePromptMetadataString(entry.type),
+        payload: entry.payload,
+      }),
+    );
+  }
+
+  for (const entry of selectInboundHistoryContext(ctx).boundedHistory) {
+    addHistoryMessage({
+      message_id: entry.messageId,
+      sender: entry.sender,
+      body: entry.body,
+      media_type:
+        buildInboundHistoryMediaPromptPayload(entry.media)
+          .map((media) => media["content_type"])
+          .filter((value): value is string => typeof value === "string")
+          .join(", ") || undefined,
+    });
+  }
+  const historyBlockIndex = historyLines.length > 0 ? blocks.length : -1;
+  if (historyLines.length > 0) {
+    blocks.push(["History:", ...historyLines].join("\n"));
+  }
+
+  // Like the default context, the goal block and the current-message block stay outside the
+  // marked unit, separated by a blank line, so stripping the marked block never takes user text.
+  const trailingBlocks = [
+    formatActiveGoalContext(sessionEntry),
+    formatTelegramCurrentMessageContext(ctx),
+  ].filter((block): block is string => Boolean(block));
+
+  // One marked header lets every inbound-context stripper find the block. The blocks below it
+  // have no blank lines, so a stripper removes the header and the block as one unit.
+  const render = (parts: string[]) =>
+    [
+      parts.some(Boolean)
+        ? [markInboundContextLabel("Context facts:"), ...parts].filter(Boolean).join("\n")
+        : "",
+      ...trailingBlocks,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  return {
+    text: render(blocks),
+    resumableText: render(blocks.filter((_, index) => index !== historyBlockIndex)),
+    removedSessionMessages,
+    deduplicatedMessages,
+  };
+}
+
 /** Builds per-turn context with host-generated structural facts and untrusted human content. */
 export function buildInboundUserContextPrefix(
   ctx: TemplateContext,
@@ -471,20 +688,8 @@ export function buildInboundUserContextPrefix(
     appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
-  const locationContext = {
-    latitude: ctx.LocationLat,
-    longitude: ctx.LocationLon,
-    accuracy_m:
-      ctx.LocationAccuracy !== undefined && Number.isFinite(ctx.LocationAccuracy)
-        ? ctx.LocationAccuracy
-        : undefined,
-    source: normalizePromptMetadataString(ctx.LocationSource),
-    is_live: ctx.LocationIsLive === true ? true : undefined,
-    name: sanitizePromptBody(ctx.LocationName),
-    address: sanitizePromptBody(ctx.LocationAddress),
-    caption: sanitizePromptBody(ctx.LocationCaption),
-  };
-  if (Object.values(locationContext).some((value) => value !== undefined)) {
+  const locationContext = buildLocationContextPayload(ctx);
+  if (locationContext) {
     appendJsonContext("Location:", locationContext);
   }
 

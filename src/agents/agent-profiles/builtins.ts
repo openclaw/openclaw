@@ -40,6 +40,7 @@ export const BUILT_IN_AGENT_PROFILES: readonly BuiltInAgentProfile[] = [
     spec: {
       common: {},
       "openclaw.ai": {
+        contextSerialization: "compact",
         toolProfile: "compact",
         prompt: {
           workspaceContext: {

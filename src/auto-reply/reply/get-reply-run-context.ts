@@ -44,6 +44,11 @@ import { applySessionHints } from "./body.js";
 import { appendChannelPromptContext } from "./channel-prompt-context.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import {
+  buildCompactCurrentInboundFields,
+  buildCompactInboundContext,
+  buildResumableRoomContext,
+} from "./get-reply-run-context.compact.js";
+import {
   buildExecOverridePromptHint,
   finishReplyPreparation,
   hasInboundHistoryBody,
@@ -81,11 +86,6 @@ import { resolveRunTypingPolicy } from "./typing-policy.js";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const ROOM_EVENT_PARTICIPATION_RULE =
   "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking.";
-const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
-  "Conversation context (chronological, selected for current message):",
-  "Chat history since last reply:",
-  "Recent chat history:",
-];
 
 export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const {
@@ -458,6 +458,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   };
   // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
+    compactInboundContext: buildCompactInboundContext({
+      isInternalEvent,
+      sessionCtx: inboundUserContextSessionCtx,
+      sessionEntry: inboundContextSessionEntry,
+      attributionPrompt,
+    }),
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
     inboundUserContext: isInternalEvent
       ? ""
@@ -472,7 +478,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
           .filter(Boolean)
           .join("\n\n"),
   });
-  let { activeGoalContext, inboundUserContext } = buildInboundContextState();
+  let { activeGoalContext, inboundUserContext, compactInboundContext } = buildInboundContextState();
   const refreshInboundContextAfterAdmissionWait = () => {
     if (isInternalEvent) {
       return;
@@ -481,7 +487,7 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       sessionEntryHandle?.getCurrent() ??
       (sessionKey !== undefined ? sessionStore?.[sessionKey] : undefined) ??
       sessionEntry;
-    ({ activeGoalContext, inboundUserContext } = buildInboundContextState());
+    ({ activeGoalContext, inboundUserContext, compactInboundContext } = buildInboundContextState());
   };
   const inboundUserContextPromptJoiner = resolveInboundUserContextPromptJoiner(sessionCtx);
   function formatRoomEventLine(context: TemplateContext, body: string): string {
@@ -546,16 +552,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
   }
 
-  function buildResumableRoomContext(roomContext: string): string {
-    return roomContext
-      .split(/\n{2,}/u)
-      .filter(
-        (block) =>
-          !RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES.some((prefix) => block.startsWith(prefix)),
-      )
-      .join("\n\n");
-  }
-
   const buildReplyPromptEnvelopeBase = () => {
     const isRoomEvent = inboundEventKind === "room_event";
     const normalizedInboundUserContext = inboundUserContext.trim();
@@ -609,6 +605,15 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       !isBareSessionReset && currentInboundContextText
         ? {
             text: currentInboundContextText,
+            ...buildCompactCurrentInboundFields({
+              compactInboundContext,
+              sessionCtx,
+              isRoomEvent,
+              deliveryDirective,
+              roomEventPrompt: ROOM_EVENT_PROMPT,
+              promptJoiner: inboundUserContextPromptJoiner,
+              buildRoomEventContext,
+            }),
             fragments,
             ...(resumableRoomEventContext ? { resumableText: resumableRoomEventContext } : {}),
             promptJoiner: inboundUserContextPromptJoiner,

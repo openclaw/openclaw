@@ -10,6 +10,15 @@ export type SessionSystemPromptReport = {
     id: string;
     selectionSource: string;
   };
+  contextSerialization?: {
+    mode: "default" | "compact";
+    source: "agent-explicit" | "defaults-explicit" | "agent-profile" | "fallback";
+    defaultChars: number;
+    serializedChars: number;
+    removedSessionMessages: number;
+    deduplicatedMessages: number;
+    providerInputTokens?: number;
+  };
   workspaceDir?: string;
   bootstrapMaxChars?: number;
   bootstrapTotalMaxChars?: number;
