@@ -57,6 +57,11 @@ test("folder recents deduplicate normalized nodes without merging different runn
 });
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
+  // Keep public-project eligibility independent of live GitHub and other suites' visibility caches.
+  using visibility = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    expect(input).toBe("https://api.github.com/repos/projects-recents-fixture/registered");
+    return Response.json({ visibility: "public" });
+  });
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   const memoryLocation = {
     agentId: "main",
@@ -65,7 +70,11 @@ test("projects.list returns only the caller's deterministic resolved recents", a
   let releaseCatalog: (() => void) | undefined;
   let projection: SessionRowProjection | undefined;
   try {
-    const repo = await initializeRepository(state.root);
+    const repo = await initializeRepository(
+      state.root,
+      "registered",
+      "https://github.com/projects-recents-fixture/registered.git",
+    );
     const project = await registerProjectRegistry({ path: repo, name: "Registered" });
     const sourceProfile = ensureProfileForEmail("source@example.test");
     const targetProfile = ensureProfileForEmail("target@example.test");
@@ -136,6 +145,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     linkEmail("source@example.test", targetProfile.id);
     releaseCatalog = (await prepareUserProfileCatalog()).release;
     const readResult = await list(["operator.read"]);
+    expect(visibility).toHaveBeenCalledOnce();
     expectRecents(readResult, [
       { kind: "project", projectId: project.id, displayName: "Registered" },
     ]);

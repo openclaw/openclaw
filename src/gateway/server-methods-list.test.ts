@@ -18,7 +18,7 @@ it.each([
     { controlPlaneWrite: true },
   ],
   ["sessions.title.prepare projects.add", "operator.write", { controlPlaneWrite: true }],
-  ["projects.searchRemote", "operator.read", {}],
+  ["projects.searchRemote", "operator.write", {}],
   ["node.runnerInventory.update", "node", { advertise: false }],
   ["mcp.events.list", "operator.read", { since: "2026.10" }],
   ["gateway.restart.preflight", "operator.read", { since: "<=2026.7" }],
