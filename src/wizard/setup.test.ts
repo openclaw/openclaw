@@ -293,6 +293,7 @@ vi.mock("../config/config.js", async (importActual) => {
     DEFAULT_GATEWAY_PORT: 18789,
     createConfigIO,
     readConfigFileSnapshot,
+    loadConfig: actual.loadConfig,
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort,
     replaceConfigFile,
@@ -863,10 +864,14 @@ describe("runSetupWizard", () => {
   });
 
   it("persists classic channel setup before hooks and Gateway finalization", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", await makeCaseDir("channel-secret"));
     const beforeConfig = { agents: { defaults: { workspace: "/tmp/workspace" } } };
     const configured = {
       ...beforeConfig,
-      channels: { matrix: { accounts: { ops: { enabled: true } } } },
+      channels: {
+        matrix: { accounts: { ops: { enabled: true } } },
+        telegram: { botToken: "onboard-fixture-token" },
+      },
     } satisfies OpenClawConfig;
     const hook = vi.fn();
     const isConfiguredWrite = (value: OpenClawConfig) =>
@@ -883,10 +888,16 @@ describe("runSetupWizard", () => {
       isConfiguredWrite(params.nextConfig),
     );
     expect(configuredWriteIndex).toBeGreaterThanOrEqual(0);
+    const committed = replaceConfigFile.mock.calls[configuredWriteIndex]?.[0].nextConfig;
+    expect(committed?.channels?.telegram?.botToken).toEqual({
+      source: "store",
+      provider: "default",
+      id: expect.any(String),
+    });
     expect(replaceConfigFile.mock.invocationCallOrder[configuredWriteIndex]).toBeLessThan(
       hook.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
-    expect(hook).toHaveBeenCalledWith({ cfg: configured, runtime: expect.any(Object) });
+    expect(hook).toHaveBeenCalledWith({ cfg: committed, runtime: expect.any(Object) });
     expect(hook.mock.invocationCallOrder[0]).toBeLessThan(
       finalizeSetupWizard.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );

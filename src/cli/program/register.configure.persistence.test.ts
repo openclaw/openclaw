@@ -7,6 +7,8 @@ import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-typ
 import { createConfigIO, readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
+import { listSecretStoreEntries, readSecretStoreValue } from "../../secrets/store/secret-store.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as setupShared from "../../wizard/setup.shared.js";
@@ -191,3 +193,77 @@ describe("registered configure persistence", () => {
     );
   });
 });
+
+it.each([false, true])(
+  "registered configure protects channel credentials (read-only: %s)",
+  (readOnly) =>
+    withOpenClawTestState(
+      { layout: "split", env: { OPENCLAW_CONFIG_READONLY: readOnly ? "1" : "0" } },
+      async (state) => {
+        await state.writeConfig({
+          gateway: { mode: "local", port: 19001 },
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace: state.workspaceDir },
+            entries: { main: {} },
+          },
+        });
+        const configureChannel = vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
+          cfg: { ...cfg, channels: { telegram: { botToken: "123456789:configure-token" } } },
+        }));
+        const plugin: ChannelSetupPlugin = {
+          ...createChannelTestPluginBase({ id: "telegram", label: "Fixture channel" }),
+          setupWizard: {
+            channel: "telegram",
+            getStatus: async () => ({ channel: "telegram", configured: false, statusLines: [] }),
+            configure: configureChannel,
+          },
+        };
+        const catalogEntry = { id: "telegram", meta: plugin.meta, install: { npmSpec: "x" } };
+        mocks.listPlugins.mockReturnValue([plugin]);
+        mocks.discover.mockReturnValue({
+          entries: [catalogEntry],
+          installedCatalogEntries: [catalogEntry],
+          installableCatalogEntries: [],
+          installedCatalogById: new Map([["telegram", catalogEntry]]),
+          installableCatalogById: new Map(),
+        });
+        mocks.select.mockResolvedValueOnce("configure");
+        mocks.createClackPrompter.mockReturnValue(
+          createWizardPrompter({}, { selectValues: ["telegram", "__done__"] }),
+        );
+        const program = new Command();
+        registerConfigureCommand(program);
+
+        const before = await fs.readFile(state.configPath, "utf8");
+        const configure = program.parseAsync(["configure", "--section", "channels"], {
+          from: "user",
+        });
+        if (readOnly) {
+          await expect(configure).rejects.toThrow("OPENCLAW_CONFIG_READONLY=1");
+          expect(await fs.readFile(state.configPath, "utf8")).toBe(before);
+          expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+          return;
+        }
+        await configure;
+
+        expect(configureChannel).toHaveBeenCalledOnce();
+        const raw = await fs.readFile(state.configPath, "utf8");
+        const ref = coerceSecretRef(JSON.parse(raw).channels?.telegram?.botToken);
+        expect(ref).toMatchObject({
+          source: "store",
+          id: expect.stringMatching(/^CHANNEL_SETUP_/),
+        });
+        expect(raw).not.toContain("configure-token");
+        expect(
+          await readSecretStoreValue({
+            scope: { kind: "team" },
+            name: expectDefined(ref, "stored channel credential").id,
+          }),
+        ).toEqual({
+          ok: true,
+          value: "123456789:configure-token",
+        });
+      },
+    ),
+);

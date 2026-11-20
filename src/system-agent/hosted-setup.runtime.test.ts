@@ -28,6 +28,7 @@ import {
 import { createInstallAccountPolicyFixture } from "../plugins/test-helpers/install-account-policy.test-support.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { listSecretStoreEntries } from "../secrets/store/secret-store.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
   fakeOverviewLoader,
@@ -613,7 +614,9 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(stopped.text).toContain("configuration changed during channel setup");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        channels: expect.objectContaining({ telegram: { botToken: "123:abc" } }),
+        channels: {
+          telegram: { botToken: { source: "store", provider: "default", id: expect.any(String) } },
+        },
       }),
       expect.objectContaining({
         baseHash: "base-hash",
@@ -681,6 +684,7 @@ describe("SystemAgentChatEngine runtime", () => {
 
     expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
   });
 
   it("rechecks inference authority before hosted channel post-write hooks", async () => {

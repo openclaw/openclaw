@@ -416,6 +416,31 @@ describe("agents add command", () => {
     });
   });
 
+  it("stages channel credentials as protected references in guided agent creation", async () => {
+    await withState("channel-secret", async ({ workspaceDir }) => {
+      setConfigSnapshot({ agents: { entries: { work: {} } } });
+      useWizard([workspaceDir], [true, false]);
+      setupChannels.mockImplementationOnce(async (cfg) => ({
+        ...cfg,
+        channels: { telegram: { botToken: "agent-setup-fixture-token" } },
+      }));
+
+      await agentsAddCommand({ name: "work" }, runtime);
+
+      expect(commitConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceConfig: expect.objectContaining({
+            channels: {
+              telegram: {
+                botToken: { source: "store", provider: "default", id: expect.any(String) },
+              },
+            },
+          }),
+        }),
+      );
+    });
+  });
+
   it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
     setConfigSnapshot({ agents: { entries: { robby: {} } } });
     const prompter = useWizard();

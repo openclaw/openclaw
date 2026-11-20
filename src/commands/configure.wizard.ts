@@ -24,6 +24,7 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
+import { storeChannelSetupCredentials } from "./channels/plugin-config-persistence.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
 import { promptAuthConfig } from "./configure.gateway-auth.js";
@@ -416,9 +417,9 @@ export async function runConfigureWizard(
       if (!hasPendingConfig) {
         return;
       }
-      nextConfig = applyWizardMetadata(nextConfig, {
-        command: "configure",
-        mode: metadataMode,
+      nextConfig = await storeChannelSetupCredentials({
+        cfg: applyWizardMetadata(nextConfig, { command: "configure", mode: metadataMode }),
+        previousConfig: mergeBaseConfig,
       });
 
       const committed = await writeWizardConfigFile(nextConfig, {

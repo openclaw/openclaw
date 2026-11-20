@@ -575,6 +575,8 @@ async function runSetupWizardOnce(
   } else {
     const { listChannelPlugins } = await import("../channels/plugins/index.js");
     const { createChannelSetupHooks, setupChannels } = await import("../flows/channel-setup.js");
+    const { storeChannelSetupCredentials } =
+      await import("../commands/channels/plugin-config-persistence.js");
     const channelSetup = createChannelSetupHooks({ runtime });
     const quickstartAllowFromChannels =
       flow === "quickstart"
@@ -582,6 +584,7 @@ async function runSetupWizardOnce(
             .filter((plugin) => plugin.meta.quickstartAllowFrom)
             .map((plugin) => plugin.id)
         : [];
+    const configBeforeChannels = nextConfig;
     nextConfig = await setupChannels(nextConfig, runtime, prompter, {
       allowIMessageInstall: true,
       allowSignalInstall: true,
@@ -592,6 +595,10 @@ async function runSetupWizardOnce(
       quickstartDefaults: flow === "quickstart",
       secretInputMode: opts.secretInputMode,
       onPostWriteHook: channelSetup.onPostWriteHook,
+    });
+    nextConfig = await storeChannelSetupCredentials({
+      cfg: nextConfig,
+      previousConfig: configBeforeChannels,
     });
     const committed = await commitSetupConfigFile(nextConfig, { allowConfigSizeDrop: false });
     await channelSetup.runPostWriteHooks(committed.path);
