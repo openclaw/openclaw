@@ -54,10 +54,9 @@ type PairingOutcomeLifecycle = Extract<
 >;
 
 // Loopback stays the default; the owner chooses and applies a route on the Gateway host.
-function SecureAccessSetup() {
+function SecureAccessInstructions() {
   return (
-    <div class="device-pair-setup__command device-pair-setup__secure-access">
-      <strong>{t("devices.pairing.secureAccess.title")}</strong>
+    <>
       <p>{t("devices.pairing.secureAccess.intro")}</p>
       <section class="device-pair-setup__command">
         <strong>{t("devices.pairing.secureAccess.tailscaleTitle")}</strong>
@@ -95,7 +94,7 @@ function SecureAccessSetup() {
         <p>{t("devices.pairing.secureAccess.publicHint")}</p>
       </details>
       <p>{t("devices.pairing.secureAccess.afterRestart")}</p>
-    </div>
+    </>
   );
 }
 
@@ -201,17 +200,23 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             : "devices.pairing.subtitle",
     );
   const isNodeSetup = () => props.lifecycle.access === "node";
-  // A code is minted for one access level, so the choice only shows while it can still change.
+  const needsSecureAccess = () => {
+    const current = error();
+    return (
+      current?.source === "create" &&
+      current.access !== "node" &&
+      isDevicePairGatewayLoopbackOnlyError(current.error)
+    );
+  };
   const failure = () => {
     const current = error();
     return current?.source === "create"
-      ? isDevicePairGatewayLoopbackOnlyError(current.error)
+      ? needsSecureAccess()
         ? undefined
         : { source: current.source, message: formatUiError(current.error) }
       : current;
   };
-  // No phone can reach a loopback-only Gateway, so the owner gets setup steps instead of the raw error.
-  const needsSecureAccess = () => Boolean(error()) && !failure();
+  // A code is minted for one access level, so the choice only shows while it can still change.
   const showAccessChoices = () =>
     props.lifecycle.phase === "selection" || error()?.source === "create";
   const canSelectAccess = () => !refreshing() && showAccessChoices();
@@ -305,9 +310,21 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 </InlineAlert>
               )}
             </Show>
-            <Show when={needsSecureAccess()}>
-              <SecureAccessSetup />
-            </Show>
+            <div
+              class={
+                needsSecureAccess()
+                  ? "device-pair-setup__command device-pair-setup__secure-access"
+                  : "sr-only"
+              }
+            >
+              {/* Keep the live region mounted so only its title is announced when setup fails. */}
+              <strong aria-live="polite" aria-atomic="true">
+                {needsSecureAccess() ? t("devices.pairing.secureAccess.title") : ""}
+              </strong>
+              <Show when={needsSecureAccess()}>
+                <SecureAccessInstructions />
+              </Show>
+            </div>
             <Show when={setup()}>
               {(current) => {
                 const expired = () => current().expiresAtMs <= props.nowMs;
