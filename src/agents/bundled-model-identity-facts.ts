@@ -13,6 +13,7 @@ import {
  * (endpoint, store, prompt cache, strict tools, tiers) stay with the serving route.
  */
 export type BundledModelIdentityFacts = {
+  reasoning?: boolean;
   compat?: Pick<ModelCompatConfig, "codeMode" | "supportsTemperature">;
   mediaInput?: ModelMediaInputConfig;
   /** Canonical developer lineage the bundled catalog declares for this exact model. */
@@ -53,6 +54,7 @@ export function createBundledModelIdentityFactsResolver(): (
       ...(supportsTemperature !== undefined ? { supportsTemperature } : {}),
     };
     const facts: BundledModelIdentityFacts = {
+      ...(typeof model.reasoning === "boolean" ? { reasoning: model.reasoning } : {}),
       ...(Object.keys(compat).length > 0 ? { compat } : {}),
       ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
       ...(model.family ? { family: model.family } : {}),

@@ -6,7 +6,6 @@ import type {
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
-  createDeepSeekV4OpenAICompatibleThinkingWrapper,
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -17,6 +16,7 @@ import {
 } from "./provider-policy-api.js";
 
 const proThinking = buildProviderStreamFamilyHooks("deepseek-v4-pro-thinking");
+const flashThinking = buildProviderStreamFamilyHooks("deepseek-v4-flash-thinking");
 
 const REASONING_REPLAY_FIELDS = [
   "reasoning_details",
@@ -93,14 +93,12 @@ export function createOpencodeGoWireWrapper(
     model.provider === "opencode-go" && model.id === "kimi-k3"
       ? thinkingOff(model, context, options)
       : payloadStreamFn(model, context, options);
-  const flashStreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-    baseStreamFn: selected,
-    thinkingLevel,
-    shouldPatchModel: (model) =>
-      model.provider === "opencode-go" &&
-      (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4.1-flash"),
-    resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
-  });
+  const flashStream = flashThinking.wrapStreamFn!({ ...ctx, streamFn: selected }) ?? selected;
+  const flashStreamFn: NonNullable<typeof baseStreamFn> = (model, context, options) =>
+    model.provider === "opencode-go" &&
+    (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4.1-flash")
+      ? flashStream(model, context, options)
+      : selected(model, context, options);
   const proStream = proThinking.wrapStreamFn!({ ...ctx, streamFn: flashStreamFn }) ?? selected;
   const deepSeek: NonNullable<typeof baseStreamFn> = (model, context, options) =>
     model.provider === "opencode-go" && model.id === "deepseek-v4-pro"

@@ -140,8 +140,11 @@ function selectedOpenCode(model: ProviderRuntimeModel, sourceApi = model.api) {
 }
 
 // Resolve from catalog authority before dispatch strips metadata or rewrites IDs.
-function resolveOpenCodeProxyStreamFamily(model: ProviderRuntimeModel, sourceApi = model.api) {
-  const provider = selectedOpenCode(model, sourceApi);
+function resolveOpenCodeProxyStreamFamily(
+  provider: ReturnType<typeof selectedOpenCode>,
+  model: ProviderRuntimeModel,
+  sourceApi = model.api,
+) {
   if (provider === "opencode" && sourceApi === "openai-responses") {
     return "opencode-responses";
   }
@@ -152,6 +155,13 @@ function resolveOpenCodeProxyStreamFamily(model: ProviderRuntimeModel, sourceApi
   ) {
     return "deepseek-v4-pro-thinking";
   }
+  if (
+    provider === "opencode-go" &&
+    sourceApi === "openai-completions" &&
+    (model.id === "opencode-go/deepseek-v4-flash" || model.id === "opencode-go/deepseek-v4.1-flash")
+  ) {
+    return "deepseek-v4-flash-thinking";
+  }
   return undefined;
 }
 
@@ -160,11 +170,34 @@ export function wrapOpenCodeProxyStream(
   model: ProviderRuntimeModel,
   underlying: StreamFn,
 ): StreamFn {
-  const family = resolveOpenCodeProxyStreamFamily(model, ctx.sourceApi);
-  return family
+  const provider = selectedOpenCode(model, ctx.sourceApi);
+  const family = resolveOpenCodeProxyStreamFamily(provider, model, ctx.sourceApi);
+  const decorated = family
     ? (buildProviderStreamFamilyHooks(family).wrapStreamFn!({ ...ctx, streamFn: underlying }) ??
-        underlying)
+      underlying)
     : underlying;
+  if (!provider) {
+    return decorated;
+  }
+  return (dispatchModel, context, options) => {
+    // Stored output uses the catalog identity. Only this exact admitted identity
+    // projects to the wire model; foreign history stays subject to native sanitization.
+    const requestContext =
+      dispatchModel.id === model.id
+        ? context
+        : {
+            ...context,
+            messages: context.messages.map((message) =>
+              message.role === "assistant" &&
+              message.provider === model.provider &&
+              message.api === dispatchModel.api &&
+              message.model === model.id
+                ? { ...message, model: dispatchModel.id }
+                : message,
+            ),
+          };
+    return decorated(dispatchModel, requestContext, options);
+  };
 }
 
 export function restoreClawRouterResponseModel(

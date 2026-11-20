@@ -704,9 +704,19 @@ and `web_search` alias policy, restoring tool names and dynamic-record arguments
 in stream events, final results, and replay. Qualified Go Chat routes for
 `deepseek-v4-pro` use the native thinking and replay policy: per-call reasoning
 overrides the configured level, off/none disables thinking, and xhigh/max uses
-max effort while other enabled levels use high effort. Other Go models and APIs
-keep their existing behavior; the bridge does not copy native Messages headers
-or first-event timers.
+max effort while other enabled levels use high effort. The two Flash IDs,
+`deepseek-v4-flash` and `deepseek-v4.1-flash`, share their native policy: low maps
+to low, max to max, and other enabled levels to high. Off/none disables thinking.
+Other Go models and APIs keep their existing behavior; the bridge does not copy
+native Messages headers or first-event timers.
+
+Assistant history from the exact selected catalog model is projected to its wire
+model for that request only. Stored messages, opaque reasoning signatures, and
+foreign provider/API/model history are unchanged. Native transcript checks still
+own replay admission. After a valid offer is selected, an exact bundled model's
+reasoning boolean supplies missing reasoning support, including Qwen's Messages
+route. Explicit catalog effort metadata wins; a native false remains false.
+Unknown IDs and different APIs inherit no such fact.
 
 It adds no model families, prices, limits, or provider
 activation. Google/Gemini and WebSocket OpenCode session transports remain

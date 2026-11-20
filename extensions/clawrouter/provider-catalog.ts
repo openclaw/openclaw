@@ -449,9 +449,10 @@ function buildRoutedModel(
     },
     reasoning:
       supportedReasoningEfforts !== undefined ||
-      /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
-        qualifiedId,
-      ),
+      ((openCode ? identityFacts?.reasoning : undefined) ??
+        /(?:claude-|gemini-|gpt-5|gpt-oss|deepseek-v|reasoner|glm-5|grok-4|minimax-m)/u.test(
+          qualifiedId,
+        )),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(Object.keys(compat).length > 0 ? { compat } : {}),
     ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
