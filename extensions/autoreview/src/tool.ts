@@ -52,6 +52,7 @@ type PreparedPass = {
   max_result_bytes: number;
   admitted_model: boolean;
   engine_timeout_seconds?: number | null;
+  timeout_owner?: string;
 };
 
 const PYTHON = "/usr/bin/python3";
@@ -180,6 +181,7 @@ function readPreparedPass(
         request.passes !== plan.passes ||
         request.model !== plan.model ||
         request.thinking !== plan.thinking ||
+        request.timeout_owner !== plan.timeout_owner ||
         (request.engine_timeout_seconds ?? null) !== (plan.engine_timeout_seconds ?? null))) ||
     typeof request.prompt !== "string" ||
     Buffer.byteLength(request.prompt) !== request.prompt_bytes ||
@@ -388,7 +390,12 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
                   argv.push("--thinking", first.thinking);
                 }
                 if (timeoutSeconds !== null) {
-                  argv.push("--timeout", String(Math.ceil(timeoutSeconds)));
+                  // Updated helpers delegate this limit to the process runner. Preserve
+                  // the native attempt timer for older helpers instead of refusing them.
+                  argv.push(
+                    "--timeout",
+                    first.timeout_owner === "host" ? "0" : String(Math.ceil(timeoutSeconds)),
+                  );
                 }
                 scope.assertCurrent();
                 if (helperSettled.signal.aborted) {
@@ -430,8 +437,12 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
                   const { redactSensitiveText } = await import("openclaw/plugin-sdk/logging-core");
                   scope.assertCurrent();
                   const detail = redactSensitiveText(result.stderr, { mode: "tools" }).slice(-4096);
+                  const failure =
+                    result.termination === "timeout"
+                      ? `Reviewer process timed out after ${timeoutSeconds} seconds`
+                      : "Reviewer command failed";
                   engineFailure =
-                    `Reviewer command failed (exit ${result.code ?? "none"}, ${result.termination}, cleanup ${result.cleanup ?? "unknown"}, output limit ${result.outputLimitExceeded ?? false}, truncated stdout ${result.stdoutTruncatedBytes ?? 0}). ${detail}`.trim();
+                    `${failure} (exit ${result.code ?? "none"}, ${result.termination}, cleanup ${result.cleanup ?? "unknown"}, output limit ${result.outputLimitExceeded ?? false}, truncated stdout ${result.stdoutTruncatedBytes ?? 0}). ${detail}`.trim();
                 }
                 const response = JSON.stringify({
                   run_id: request.run_id,
@@ -447,16 +458,34 @@ export function createAutoReviewTool(context: OpenClawPluginToolContext<2>): Any
                   );
                 }
                 const spool = `${directory}/handoff.${request.run_id}.${pass}.response.json`;
-                const submitted = await python(
-                  submitResponse,
-                  [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
-                  scope.signal,
-                  response,
-                );
-                if (submitted.code !== 0) {
-                  throw new Error(
-                    submitted.stderr || "Auto Review rejected the response submission.",
+                try {
+                  const submitted = await python(
+                    submitResponse,
+                    [skillRoot, helper, "--native-submit", `${directory}/handoff`, spool],
+                    scope.signal,
+                    response,
                   );
+                  if (submitted.code !== 0) {
+                    throw new Error(
+                      submitted.stderr || "Auto Review rejected the response submission.",
+                    );
+                  }
+                } catch (error) {
+                  // The helper owns the outcome; retiring its exchange can reject a late submit.
+                  if (!scope.signal.aborted && helperSettled.signal.aborted) {
+                    return completeResult(await helperRun!, engineFailure);
+                  }
+                  if (!scope.signal.aborted && engineFailure) {
+                    const submissionFailure =
+                      error instanceof Error ? error.message : String(error);
+                    throw new Error(
+                      `${engineFailure}\nResponse submission failed: ${submissionFailure}`,
+                      {
+                        cause: error,
+                      },
+                    );
+                  }
+                  throw error;
                 }
               }
               const completed = await helperRun!;

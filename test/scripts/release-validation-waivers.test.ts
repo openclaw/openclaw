@@ -113,6 +113,90 @@ const stableCauses = [
   "macos-swift finished with failure (selected=true)",
 ];
 const failedJob = { status: "completed", conclusion: "failure" };
+it.each([
+  "checks-ui-e2e-real-gateway (1/2)",
+  "checks-node-compact-large-36 (node)",
+  "checks-node-compact-large-41 (node)",
+])("keeps the November 19 shard waiver candidate-scoped: %s", (name) => {
+  const observedChild = { key: "normalCi", jobs: [{ ...failedJob, id: 1, name }] };
+  const policy = (candidateSha: string) =>
+    evaluateReleaseChildPolicy({
+      child: observedChild,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+  expect(policy("06afb10d3272cc9deaf38ca6a3b7b839d5935638").waivers).toHaveLength(1);
+  expect(policy("0000000000000000000000000000000000000000").waivers).toHaveLength(0);
+});
+
+describe("2026.11.6 observed OpenCode Go availability failure", () => {
+  const candidateSha = "06afb10d3272cc9deaf38ca6a3b7b839d5935638";
+  const leaf = {
+    ...failedJob,
+    id: 135459584818,
+    name: "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenCode Go smoke)",
+  };
+  const aggregate = {
+    ...failedJob,
+    id: 2,
+    name: "Verify release checks",
+    steps: [{ name: "Verify release check results", conclusion: "failure" }],
+  };
+  const observed = {
+    ...failedJob,
+    key: "releaseChecksIndependent",
+    runId: "44494417449",
+    runAttempt: 1,
+    jobs: [leaf, aggregate],
+  };
+
+  it("accepts only the exact candidate across runs and attempts without rewriting failure", () => {
+    for (const execution of [
+      observed,
+      { ...observed, runAttempt: 2 },
+      { ...observed, runId: "44494417450" },
+    ]) {
+      expect(terminalPolicyPass(execution, "2026.11.6", candidateSha)).toBe(true);
+    }
+    expect(observed.conclusion).toBe("failure");
+    expect(observed.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    for (const rejected of [
+      { ...observed, key: "releaseChecksCandidate" },
+      { ...observed, jobs: [] },
+      { ...observed, jobs: [aggregate] },
+      { ...observed, jobs: [...observed.jobs, { ...leaf, name: "Unrelated live failure" }] },
+      ...["cancelled", "timed_out", null].map((conclusion) =>
+        Object.assign({}, observed, { jobs: [{ ...leaf, conclusion }, aggregate] }),
+      ),
+      { ...observed, jobs: [{ ...leaf, status: "in_progress" }, aggregate] },
+    ]) {
+      expect(terminalPolicyPass(rejected, "2026.11.6", candidateSha)).toBe(false);
+    }
+    expect(terminalPolicyPass(observed, "2026.11.7", candidateSha)).toBe(false);
+    expect(terminalPolicyPass(observed, "2026.11.6", "a".repeat(40))).toBe(false);
+  });
+
+  it("retains exact aggregate cause and complete evidence requirements", async () => {
+    const policy = evaluateReleaseChildPolicy({
+      child: observed,
+      targetVersion: "2026.11.6",
+      targetSha: candidateSha,
+    });
+    const cause = "##[error]live_repo_e2e_release_checks ended with failure";
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => cause }),
+    ).resolves.toBeUndefined();
+    for (const log of ["", cause + "\n##[error]artifact integrity failed"]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs: observed.jobs, getJobLog: () => log }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: [leaf], getJobLog: () => cause }),
+    ).rejects.toThrow("missing or incomplete");
+  });
+});
+
 const stableJobs = stableNames.map((name, id) => ({ ...failedJob, id, name }));
 const gate = {
   id: 10,
@@ -977,4 +1061,43 @@ it("binds the repaired 2026.11.6 trajectory exception to its exact candidate and
       child: { ...child, jobs: [{ ...leaf, conclusion: "cancelled" }] },
     }).waivers,
   ).toEqual([]);
+});
+
+it("accepts only the authorized Node23 cleanup failure on its exact candidate", async () => {
+  const leaf = {
+    id: 23,
+    name: "checks-node-compact-large-23 (node)",
+    status: "completed",
+    conclusion: "failure",
+    steps: [{ name: "Run Node test shard", conclusion: "failure" }],
+  };
+  const input = {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    child: { ...child, jobs: [leaf] },
+  };
+  const policy = evaluateReleaseChildPolicy(input);
+  const log = frv11Log({
+    jobName: leaf.name,
+    file: "src/gateway/worker-environments/live-events-settlement.test.ts",
+    title: "worker live event settlement joins writes before RPC acknowledgment (revoked)",
+    assertion:
+      "Error: ENOTEMPTY: directory not empty, rmdir '/tmp/oc-vt-qFaVWf/oc-vt-0XBHte/openclaw-worker-service-2laeTn'",
+  });
+  const verify = (text: string) =>
+    validateReleaseWaiverAggregates({
+      policy,
+      jobs: [
+        leaf,
+        { id: 24, name: "openclaw/ci-gate", status: "completed", conclusion: "success" },
+      ],
+      getJobLog: () => text,
+    });
+  await expect(verify(log)).resolves.toBeUndefined();
+  await expect(verify(log.replace("ENOTEMPTY", "EACCES"))).rejects.toThrow("unwaived");
+  await expect(
+    verify(log + " FAIL other.test.ts > unexpected\nError: unexpected\n"),
+  ).rejects.toThrow("unwaived");
+  await expect(verify(log.slice(0, log.indexOf("[shard:completion]")))).rejects.toThrow("unwaived");
+  expect(evaluateReleaseChildPolicy({ ...input, targetSha: "0".repeat(40) }).waivers).toEqual([]);
 });

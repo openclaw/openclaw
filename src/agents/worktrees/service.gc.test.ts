@@ -787,7 +787,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     const snapshot = await service.remove({ id: removed.id, reason: "test-retention" });
     const snapshotCommit = await git(repo, "rev-parse", snapshot.snapshotRef!);
     const live = await materializeRunOwnedFixture("live-owner", "session", "agent:main:live");
-    const readOwnerState = vi.fn(() => "idle" as const);
+    const readOwnerState = vi.fn(() => "active" as const);
 
     const result = await service.gc({ readOwnerState });
 

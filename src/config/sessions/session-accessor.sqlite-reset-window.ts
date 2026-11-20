@@ -267,7 +267,7 @@ export function readLatestActiveResetBoundary(
   return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
 }
 
-function readLatestActiveBoundaryMetadata(
+export function readLatestActiveBoundaryMetadata(
   projection: CurrentTranscriptProjection,
   scope: BoundaryWindowScope,
   beforeRawSeq?: number,

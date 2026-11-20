@@ -88,7 +88,7 @@ export type SessionRowStore = {
   filename: string;
 };
 
-export type Row = {
+export type Row = Pick<GatewaySessionRow, "hasMessages"> & {
   key: string;
   agentId: string;
   storeTarget: SessionStoreTarget;
@@ -390,6 +390,7 @@ export function renewGeneration(row: Row): Row {
     publishedSource: undefined,
     sharingEntry: undefined,
     materialized: undefined,
+    hasMessages: undefined,
     lastMessagePreview: undefined,
     lastAssistantMessage: undefined,
     fallbackModel: undefined,
@@ -413,7 +414,10 @@ export function ready(row: Row | undefined): row is MaterializedRow {
 
 export function publishTranscriptFields(
   row: MaterializedRow,
-  fields: Pick<Row, "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel">,
+  fields: Pick<
+    Row,
+    "hasMessages" | "lastMessagePreview" | "lastAssistantMessage" | "fallbackModel"
+  >,
   cfg: Inputs["cfg"],
   context: SessionListRowContext,
 ): boolean {
@@ -431,21 +435,19 @@ export function publishTranscriptFields(
     activeModel: fields.fallbackModel ?? null,
   });
   if (
+    row.hasMessages === fields.hasMessages &&
     row.lastMessagePreview === fields.lastMessagePreview &&
     isDeepStrictEqual(row.lastAssistantMessage, fields.lastAssistantMessage) &&
     isDeepStrictEqual(row.fallbackModel, fallbackModel)
   ) {
     return false;
   }
-  Object.assign(row, {
-    lastMessagePreview: fields.lastMessagePreview,
-    lastAssistantMessage: fields.lastAssistantMessage,
-    fallbackModel,
-  });
   const transcript = {
+    hasMessages: fields.hasMessages,
     lastMessagePreview: fields.lastMessagePreview,
     lastAssistantMessage: fields.lastAssistantMessage,
   };
+  Object.assign(row, transcript, { fallbackModel });
   row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
   return true;
 }

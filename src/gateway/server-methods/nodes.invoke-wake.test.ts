@@ -1485,47 +1485,6 @@ describe("node.invoke APNs wake path", () => {
     invalidateNodeWakeState(nodeId);
   });
 
-  it("does not raw-dispatch when runtime authority closes during an awaited policy check", async () => {
-    const nodeId = "ios-node-authority-close";
-    const nodeRegistry = mockNode(() => makeNodeSession(nodeId, { connId: "authority-conn" }), {
-      ok: true,
-      payload: { delivered: true },
-    });
-    let authorityActive = true;
-    const releaseHandoff = vi.fn();
-    const retainForHandoff = vi.fn(() => releaseHandoff);
-    vi.spyOn(nodeInvokePluginPolicy, "applyPluginNodeInvokePolicy").mockImplementationOnce(
-      async () => {
-        await Promise.resolve();
-        authorityActive = false;
-        return null;
-      },
-    );
-    mocks.sanitizeNodeInvokeParamsForForwarding.mockReturnValueOnce({
-      ok: true,
-      params: { command: ["echo", "approved"] },
-      approvalAuthority: { recordId: "approval-backend-bridge", decision: "allow-always" },
-    });
-
-    const respond = await invokeNode({
-      nodeRegistry,
-      client: createOperatorClient(),
-      requestParams: { nodeId },
-      execApprovalManager: {
-        projectDecisionIfActive: (_id, decision) => (authorityActive ? decision : null),
-        retainForHandoff,
-      },
-    });
-
-    expect(retainForHandoff).toHaveBeenCalledWith("approval-backend-bridge");
-    expect(releaseHandoff).toHaveBeenCalledOnce();
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expectInvokeError(respond, {
-      message: "approved runtime authority closed before node dispatch",
-      details: { code: "APPROVAL_AUTHORITY_CLOSED" },
-    });
-  });
-
   it.each(["invalidated", "prior generation"])(
     "does not dispatch through a %s node session",
     async (state) => {

@@ -15,6 +15,10 @@ import {
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import { resolveInstalledNativeTypeScriptCompiler } from "./native-typescript.mts";
 import { isRecord } from "./record-shared.mjs";
+import {
+  TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  tsdownBudgetAdmitsParallelNativeWork,
+} from "./tsdown-heap-budget.mts";
 
 export type NativeDeclaration = {
   code: string;
@@ -283,6 +287,20 @@ export async function compileNativeProject({
 }
 
 /**
+ * The parallel pass's Go memory is outside --max-old-space-size: its cgroup peaked at 8.4 GiB
+ * against 6.1 GiB for the single-threaded pass, and it was OOM-killed in an 8 GiB container
+ * that the single-threaded pass completes in. The build's memory owner (tsdown-build, frozen
+ * by build-all) hands every build child its admitted heap in OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB
+ * and grants its uncapped default only when memory is ample, the same fact it uses to run two
+ * runtime builds at once. Its Windows default and a run without that budget (a bare tsdown)
+ * emit single-threaded; an operator's explicit budget at or above it asserts ample memory.
+ */
+function hostAdmitsParallelEmit() {
+  const budgetMb = Number(process.env[TSDOWN_MAX_OLD_SPACE_MB_ENV]);
+  return Number.isSafeInteger(budgetMb) && tsdownBudgetAdmitsParallelNativeWork(budgetMb);
+}
+
+/**
  * Emit declarations in one compiler command-line pass. The compiler reads the checkout
  * directly, which is several times faster than routing each read through the API
  * filesystem callbacks, and it may check and emit in parallel: repeated parallel emits
@@ -371,7 +389,9 @@ async function compileDeclarationsWithCompilerCli({
           composite: false,
           // Parallel emit can give shared inferred properties different readonly modifiers.
           // Stable type ordering removes that race: parallel emits are byte-identical.
-          ...(compilerOptions?.stableTypeOrdering === true ? {} : { singleThreaded: true }),
+          ...(compilerOptions?.stableTypeOrdering === true && hostAdmitsParallelEmit()
+            ? {}
+            : { singleThreaded: true }),
         },
       }),
     );
