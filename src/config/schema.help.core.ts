@@ -190,9 +190,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes":
     "Maximum scopes granted to auto-approved operator devices. Defaults to operator.read, operator.write, operator.approvals, and operator.questions. Requested scopes are capped to this list; requests without scopes receive this list. When unset, auto-approval also adds operator.questions for older UI clients; an explicit list is never widened. Explicitly listing operator.admin lets every proxy-authenticated user auto-approve full admin and makes scope-less requests receive full admin automatically; it also triggers a critical security audit finding and Gateway startup warning.",
   "gateway.roles":
-    "Named operator-role definitions for team Gateways. Setting gateway.roles.default enables profile-bound enforcement of session access, sandbox isolation, agents, and operator scopes. Definitions without a default are a catalog only and preserve the behavior of a Gateway without gateway.roles.",
+    "Named operator-role catalog. A default enables enforcement for all identified profiles. Without a default, only current linked OpenClaw ID members use their profile role across sign-in routes. Enforced profiles without a resolvable role cannot connect.",
   "gateway.roles.default":
-    "Optional default that enables named-role enforcement and applies to authenticated profiles without a valid explicit or GitHub login assignment. Its name must match a configured definition. Omitting it leaves named-role enforcement off, even when definitions exist.",
+    "Optional installation-wide enforcement switch and fallback for authenticated profiles without a valid explicit or GitHub login assignment. Its name must match a configured definition. Without a default, only current linked OpenClaw ID members need a resolvable assignment.",
   "gateway.roles.assignments":
     "Optional declarative role assignments for authenticated profiles. A valid explicit assignment made with users.setRole takes precedence over these mappings, followed by the default role.",
   "gateway.roles.assignments.byGithubLogin":
@@ -200,7 +200,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.assignments.byGithubLogin.*":
     "Configured role name for this GitHub login. Applies when the profile has a matching cached GitHub identity and no valid explicit role assignment. Changes hot-apply when config reload is enabled.",
   "gateway.roles.definitions":
-    "Nonempty administrator-named role catalog bundling session-sharing, sandbox-isolation, agent-access, and operator-scope policies. Definitions alone do not enable enforcement; set gateway.roles.default to apply named roles to authenticated profiles.",
+    "Nonempty administrator-named role catalog bundling session-sharing, sandbox-isolation, agent-access, and operator-scope policies. Current linked OpenClaw ID members use explicit profile assignments without gateway.roles.default; other profiles require the default switch.",
   "gateway.roles.definitions.*":
     "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
   "gateway.roles.definitions.*.sessions":
