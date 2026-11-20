@@ -12,13 +12,12 @@ import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
 type AcpTurnOutputEvent = Extract<AcpRuntimeEvent, { type: "text_delta" | "tool_call" }>;
-const MAX_TRACKED_PROGRESS_TOOLS = 4096;
 
 export function createAcpTurnProgressReporter(
   watchdog: Pick<SessionControllerWatchdog, "progress"> | undefined,
   signal: AbortSignal,
 ): (event: AcpTurnOutputEvent) => void {
-  const completedProgressTools = new Set<string>();
+  const completedTools = new Set<string>();
   return (event) => {
     if (!watchdog || signal.aborted) {
       return;
@@ -35,10 +34,9 @@ export function createAcpTurnProgressReporter(
     if (
       toolCallId &&
       resolveAcpToolTerminalOutcome(event.status) &&
-      !completedProgressTools.has(toolCallId) &&
-      completedProgressTools.size < MAX_TRACKED_PROGRESS_TOOLS
+      !completedTools.has(toolCallId)
     ) {
-      completedProgressTools.add(toolCallId);
+      completedTools.add(toolCallId);
       watchdog.progress("semantic", "acp:tool_completed");
     }
   };
