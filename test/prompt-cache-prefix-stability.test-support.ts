@@ -18,7 +18,6 @@ import {
   latestInput as lastMessage,
   readWireRequest,
   toolNames,
-  withoutTools,
   writeReply,
   type FakeReply as Reply,
   type FakeTransport as Api,
@@ -34,13 +33,6 @@ const SENDER = "agent:main:prefix-stability-sender";
 const OTHER = "agent:other:prefix-stability-other";
 // A chat whose first turn is a scheduled job; its next owner turn must list the same tools.
 const CRON_FIRST = "agent:main:prefix-stability-cron-first";
-// Main adds `message` on that owner turn (13 -> 14 tools); its owner lists one tool set from a
-// series' first request. The journey requires the growth, so it fails once the owner lands until
-// this entry goes.
-const CRON_FIRST_GROWTH = {
-  tools: ["message"],
-  owner: "https://github.com/openclaw/openclaw/pull/201710",
-};
 const OVERFLOW_CHUNKS = 24;
 const OVERFLOW_CHUNK_CHARS = 8_000;
 
@@ -519,22 +511,8 @@ export function usePrefixStabilityJourney() {
           await send(CRON_FIRST, "OWNER turn after a scheduled first turn");
           const owner = cronFirstRequests.at(-1)!;
           expect(owner.text).toContain("OWNER turn after a scheduled first turn");
-          // Whole declarations in order; only the known growth, which must still occur, may differ.
-          const names = cronFirstRequests.map((request) => toolNames(request.tools).join(","));
-          expect(
-            toolNames(cronFirstRequests[0]!.tools).filter((name) =>
-              CRON_FIRST_GROWTH.tools.includes(name),
-            ),
-            names[0],
-          ).toEqual([]);
-          expect(toolNames(owner.tools), names.at(-1)).toEqual(
-            expect.arrayContaining(CRON_FIRST_GROWTH.tools),
-          );
-          const cronFirstBreaks = prefixBreaks(
-            cronFirstRequests.map((request) =>
-              request === owner ? withoutTools(request, CRON_FIRST_GROWTH.tools) : request,
-            ),
-          );
+          // Whole declarations in order: the owner turn lists the scheduled turn's tools.
+          const cronFirstBreaks = prefixBreaks(cronFirstRequests);
           expect(cronFirstBreaks, JSON.stringify(cronFirstBreaks, null, 2)).toEqual([]);
         }
         // An unrelated chat on a small window: its tool results fill the window inside one run,
