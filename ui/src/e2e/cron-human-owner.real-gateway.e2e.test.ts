@@ -33,6 +33,7 @@ import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { respondToActivityRecap } from "./cron-human-owner-provider.test-support.ts";
 import { createGatewayProxy, gatewayProxyRoute } from "./gateway-proxy.test-support.ts";
 
 const people = [
@@ -81,6 +82,9 @@ const suite = createControlUiE2eSuite({
               return;
             }
             providerAuthorizations.push(request.headers.authorization);
+            if (respondToActivityRecap(response, body)) {
+              return;
+            }
             if (legacyOperation) {
               legacyModels.push(body.model);
               if (legacyCalls++ === 0) {
