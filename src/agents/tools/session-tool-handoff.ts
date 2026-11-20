@@ -42,7 +42,7 @@ import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 const log = createSubsystemLogger("agent/tool-handoff");
 const pending = new WeakSet<object>();
 
-type HandoffScope = { assertCurrent: () => void; signal: AbortSignal };
+export type HandoffScope = { assertCurrent: () => void; signal: AbortSignal };
 type HandoffWork =
   | { run: (scope: HandoffScope) => Promise<Record<string, unknown>>; request?: never }
   | { request: { method: "plugins.reload"; params: Record<string, unknown> }; run?: never };
@@ -55,6 +55,8 @@ export async function handoffSessionTool(
     /** Retained sends may defer without stopping the current response. */
     yield?: "conditional" | "after_turn";
     retainRequester?: true;
+    /** Keep dependent work reachable until this handoff settles or is cancelled. */
+    retainWork?: (scope: HandoffScope) => () => void;
     sessionId?: string;
     runId?: string;
     operation?: ReplyOperation;
@@ -94,6 +96,7 @@ export async function handoffSessionTool(
   let continuation:
     | Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
     | Awaited<ReturnType<typeof captureOperatorToolGatewayRequestContinuationContext>> = undefined;
+  let releaseWork: (() => void) | undefined;
   let runDeferred: ((scope: HandoffScope) => Promise<Record<string, unknown>>) | undefined;
   let enqueueDeferred:
     | ((
@@ -157,6 +160,14 @@ export async function handoffSessionTool(
     continuation.assertCurrent();
     assertSessionControllerOperation(operation);
     params.signal?.throwIfAborted();
+    releaseWork = params.retainWork?.({
+      assertCurrent: continuation.assertCurrent,
+      signal: AbortSignal.any([
+        continuation.signal,
+        execRequestAbortSignal(params.requestOwners, operation.abortSignal) ??
+          operation.abortSignal,
+      ]),
+    });
     if (params.fenceSuccessors) {
       registerReplyOperationSuccessorBarrier({
         operation,
@@ -318,6 +329,7 @@ export async function handoffSessionTool(
         })
         .finally(() => {
           handoffSettled.resolve(undefined);
+          releaseWork?.();
           retained.release();
         }),
     );
@@ -331,6 +343,7 @@ export async function handoffSessionTool(
   } catch (error) {
     handoffSettled.resolve(undefined);
     pending.delete(operation);
+    releaseWork?.();
     continuation?.release();
     throw error;
   }

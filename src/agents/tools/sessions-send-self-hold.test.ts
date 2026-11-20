@@ -57,7 +57,10 @@ import {
 } from "./gateway-caller-context.js";
 import * as gateway from "./in-process-gateway.js";
 import * as handoff from "./session-tool-handoff.js";
-import { createSelfHeldSendRetainer } from "./sessions-send-self-hold.js";
+import {
+  createSelfHeldSendRetainer,
+  hasRetainedSessionSendForSubagent,
+} from "./sessions-send-self-hold.js";
 import * as delivery from "./sessions-send-tool.delivery.js";
 import * as input from "./sessions-send-tool.input.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
@@ -109,14 +112,17 @@ async function refuseSelfHeldAdmission(cause: unknown) {
 }
 
 it.each([
-  [true, false, false, false],
-  [false, false, false, false],
-  [false, true, false, false],
-  [false, false, true, false],
-  [false, false, false, true],
+  [true, false, false, false, "active"],
+  [false, false, false, false, "active"],
+  [false, true, false, false, "active"],
+  [false, false, true, false, "active"],
+  [false, false, false, true, "active"],
+  [false, false, true, false, "aborted"],
+  [false, false, true, false, "released"],
+  [false, false, true, false, "revoked"],
 ] as const)(
-  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s, target successor=%s)",
-  async (parentOwned, unobserved, implicitResume, successor) =>
+  "classifies the real factory caller before retention (parent-owned=%s, unobserved async=%s, implicit resume=%s, target successor=%s, handoff=%s)",
+  async (parentOwned, unobserved, implicitResume, successor, lifetime) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       const config: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {} } },
@@ -182,12 +188,23 @@ it.each([
       const handle = createEmbeddedRunHandle({ runId: "source-run" });
       const operation = registerTestEmbeddedRun(sourceId, handle, sourceKey, undefined, "main");
       const onYield = vi.fn();
+      const handoffAbort = new AbortController();
+      let handoffCurrent = true;
+      let releaseWork: (() => void) | undefined;
       let work: Parameters<typeof handoff.handoffSessionTool>[0] | undefined;
       const timeout = vi.spyOn(input, "readSessionsSendTimeout");
       const handoffs = vi
         .spyOn(handoff, "handoffSessionTool")
         .mockImplementation(async (params) => {
           work = params;
+          releaseWork = params.retainWork?.({
+            signal: handoffAbort.signal,
+            assertCurrent: () => {
+              if (!handoffCurrent) {
+                throw new Error("Handoff revoked");
+              }
+            },
+          });
           await params.onYield?.("fixture handoff admitted");
           return jsonResult({ status: "started", async: true, message: "fixture handoff started" });
         });
@@ -283,7 +300,22 @@ it.each([
         expect(onYield).toHaveBeenCalledTimes(parentOwned ? 0 : 1);
         expect(effect).not.toHaveBeenCalled();
         expect(dispatch).toHaveBeenCalledOnce();
-        if (implicitResume || successor) {
+        if (implicitResume) {
+          const child = subagentRuns.get("paused-resume");
+          assert(child);
+          expect(hasRetainedSessionSendForSubagent(child)).toBe(true);
+          // Equal metadata without the in-process owner is a different incarnation.
+          expect(hasRetainedSessionSendForSubagent({ ...child })).toBe(false);
+          if (lifetime === "aborted") {
+            handoffAbort.abort();
+          } else if (lifetime === "released") {
+            releaseWork?.();
+          } else if (lifetime === "revoked") {
+            handoffCurrent = false;
+          }
+          expect(hasRetainedSessionSendForSubagent(child)).toBe(lifetime === "active");
+        }
+        if ((implicitResume || successor) && lifetime === "active") {
           assert(work?.run);
           const replayed = await withGatewayToolCallerIdentity(caller, () =>
             work!.run!({
@@ -323,8 +355,14 @@ it.each([
             ).rejects.toThrow("admission only");
           }
           expect(dispatch).toHaveBeenCalledTimes(2);
+          if (implicitResume) {
+            expect(hasRetainedSessionSendForSubagent(subagentRuns.get("paused-resume")!)).toBe(
+              false,
+            );
+          }
         }
       } finally {
+        releaseWork?.();
         release();
         consumer.release();
         settled.resolve({ kind: "failed", committed: false, unavailablePluginIds: [] });
