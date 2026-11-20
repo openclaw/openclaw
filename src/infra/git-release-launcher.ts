@@ -1,5 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ROOT_VALUE_FLAGS } from "../../cli-root-options.mjs";
+import { GATEWAY_RUN_VALUE_FLAGS } from "../../gateway-run-argv.mjs";
+import {
+  WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
+  WINDOWS_TASK_SUPERVISOR_FLAG,
+} from "../daemon/windows-task-supervisor-contract.js";
 import { GIT_RELEASE_LAUNCHER, GIT_RELEASE_TRIAL } from "./git-release-paths.js";
 
 export type GitReleaseTrial = {
@@ -21,11 +27,12 @@ export type GitReleaseTrial = {
   restoring?: Array<{ suffix: string; files: string[] }>;
 };
 
-// Frozen contract: the release link, the trial record and `dist/index.js` in each
-// release. It must not import from any release: a release that fails to load is
-// exactly what it recovers from. Writes during a failed trial are lost (accepted).
+// Frozen contract: the release link, the trial record, and in each release `dist/index.js` (a
+// Gateway run) and `dist/entry.js` (every other command). It must not import from any release: a
+// release that fails to load is exactly what it recovers from. Writes during a failed trial are
+// lost (accepted).
 const LAUNCHER_SOURCE = String.raw`#!/usr/bin/env node
-// OpenClaw release launcher, written by openclaw update. The service runs this file.
+// OpenClaw release launcher, written by openclaw update. Services and the CLI on PATH run this file.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -33,10 +40,24 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const prefix = path.dirname(fileURLToPath(import.meta.url));
 const slot = path.join(prefix, "openclaw");
 const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
-// The Windows task supervisor only starts the Gateway child, through this launcher (it reads the
-// global below), so only the child's starts count.
-const counts =
-  process.argv.slice(2).includes("gateway") && !process.argv.includes("--task-supervisor");
+// Only a Gateway run is a start: "openclaw gateway" or "openclaw gateway run", never another
+// "gateway" subcommand. The Windows task supervisor only starts the Gateway child, through this
+// launcher (it reads the global below), so only the child's starts count. An unknown value flag
+// can make a start look like a subcommand; it is then not counted (accepted).
+const valueFlags = new Set(${JSON.stringify([...ROOT_VALUE_FLAGS, ...GATEWAY_RUN_VALUE_FLAGS, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG])});
+const positionals = [];
+for (let i = 2; i < process.argv.length && process.argv[i] !== "--"; i++) {
+  const arg = process.argv[i];
+  if (!arg.startsWith("-")) {
+    positionals.push(arg);
+  } else if (valueFlags.has(arg)) {
+    i++;
+  }
+}
+const gatewayRun =
+  positionals[0] === "gateway" &&
+  (positionals.length === 1 || (positionals.length === 2 && positionals[1] === "run"));
+const counts = gatewayRun && !process.argv.includes("${WINDOWS_TASK_SUPERVISOR_FLAG}");
 globalThis[Symbol.for("openclaw.gitReleaseLauncher")] = fileURLToPath(import.meta.url);
 
 // Upgraded state keeps each replaced file as "<file>.pre-<generation>". Restore them
@@ -185,7 +206,7 @@ if (trial && counts) {
     writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }
 }
-process.argv[1] = path.join(slot, "dist", "index.js");
+process.argv[1] = path.join(slot, "dist", gatewayRun ? "index.js" : "entry.js");
 await import(pathToFileURL(process.argv[1]).href);
 `;
 

@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { readRegularFile } from "../../infra/fs-safe.js";
+import { GIT_RELEASE_LAUNCHER } from "../../infra/git-release-paths.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -44,7 +45,8 @@ import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 
 /**
  * The installer's `openclaw` wrapper for a checkout: retired after a switch to a package,
- * or pointed at `replacementRoot` (the release link) once a Git install runs from releases.
+ * or pointed at the launcher beside `replacementRoot` (the release link) once a Git install runs
+ * from releases. A wrapper already pointed at the launcher beside `previousRoot` is recognized too.
  */
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -57,7 +59,11 @@ export async function retireStandaloneGitWrapper(params: {
   const wrapperName = platform === "win32" ? "openclaw.cmd" : "openclaw";
   const searchDirs = params.searchDirs ?? (process.env.PATH ?? "").split(path.delimiter);
   const pathApi = platform === "win32" ? path.win32 : path;
-  const expectedEntry = pathApi.join(params.previousRoot, "dist", "entry.js");
+  // The checkout's entry, or the launcher beside a release link.
+  const expectedEntries = [
+    pathApi.join(params.previousRoot, "dist", "entry.js"),
+    pathApi.join(pathApi.dirname(params.previousRoot), GIT_RELEASE_LAUNCHER),
+  ];
   const seen = new Set<string>();
 
   for (const directory of searchDirs) {
@@ -99,7 +105,7 @@ export async function retireStandaloneGitWrapper(params: {
       platform === "win32" &&
       lines.length === 2 &&
       lines[0] === "@echo off" &&
-      lines[1] === `node "${expectedEntry}" %*`;
+      expectedEntries.some((entry) => lines[1] === `node "${entry}" %*`);
     const execArgs =
       platform === "win32" || lines.length !== 3 ? null : splitShellArgs(lines[2] ?? "");
     const matchesPosix =
@@ -108,7 +114,7 @@ export async function retireStandaloneGitWrapper(params: {
       lines[1] === "set -euo pipefail" &&
       execArgs?.length === 4 &&
       execArgs[0] === "exec" &&
-      execArgs[2] === expectedEntry &&
+      expectedEntries.includes(execArgs[2] ?? "") &&
       execArgs[3] === "$@";
     if (!matchesWindows && !matchesPosix) {
       continue;
@@ -135,8 +141,9 @@ export async function retireStandaloneGitWrapper(params: {
     params.assertCurrent?.();
     try {
       if (params.replacementRoot) {
-        // The installer's formats, so its own wrapper checks still recognize the result.
-        const entry = pathApi.join(params.replacementRoot, "dist", "entry.js");
+        // The installer's formats, so its own wrapper checks still recognize the result. The
+        // launcher selects a pending release and counts a foreground Gateway start.
+        const entry = pathApi.join(pathApi.dirname(params.replacementRoot), GIT_RELEASE_LAUNCHER);
         const next =
           platform === "win32"
             ? `@echo off\r\nnode "${entry}" %*\r\n`
@@ -445,7 +452,7 @@ export async function updateGitInstall(params: {
     (result.status === "ok" ? await findGlobalPackageLinkedTo(gitRoot, effectiveTimeout) : null);
   if (packageRoot && result.status === "ok" && result.root) {
     // `openclaw` on PATH resolves through the global package path; it now runs the release.
-    const warning = await exposeGlobalPackageThroughRelease(packageRoot, result.root);
+    const warning = await exposeGlobalPackageThroughRelease(packageRoot, result.root, gitRoot);
     if (warning) {
       defaultRuntime.error(`Warning: ${warning}`);
       steps.push({
@@ -474,56 +481,63 @@ async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
     timeoutMs,
   }).catch(() => null);
   const packageRoot = target?.packageRoot;
-  if (!packageRoot || !(await fs.lstat(packageRoot).catch(() => null))?.isSymbolicLink()) {
-    return null;
+  return packageRoot && (await isLinkTo(packageRoot, checkout)) ? packageRoot : null;
+}
+
+async function isLinkTo(link: string, dir: string): Promise<boolean> {
+  if (!(await fs.lstat(link).catch(() => null))?.isSymbolicLink()) {
+    return false;
   }
   const [linked, real] = await Promise.all(
-    [packageRoot, checkout].map((dir) => fs.realpath(dir).catch(() => null)),
+    [link, dir].map((entry) => fs.realpath(entry).catch(() => null)),
   );
-  return linked && linked === real ? packageRoot : null;
+  return linked !== null && linked === real;
 }
 
 /**
- * Point the global npm package's `openclaw.mjs`, which its bin shims run, at the release link's
- * CLI, so `openclaw` on PATH runs the selected release. The rest of the package stays: this
- * updater and a running Gateway still load from it, and an old service definition may still name
- * its `dist/index.js`. Its disk space stays used until `npm uninstall -g openclaw` (accepted).
+ * Point the global npm package's `openclaw.mjs`, which its bin shims run, at the release launcher,
+ * so `openclaw` on PATH runs the release the launcher selects (a `--no-restart` target is pending
+ * until the next Gateway start) and a foreground Gateway start counts toward the trial. The rest
+ * of the package stays: this updater and a running Gateway still load from it, and an old service
+ * definition may still name its `dist/index.js`. Its disk space stays used until
+ * `npm uninstall -g openclaw` (accepted).
  *
  * An updater before #200578 switched to Git by linking the global package to the checkout, which
  * it then rebuilt in place. Releases never rebuild the checkout, so that link is replaced by a
- * directory holding only the entry (writing through it would edit the checkout). A process killed
- * between the unlink and the rename leaves no global package; the next update writes it again.
+ * directory holding only the entries (writing through it would edit the checkout). Its
+ * `dist/index.js` also starts the launcher, for a service definition that names the package path
+ * and is not refreshed (`--no-restart`). Other links (a pnpm store path) are written through, as
+ * before. A process killed between the unlink and the rename leaves no global package and no
+ * `openclaw` on PATH (rare, accepted): `node <launcher>` runs the release, and
+ * `npm install -g openclaw` then `openclaw update --channel dev` switch PATH to Git again.
  */
 async function exposeGlobalPackageThroughRelease(
   packageRoot: string,
   slot: string,
+  checkout: string,
 ): Promise<string | undefined> {
-  const release = path.join(slot, "dist", "entry.js");
-  const linked = (await fs.lstat(packageRoot)).isSymbolicLink();
+  const launcher = path.join(path.dirname(slot), GIT_RELEASE_LAUNCHER);
+  const contents = `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${launcher} selects.\nawait import(${JSON.stringify(pathToFileURL(launcher).href)});\n`;
+  const linked = await isLinkTo(packageRoot, checkout);
   const stage = `${packageRoot}.release-${process.pid}`;
-  const entry = linked ? path.join(stage, "openclaw.mjs") : stage;
   try {
     if (linked) {
-      await fs.mkdir(stage);
+      await fs.mkdir(path.join(stage, "dist"), { recursive: true });
       await fs.writeFile(
         path.join(stage, "package.json"),
-        `${JSON.stringify({ name: "openclaw", private: true, bin: { openclaw: "openclaw.mjs" } })}\n`,
+        `${JSON.stringify({ name: "openclaw", private: true, type: "module", bin: { openclaw: "openclaw.mjs" } })}\n`,
       );
-    }
-    await fs.writeFile(
-      entry,
-      `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${slot} selects.\nawait import(${JSON.stringify(pathToFileURL(release).href)});\n`,
-      { mode: 0o755 },
-    );
-    if (linked) {
+      await fs.writeFile(path.join(stage, "dist", "index.js"), contents);
+      await fs.writeFile(path.join(stage, "openclaw.mjs"), contents, { mode: 0o755 });
       await fs.unlink(packageRoot);
       await fs.rename(stage, packageRoot);
     } else {
+      await fs.writeFile(stage, contents, { mode: 0o755 });
       await fs.rename(stage, path.join(packageRoot, "openclaw.mjs"));
     }
     return undefined;
   } catch (error) {
     await fs.rm(stage, { recursive: true, force: true }).catch(() => {});
-    return `${packageRoot} could not start ${release} (${String(error)}); \`openclaw\` on PATH still starts the npm package. Run \`npm uninstall -g openclaw\`, then start OpenClaw with ${release}.`;
+    return `${packageRoot} could not start ${launcher} (${String(error)}); \`openclaw\` on PATH may not run the release. Run OpenClaw with \`node ${launcher}\`. If \`openclaw\` is missing, run \`npm install -g openclaw\`, then \`openclaw update --channel dev\`.`;
   }
 }

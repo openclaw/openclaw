@@ -1549,7 +1549,7 @@ the sentinel.
     Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving. If validation leaves source edits in the temporary worktree, progress reports a failed candidate clean check.
   </Step>
   <Step title="Activate and verify">
-    Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/openclaw`. This is a symlink on POSIX and a junction on Windows. The service runs through `<state>/git-install/openclaw-launcher.mjs`; the CLI runs the release link's `dist/entry.js`.
+    Checks that the service's Node can load the completed release with `--version`, then publishes it through `<state>/git-install/openclaw`. This is a symlink on POSIX and a junction on Windows. The service and the `openclaw` command on PATH both run through `<state>/git-install/openclaw-launcher.mjs`.
 
     Windows cannot rename onto a junction, so a switch removes the old junction and then renames the new one into place. A process killed between those two steps leaves no `git-install\openclaw`; the temporary `.openclaw.release-link-*` junction beside it still names the new release. Rename it to `openclaw`, or run `openclaw update` from the source checkout, which recreates a missing link.
 
@@ -1576,14 +1576,16 @@ the sentinel.
 
 ### Git checkouts that run from releases
 
-On macOS and Linux, a Git checkout whose Gateway service the update owns runs from
-releases instead of being rebuilt in place. Each release is a detached worktree of the
+On every platform, a Git checkout runs from releases instead of being rebuilt in place,
+with or without a Gateway service. Each release is a detached worktree of the
 checkout under `<stateDir>/git-install/releases/`, and the link
 `<stateDir>/git-install/openclaw` names the selected one. An update
 builds the target as a new release, switches the link, and arms a trial in
-`releases/.trial`. The service starts through `<stateDir>/git-install/openclaw-launcher.mjs`,
-which switches the link back to the trial's previous release after two failed starts.
-The trial ends once the Gateway on the new release is ready.
+`releases/.trial`. The service and the `openclaw` command on PATH start through
+`<stateDir>/git-install/openclaw-launcher.mjs`. Only a Gateway run (`openclaw gateway` or
+`openclaw gateway run`) counts as a start: after two failed starts the launcher switches the
+link back to the trial's previous release. With `--no-restart`, the new release stays pending
+and the next Gateway run selects it. The trial ends once the Gateway on the new release is ready.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that

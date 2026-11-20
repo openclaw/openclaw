@@ -142,7 +142,7 @@ describe("retireStandaloneGitWrapper", () => {
     await expect(fs.readFile(wrapper, "utf8")).resolves.toContain("unrelated");
   });
 
-  it("points the installer wrapper at the release link, so `openclaw` on PATH runs the new release", async () => {
+  it("points the installer wrapper at the release launcher, so `openclaw gateway` on PATH starts a pending release", async () => {
     const base = dirs.make("openclaw-wrapper-release-");
     const checkout = path.join(base, "checkout");
     const wrapper = path.join(base, "openclaw");
@@ -152,10 +152,18 @@ describe("retireStandaloneGitWrapper", () => {
       { mode: 0o755 },
     );
     const prefix = path.join(base, "state", "git-install");
-    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
-    await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
-    await fs.writeFile(path.join(releaseRoot, "dist", "entry.js"), 'console.log("release");\n');
-    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    const release = async (name: string) => {
+      const { releaseRoot } = await createGitReleaseDirs(prefix);
+      await fs.mkdir(path.join(releaseRoot, "dist"), { recursive: true });
+      for (const entry of ["index.js", "entry.js"]) {
+        await fs.writeFile(
+          path.join(releaseRoot, "dist", entry),
+          `console.log("${name} ${entry}");\n`,
+        );
+      }
+      return releaseRoot;
+    };
+    await publishGitRelease({ prefix, releaseRoot: await release("old"), trial: false });
     const slot = gitReleaseSlot(prefix);
     vi.stubEnv("PATH", `${base}${path.delimiter}${process.env.PATH ?? ""}`);
     try {
@@ -177,7 +185,18 @@ describe("retireStandaloneGitWrapper", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+    // A `--no-restart` update leaves the new release pending for the next Gateway start.
+    await publishGitRelease({
+      prefix,
+      releaseRoot: await release("new"),
+      trial: true,
+      pending: true,
+    });
+    const run = (...args: string[]) =>
+      spawnSync("bash", [wrapper, ...args], { encoding: "utf8" }).stdout;
 
-    expect(spawnSync("bash", [wrapper], { encoding: "utf8" }).stdout).toBe("release\n");
+    expect(run("gateway", "status")).toBe("old entry.js\n");
+    expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
+    expect(run("--version")).toBe("new entry.js\n");
   });
 });
