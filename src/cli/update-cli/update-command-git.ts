@@ -4,7 +4,6 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { readRegularFile } from "../../infra/fs-safe.js";
 import { gitReleaseForwardingEntry } from "../../infra/git-release-launcher.js";
 import { GIT_RELEASE_LAUNCHER, resolveGitReleasePrefix } from "../../infra/git-release-paths.js";
-import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { restoreInterruptedNpmPackageRootLink } from "../../infra/package-update-npm-root.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { DEV_BRANCH, type UpdateChannel } from "../../infra/update-channels.js";
@@ -452,10 +451,14 @@ export async function updateGitInstall(params: {
   if (result.status === "ok" && result.root) {
     // `openclaw` on PATH resolves through the npm package path or the installer's wrapper, both
     // written for the checkout; they now run the release. A release-driven update (the Control
-    // UI, or `openclaw` started from a release) names the release link as its root, so the
-    // checkout comes from the release's Git common directory: the main repository, so PATH
-    // entries written for a linked-worktree checkout are matched only from that checkout.
-    const checkoutRoot = readPackageReleaseSlotSync(gitRoot)
+    // UI, or `openclaw` started from a release or the old lib/node_modules link) has a root under
+    // the release prefix, so the checkout comes from the release's Git common directory: the main
+    // repository, so PATH entries written for a linked-worktree checkout are matched only from
+    // that checkout.
+    const releaseDriven = !path
+      .relative(resolveGitReleasePrefix(), path.resolve(gitRoot))
+      .startsWith("..");
+    const checkoutRoot = releaseDriven
       ? await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout)
       : gitRoot;
     const packageRoot =

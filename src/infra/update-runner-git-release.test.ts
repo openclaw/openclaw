@@ -708,21 +708,22 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
       expect(target.conversionTargets).toEqual([serving]);
       const served = await fs.realpath(gitReleaseSlot(prefix));
       expect(served.split(path.sep)).not.toContain("node_modules");
-      // Old PATH entries keep working, but cannot select a release independently.
-      expect(path.resolve(path.dirname(legacy), await fs.readlink(legacy))).toBe(
-        gitReleaseSlot(prefix),
-      );
-      expect(await fs.realpath(legacy)).toBe(served);
-      if (deferReleaseActivation) {
-        const trial = JSON.parse(
-          await fs.readFile(path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL), "utf8"),
-        ) as Trial & { pending: boolean };
-        expect(trial.pending).toBe(true);
-        const candidate = path.resolve(prefix, trial.target);
-        expect(candidate).not.toBe(served);
-        await publishGitRelease({ prefix, releaseRoot: candidate, trial: false });
-        expect(await fs.realpath(legacy)).toBe(candidate);
+      if (!deferReleaseActivation) {
+        // Old PATH entries keep working, but cannot select a release independently.
+        expect(path.resolve(path.dirname(legacy), await fs.readlink(legacy))).toBe(
+          gitReleaseSlot(prefix),
+        );
+        expect(await fs.realpath(legacy)).toBe(served);
+        return;
       }
+      // --no-restart leaves the running Gateway's build path alone; the next start selects the
+      // pending release through the launcher and the new link.
+      expect(await fs.realpath(legacy)).toBe(await fs.realpath(legacyRelease));
+      const trial = JSON.parse(
+        await fs.readFile(path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL), "utf8"),
+      ) as Trial & { pending: boolean };
+      expect(trial.pending).toBe(true);
+      expect(path.resolve(prefix, trial.target)).not.toBe(served);
     },
   );
 

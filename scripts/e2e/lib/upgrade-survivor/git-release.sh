@@ -315,16 +315,18 @@ git_release_check_untouched() {
   echo "$label: checkout unchanged ($(head -n 1 "$ARTIFACT_ROOT/$label-checkout-after.txt"))"
 }
 
-# I1: the link resolves to a release outside node_modules built from `sha`, and the
-# earlier lib/node_modules link is gone.
+# I1: the link resolves to a release outside node_modules built from `sha`. An earlier
+# lib/node_modules link, if any, follows that link (its old callers keep working).
 git_release_assert_release() {
-  local label="$1" sha="$2" target
+  local label="$1" sha="$2" target legacy="$git_prefix/lib/node_modules/openclaw"
   target="$(realpath "$git_prefix/openclaw")"
   printf 'link %s -> %s head=%s\n' "$(readlink "$git_prefix/openclaw")" "$target" "$(git -C "$target" rev-parse HEAD)" |
     tee "$ARTIFACT_ROOT/$label-layout.txt"
   [[ "$target" == */git-install/releases/*/openclaw && "$target" != */node_modules/* ]]
-  [ ! -e "$git_prefix/lib/node_modules/openclaw" ]
-  [ ! -L "$git_prefix/lib/node_modules/openclaw" ]
+  if [ -e "$legacy" ] || [ -L "$legacy" ]; then
+    printf 'legacy %s -> %s\n' "$(readlink "$legacy")" "$(realpath "$legacy")" | tee -a "$ARTIFACT_ROOT/$label-layout.txt"
+    [ "$(realpath "$legacy")" = "$target" ]
+  fi
   [ "$(git -C "$target" rev-parse HEAD)" = "$sha" ]
 }
 

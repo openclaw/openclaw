@@ -20,6 +20,11 @@ import {
   packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
+import {
+  capturePackageReleaseSlot,
+  packageReleaseLinkTarget,
+  switchPackageReleaseLink,
+} from "./package-release-slot.js";
 import { DEV_BRANCH, type UpdateChannel } from "./update-channels.js";
 import {
   readBuiltGatewayBuildId,
@@ -516,6 +521,20 @@ export async function updateGitRelease(params: {
       trial: true,
       pending: opts.deferReleaseActivation,
     });
+  }
+  if (serving !== slot && !opts.deferReleaseActivation) {
+    // The 7db69bedeab6-era launcher and CLI enter through lib/node_modules: keep that path, but
+    // make it follow the new link, so there is one selection. A --no-restart update leaves it:
+    // the running Gateway reads its build through it, and a changed build would restart it.
+    const legacy = await capturePackageReleaseSlot(serving);
+    if (legacy.kind === "link") {
+      await switchPackageReleaseLink({
+        slot: serving,
+        expected: { identity: legacy.identity, target: legacy.target },
+        target: packageReleaseLinkTarget(serving, slot),
+        assertCurrent: () => {},
+      });
+    }
   }
   const collected = await collectGitReleases({
     prefix,

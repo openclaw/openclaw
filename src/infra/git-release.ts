@@ -6,7 +6,7 @@ import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
-import { GIT_RELEASE_TRIAL, gitReleaseSlot, servingGitReleaseSlot } from "./git-release-paths.js";
+import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { readPackageVersion } from "./package-json.js";
 import { readPackageReleaseLeases } from "./package-release-lease.js";
@@ -63,8 +63,6 @@ export async function publishGitRelease(params: {
   assertCurrent?: () => void;
 }): Promise<{ previous: string | null; target: string }> {
   const slot = gitReleaseSlot(params.prefix);
-  const serving = servingGitReleaseSlot(params.prefix);
-  const legacy = serving !== slot ? await capturePackageReleaseSlot(serving) : undefined;
   const globalRoot = path.dirname(slot);
   await fs.mkdir(globalRoot, { recursive: true });
   const realGlobalRoot = await fs.realpath(globalRoot);
@@ -77,7 +75,8 @@ export async function publishGitRelease(params: {
     );
   }
   const trialFile = gitReleaseTrialFile(params.prefix);
-  await writeGitReleaseLauncher(params.prefix);
+  // The launcher is written once the link it starts exists: a legacy service already names this
+  // file, so a launcher written first would start a missing link if the publisher died between.
   const existing = await fs.lstat(slot).catch(ignoreMissingPath);
   let previous: string | null = null;
   if (existing) {
@@ -111,16 +110,7 @@ export async function publishGitRelease(params: {
     await fs.rename(temporary, slot);
     await syncDirectoryIfSupported(globalRoot);
   }
-  if (legacy?.kind === "link") {
-    // Preserve old CLI/service paths, but leave only one release selection, even when
-    // activation is deferred or a later candidate publication fails.
-    await switchPackageReleaseLink({
-      slot: serving,
-      expected: { identity: legacy.identity, target: legacy.target },
-      target: packageReleaseLinkTarget(serving, path.join(realGlobalRoot, "openclaw")),
-      assertCurrent: () => params.assertCurrent?.(),
-    });
-  }
+  await writeGitReleaseLauncher(params.prefix);
   if (params.trial && previous) {
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     const record: GitReleaseTrial = {
