@@ -394,8 +394,8 @@ it.each([
   [80, false],
   [40, true],
 ] as const)(
-  "fits a %i-pixel icon with official background=%s and preserves settled artwork",
-  async (width, whiteBackground) => {
+  "fits a %i-pixel icon with official status=%s and preserves settled artwork",
+  async (width, official) => {
     const icon = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="40"><rect width="100%" height="100%" fill="red"/></svg>`)}`;
     const currentSource = "https://example.com/current.svg";
     const failedSource = "https://example.com/failed.svg";
@@ -404,7 +404,11 @@ it.each([
       [failedSource]: "data:image/svg+xml,not-an-svg",
     });
     const items = [
-      { ...entry, id: "loaded-artwork", catalog: { ...entry.catalog, imageUrl: currentSource } },
+      {
+        ...entry,
+        id: "loaded-artwork",
+        catalog: { ...entry.catalog, official, imageUrl: currentSource },
+      },
       {
         ...entry,
         id: "failed-artwork",
@@ -412,11 +416,11 @@ it.each([
       },
     ];
     const artwork = (slug = "demo", name = "Demo") => (
-      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={whiteBackground} />
+      <PluginArtTile slug={slug} name={name} iconUrl={icon} whiteBackground={official} />
     );
     render(() => (
       <>
-        {whiteBackground ? (
+        {official ? (
           artwork("official", "Official")
         ) : (
           <>
@@ -449,10 +453,20 @@ it.each([
     expect(loadedCard.querySelector(".skeleton")).toBeNull();
     expect(failedCard.querySelector("img")).toBeNull();
     expect(failedCard.querySelector(".skeleton")).toBeNull();
-    const fallback = find(".plugins-tile--fallback svg", failedCard).getBoundingClientRect();
+    const artworkSlot = find(".plugin-catalog-card__art", loadedCard);
+    const artworkSize = loadedImage.getBoundingClientRect();
+    expect(artworkSize.width).toBeGreaterThanOrEqual(artworkSlot.clientWidth - 2);
+    expect(artworkSize.height).toBeLessThanOrEqual(artworkSlot.clientHeight);
+    expect(getComputedStyle(loadedImage)).toMatchObject({ objectFit: "contain", padding: "0px" });
+    expect(getComputedStyle(artworkSlot).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(loadedImage.parentElement).toBe(artworkSlot);
+    const fallback = find(
+      ".plugin-catalog-card__art--fallback svg",
+      failedCard,
+    ).getBoundingClientRect();
     expect(fallback.width).toBeGreaterThan(0);
     expect(fallback.height).toBeGreaterThan(0);
-    if (whiteBackground) {
+    if (official) {
       const image = container.querySelector<HTMLImageElement>(".plugins-icon")!;
       expect(image.parentElement!.classList.contains("plugins-tile--white")).toBe(true);
       expect(getComputedStyle(image.parentElement!).backgroundColor).toBe("rgb(255, 255, 255)");

@@ -109,12 +109,12 @@ function CatalogIcon(props: {
   );
   return (
     <PluginArtTile
+      class="plugin-catalog-card__art"
       neutralFallback
       registerIcon={props.state.registerIcon}
       slug={props.plugin.local.pluginId ?? props.plugin.id}
       name={props.plugin.catalog.name}
       iconUrl={iconUrl() ?? undefined}
-      whiteBackground={props.plugin.catalog.official && Boolean(iconUrl())}
       loading={Boolean(
         (props.plugin.local.pluginId &&
           props.state.pluginIconLoading?.(props.plugin.local.pluginId)) ||
@@ -161,13 +161,7 @@ function CatalogCard(props: {
       />
       <div class="plugin-catalog-card__content" ref={props.contentRef}>
         <div class="plugin-catalog-row__main">
-          <span
-            class="installed-plugins-card__art plugin-catalog-card__art"
-            aria-hidden="true"
-            data-plugin-icon-id={props.plugin.local.pluginId ?? undefined}
-          >
-            <CatalogIcon plugin={props.plugin} state={props.state} />
-          </span>
+          <CatalogIcon plugin={props.plugin} state={props.state} />
           <div class="plugin-catalog-row__text">
             <div class="plugin-card-title-row">
               <h3>{props.plugin.catalog.name}</h3>
