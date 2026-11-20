@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -222,6 +223,65 @@ describe("persisted subagent requester wakes", () => {
         expect(currentRun(input).requesterSettleWake).toBeUndefined();
         expect(currentRun(input).delivery?.status).toBe("delivered");
         expect(currentRun(input).execution.lifecycleGeneration).toBe("cleaned-lifecycle");
+      }
+    },
+  );
+
+  it.each([
+    ["parent", true],
+    ["public", true],
+    ["yielded", true],
+    ["public", false],
+  ] as const)(
+    "records delayed delivery before settlement (target=%s, delivered=%s)",
+    async (kind, delivered) => {
+      const input = records();
+      input.subagent.completionTarget = kind === "parent" ? "parent" : undefined;
+      if (kind === "yielded") {
+        armRequesterWake(input);
+        input.subagent.requesterSettleWake!.requesterYieldBatch = true;
+      }
+      input.subagent.delivery = { status: "pending", generation: 1 };
+      input.subagent.requesterStorePath = path.join(
+        process.env.OPENCLAW_STATE_DIR!,
+        "sessions.json",
+      );
+      const scope = {
+        agentId: input.subagent.requesterAgentId,
+        sessionKey: input.subagent.requesterSessionKey,
+        storePath: input.subagent.requesterStorePath,
+        sessionId: "resumed-requester-session",
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+      persistOwner(input);
+      await blockSubagentCompletionDelivery({
+        subagent: input.subagent,
+        reason: "subagent announce delivery expired",
+        suspendedReason: "expiry",
+        databaseOptions: { database: db.value },
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe("suspended");
+      const notices = (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "custom_message",
+      );
+      expect(notices).toHaveLength(1);
+      expect(notices[0]).toMatchObject({ customType: "subagent-delivery-delayed", display: true });
+      input.subagent = currentRun(input);
+      await settleOne(input, {
+        delivered,
+        path: "direct",
+        error: delivered ? undefined : "requester failed",
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
+      const settled = (await loadTranscriptEvents(scope)).filter(
+        (event) => isRecord(event) && event.type === "custom_message",
+      );
+      expect(settled).toHaveLength(delivered ? 1 : 2);
+      expect(settled[0]).toEqual(notices[0]);
+      if (!delivered) {
+        expect(settled[1]).toMatchObject({ customType: "run-failed-before-reply", display: true });
       }
     },
   );
