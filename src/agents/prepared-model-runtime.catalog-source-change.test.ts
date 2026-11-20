@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import { createGatewayUpdateCheck } from "../infra/update-startup-scheduler.js";
@@ -32,7 +32,6 @@ import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-supp
 import {
   applyRemoteModelCatalogUpdate,
   loadPublishedGatewayReplyDispatchRuntime,
-  markPreparedModelRuntimeSnapshotsStale as markStale,
   refreshPreparedModelRuntimeSnapshots as refresh,
   type PreparedModelRuntimeLease,
 } from "./prepared-model-runtime.js";
@@ -94,18 +93,6 @@ async function startGateway() {
     catalogMode: "static",
   });
 }
-// The hot reload of a model-affecting path: stale mark at commit, then its replacement build.
-const reloadModelRuntime = () =>
-  refresh(config, {
-    catalogMode: "static",
-    joinSupersedingPublication: true,
-    allowGatewaySubagentBinding: true,
-  });
-function markStaleForConfigPublication() {
-  markStale("prepared model runtime owner is stale before config publication", {
-    waitForReplacement: true,
-  });
-}
 function holdPricing() {
   const entered = createDeferred();
   const release = createDeferred();
@@ -114,16 +101,6 @@ function holdPricing() {
     entered.resolve();
     await release.promise;
     return await preparePricing(...args);
-  });
-  return { entered: entered.promise, release: () => release.resolve() };
-}
-function holdCatalogRead() {
-  const entered = createDeferred();
-  const release = createDeferred();
-  stored.mockImplementationOnce(async () => {
-    entered.resolve();
-    await release.promise;
-    return bundle(300);
   });
   return { entered: entered.promise, release: () => release.resolve() };
 }
@@ -140,41 +117,6 @@ async function replyDispatchAgent() {
   return runtime?.agentId;
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
-
-describe("hosted catalog adoption during a config publication", () => {
-  it("adopts after a replacement that supersedes the one it joined", async () => {
-    await startGateway();
-    const read = holdCatalogRead();
-    const adoption = applyRemoteModelCatalogUpdate(() => config);
-    await read.entered;
-    markStaleForConfigPublication();
-    read.release();
-    // Let the adoption reach the first replacement before the reload supersedes it.
-    await nextEventLoopTurn();
-    const reload = reloadModelRuntime();
-
-    expect(await adoption).toBe("published");
-    await reload;
-    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
-    expect(await replyDispatchAgent()).toBe("default");
-  });
-
-  it("follows a config publication that cancels its build", async () => {
-    await startGateway();
-    stored.mockReturnValue(bundle(300));
-    const held = holdPricing();
-    const adoption = applyRemoteModelCatalogUpdate(() => config);
-    await held.entered;
-    markStaleForConfigPublication();
-    const reload = reloadModelRuntime();
-    held.release();
-
-    expect(await adoption).toBe("published");
-    await reload;
-    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
-    expect(await replyDispatchAgent()).toBe("default");
-  });
-});
 
 describe("catalog source change on a running Gateway", () => {
   const mirror = "https://catalog-mirror.example.test/models/v3/catalog.json";
@@ -225,7 +167,7 @@ describe("catalog source change on a running Gateway", () => {
     withPluginCache(operation, () => sessionChanges.emit({ all: true, scope: "config" }));
     return {
       clock,
-      adoption: () => adoptions[1],
+      adoption: (index: number) => adoptions[index],
       endOperation: async () => await retirePluginCache(operation),
       stop: async () => {
         await check.stop();
@@ -234,7 +176,7 @@ describe("catalog source change on a running Gateway", () => {
     };
   }
 
-  it("builds the new catalog from the Gateway's plugins, not the retiring reload's", async () => {
+  it("adopts when the reload operation ends during the build", async () => {
     const gateway = await changeSourceDuringReload();
     try {
       const held = holdPricing();
@@ -244,7 +186,20 @@ describe("catalog source change on a running Gateway", () => {
       held.release();
       await check;
 
-      expect(await gateway.adoption()).toBe("published");
+      expect(await gateway.adoption(1)).toBe("published");
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("adopts when the reload operation ended before the check ran", async () => {
+    const gateway = await changeSourceDuringReload();
+    try {
+      await gateway.endOperation();
+      await gateway.clock.advanceBy(0);
+
+      expect(await gateway.adoption(1)).toBe("published");
       expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
     } finally {
       await gateway.stop();
@@ -255,10 +210,26 @@ describe("catalog source change on a running Gateway", () => {
     const gateway = await changeSourceDuringReload();
     try {
       await gateway.clock.advanceBy(0);
-      expect(await gateway.adoption()).toBe("published");
-      // The reload's plugin operation ends after the adoption committed.
+      expect(await gateway.adoption(1)).toBe("published");
       await gateway.endOperation();
 
+      expect(await replyDispatchAgent()).toBe("default");
+    } finally {
+      await gateway.stop();
+    }
+  });
+
+  it("keeps later scheduled checks working after the reload operation ends", async () => {
+    const gateway = await changeSourceDuringReload();
+    try {
+      await gateway.clock.advanceBy(0);
+      expect(await gateway.adoption(1)).toBe("published");
+      await gateway.endOperation();
+
+      stored.mockReturnValue(bundle(400, mirror));
+      await gateway.clock.advanceBy(remoteRefresh.REMOTE_MODEL_CATALOG_TTL_MS);
+      expect(await gateway.adoption(2)).toBe("published");
+      expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(400);
       expect(await replyDispatchAgent()).toBe("default");
     } finally {
       await gateway.stop();
