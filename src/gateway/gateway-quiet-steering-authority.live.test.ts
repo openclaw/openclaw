@@ -864,12 +864,16 @@ describeLive("quiet steering with real caller authority", () => {
       }
       await restartQueue(false, "queue");
 
-      await caseRun("cold Gateway process restart with queued input", async () => {
+      await caseRun("cold Gateway crash cancels queued input without replay", async () => {
         const key = await create("cold");
         const gate = relay.arm();
         const root = await send(high, key, "Do not use tools. Reply COLD_ROOT.");
         await withinTest(gate.entered.promise, signal);
-        const queued = await send(third, key, "Do not use tools. Reply COLD_QUEUED_RECOVERED.");
+        const queued = await send(
+          third,
+          key,
+          "Do not use tools. Reply COLD_QUEUED_MUST_NOT_REPLAY.",
+        );
         await waitQueued(queued.runId);
         const before = await history(key, [queued.runId]);
         expect(before.inputReceipts).toContainEqual(
@@ -897,7 +901,17 @@ describeLive("quiet steering with real caller authority", () => {
               pending: recovered.pendingInputs,
             }),
         );
-        await waitRun(queued.runId);
+        // SIGKILL cannot capture graceful-shutdown replay custody. Startup must
+        // settle this exact input as cancelled and resendable, never execute it.
+        await expect
+          .poll(
+            async () =>
+              (await history(key, [queued.runId])).inputReceipts?.find(
+                (receipt) => receipt.runId === queued.runId,
+              ),
+            { timeout: 130_000 },
+          )
+          .toMatchObject({ runId: queued.runId, cancelled: true });
         const after = await history(key, [queued.runId]);
         expect(
           after.pendingInputs?.items.filter(
@@ -909,7 +923,12 @@ describeLive("quiet steering with real caller authority", () => {
             .filter((message) => message.role === "assistant")
             .map(safeAssistantText)
             .join("\n"),
-        ).toContain("COLD_QUEUED_RECOVERED");
+        ).not.toContain("COLD_QUEUED_MUST_NOT_REPLAY");
+        expect(
+          relay.requests.some((request) =>
+            JSON.stringify(request.input).includes("COLD_QUEUED_MUST_NOT_REPLAY"),
+          ),
+        ).toBe(false);
         return {
           root: root.runId,
           oldPid,
