@@ -341,7 +341,8 @@ async function insertBatch(
 async function scan(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
-  maxRowBytes: number,
+  // Include the blob owner's 100 MiB allowance plus keys and JSON metadata.
+  maxRowBytes = 128 * 1024 * 1024,
   destination?: Endpoint,
   assertCurrent = () => {},
   transformRow?: (table: string, row: PortRow) => PortRow | undefined,
@@ -540,7 +541,7 @@ export async function inspectDatabasePort(
     }
     return {
       catalog,
-      tables: await scan(source, descriptor, 64 * 1024 * 1024),
+      tables: await scan(source, descriptor),
       allocations: await readDatabasePortAllocations(source, descriptor),
     };
   } finally {
@@ -597,7 +598,7 @@ export async function materializeDatabasePort(params: {
     params.descriptor,
     params.activeFragments,
   );
-  const maxRowBytes = params.maxRowBytes ?? 64 * 1024 * 1024;
+  const maxRowBytes = params.maxRowBytes;
   const postgres = [source, destination].find(
     (endpoint): endpoint is Extract<Endpoint, { engine: "postgres" }> =>
       endpoint.engine === "postgres",
