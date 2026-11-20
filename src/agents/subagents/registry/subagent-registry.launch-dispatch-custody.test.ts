@@ -253,7 +253,7 @@ it.each(["landed", "not-landed"] as const)(
       expect(abortCalls).toEqual([]);
       // With its launch marker cleared it is a plain child of the crashed process, so
       // upstream #200807's restart sweeper settles it exactly once with the crash
-      // interruption, which a resumed parent's collector wait reads (O3).
+      // interruption, which a resumed parent's collector wait reads.
       const restored = durable().get(gatewayRunId);
       expect(restored?.launchDispatch).toBeUndefined();
       expect(restored?.execution).toMatchObject({
