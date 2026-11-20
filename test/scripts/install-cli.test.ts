@@ -651,6 +651,111 @@ fi
     expect(JSON.parse(failure.stdout)).toEqual({ event: "error", message: dynamicValue });
   });
 
+  it.each([
+    { tool: "npm", method: "npm", json: true },
+    { tool: "npm", method: "npm", json: false },
+    { tool: "pnpm", method: "git", json: true },
+  ] as const)(
+    "keeps $tool output out of JSON stdout without changing human output (json=$json)",
+    ({ tool, method, json }) => {
+      const f = makeFixture(`${tool}-output`);
+      f.runtime(
+        "prefix/tools/node-v24.22.1/bin",
+        `
+case "$1" in
+  --version) printf '11.15.0\\n' ;;
+  config) printf 'null\\n' ;;
+  install)
+    [[ "$2 $3" == "-g --prefix" ]] || exit 64
+    mkdir -p "$4/lib/node_modules/openclaw/dist"
+    printf 'console.log("2026.11.6");\\n' > "$4/lib/node_modules/openclaw/dist/entry.js"
+    printf '\\nchanged 1 package in 1s\\n'
+    ;;
+  *) exit 64 ;;
+esac
+`,
+      );
+      symlinkSync("node-v24.22.1", join(f.root, "prefix/tools/node"));
+      if (method === "git") {
+        // The real run_pnpm runs this stub as a child process that prints pnpm-style progress.
+        f.shell(
+          "bin/pnpm",
+          `
+case "$1" in
+  config) printf 'undefined\\n' ;;
+  install | ui:build | build) printf 'pnpm %s output\\n' "$1" ;;
+  *) exit 64 ;;
+esac
+`,
+        );
+        mkdirSync(join(f.root, "repo/.git"), { recursive: true });
+        f.write("repo/dist/entry.js", 'console.log("2026.11.6");\n');
+      }
+      const result = f.run(
+        `
+        install_node() { :; }
+        ${
+          method === "git"
+            ? `resolve_git_openclaw_ref() { printf 'main\\n'; }
+        checkout_git_openclaw_ref() { :; }
+        ensure_pnpm() { set_pnpm_cmd "$ROOT/bin/pnpm"; }
+        git() { return 0; }`
+            : ""
+        }
+        main ${json ? "--json " : ""}--${method} --runtime-only --node-version 24.22.1 --version latest --prefix "$ROOT/prefix"${method === "git" ? ' --git-dir "$ROOT/repo"' : ""}
+      `,
+        { HOME: f.root },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      if (!json) {
+        expect(result.stdout).toContain(
+          "Installing OpenClaw (latest)...\n\nchanged 1 package in 1s\nOpenClaw installed (2026.11.6).\n",
+        );
+        expect(result.stderr).not.toContain("changed 1 package in 1s");
+        return;
+      }
+      const isEvent = (line: string) => {
+        try {
+          const value: unknown = JSON.parse(line);
+          return value !== null && typeof value === "object" && "event" in value;
+        } catch {
+          return false;
+        }
+      };
+      // Strip only the final newline so blank lines still count as stray output.
+      const lines = result.stdout.replace(/\n$/, "").split("\n");
+      const events = lines
+        .filter((line) => isEvent(line))
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(events.filter((event) => event.name === "openclaw")).toEqual(
+        method === "npm"
+          ? [
+              { event: "step", name: "openclaw", status: "start", version: "latest" },
+              { event: "step", name: "openclaw", status: "ok", version: "latest" },
+            ]
+          : [
+              {
+                event: "step",
+                name: "openclaw",
+                status: "start",
+                method: "git",
+                repo: "https://github.com/openclaw/openclaw.git",
+              },
+              { event: "step", name: "openclaw", status: "ok", method: "git" },
+            ],
+      );
+      expect(events.at(-1)).toEqual({ event: "done", ok: true, version: "2026.11.6" });
+      const nonEventLines = lines.filter((line) => !isEvent(line));
+      expect(
+        nonEventLines,
+        `stdout lines outside the NDJSON event stream: ${JSON.stringify(nonEventLines)}`,
+      ).toEqual([]);
+      expect(result.stderr).toContain(
+        method === "npm" ? "changed 1 package in 1s" : "pnpm build output",
+      );
+    },
+  );
+
   it("keeps the full Git install on the canonical checkout after an alias is retargeted", () => {
     const root = tempDirs.make("openclaw-install-cli-retargeted-alias-");
     const result = runInstallCliShell(

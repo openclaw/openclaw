@@ -144,6 +144,7 @@ INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
+JSON_EVENT_FD=1
 RUN_ONBOARD=0
 NODE_ONLY=0
 RUNTIME_ONLY=0
@@ -262,7 +263,7 @@ emit_json() {
     quote_json_string "$value"
     output+="$JSON_STRING"
   done
-  printf '%s}\n' "$output"
+  printf '%s}\n' "$output" >&"$JSON_EVENT_FD"
 }
 
 fail() {
@@ -1303,6 +1304,11 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  if [[ "$JSON" -eq 1 ]]; then
+    # --json promises NDJSON-only stdout: keep it for events and send child-process output to stderr.
+    exec 3>&1 1>&2
+    JSON_EVENT_FD=3
+  fi
   # Node-only recovery ignores the method; normal installs validate before any writes.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
