@@ -41,6 +41,7 @@ export const runRegistrySubagentAnnounceFlow: SubagentLifecycleOptions["runSubag
         });
         return committed && isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry);
       },
+      ...(entry?.continuationLineageMissing ? { continuationLineageMissing: true } : {}),
       ...(entry?.traceparent ? { traceparent: entry.traceparent } : {}),
     });
   };

@@ -42,7 +42,7 @@ import {
   countPendingDescendantRuns,
   getLatestLiveSubagentRunByChildSessionKey,
 } from "./subagent-registry-read.js";
-import { settleOwnerlessContinuationChildren } from "./subagent-registry-restart-custody.js";
+import { settleContinuationRestartCustody } from "./subagent-registry-restart-custody.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-launch-record.js";
 import type { SubagentRegistrationOwnership } from "./subagent-registry-run-launch.js";
@@ -593,7 +593,7 @@ export function activateSubagentRegistry(
     activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
     bindGatewayContextResolver(subagentRuns, activeGatewayContextResolver);
     await subagentRestorer.activate();
-    await settleOwnerlessContinuationChildren(startSubagentAnnounceCleanupFlow);
+    await settleContinuationRestartCustody(startSubagentAnnounceCleanupFlow);
   });
 }
 export { whenSubagentRegistryActivated } from "./subagent-registry-activation.js";

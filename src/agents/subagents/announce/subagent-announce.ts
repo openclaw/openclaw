@@ -560,6 +560,7 @@ async function runSubagentAnnounceFlowBound(
           killed,
           findings,
           noVisibleResult: !childResultText && findings === "(no output)",
+          lineageMissing: params.continuationLineageMissing,
           statsLine,
           modelRouteChange,
           preserveModelRouteNotice,

@@ -20,6 +20,10 @@
 //    outcome for the delegate.
 // 6. A restart the delegate's work survives settles nothing early: a delegate the new lifecycle
 //    runs, or one parked in `sessions_yield`, gets no outcome and no terminal settlement.
+// 7. A delegate whose child session entry is missing has no spawn lineage to follow (🌊's ruling
+//    on upstream #201970's root walk): no root is inferred or resumed for it. While its row still
+//    binds its requester, its one outcome says "lineage missing; election outcome unknown", once,
+//    through its return mode. Without that binding it is recorded unresolved and delivers nothing.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
@@ -34,7 +38,9 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { formatContinuationChildRunId } from "../../../shared/continuation-run-key.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
+import { deriveContinuationDelegateChildSessionKey } from "../../subagent-continuation-ids.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
@@ -53,6 +59,7 @@ const {
   addRunningChild,
   shutDownGracefully,
   restartGateway,
+  removeChildSession,
   writeParentSession,
   resumeRoots,
 } = useRestartCustodyWorld();
@@ -107,6 +114,8 @@ it("1: a graceful shutdown stops an accepted delegate with one outcome of its ow
   const delivered = loadSubagentRegistryFromSqlite().get("graceful-delegate");
   expectGracefullyStopped(delivered);
   expect(delivered?.delivery).toMatchObject({ status: "delivered" });
+  // Its spawn lineage is intact, so item 7 records nothing.
+  expect(delivered?.continuationLineageMissing).toBeUndefined();
   expect(fixture.gateway).not.toHaveBeenCalled();
 });
 
@@ -489,17 +498,22 @@ function deliveredThrough(
   }: (typeof RETURN_MODES)[number] | typeof DIRECT_RETURN,
   runId: string,
   status: (runId: string) => string,
+  childSessionKey?: string,
 ) {
   if (mode === "direct") {
     return [
-      { sessionKey: parent, source: `outcome:${runId}`, text: childOutcomeText(runId, status) },
+      {
+        sessionKey: parent,
+        source: `outcome:${runId}`,
+        text: childOutcomeText(runId, status, childSessionKey),
+      },
     ];
   }
   return [
     {
       sessionKey: recipient,
       source: `return:${runId}`,
-      text: childOutcomeText(runId, status),
+      text: childOutcomeText(runId, status, childSessionKey),
       wakeRecipients,
       returnWake: returnWake(runId),
     },
@@ -635,4 +649,164 @@ it("6: a crash leaves a delegate parked in sessions_yield to its message wait: n
   expect(messages).toEqual([]);
   expect(fixture.announce).not.toHaveBeenCalled();
   expect(fixture.gateway).not.toHaveBeenCalled();
+});
+
+/** A production delegate: its run id is its election's claimed launch key (RFC §5.4.4). */
+function productionDelegate(name: string) {
+  const electionId = `election-${name}`;
+  return {
+    electionId,
+    runId: formatContinuationChildRunId(electionId, 1),
+    childSessionKey: deriveContinuationDelegateChildSessionKey("main", `flow-${name}`),
+  };
+}
+
+const gracefulStopCause = (runId: string) =>
+  `stopped by a graceful Gateway shutdown before run ${runId} finished (recorded error: Gateway stopped)`;
+const restartInterruptedCause = (runId: string) =>
+  `interrupted: the Gateway restarted before run ${runId} ended, and no graceful shutdown reached it`;
+/** Item 7: the delegate's one outcome when its spawn lineage is missing. */
+const lineageMissingStatus =
+  (electionId: string, cause: (runId: string) => string) => (runId: string) =>
+    `lineage missing; election outcome unknown (election ${electionId}): ${cause(runId)}. Its child session entry is missing, so no root was resumed for it and any work it saved cannot be located. Not a task failure; the run was not resumed.`;
+
+it.each([DIRECT_RETURN, ...RETURN_MODES])(
+  "7: a graceful restart that finds a $mode delegate's child session entry missing sends one lineage-missing outcome on its route and resumes no root",
+  async (returnMode) => {
+    await writeParentSession();
+    const delegate = productionDelegate(`graceful-${returnMode.mode}`);
+    const child = await addRunningChild(delegate.runId, {
+      ...returnMode.fields,
+      childSessionKey: delegate.childSessionKey,
+    });
+    await removeChildSession(child);
+
+    await shutDownGracefully([child]);
+    const messages = recordRequesterMessages();
+    await restartGateway();
+    await resumeRoots();
+
+    // The requester's one message is the delegate's outcome, on its own route; no root resume
+    // input, since nothing verifies the requester as the root of this delegate's work.
+    expect(messages).toEqual(
+      deliveredThrough(
+        returnMode,
+        delegate.runId,
+        lineageMissingStatus(delegate.electionId, gracefulStopCause),
+        delegate.childSessionKey,
+      ),
+    );
+    const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+    expectGracefullyStopped(durable);
+    expect(durable?.continuationLineageMissing).toEqual({ recordedAt: expect.any(Number) });
+    expect(durable?.delivery).toMatchObject({ status: "delivered" });
+    expect(fixture.announce).toHaveBeenCalledTimes(1);
+    expect(fixture.gateway).not.toHaveBeenCalled();
+  },
+);
+
+it("7: the lineage-missing outcome goes out once: a replayed activation, a second restart and its sweeps add none", async () => {
+  await writeParentSession();
+  const delegate = productionDelegate("once");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+  });
+  await removeChildSession(child);
+  await shutDownGracefully([child]);
+  const messages = recordRequesterMessages();
+
+  await restartGateway();
+  const decided = loadSubagentRegistryFromSqlite().get(delegate.runId)?.continuationLineageMissing;
+  expect(decided).toEqual({ recordedAt: expect.any(Number) });
+  // Activation replays before startup delivers, then the same state restarts again.
+  await activateSubagentRegistry(resolveGateway);
+  await fixture.settle();
+  await resumeRoots();
+  await restartGateway();
+  await resumeRoots();
+
+  expect(messages).toEqual(
+    deliveredThrough(
+      DIRECT_RETURN,
+      delegate.runId,
+      lineageMissingStatus(delegate.electionId, gracefulStopCause),
+      delegate.childSessionKey,
+    ),
+  );
+  expect(fixture.announce).toHaveBeenCalledTimes(1);
+  expect(loadSubagentRegistryFromSqlite().get(delegate.runId)?.continuationLineageMissing).toEqual(
+    decided,
+  );
+});
+
+it("7: after a crash, a delegate whose child session entry is missing gets one lineage-missing interrupted outcome", async () => {
+  await writeParentSession();
+  const earlier = Math.floor(performance.timeOrigin) - 10 * 60_000;
+  const delegate = productionDelegate("crashed");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+    createdAt: earlier,
+    execution: {
+      status: "running",
+      startedAt: earlier,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    },
+  });
+  await removeChildSession(child);
+  const messages = recordRequesterMessages();
+
+  await restartGateway();
+  await resumeRoots();
+
+  expect(messages).toEqual(
+    deliveredThrough(
+      DIRECT_RETURN,
+      delegate.runId,
+      lineageMissingStatus(delegate.electionId, restartInterruptedCause),
+      delegate.childSessionKey,
+    ),
+  );
+  const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expectInterrupted(durable);
+  expect(durable?.continuationLineageMissing).toEqual({ recordedAt: expect.any(Number) });
+  expect(durable?.delivery).toMatchObject({ status: "delivered" });
+});
+
+it("7: with no requester binding left, a missing child session entry is recorded unresolved: no notice, no root resume", async () => {
+  // The requester's session is gone too: the row names a requester nothing can admit.
+  const delegate = productionDelegate("unbound");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+  });
+  await removeChildSession(child);
+  await shutDownGracefully([child]);
+  const messages = recordRequesterMessages();
+  const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+  await restartGateway();
+  await resumeRoots();
+
+  expect(messages).toEqual([]);
+  expect(fixture.announce).not.toHaveBeenCalled();
+  expect(fixture.gateway).not.toHaveBeenCalled();
+  const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expectGracefullyStopped(durable);
+  expect(durable).toMatchObject({
+    continuationLineageMissing: {
+      recordedAt: expect.any(Number),
+      unresolved: "requester-session-missing",
+    },
+    cleanupCompletedAt: expect.any(Number),
+    delivery: { status: "not_required", disposition: "intentional_non_delivery" },
+  });
+  expect(registryWarn).toHaveBeenCalledWith(
+    "continuation delegate restart lineage missing; outcome left unresolved",
+    {
+      runId: delegate.runId,
+      electionId: delegate.electionId,
+      childSessionKey: delegate.childSessionKey,
+      requesterSessionKey: parent,
+      reason: "requester-session-missing",
+    },
+  );
 });

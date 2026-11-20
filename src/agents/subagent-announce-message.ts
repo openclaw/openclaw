@@ -1,3 +1,4 @@
+import { parseContinuationChildRunId } from "../shared/continuation-run-key.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";
 import { describeChildrenEndedWithoutResult } from "./subagents/announce/subagent-announce.requester-settle-message.js";
@@ -5,32 +6,42 @@ import {
   buildSubagentPrivateCompletionInstruction,
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
 } from "./subagents/completion/subagent-completion-instructions.js";
-import { SUBAGENT_RESTART_INTERRUPTED_ERROR } from "./subagents/registry/subagent-registry-restart-custody.js";
+import {
+  SUBAGENT_GATEWAY_STOPPED_ERROR,
+  SUBAGENT_RESTART_INTERRUPTED_ERROR,
+} from "./subagents/registry/subagent-registry-restart-custody.js";
 import type { SubagentRunOutcome } from "./subagents/subagent-run-outcome.types.js";
-
-/** The error upstream's graceful shutdown records (terminateLiveSubagentsForShutdown). */
-const GATEWAY_STOPPED_ERROR = "Gateway stopped";
 
 /**
  * A Gateway stop or restart that ended the run is not a task failure: name what ended it, the
  * run, and what was retained, so the requester can choose to re-dispatch or abandon the task.
+ * A delegate whose spawn lineage is missing says so, with the election it carried out.
  */
 function describeGatewayInterruption(params: {
   outcome: SubagentRunOutcome;
   childRunId: string;
   noVisibleResult?: boolean;
+  lineageMissing?: boolean;
 }): string | undefined {
   const { outcome, childRunId } = params;
   const cause =
     outcome.status !== "error"
       ? undefined
-      : outcome.error === GATEWAY_STOPPED_ERROR
-        ? `stopped by a graceful Gateway shutdown before run ${childRunId} finished (recorded error: ${GATEWAY_STOPPED_ERROR})`
+      : outcome.error === SUBAGENT_GATEWAY_STOPPED_ERROR
+        ? `stopped by a graceful Gateway shutdown before run ${childRunId} finished (recorded error: ${SUBAGENT_GATEWAY_STOPPED_ERROR})`
         : outcome.error === SUBAGENT_RESTART_INTERRUPTED_ERROR
           ? `interrupted: the Gateway restarted before run ${childRunId} ended, and no graceful shutdown reached it`
           : undefined;
   if (!cause) {
     return undefined;
+  }
+  if (params.lineageMissing) {
+    // Kept short: the event caps a status at 500 characters, and both ids may be UUID-sized.
+    const electionId = parseContinuationChildRunId(childRunId)?.recordId;
+    const partial = params.noVisibleResult
+      ? ""
+      : " Its last output before then follows as a partial result.";
+    return `lineage missing; election outcome unknown${electionId ? ` (election ${electionId})` : ""}: ${cause}. Its child session entry is missing, so no root was resumed for it and any work it saved cannot be located. Not a task failure; the run was not resumed.${partial}`;
   }
   const retained = params.noVisibleResult
     ? "No result or partial result was retained; any work it saved before then stays in its child session. Inspect it before re-dispatching or abandoning the task."
@@ -79,6 +90,8 @@ export function buildSubagentAnnounceMessages(params: {
   killed?: boolean;
   findings: string;
   noVisibleResult?: boolean;
+  /** A restart found this delegate's child session entry missing (its registry row records it). */
+  lineageMissing?: boolean;
   statsLine?: string;
   modelRouteChange?: string;
   preserveModelRouteNotice?: boolean;

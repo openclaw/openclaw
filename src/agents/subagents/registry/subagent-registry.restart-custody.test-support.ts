@@ -24,7 +24,10 @@ import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/age
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { deliverSubagentAnnouncement } from "../announce/subagent-announce-delivery.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  removeSubagentSessionEntry,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistry,
   addSubagentRunForTests,
@@ -48,14 +51,18 @@ const gatewayContext = {
 export const resolveGateway = () => gatewayContext;
 
 /** The exact runtime context a main-session requester receives as one child's outcome. */
-export function childOutcomeText(runId: string, status: (runId: string) => string): string {
+export function childOutcomeText(
+  runId: string,
+  status: (runId: string) => string,
+  childSessionKey = `agent:main:subagent:${runId}`,
+): string {
   return [
     "OpenClaw runtime context:",
     "This context is runtime-generated, not user-authored. Keep internal details private.",
     "",
     "[Internal task completion event]",
     "source: subagent",
-    `session_key: agent:main:subagent:${runId}`,
+    `session_key: ${childSessionKey}`,
     // Suppressed child-session effects leave the session id unread; it is never invented.
     "session_id: unknown",
     "type: subagent task",
@@ -161,7 +168,7 @@ export function useRestartCustodyWorld() {
     runId: string,
     overrides: Partial<Omit<SubagentRunRecord, "runId">> = {},
   ): Promise<SubagentRunRecord> {
-    const childSessionKey = `agent:main:subagent:${runId}`;
+    const childSessionKey = overrides.childSessionKey ?? `agent:main:subagent:${runId}`;
     const storePath = await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
       agentId: "main",
@@ -235,6 +242,15 @@ export function useRestartCustodyWorld() {
     await fixture.settle();
   }
 
+  /** The child's session entry is gone (its spawn lineage with it); its registry row remains. */
+  async function removeChildSession(row: SubagentRunRecord) {
+    await removeSubagentSessionEntry({
+      stateDir: fixture.stateDir,
+      agentId: "main",
+      sessionKey: row.childSessionKey,
+    });
+  }
+
   async function writeParentSession() {
     return await writeSubagentSessionEntry({
       stateDir: fixture.stateDir,
@@ -264,6 +280,7 @@ export function useRestartCustodyWorld() {
     addRunningChild,
     shutDownGracefully,
     restartGateway,
+    removeChildSession,
     writeParentSession,
     resumeRoots,
   };

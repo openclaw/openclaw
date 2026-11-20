@@ -47,6 +47,8 @@ export type SubagentAnnounceFlowParams = Omit<
   persistContinuationRecipientAuthorityBinding?: (
     binding: ContinuationRecipientAuthorityBinding,
   ) => boolean | Promise<boolean>;
+  /** A restart found this delegate's child session entry, and so its spawn lineage, missing. */
+  continuationLineageMissing?: boolean;
   traceparent?: string;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: GatewayContextResolver;
