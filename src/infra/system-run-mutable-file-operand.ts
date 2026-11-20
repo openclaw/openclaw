@@ -16,6 +16,7 @@ import {
   unwrapKnownShellMultiplexerInvocation,
 } from "./exec-wrapper-resolution.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
+import { resolveFilesystemPathCandidate } from "./executable-path.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";
 import {
   normalizePackageManagerExecToken,
@@ -355,7 +356,7 @@ async function resolveDirectScriptExecutableIndex(params: {
   ) {
     return null;
   }
-  const resolvedPath = path.resolve(params.cwd ?? process.cwd(), executable);
+  const resolvedPath = resolveFilesystemPathCandidate(executable, params.cwd);
   return (await pathLooksMutableForShellPayload(resolvedPath)) ? unwrapped.baseIndex : null;
 }
 
@@ -496,7 +497,7 @@ async function shellPayloadNeedsStableBinding(
   if (!path.isAbsolute(firstToken)) {
     return true;
   }
-  const resolvedPath = path.resolve(cwd ?? process.cwd(), firstToken);
+  const resolvedPath = resolveFilesystemPathCandidate(firstToken, cwd);
   if (await pathLooksMutableForShellPayload(resolvedPath)) {
     return true;
   }
