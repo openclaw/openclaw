@@ -547,6 +547,7 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
       pointer-events: auto;
     }
     & > span {
+      position: relative;
       --art-size: 64px;
     }
     & > div {

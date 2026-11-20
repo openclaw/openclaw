@@ -6,15 +6,19 @@ import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
-import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  capture,
+  expectTemplateArtworkSettles,
+  heldArtworkUrl,
+  proofDir,
+} from "./templates-catalog-browser.test-support.ts";
 import {
   agentsList,
   auditUrl,
@@ -24,24 +28,6 @@ import {
   soulExcerpt,
   workflowOperator,
 } from "./templates-catalog-gateway.test-support.ts";
-
-const proofDir = createControlUiE2eArtifactDir("templates-catalog");
-const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
-  const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
-    animations: "disabled",
-    elements: name === "after-catalog" ? [content] : [],
-    scrollTo,
-  });
-  await writeFile(`${proofDir}/${name}.png`, frame.png);
-  await writeFile(
-    `${proofDir}/${name}.json`,
-    JSON.stringify({
-      viewport: page.viewportSize(),
-      scale: await page.evaluate(() => devicePixelRatio),
-      elements: frame.elements.map(({ bounds }) => ({ bounds })),
-    }),
-  );
-};
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browserAvailable = canRunPlaywrightChromium(executablePath);
@@ -125,6 +111,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     // Placeholders cover the visible catalog at every size without measuring it.
     expect(placeholders.bottom).toBeGreaterThanOrEqual(viewport.height);
     expect(placeholders.hidden).toBe(true);
+    // A sparse response must not move the next shelf header up from a guessed row.
+    expect(await loading.locator(".plugin-catalog-section__header").count()).toBe(1);
     expect(await loading.count()).toBe(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
@@ -149,11 +137,30 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     const card = page.locator("[data-templates-entry]").first();
     await card.waitFor();
     expect(await loading.count()).toBe(0);
+    // An entry with no artwork starts directly in its fallback, not pending.
+    await card.locator(".agents-home__template-art svg").waitFor();
+    expect(await card.locator(".agents-home__template-art .skeleton").count()).toBe(0);
     expect(await card.evaluate(rect)).toEqual(placeholderCard);
     expect(await page.locator(".plugin-catalog-section__header").first().evaluate(rect)).toEqual(
       placeholderHeader,
     );
   });
+
+  it.each(["light", "dark"] as const)(
+    "paints artwork placeholders until each image settles in %s",
+    async (theme) => {
+      const viewport =
+        theme === "dark" ? { width: 400, height: 844 } : { width: 1280, height: 900 };
+      const entry = { ...workflowOperator, iconUrl: heldArtworkUrl };
+      const { page, gateway } = await fixture(viewport, entry, undefined, true, theme);
+      await expectTemplateArtworkSettles(
+        page,
+        () => gateway.resolveDeferred("templates.catalog.search"),
+        theme,
+        entry.displayName,
+      );
+    },
+  );
 
   async function openDetail(page: Page) {
     const card = page.locator("[data-templates-explore] [data-templates-entry]").first();
