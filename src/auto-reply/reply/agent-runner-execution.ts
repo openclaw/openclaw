@@ -16,6 +16,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
 import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-model-auto-revert.js";
 import { captureAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { prepareChildSessionPublication } from "../../channels/message-access/child-session-publication.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -385,6 +386,8 @@ async function executeAgentTurnInternalLoop(
   let subagentContinuationPrepared = false;
   while (true) {
     try {
+      // Settle a memoized preflight refusal here, before continuation or model work.
+      await prepareChildSessionPublication(params.followupRun.run);
       if (!subagentContinuationPrepared) {
         await prepareReplySubagentContinuation(params, runId, runtimeConfig, preparedRunAdmission);
         subagentContinuationPrepared = true;
