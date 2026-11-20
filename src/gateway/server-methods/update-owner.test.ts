@@ -221,7 +221,7 @@ it.each(promptUpdateCases)(
         "hosting Gateway guidance",
       );
       const action = expectDefined(
-        guidance.match(/perform the work with `gateway`: ([\w.]+)/u)?.[1],
+        guidance.match(/`gateway`: ([\w.]+)/u)?.[1],
         "prompt-advertised update action",
       );
       const result = await tool.execute("update", {
@@ -279,7 +279,6 @@ it.each(promptUpdateCases)(
         );
       }
       expect(guidance).toContain("On an explicit owner request");
-      expect(guidance).toContain("Do not redirect the owner to slash commands or a terminal");
       expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },

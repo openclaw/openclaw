@@ -7,6 +7,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveAmbientOwnerAgentId,
+  resolveNativeModelPrimary,
   tryResolveAmbientOwnerAgentId,
 } from "./agent-scope.js";
 import {
@@ -19,6 +20,7 @@ import { findModelInCatalog } from "./model-catalog-lookup.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
@@ -601,12 +603,18 @@ export async function prewarmDefaultNativeModelCatalog(config: OpenClawConfig): 
     return;
   }
   const { provider, model } = resolveDefaultModelForAgent({ cfg: config, agentId });
+  const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId });
+  // A built-in fallback is not startup demand. Keep warmup for configured models/runtimes and
+  // signed-in defaults, without probing native auth or starting discovery to decide.
+  if (
+    !resolveNativeModelPrimary(config, agentId) &&
+    !owner?.authModes[provider] &&
+    !resolveModelRuntimePolicy({ config, agentId, provider, modelId: model }).policy
+  ) {
+    return;
+  }
   // The turn chooses its runtime from the published row's transport; match it.
-  const selected = findModelInCatalog(
-    getPublishedPreparedModelCatalogOwnerSnapshot({ config, agentId })?.modelCatalog.entries ?? [],
-    provider,
-    model,
-  );
+  const selected = findModelInCatalog(owner?.modelCatalog.entries ?? [], provider, model);
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: config,
     provider,

@@ -1,5 +1,7 @@
-import { Errored, For, Loading, Show } from "solid-js";
+import { createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
+import { ModalDialog } from "../../components/modal-dialog.tsx";
+import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -13,6 +15,8 @@ import {
   renderPublisherIdentity,
 } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
+import { createTemplateAutomationSummary } from "./template-automation-summary.ts";
+import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
@@ -72,7 +76,7 @@ function renderTemplateTrustWarning(warning: string) {
     <InlineAlert tone="warning" class="templates-trust-warning" role="alert">
       {audit ? (
         <>
-          <strong class="templates-trust-warning__title">{title}</strong>
+          <strong>{title}</strong>
           <p>{audit.overview}</p>
           {detailsUrl ? (
             <a href={detailsUrl} target="_blank" rel="noopener noreferrer">
@@ -81,7 +85,7 @@ function renderTemplateTrustWarning(warning: string) {
           ) : undefined}
         </>
       ) : (
-        <span class="templates-trust-warning__plain">{warning}</span>
+        <span>{warning}</span>
       )}
     </InlineAlert>
   );
@@ -89,6 +93,10 @@ function renderTemplateTrustWarning(warning: string) {
 
 function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const contents = () => props.view.readDetail()!.contents;
+  const automationSummary = createTemplateAutomationSummary();
+  const [automation, setAutomation] = createSignal<
+    TemplateCatalogDetail["contents"]["automations"][number] | null
+  >(null);
   return (
     <>
       <TemplateWorkspaceFiles
@@ -102,29 +110,24 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         contents().skills.map((item) => ({
           name: item.name,
           description: item.excerpt,
-          trailing: (
-            <span class="muted">
-              {item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })}
-            </span>
-          ),
           onOpen: () => props.view.onOpenPreview("skill", item.name),
         })),
         () => (
-          <Icon name="book" />
+          <Icon name="sparkles" />
         ),
       )}
       {renderPluginCapabilitySection(
         t("templatesCatalog.integrations"),
         contents().integrations.map((item) => ({
-          name: item.name,
-          description:
+          name:
             item.kind === "plugin"
-              ? item.source === "bundled"
-                ? t("templatesCatalog.dependencyBundled")
-                : t("templatesCatalog.dependencyClawHub", { version: item.version })
-              : t("tabs.mcp"),
+              ? (props.view.pluginPresentation?.[item.name]?.name ?? item.name)
+              : item.name,
+          icon:
+            item.kind === "plugin"
+              ? () => <TemplatePluginIcon plugin={props.view.pluginPresentation?.[item.name]} />
+              : undefined,
+          description: item.kind === "plugin" ? undefined : t("tabs.mcp"),
           trailing:
             item.kind === "plugin" &&
             item.source === "clawhub" &&
@@ -148,23 +151,34 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
-          details: (
-            <p>
-              {item.schedule} · {item.timezone}
-              {" · "}
-              {t(
-                item.enabled
-                  ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationDisabled",
-              )}
-            </p>
-          ),
+          description: automationSummary(item),
+          onOpen: () => setAutomation(item),
         })),
         () => (
           <Icon name="clock" />
         ),
       )}
+      <Show when={automation()}>
+        {(item) => (
+          <ModalDialog label={item().name} open onModal-cancel={() => setAutomation(null)}>
+            <article class="oc-dialog">
+              <DialogHeader
+                title={
+                  <>
+                    <span class="plugin-capability__icon" aria-hidden="true">
+                      <Icon name="clock" />
+                    </span>
+                    {item().name}
+                  </>
+                }
+                description={automationSummary(item())}
+                onClose={() => setAutomation(null)}
+              />
+              <div class="oc-dialog__body template-automation-message">{item().message}</div>
+            </article>
+          </ModalDialog>
+        )}
+      </Show>
     </>
   );
 }
@@ -265,10 +279,8 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                                 role="status"
                                 aria-label={t("templatesCatalog.contentsLoading")}
                               >
-                                <div class="templates-content-skeleton__title skeleton" />
-                                <For each={[0, 1, 2, 3]}>
-                                  {() => <div class="templates-content-skeleton__row skeleton" />}
-                                </For>
+                                <div class="skeleton-title skeleton" />
+                                <For each={[0, 1, 2, 3]}>{() => <div class="skeleton" />}</For>
                               </section>
                             }
                           >
@@ -312,9 +324,9 @@ export function TemplateAddFeedback(props: { view: TemplatesCatalogViewProps }) 
         </InlineAlert>
       </Show>
       <Show when={props.view.consentWarning}>
-        <section class="templates-add-consent" aria-label={t("templatesCatalog.trustReview")}>
+        <section class="templates-add-consent stack" aria-label={t("templatesCatalog.trustReview")}>
           {renderTemplateTrustWarning(props.view.consentWarning!)}
-          <div class="templates-add-consent__actions">
+          <div class="template-actions templates-add-consent__actions">
             <button type="button" class="btn" onClick={() => props.view.onCancelConsent()}>
               {t("common.cancel")}
             </button>

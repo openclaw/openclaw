@@ -9,6 +9,7 @@ import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import type { AutomationProjection } from "../chat-automation-projection-loader.ts";
 import { createPendingSteerLookup } from "../chat-pending-input-display.ts";
 import { indexQuestionPrompts } from "../chat-question-placement.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -26,6 +27,7 @@ import {
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
+import { projectInlineSwarms } from "./chat-inline-swarm-projection.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
@@ -40,7 +42,10 @@ import {
   createTranscriptActions,
   createTranscriptMessageOptions,
 } from "./chat-transcript-actions.ts";
-import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
+import {
+  createLiveStatusSignature,
+  projectTranscriptActivity,
+} from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
   resolveTranscriptAssistantIdentity,
@@ -62,7 +67,6 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptContextDependencies,
-  type TranscriptDependencyItem,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -72,6 +76,7 @@ export function projectChatTranscript(
   props: ChatThreadProps,
   transcript: ChatTranscriptSession,
   search = getTranscriptState(props.paneId).search.snapshot,
+  projectAutomations?: AutomationProjection,
 ) {
   const state = getTranscriptState(props.paneId);
   const { actions, dependencies: actionDependencies } = createTranscriptActions(
@@ -113,6 +118,7 @@ export function projectChatTranscript(
     locale,
     messages: props.messages,
     toolMessages: props.toolMessages,
+    projectAutomations,
     guardianNotices: props.guardianNotices,
     streamSegments: props.streamSegments,
     get stream() {
@@ -255,7 +261,8 @@ export function projectChatTranscript(
     (!props.historyPagination?.hasMore || search.open);
   const { isDirectThread, avatarPlacement } = resolveTranscriptAvatarPlacement(props, chatItems);
   transcript.layout.configureRows(props, avatarPlacement, searchFiltering || recovery.revision > 0);
-  const showLoadingSkeleton = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const isLoading = props.loading && transcriptItems.length === 0 && !hasTypingActors;
+  const showLoadingSkeleton = isLoading && props.selectedSession?.hasMessages === true;
   // Pending nonempty rows must not settle an empty viewport or overwrite its saved reader.
   transcript.layout.ready &&= isEmpty;
   const presented =
@@ -391,40 +398,28 @@ export function projectChatTranscript(
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
   };
-  // Only working indicators depend on live usage and subagent status.
+  const swarmsByFrame = projectInlineSwarms(
+    props,
+    rows,
+    liveItem,
+    searchFiltering,
+    actions.onOpenSubagent,
+  );
+  // Only working indicators depend on live usage and subagent wait status.
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
     subagents.statusKey,
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: TranscriptDependencyItem): string => {
-    if (item.kind === "reading-indicator") {
-      return workingUsageKey;
-    }
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const duration = item.runId ? transcriptChain.runDurations.get(item.runId) : undefined;
-    const statusKey = `${duration ?? ""}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Continuation options already participate in the shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
+  const liveStatusSignature = createLiveStatusSignature(
+    workingUsageKey,
+    transcriptChain.runDurations,
+    latestAssistantItemKey,
+    continuations,
+    searchFiltering,
+    (key) => swarmsByFrame.get(key)?.signature,
+  );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
@@ -588,6 +583,7 @@ export function projectChatTranscript(
         options: {
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
+          swarms: swarmsByFrame.get(item.key)?.views,
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,
@@ -704,6 +700,7 @@ export function projectChatTranscript(
               : message,
         },
     isEmpty,
+    isLoading,
     showLoadingSkeleton,
     searchOpen: search.open,
     renderRows: (overlay: JSX.Element = null, header: TranscriptHeader | null = null) => {

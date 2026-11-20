@@ -178,6 +178,31 @@ describe("Gateway index over Harness workspace files", () => {
     },
   );
 
+  it("finds a new Harness note on the next CLI search of a populated index", async () => {
+    const { harness } = await registerHarness();
+    const cfg = createConfig();
+    await write(harness, "memory/first.md", "The observatory keeps a sidereal clock.");
+    const initial = await fixture.getFreshManager(cfg, "cli", true);
+    try {
+      expect(await search(initial, "sidereal")).toContainEqual(
+        expect.objectContaining({ path: "memory/first.md" }),
+      );
+    } finally {
+      await initial.close();
+    }
+
+    // The one-shot reader has no watcher. Only the Harness sees the new file.
+    await write(harness, "memory/second.md", "The hydrophone is stored below deck.");
+    const next = await fixture.getFreshManager(cfg, "cli", true);
+    try {
+      expect(await search(next, "hydrophone")).toContainEqual(
+        expect.objectContaining({ path: "memory/second.md" }),
+      );
+    } finally {
+      await next.close();
+    }
+  });
+
   it("drains host edits arriving during indexing into the next watch generation", async () => {
     const { harness, files, changed } = await registerHarness();
     await write(harness, "memory/first.md", "alpha first.");

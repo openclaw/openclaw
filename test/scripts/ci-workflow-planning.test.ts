@@ -160,7 +160,7 @@ describe("PostgreSQL conformance selection", () => {
     expect(smoke.with).toEqual({
       image:
         "pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a",
-      target: "src/gateway/server-database-engine.postgres.test.ts",
+      target: "src/gateway/server-database-engine-cron.postgres.test.ts",
     });
   });
 
@@ -6191,11 +6191,14 @@ describe("ci workflow guards", () => {
     expect(result.status, result.output).toBe(0);
     const fullBoat = "qualificationDispatch" in scenario && scenario.qualificationDispatch;
     expect(result.outputs).toMatchObject({
-      runner_profile: scenario.admitted ? "hybrid" : "github",
-      node_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
-      effective_runner_backend: scenario.admitted ? (fullBoat ? "boat" : "hybrid") : "github",
-      placement_runner_backend: scenario.admitted ? "hybrid" : "github",
+      runner_profile: scenario.admitted && fullBoat ? "hybrid" : "github",
+      node_runner_backend: scenario.admitted && fullBoat ? "boat" : "github",
+      effective_runner_backend: scenario.admitted && fullBoat ? "boat" : "github",
+      placement_runner_backend: scenario.admitted && fullBoat ? "hybrid" : "github",
     });
+    if (scenario.admitted && !fullBoat) {
+      expect(result.outputs.boat_node_job_limit).toBe("0");
+    }
   });
 
   it("routes retained Boat plans and retries without pilot exceptions", () => {
@@ -6215,8 +6218,10 @@ describe("ci workflow guards", () => {
       // Already-emitted plans and explicit qualifications keep the full Boat route.
       preflightOutputs: {
         ...admitted.outputs,
+        runner_profile: "hybrid",
         node_runner_backend: "boat",
         effective_runner_backend: "boat",
+        placement_runner_backend: "hybrid",
       },
     };
     for (const [name, runner] of [

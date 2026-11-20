@@ -354,6 +354,8 @@ function workerDeployBuildConfig(
       WORKER_DEPLOY_VERSION: JSON.stringify(workerDeployVersion),
     },
     alias: {
+      // Template portrait review runs on the Gateway, not in the portable worker.
+      "@resvg/resvg-js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
       "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
@@ -520,7 +522,7 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
-    // Ship the repaired compression dependency to npm installs as well as source builds.
+    // Bundle tar/raw and its repaired minizlib dependency for installed runtimes too.
     id === "tar" ||
     id.startsWith("tar/") ||
     // Keep htmlparser2's decoder version intact instead of binding it to the root major.
@@ -1086,7 +1088,8 @@ const configs: UserConfig[] = [
           ? Object.fromEntries(
               Object.entries(runtimeProcessWorkerDependencies).map(([key, source]) => [
                 "worker/" + key,
-                source,
+                // Bare node_modules paths can resolve against an enclosing checkout.
+                path.resolve(repoRoot, source),
               ]),
             )
           : {}),
