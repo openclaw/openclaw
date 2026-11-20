@@ -1,0 +1,2 @@
+# Backport #199689: Linux unset/blank/explicit TMPDIR plus retained platform behavior.
+19
