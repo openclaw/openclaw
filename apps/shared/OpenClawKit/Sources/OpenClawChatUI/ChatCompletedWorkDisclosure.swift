@@ -15,52 +15,15 @@ struct ChatCompletedWorkDisclosure<Content: View>: View {
             }
             .padding(.top, 8)
         } label: {
-            Text(self.label)
+            Text(ChatCompletedWorkSummary.label(work: self.work))
                 .font(OpenClawChatTypography.caption)
                 .fixedSize(horizontal: false, vertical: true)
-                #if os(iOS)
-                .foregroundStyle(Color.secondary)
-                .frame(minHeight: 44)
-                #else
                 .foregroundStyle(.secondary)
-                #endif
         }
         #if os(iOS)
-        .disclosureGroupStyle(ChatCompletedWorkDisclosureStyle())
+        .disclosureGroupStyle(ChatInlineDisclosureStyle(chevron: .secondary))
         #endif
         .accessibilityIdentifier("chat-completed-work-\(self.work.anchorID)")
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-
-    private var label: String {
-        ChatCompletedWorkSummary.label(work: self.work, expanded: self.isExpanded)
-    }
 }
-
-#if os(iOS)
-private struct ChatCompletedWorkDisclosureStyle: DisclosureGroupStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Button {
-                configuration.isExpanded.toggle()
-            } label: {
-                HStack {
-                    configuration.label
-                    Spacer(minLength: 8)
-                    Image(systemName: configuration.isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .accessibilityHidden(true)
-                }
-                .frame(minHeight: 44)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityValue(configuration.isExpanded ? Text("Expanded") : Text("Collapsed"))
-            if configuration.isExpanded {
-                configuration.content
-            }
-        }
-    }
-}
-#endif
