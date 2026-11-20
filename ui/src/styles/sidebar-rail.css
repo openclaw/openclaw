@@ -1,3 +1,9 @@
+.shell--navigation-rail,
+.sidebar--rail {
+  --sidebar-panel-radius: calc(18px * var(--openclaw-corner-radius-scale));
+  --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
 .sidebar.sidebar--rail {
   flex-direction: row;
   overflow: visible;
@@ -49,10 +55,8 @@
    the straight divider. The content side keeps its square edge and the shell's divider. */
 .sidebar--rail .sidebar-shell {
   --sidebar-pad-x: 8px;
-  --sidebar-panel-radius: calc(18px * var(--openclaw-corner-radius-scale));
   min-width: 0;
   overflow: hidden;
-  --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
   background: var(--sidebar-bg);
   /* The hairline is drawn inside the panel so it moves nothing; the page side has none. */
   box-shadow:
@@ -72,6 +76,31 @@
 .shell:not(.shell--nav-collapsed, .shell--settings) .sidebar-rail,
 .shell-nav:has(openclaw-app-sidebar[data-peek]) .sidebar-rail {
   border-inline-end-color: transparent;
+}
+
+/* When the panel is hidden, the workspace takes over its rounded edge beside the rail.
+   Paint only the seam, below sidebar peeks, without clipping the workspace itself. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  .sidebar-rail {
+    border-inline-end-color: transparent;
+  }
+
+  &::after {
+    grid-column: 2;
+    grid-row: 1 / -1;
+    justify-self: start;
+    z-index: 9;
+    inline-size: calc(2 * var(--sidebar-panel-radius));
+    border-inline-start: 1px solid var(--sidebar-panel-hairline);
+    border-start-start-radius: var(--sidebar-panel-radius);
+    border-end-start-radius: var(--sidebar-panel-radius);
+    corner-shape: superellipse(1.5);
+    box-shadow: 0 0 0 var(--sidebar-panel-radius) var(--sidebar-rail-surface, var(--sidebar-bg));
+    clip-path: inset(0);
+    content: "";
+    pointer-events: none;
+  }
 }
 
 /* Preserve title space beside the rail, row insets, and the 44px menu target. */

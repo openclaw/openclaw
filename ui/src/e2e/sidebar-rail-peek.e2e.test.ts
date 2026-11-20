@@ -1,3 +1,4 @@
+import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -23,6 +24,28 @@ suite.define(() => {
           .getByRole("button", { name: "Collapse sidebar", exact: true })
           .click();
         await sidebar.waitFor({ state: "hidden" });
+
+        // The rail's surface reaches into both workspace corners, but not across the straight edge.
+        const rail = (await page.locator(".sidebar-rail").boundingBox())!;
+        const seam = await page.screenshot({
+          animations: "disabled",
+          scale: "css",
+          clip: { x: Math.floor(rail.x + rail.width) - 3, y: 0, width: 7, height: 800 },
+        });
+        const image = photon.PhotonImage.new_from_byteslice(seam);
+        try {
+          const pixels = image.get_raw_pixels();
+          const pixel = (x: number, y: number) => {
+            const offset = (y * image.get_width() + x) * 4;
+            return pixels.subarray(offset, offset + 3);
+          };
+          expect(pixel(6, 4), "top corner matches the rail").toEqual(pixel(0, 4));
+          expect(pixel(6, 795), "bottom corner matches the rail").toEqual(pixel(0, 795));
+          expect(pixel(6, 399), "workspace still differs from the rail").not.toEqual(pixel(0, 399));
+        } finally {
+          image.free();
+        }
+
         const contentLeft = () =>
           page.locator("main.content").evaluate((main) => main.getBoundingClientRect().left);
         const left = await contentLeft();
