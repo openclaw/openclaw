@@ -292,7 +292,7 @@ export async function prepareWorkerTurnPrompt(params: {
     });
     params.history = retireUserRowPromptUpdates(params.history, entries, pinned.restart);
     if (pinned.update) {
-      assembly.effectivePrompt = `${pinned.update.content}\n\n${assembly.effectivePrompt}`;
+      assembly.effectivePrompt = `${assembly.effectivePrompt}\n\n${pinned.update.content}`;
     }
     systemPromptText = pinned.systemPrompt;
     // The checkpoint follows the worker's committed rows; a failed turn writes none. Its

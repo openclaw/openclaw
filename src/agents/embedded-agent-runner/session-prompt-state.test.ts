@@ -853,21 +853,29 @@ describe("embedded session active project keys", () => {
 });
 
 it("retires user-row prompt deltas sent before the newest rebuild", () => {
-  const row = (text: string, timestamp: number, projection?: string) => ({
+  const row = (text: string, timestamp: string, projection?: string) => ({
     role: "user" as const,
     content: [{ type: "text" as const, text }],
-    timestamp,
+    timestamp: Date.parse(timestamp),
     ...(projection
       ? { __openclaw: { modelPromptProjection: { version: 1, text: projection } } }
       : {}),
   });
-  const old = row("before", Date.parse("2026-10-01T00:00:01Z"), `${updateHeading}rule A\n\nbefore`);
-  const hook = row("hooked", Date.parse("2026-10-01T00:00:02Z"), "recalled memory\n\nhooked");
-  const recent = row(
-    "after",
-    Date.parse("2026-10-01T00:00:04Z"),
-    `${updateHeading}rule B\n\nafter`,
+  const plain = row("before", "2026-10-01T00:00:01Z", `before\n\n${updateHeading}rule A`);
+  const hooked = row(
+    "hooked",
+    "2026-10-01T00:00:02Z",
+    `recalled memory\n\nhooked\n\n${updateHeading}rule B`,
   );
+  const recent = row("after", "2026-10-01T00:00:04Z", `after\n\n${updateHeading}rule C`);
+  const update = {
+    role: "custom" as const,
+    customType: "openclaw.system-update",
+    content: `${updateHeading}rule D`,
+    display: false,
+    details: { kind: "prompt-update", turnScoped: false },
+    timestamp: Date.parse("2026-10-01T00:00:05Z"),
+  };
   const rebuild: SessionEntry = {
     ...entryMetadata,
     timestamp: "2026-10-01T00:00:03Z",
@@ -876,21 +884,18 @@ it("retires user-row prompt deltas sent before the newest rebuild", () => {
     customType: "openclaw.system-prompt",
     data: { restart: true },
   };
-  const messages = [old, hook, recent];
+  const messages = [plain, hooked, recent, update];
   expect(retireUserRowPromptUpdates(messages, [], false)).toBe(messages);
   const retained = retireUserRowPromptUpdates(messages, [rebuild], false);
-  expect(retained.map((message) => JSON.stringify(message))).toEqual([
-    JSON.stringify({
-      role: "user",
-      content: old.content,
-      timestamp: old.timestamp,
-      __openclaw: {},
-    }),
-    JSON.stringify(hook),
-    JSON.stringify(recent),
-  ]);
-  // The rebuilding request itself already holds every delta.
-  expect(retireUserRowPromptUpdates(messages, [], true)[2]).not.toHaveProperty(
-    "__openclaw.modelPromptProjection",
+  expect(retained.slice(2)).toEqual([recent, update]);
+  expect(retained[0]).not.toHaveProperty("__openclaw.modelPromptProjection");
+  // Other model-only text on the row survives the retirement.
+  expect(retained[1]).toHaveProperty(
+    "__openclaw.modelPromptProjection.text",
+    "recalled memory\n\nhooked",
   );
+  // The rebuilding request drops prompt-update rows and every older delta.
+  const rebuilding = retireUserRowPromptUpdates(messages, [], true);
+  expect(rebuilding).toHaveLength(3);
+  expect(rebuilding[2]).not.toHaveProperty("__openclaw.modelPromptProjection");
 });
