@@ -15,8 +15,7 @@ const callbackStillOpenMessage =
 const openAICodexOAuthOriginator = "openclaw";
 const callbackUnavailableMessage =
   "Sign in in your browser, then paste the address from its address bar.";
-// A normal browser sign-in, including two-factor steps, finishes well inside this window.
-const localManualFallbackDelayMs = 60_000;
+const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
 type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
 
