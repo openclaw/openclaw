@@ -56,8 +56,8 @@ keeps deciding whether to reply. Existing opt-ins also enable this feature after
 upgrade; no additional setting is needed.
 
 Hosted Decision providers receive the current message, reply reference, bounded
-workspace identity and recent conversation, and charge under their normal usage
-terms. Each evaluation has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
+workspace identity and recent model history, including tool calls and results,
+and charge under their normal usage terms. Each evaluation has a maximum 30-second timeout, bounded further by the turn timeout. Cancellation
 ends the turn; changing the opt-in applies to subsequent turns.
 
 ## Choose a provider and model
