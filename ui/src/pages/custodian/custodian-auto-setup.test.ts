@@ -216,6 +216,12 @@ it("shows a short reason for a failed test and folds the Gateway's error into de
   expect(details.open).toBe(false);
   expect(details.querySelector("pre")?.textContent).toBe(error);
   expect(page.store.autoSetup.ready).toBe(false);
+  // The existing Codex login is tested in place, as automatic setup does.
+  expectRpc(
+    request,
+    "activate.start",
+    expect.objectContaining({ kind: "codex-cli", shareCodexLogin: true }),
+  );
   // After the stored login fails its test, ChatGPT offers its one sign-in, as on main.
   findButton(page, "Sign in with ChatGPT").click();
   await waitForFast(() =>

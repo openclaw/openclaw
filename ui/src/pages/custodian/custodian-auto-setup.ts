@@ -242,6 +242,8 @@ export class CustodianAutoSetup {
       kind: candidate.kind,
       modelRef: candidate.modelRef,
       ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
+      // Like automatic setup: reuse the Codex login instead of a second sign-in.
+      ...(candidate.kind === "codex-cli" ? { shareCodexLogin: true as const } : {}),
       ...this.catalogPreference(),
     };
     const progress = t("custodian.autoSetup.testing");

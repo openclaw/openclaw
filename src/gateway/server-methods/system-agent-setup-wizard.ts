@@ -21,6 +21,7 @@ type SetupActivation = Pick<
   | "workspace"
   | "nativeSessionCatalogsEnabled"
   | "selectModel"
+  | "shareCodexLogin"
 >;
 type AuthWizardRequest = {
   ownerKey: string;

@@ -224,6 +224,8 @@ export type ActivateSetupInferenceParams = {
   isRemoteProviderAuth?: boolean;
   /** Fresh-install opt-in for discovering existing native provider conversations. */
   nativeSessionCatalogsEnabled?: boolean;
+  /** `codex-cli` only: use the native Codex login and home instead of a separate sign-in. */
+  shareCodexLogin?: true;
   /** False when an enclosing persistent-operation boundary owns the setup audit. */
   recordSetupAudit?: boolean;
   runtime: RuntimeEnv;
