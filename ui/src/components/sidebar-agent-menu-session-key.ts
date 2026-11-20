@@ -30,8 +30,8 @@ export function resolveAgentMenuSessionKey(input: {
     archivedFilter: "active",
   });
   const latest = visible.reduce<SessionsListResult["sessions"][number] | null>(
-    (latest, row) =>
-      latest !== null && compareSessionRowsByUpdatedAt(latest, row) <= 0 ? latest : row,
+    (current, row) =>
+      current !== null && compareSessionRowsByUpdatedAt(current, row) <= 0 ? current : row,
     null,
   );
   return (

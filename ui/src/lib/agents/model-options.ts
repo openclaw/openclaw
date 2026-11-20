@@ -11,7 +11,7 @@ import { parseModelPolicyWildcardRef } from "../../../../src/config/model-policy
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
-import { type AgentDisplayConfig, resolveAgentConfig } from "./display.ts";
+import { resolveAgentConfig } from "./display.ts";
 
 type ConfiguredModelOption = {
   value: string;
@@ -26,7 +26,8 @@ function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
   agentId?: string,
 ): ConfiguredModelOption[] {
-  const defaultModels = (configForm as AgentDisplayConfig | null)?.agents?.defaults?.models;
+  const defaults = asOptionalRecord(asOptionalRecord(configForm?.agents)?.defaults);
+  const defaultModels = asOptionalRecord(defaults?.models);
   const agentModels = agentId ? resolveAgentConfig(configForm, agentId)?.entry?.models : undefined;
   const modelIds = Object.keys({ ...defaultModels, ...agentModels });
   const options: ConfiguredModelOption[] = [];
@@ -35,7 +36,7 @@ function resolveConfiguredModels(
     if (!trimmed) {
       continue;
     }
-    const defaultMetadata = defaultModels?.[modelId];
+    const defaultMetadata = asOptionalRecord(defaultModels?.[modelId]);
     const agentMetadata = agentModels?.[modelId];
     const alias =
       agentMetadata?.alias !== undefined

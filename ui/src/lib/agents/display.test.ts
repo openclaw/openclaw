@@ -16,6 +16,10 @@ import {
 } from "./display.ts";
 import { buildModelOptions, createPrimaryModelExclusion } from "./model-options.ts";
 
+it("ignores a draft model map that is not a record", () => {
+  expect(buildModelOptions({ agents: { defaults: { models: "unfinished" } } })).toEqual([]);
+});
+
 it("keeps known unavailable choices visible but disabled", () => {
   const config = { agents: { defaults: { models: { "fixture/blocked": {} } } } };
   const options = buildModelOptions(config, "fixture/blocked", [

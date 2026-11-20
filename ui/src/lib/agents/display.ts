@@ -57,7 +57,7 @@ type AgentConfigEntry = Pick<
   tools?: AgentDisplayTools;
 };
 
-export type AgentDisplayConfig = {
+type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
@@ -118,7 +118,7 @@ export function formatBytes(bytes?: number) {
 }
 
 export function resolveAgentConfig(config: Record<string, unknown> | null, agentId: string) {
-  const cfg = config as AgentDisplayConfig | null;
+  const cfg = config as ConfigSnapshot | null;
   const entry = resolveAgentConfigEntryTarget(config, agentId)?.entry as
     | AgentConfigEntry
     | undefined;
