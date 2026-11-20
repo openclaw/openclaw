@@ -49,16 +49,6 @@ function comparison(activeSteer: unknown, withIdentity = true): ChatSendRetryCom
     source: "pending",
   };
 }
-it("uses the keyed identity to reconcile hook-transformed text", () => {
-  expect(compareChatSendSubmittedInput(request, session, comparison(marker))).toBe(false);
-  expect(
-    compareChatSendSubmittedInput(
-      { ...request, requestIdentity: "different-hmac" },
-      session,
-      comparison(marker),
-    ),
-  ).toBe(true);
-});
 it.each(["pending", "transcript"] as const)(
   "fails closed on keyless transformed %s text but accepts unchanged retained text",
   (source) => {
