@@ -514,11 +514,11 @@ function noWidenThenAssertRule({ roots }) {
 
       let scopes;
       const checkAssertion = (node) => {
-        if (isNestedAssertion(node) || broadTypeKind(node.typeAnnotation) !== null) {
+        if (isNestedAssertion(node)) {
           return;
         }
         const expression = assertedIdentifier(node);
-        if (expression === null) {
+        if (expression === null || broadTypeKind(node.typeAnnotation) !== null) {
           return;
         }
 
