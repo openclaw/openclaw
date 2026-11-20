@@ -17,6 +17,8 @@ import type { WorkshopPluginAvailability } from "./plugin-availability.ts";
 export type WorkshopView = () => {
   context: ApplicationContext;
   agentId: string | null;
+  /** The sidebar shows all agents; only then does the page offer its agent picker. */
+  allAgentsScope: boolean;
   access: ReturnType<typeof resolveWorkshopAccess>;
   /** Set while the Gateway serves no Workshop methods. */
   plugin: WorkshopPluginAvailability | null;
@@ -178,6 +180,9 @@ export type WorkshopReads = {
   viewerRequest: () => { result: Promise<unknown> } | null;
   viewer: () => WorkshopViewerResult | null;
 };
+
+/** The start page lists skills; `open` shows the selected skill or draft as its own page. */
+export type WorkshopPage = { open: () => void; close: () => void };
 
 export type WorkshopFilter = "active" | "drafts" | "archived";
 export type WorkshopSort = "uses" | "recent" | "name";
