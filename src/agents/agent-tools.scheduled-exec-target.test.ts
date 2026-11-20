@@ -86,7 +86,7 @@ describe("createOpenClawCodingTools scheduled exec target", () => {
       }),
     );
     expect(shellSpies.processDefaults).toHaveBeenLastCalledWith(
-      expect.objectContaining({ readOnly: true }),
+      expect.objectContaining({ readOnly: true, includeAncestors: false }),
     );
   });
 
