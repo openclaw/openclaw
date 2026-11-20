@@ -52,7 +52,9 @@ app. Click **Open** to continue.
 </Step>
 <Step title="Approve find local networks">
 macOS may ask whether **OpenClaw** or **bun** may find devices on your local
-network. Bun is the runtime included with OpenClaw.app's bundled Gateway. Choose
+network. OpenClaw asks only when you choose **Nearby** to look for a Gateway on
+another computer; running on this Mac does not need it. Bun is the runtime
+included with OpenClaw.app's bundled Gateway. Choose
 **Allow** when you want LAN discovery and access to a Gateway on another machine.
 **Don't Allow** can prevent discovery and local-network connections.
 
