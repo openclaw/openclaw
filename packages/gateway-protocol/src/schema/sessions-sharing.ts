@@ -2,7 +2,11 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { SessionSharingRoleSchema, SessionVisibilitySchema } from "./sessions-sharing-values.js";
+import {
+  SessionMemberPermissionLevelSchema,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+} from "./sessions-sharing-values.js";
 import { SessionCreatedActorSchema } from "./sessions.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
@@ -14,6 +18,7 @@ export const SessionSharingIdentitySchema = closedObject({
 
 export {
   SESSION_VISIBILITY_VALUES,
+  SessionMemberPermissionLevelSchema,
   SessionSharingRoleSchema,
   SessionVisibilitySchema,
   type SessionSharingRole,
@@ -24,6 +29,7 @@ export const SessionSharingActionSchema = stringLiteralUnion([
   "visibility",
   "member-added",
   "member-removed",
+  "member-access-changed",
 ]);
 
 const SessionSharingTargetParamsSchema = {
@@ -61,8 +67,6 @@ export const SessionPublicShareSetResultSchema = closedObject({
 
 export const SessionMembersListParamsSchema = closedObject(SessionSharingTargetParamsSchema);
 
-export const SessionMemberPermissionLevelSchema = stringLiteralUnion(["read", "suggest", "send"]);
-
 export const SessionMemberSchema = closedObject({
   identityId: NonEmptyString,
   addedBy: NonEmptyString,
@@ -97,7 +101,7 @@ export const SessionMemberPermissionSchema = closedObject({
   level: SessionMemberPermissionLevelSchema,
   options: Type.Array(SessionMemberPermissionLevelSchema, {
     minItems: 1,
-    maxItems: 2,
+    maxItems: 3,
     uniqueItems: true,
   }),
 });
@@ -117,9 +121,19 @@ export const SessionMembersListEvidenceResultSchema = closedObject({
 export const SessionMemberAddParamsSchema = closedObject({
   ...SessionSharingTargetParamsSchema,
   identityId: NonEmptyString,
+  access: Type.Optional(SessionMemberPermissionLevelSchema),
 });
 
-export const SessionMemberRemoveParamsSchema = SessionMemberAddParamsSchema;
+export const SessionMemberSetAccessParamsSchema = closedObject({
+  ...SessionSharingTargetParamsSchema,
+  identityId: NonEmptyString,
+  access: SessionMemberPermissionLevelSchema,
+});
+
+export const SessionMemberRemoveParamsSchema = closedObject({
+  ...SessionSharingTargetParamsSchema,
+  identityId: NonEmptyString,
+});
 
 export const SessionMemberMutationResultSchema = closedObject({
   ok: Type.Literal(true),
@@ -136,6 +150,7 @@ const SessionSharingEventTargetFields = {
 const SessionSharingEventChangeFields = {
   visibility: Type.Optional(SessionVisibilitySchema),
   identityId: Type.Optional(NonEmptyString),
+  access: Type.Optional(SessionMemberPermissionLevelSchema),
   ts: Type.Integer({ minimum: 0 }),
 };
 
@@ -171,6 +186,7 @@ export type SessionMembersListEvidenceResult = Static<
   typeof SessionMembersListEvidenceResultSchema
 >;
 export type SessionMemberAddParams = Static<typeof SessionMemberAddParamsSchema>;
+export type SessionMemberSetAccessParams = Static<typeof SessionMemberSetAccessParamsSchema>;
 export type SessionMemberRemoveParams = Static<typeof SessionMemberRemoveParamsSchema>;
 export type SessionMemberMutationResult = Static<typeof SessionMemberMutationResultSchema>;
 export type SessionSharingEvent = Static<typeof SessionSharingEventSchema>;

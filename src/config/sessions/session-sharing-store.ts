@@ -48,4 +48,5 @@ export async function readSessionMembersInWorker(
 export {
   addSessionMemberInWorker as addSessionMember,
   removeSessionMemberInWorker as removeSessionMember,
+  setSessionMemberAccessInWorker as setSessionMemberAccess,
 } from "./session-sharing-store.async.js";

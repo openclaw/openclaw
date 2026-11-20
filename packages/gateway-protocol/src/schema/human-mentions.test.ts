@@ -17,7 +17,16 @@ it.each([
   const method = validation(validate);
   const base = { ...target, message: "🙂 @Ada", idempotencyKey: "run-mentions" };
   const mention = { profileId: "profile-ada", start: 3, end: 7 };
-  method.accepts(base, { ...base, mentions: [] }, { ...base, mentions: [mention] });
+  method.accepts(
+    base,
+    { ...base, mentions: [] },
+    { ...base, mentions: [mention] },
+    ...["read", "suggest", "send"].map((access) =>
+      Object.assign({}, base, {
+        mentions: [Object.assign({}, mention, { access })],
+      }),
+    ),
+  );
   method.rejects(
     ...[
       ["profile-ada"],
@@ -26,6 +35,7 @@ it.each([
       [{ ...mention, start: -1 }],
       [{ ...mention, start: 3.5 }],
       [{ ...mention, end: 0 }],
+      [{ ...mention, access: "admin" }],
       [{ ...mention, senderProfileId: "forged-sender" }],
       copies(mention, 11),
     ].map((mentions) => Object.assign({}, base, { mentions })),

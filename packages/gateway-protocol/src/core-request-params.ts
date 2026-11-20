@@ -19,6 +19,7 @@ import type { LogsTailParams } from "./schema/logs-chat.js";
 import type * as PortalSchema from "./schema/portals.js";
 import type { PresenceActivityParams, PresenceQueryParams } from "./schema/presence.js";
 import type * as GitHubSchema from "./schema/session-github-publication.js";
+import type { SessionMemberSetAccessParams } from "./schema/sessions-sharing.js";
 import type { StorageLocationsListParams, StorageLocationsProbeParams } from "./schema/storage.js";
 import type * as TemplateDraftSchema from "./schema/template-drafts.js";
 import type {
@@ -84,6 +85,7 @@ export type GatewayCoreRequestParams = {
   "portal.session.close": Static<typeof PortalSchema.SessionPortalCloseParamsSchema>;
   "portal.session.list": Static<typeof PortalSchema.SessionPortalListParamsSchema>;
   "portal.session.open": Static<typeof PortalSchema.SessionPortalOpenParamsSchema>;
+  "session.members.setAccess": SessionMemberSetAccessParams;
   "sessions.github.publish": GitHubSchema.SessionGitHubPublishParams;
   "sessions.github.action": GitHubSchema.SessionGitHubActionParams;
   "sessions.github.readiness": Static<typeof GitHubSchema.SessionGitHubReadinessParamsSchema>;

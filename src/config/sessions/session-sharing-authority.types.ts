@@ -1,3 +1,4 @@
+import type { SessionMember } from "./session-membership-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { SessionEntry } from "./types.js";
 
@@ -10,7 +11,12 @@ export type SessionSharingExpectedEntry = Pick<
 export type SessionMentionInvitation = {
   addedBy: string;
   expectedEntry: SessionSharingExpectedEntry;
-  profiles: readonly { profileId: string; aliases: readonly string[]; tokens: readonly string[] }[];
+  profiles: readonly {
+    profileId: string;
+    aliases: readonly string[];
+    tokens: readonly string[];
+    access?: SessionMember["access"];
+  }[];
 };
 
 export type PreparedSessionMentionInvitation = {

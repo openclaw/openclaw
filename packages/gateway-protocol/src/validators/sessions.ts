@@ -155,6 +155,10 @@ export const validateSessionMemberAddParams = createProtocolValidator(
   S.SessionMemberAddParamsSchema,
   Checks.isSessionMemberAddParams,
 );
+export const validateSessionMemberSetAccessParams = createProtocolValidator(
+  S.SessionMemberSetAccessParamsSchema,
+  Checks.isSessionMemberSetAccessParams,
+);
 export const validateSessionMemberRemoveParams = createProtocolValidator(
   S.SessionMemberRemoveParamsSchema,
   Checks.isSessionMemberRemoveParams,

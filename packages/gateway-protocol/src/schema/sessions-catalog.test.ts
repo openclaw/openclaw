@@ -2,6 +2,11 @@ import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { validateSessionsAssignOwnerParams } from "../index.js";
+import {
+  validateSessionMemberAddParams,
+  validateSessionMemberRemoveParams,
+  validateSessionMemberSetAccessParams,
+} from "../validators/sessions.js";
 import { schemaValidation } from "./protocol-validation.test-support.js";
 import * as Catalog from "./sessions-catalog.js";
 import { SessionRowSchema } from "./sessions-row.js";
@@ -335,6 +340,31 @@ describe("session sharing protocol", () => {
         { identityId: "mixed", addedBy: "profile-ada", addedByState: "unknown", addedAt: 4 },
       ],
       allowedVisibilities: [],
+    });
+  });
+
+  it("validates explicit access without allowing removal to assign grants", () => {
+    const member = { ...target, identityId: "alice" };
+    expect(validateSessionMemberAddParams(member)).toBe(true);
+    expect(validateSessionMemberRemoveParams(member)).toBe(true);
+    expect(validateSessionMemberSetAccessParams(member)).toBe(false);
+    for (const access of ["read", "suggest", "send"]) {
+      expect(validateSessionMemberAddParams({ ...member, access })).toBe(true);
+      expect(validateSessionMemberSetAccessParams({ ...member, access })).toBe(true);
+      expect(validateSessionMemberRemoveParams({ ...member, access })).toBe(false);
+      evidenceEvent.accepts({
+        ...baseEvent,
+        action: "member-access-changed",
+        identityId: "alice",
+        access,
+      });
+    }
+    expect(validateSessionMemberAddParams({ ...member, access: "admin" })).toBe(false);
+    expect(validateSessionMemberSetAccessParams({ ...member, access: "admin" })).toBe(false);
+    schemaValidation(Sharing.SessionMemberPermissionSchema).accepts({
+      identityId: "alice",
+      level: "suggest",
+      options: ["read", "suggest", "send"],
     });
   });
 

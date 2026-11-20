@@ -21,7 +21,11 @@ import { readSessionActorTransactionState } from "./session-actor-transaction.js
 import type { SessionMember } from "./session-membership-facts.types.js";
 import type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 import { getSessionMemberKysely } from "./session-sharing-store.kernel.js";
-import type { SessionMemberAdd } from "./session-sharing-store.types.js";
+import type {
+  SessionMemberAdd,
+  SessionMemberSetAccess,
+  SessionMemberAccessChange,
+} from "./session-sharing-store.types.js";
 export type { SessionSharingExpectedEntry } from "./session-sharing-authority.types.js";
 
 // Membership is bound to a live session entry, never a transcript placeholder.
@@ -168,6 +172,76 @@ export function addSessionMemberInTransaction(
     },
     inserted: changed,
   };
+}
+
+export function setSessionMemberAccess(
+  scope: SessionAccessScope,
+  params: SessionMemberSetAccess,
+): SessionMemberAccessChange | undefined {
+  const identityId = params.identityId.trim();
+  if (!identityId) {
+    return undefined;
+  }
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
+  return runOpenClawAgentWriteTransaction(
+    (database) => {
+      const sessionId = assertAuthorizedSessionInstance(
+        database,
+        sessionKey,
+        params.expectedSessionId,
+        params.expectedEntry,
+      );
+      const db = getSessionMemberKysely(database);
+      const previous = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("session_members")
+          .select("access")
+          .where("session_key", "=", sessionKey)
+          .where("identity_id", "=", identityId),
+      );
+      if (!previous) {
+        return undefined;
+      }
+      const result = {
+        changed: previous.access !== params.access,
+        ...(previous.access != null ? { previousAccess: previous.access } : {}),
+      };
+      if (!result.changed) {
+        return result;
+      }
+      withSqliteDatabaseWriteScope(database.db, [sessionKey], () =>
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .updateTable("session_members")
+            .set({ access: params.access })
+            .where("session_key", "=", sessionKey)
+            .where("identity_id", "=", identityId),
+        ),
+      );
+      const actor = readSessionActorTransactionState(database, { sessionKey, sessionId });
+      if (actor) {
+        const member = actor.hot.members.find((row) => row.identityId === toUSVString(identityId));
+        if (member) {
+          member.access = params.access;
+        }
+      }
+      publishCommittedSessionMembership(
+        database,
+        agentId,
+        sessionKey,
+        sessionId,
+        identityId,
+        true,
+        params.access,
+      );
+      return result;
+    },
+    toDatabaseOptions(resolved),
+    { operationLabel: "session.sharing.set-member-access" },
+  );
 }
 
 export function removeSessionMember(
