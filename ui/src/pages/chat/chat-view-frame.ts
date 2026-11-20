@@ -114,6 +114,9 @@ export type ChatProps = Omit<
     errorDetail?: unknown;
     diskSpace?: SessionPlacementDiskSpace;
     workerRuntimeInstall?: SessionPlacementWorkerRuntimeInstall;
+    participantApproval?:
+      | import("./session-approval-projection.ts").ParticipantApprovalNotice
+      | null;
     inlineApproval?: ExecApprovalRequest | null;
     approvalBusy?: boolean;
     approvalCanGrant: boolean;

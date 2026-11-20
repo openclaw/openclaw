@@ -127,6 +127,28 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["inline", "modal", "sidebar"] as const)(
+    "attributes a participant turn in the %s card without changing decisions",
+    (variant) => {
+      const onDecision = vi.fn();
+      const request = approval({
+        request: {
+          command: "pwd",
+          turnActor: { id: "profile:pat", label: "Pat <script>" },
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        expiresAtMs: Date.now() + 60_000,
+      });
+      renderSurface(request, variant, onDecision);
+      expect(container.textContent).toContain("Requested during Pat <script>’s turn");
+      expect(container.querySelector("script")).toBeNull();
+      expect(buttons()).toHaveLength(2);
+      const allow = buttons().find((button) => button.textContent?.includes("Allow"));
+      allow?.click();
+      expect(onDecision).toHaveBeenCalledWith(request.id, "allow-once");
+    },
+  );
+
   it.each(["Win32", "Linux x86_64", "MacIntel"])(
     "uses compact non-Mac approval hints on %s",
     (platform) => {

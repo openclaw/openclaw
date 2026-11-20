@@ -28,6 +28,7 @@ import {
 } from "./approval-countdown.tsx";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import {
+  ApprovalTurnLabel,
   ExecApprovalBody,
   MobileExecApprovalBody,
   renderPluginBody,
@@ -252,6 +253,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               </div>
             )}
           </Show>
+          <ApprovalTurnLabel actor={approval().request.turnActor} sidebar />
           <div
             class="sidebar-approval-row__actions"
             role="group"
@@ -485,6 +487,7 @@ function ExecApprovalCardContent(
           </div>
         )}
       </Show>
+      <ApprovalTurnLabel actor={active().request.turnActor} />
       <Show
         when={active().kind === "exec" && active().id}
         keyed
