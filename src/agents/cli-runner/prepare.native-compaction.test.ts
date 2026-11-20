@@ -244,7 +244,14 @@ it("a session fork branches the native session and runs only its own tools", asy
   expect(grantContexts[0]?.toolCallsRefused).toBeUndefined();
 });
 
-it("a session fork refuses a native session from another auth profile", async () => {
+it.each([
+  { name: "another auth profile", binding: { authProfileId: "anthropic:other-account" } },
+  // A fork's own message policy always differs; it must not hide the cwd boundary.
+  {
+    name: "another cwd",
+    binding: { cwdHash: "other-cwd", messageToolPolicyHash: "turn-message-policy" },
+  },
+])("a session fork refuses a native session from $name", async ({ name, binding }) => {
   const { dir, sessionTarget } = fixture.session;
   vi.stubEnv("HOME", dir);
   const config: OpenClawConfig = {
@@ -264,11 +271,13 @@ it("a session fork refuses a native session from another auth profile", async ()
       prompt: "Improve the next prompt",
       controlOperation: "fork",
       cliSessionId: nativeSessionId,
-      cliSessionBinding: { sessionId: nativeSessionId, authProfileId: "anthropic:other-account" },
+      cliSessionBinding: { sessionId: nativeSessionId, ...binding },
       forkCliSessionOnResume: true,
       cliSessionResumeAt: FORK_CHECKPOINT,
       toolCallsAllow: [],
     }),
-  ).rejects.toThrow("cannot fork this session: its native session is not reusable (auth-profile)");
+  ).rejects.toThrow(
+    `its native session is not reusable (${name === "another cwd" ? "cwd" : "auth-profile"})`,
+  );
   expect(supervisorSpawnMock).not.toHaveBeenCalled();
 });

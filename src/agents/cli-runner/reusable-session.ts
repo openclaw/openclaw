@@ -20,9 +20,17 @@ export function resolveCliReusableSessionCandidate(params: {
 }): CliReusableSession {
   const { run } = params;
   const binding = run.cliSessionBinding;
+  // A fork has its own message-tool policy. Judge it with the binding's own, so the account and
+  // cwd checks that follow message policy always run.
   const checked =
     binding && run.controlOperation !== "compact"
-      ? resolveCliSessionReuse({ binding, ...params.facts })
+      ? resolveCliSessionReuse({
+          binding,
+          ...params.facts,
+          ...(run.controlOperation === "fork"
+            ? { messageToolPolicyHash: binding.messageToolPolicyHash }
+            : {}),
+        })
       : undefined;
   if (run.controlOperation === "fork") {
     const refusal =
