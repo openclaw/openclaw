@@ -237,25 +237,21 @@ describe("Templates discovery", () => {
     });
   });
 
-  it("shows the full category without preloading decorative artwork a second time", async () => {
-    const decode = stubImageDecode(async () => {});
+  it("shows the full category and its artwork when the search returns", async () => {
     const { page, request } = createPage({
       templatesEnabled: true,
       templateIconUrl: `https://clawhub.ai/api/v1/skill-icons/${"e".repeat(64)}`,
     });
     const shelf = '[data-catalog-section="productivity"]';
     await waitForSolid(() => expect(page.querySelector(shelf)).not.toBeNull());
-    expect(decode).toHaveBeenCalledOnce();
     page.querySelector<HTMLButtonElement>(shelf + " .plugin-catalog-section__view-all")!.click();
     await waitForSolid(() =>
       expect(page.querySelector(shelf + " [data-templates-results] img")).not.toBeNull(),
     );
     expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "productivity" });
-    expect(decode).toHaveBeenCalledOnce();
   });
 
   it("expands the four visible cards to the complete public shelf without another request or artwork wait", async () => {
-    const decode = stubImageDecode(async () => {});
     const { page, request } = openCertifiedShelf();
     const names = () =>
       [...page.querySelectorAll("[data-templates-entry] h3")].map((node) => node.textContent);
@@ -263,7 +259,6 @@ describe("Templates discovery", () => {
     expect(
       request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
     ).toHaveLength(1);
-    expect(decode).toHaveBeenCalledTimes(4);
     request.mockClear();
     page.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
     flush();
@@ -271,7 +266,6 @@ describe("Templates discovery", () => {
     expect(names()).toEqual(["Card 1", "Card 2", "Card 3", "Card 4", "Card 5", "Card 6"]);
     expect(page.querySelector("[data-templates-results]")).not.toBeNull();
     expect(request).not.toHaveBeenCalled();
-    expect(decode).toHaveBeenCalledTimes(4);
     expect(page.querySelector('.plugin-catalog-chip[aria-pressed="true"]')?.textContent).toBe(
       "Productivity",
     );
@@ -289,7 +283,6 @@ describe("Templates discovery", () => {
   it.each(["expired shelf", "retired connection", "superseded shelf", "category chip"])(
     "reads the selected category from the Gateway: %s",
     async (selection) => {
-      stubImageDecode(async () => {});
       const { page, request, setPhase } = openCertifiedShelf();
       await waitForSolid(() =>
         expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(4),
@@ -742,7 +735,6 @@ it.each(["card", "detail"])(
   "shows Template artwork and falls back to the Blobster in the %s",
   async (surface) => {
     const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"a".repeat(64)}`;
-    stubImageDecode(() => Promise.resolve());
     const create = (iconUrl?: string) => {
       const options = { templateIconUrl: iconUrl, templatesEnabled: true };
       return surface === "card" ? createPage(options).page : createDetail(options).detail;
@@ -753,7 +745,7 @@ it.each(["card", "detail"])(
     const blobsterEyes = `${selector} svg[stroke="currentColor"] circle[fill="currentColor"]`;
     const withoutArtwork = create();
     await waitForSolid(() => expect(withoutArtwork.querySelectorAll(blobsterEyes)).toHaveLength(2));
-    expect(withoutArtwork.querySelector(`${selector} img`)).toBeNull();
+    expect(withoutArtwork.querySelector(`${selector} img, ${selector} .skeleton`)).toBeNull();
 
     const container = create(templateIconUrl);
     await waitForSolid(() =>
@@ -765,49 +757,23 @@ it.each(["card", "detail"])(
     image.dispatchEvent(new Event("error"));
     await waitForSolid(() => expect(container.querySelector(`${selector} img`)).toBeNull());
     expect(container.querySelectorAll(blobsterEyes)).toHaveLength(2);
+    expect(container.querySelector(`${selector} .skeleton`)).toBeNull();
   },
 );
 
-it.each(["decoded", "failed"] as const)(
-  "keeps the catalog placeholders until first-screen artwork has %s",
-  async (outcome) => {
-    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"b".repeat(64)}`;
-    const artwork = createDeferredCore();
-    const decode = stubImageDecode(() => artwork.promise);
-    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
-    await waitForSolid(() => expect(decode).toHaveBeenCalledOnce());
-    const preloaded = decode.mock.contexts[0] as HTMLImageElement;
-    // The preload must share the card image's request mode to reuse its response.
-    expect(preloaded.src).toBe(templateIconUrl);
-    expect(preloaded.crossOrigin).toBe("anonymous");
-    expect(preloaded.referrerPolicy).toBe("no-referrer");
-    await nextTurn();
-    expect(page.querySelector("[data-templates-entry]")).toBeNull();
-    expect(page.querySelectorAll("[data-templates-placeholder]")).not.toHaveLength(0);
-
-    if (outcome === "decoded") {
-      artwork.resolve();
-    } else {
-      artwork.reject(new Error("decode failed"));
-    }
-    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
-    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
-    expect(page.querySelector(".agents-home__template-art img")?.getAttribute("src")).toBe(
-      templateIconUrl,
-    );
-  },
-);
-
-it("stops waiting for slow artwork after the reveal budget", async () => {
+it("shows Template metadata and Add without waiting for decorative artwork", async () => {
   vi.useFakeTimers();
   try {
-    const templateIconUrl = `https://clawhub.ai/api/v1/skill-icons/${"c".repeat(64)}`;
     stubImageDecode(() => new Promise<void>(() => {}));
-    const { page } = createPage({ templateIconUrl, templatesEnabled: true });
-    await vi.advanceTimersByTimeAsync(499);
-    expect(page.querySelector("[data-templates-entry]")).toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
-    await waitForSolid(() => expect(page.querySelector("[data-templates-entry]")).not.toBeNull());
+    const { page } = createPage({
+      templateIconUrl: "/artwork.png",
+      templatesEnabled: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const card = page.querySelector("[data-templates-entry]");
+    expect(card?.querySelector("h3")?.textContent).toBe(workflowOperator.displayName);
+    expect(card?.querySelector(".agents-home__template-add")).toHaveProperty("disabled", false);
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
   } finally {
     vi.useRealTimers();
   }
