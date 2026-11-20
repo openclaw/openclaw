@@ -248,8 +248,9 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         const active = params.sessions.get(params.sessionId) === params.session;
         if (corrective || !active) {
           await retireSystemAgentProposal(params.session, manager, correction.hash);
-          const notice =
-            "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request.";
+          const notice = pluginCapabilityContinuation
+            ? "The plugin changed during capability review. No plugin change was committed; ask again here to review the current plugin."
+            : "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request.";
           params.session.engine.noteAssistantMessage(notice);
           return { kind: "completed", reply: { ...reply, text: `${reply.text}\n\n${notice}` } };
         }

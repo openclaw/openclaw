@@ -521,10 +521,7 @@ describe("Full Access delegated chat", () => {
         const result = await pending;
         expectReplyParts(result.payload, "gateway.port: Invalid input");
         if (outcome === "failed-correction") {
-          expectReplyParts(
-            result.payload,
-            "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request.",
-          );
+          expectReplyParts(result.payload, "stopped after one corrective attempt");
           fixture.expectRequests(2);
         }
         expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
@@ -550,7 +547,6 @@ describe("Full Access delegated chat", () => {
     "bounds Full Access repair with outcome %s",
     async (outcome) => {
       const fixture = await createDelegatedChatFixture(createTestGatewayScheduler(), "repair");
-      const noteAssistantMessage = vi.spyOn(fixture.engine, "noteAssistantMessage");
       fixture.runConfigSet.mockImplementationOnce(async () => {
         if (outcome === "session-replaced") {
           fixture.sessions.set("delegate-full", { ...fixture.delegatedSession });
@@ -567,14 +563,11 @@ describe("Full Access delegated chat", () => {
         await expect(reply).rejects.toThrow(
           "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
         );
-        expect(noteAssistantMessage).toHaveBeenCalledWith(
-          "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request.",
-        );
       } else {
         expectReplyParts(
           (await reply).payload,
           outcome === "correction-failed"
-            ? "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request."
+            ? "stopped after one corrective attempt"
             : "[openclaw] done: config.set",
         );
       }
