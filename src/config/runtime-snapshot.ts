@@ -254,12 +254,6 @@ function publishRuntimeConfigSnapshot(
     // The outgoing mutable snapshot may already expose a disable before replacement.
     runtimeConfigPublication.publicationReadDisableEpoch = {};
   }
-  if (
-    config.gateway?.sessionControl?.steeringEnabled !== true ||
-    runtimeConfigSnapshot?.gateway?.sessionControl?.steeringEnabled !== true
-  ) {
-    runtimeConfigPublication.steeringDisableEpoch = {};
-  }
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = captured;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
@@ -373,7 +367,6 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   runtimeConfigSnapshotMetadata = null;
   runtimeModelConfigCacheKey = null;
   runtimeConfigPublication.publicationReadDisableEpoch = {};
-  runtimeConfigPublication.steeringDisableEpoch = {};
   runtimeConfigPublication.current = undefined;
   runtimeConfigValueFact = null;
   runtimeSourceConfigValueFact = null;

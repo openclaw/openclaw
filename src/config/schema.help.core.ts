@@ -142,7 +142,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.sessionControl.publicationReadEnabled":
     "Allows restricted publication-reader connections only when true (default: false). Source plugins still require their own publication settings and device grants. Disabling retires existing reader admissions, including pending reads, even if enabled again before their next check.",
   "gateway.sessionControl.steeringEnabled":
-    "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Disabling retires pending steering admissions, including an off/on transition.",
+    "Allows authenticated people to steer an existing run only when true (default: false). Independent of publication reads and writer transport. Checked when each request starts; disabling denies new requests without revoking one already admitted.",
   "gateway.cliAgents":
     "Web app discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":

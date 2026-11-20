@@ -5,5 +5,4 @@ export const runtimeConfigPublication: {
   current?: { config: OpenClawConfig; revision: object };
   /** Retires reader admissions across a published disable, including off/on pairs. */
   publicationReadDisableEpoch: object;
-  steeringDisableEpoch: object;
-} = { publicationReadDisableEpoch: {}, steeringDisableEpoch: {} };
+} = { publicationReadDisableEpoch: {} };
