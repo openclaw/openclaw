@@ -379,6 +379,12 @@ restore the previous definition until the owning component provides a derived-in
 rebuild. Canonical embeddings remain unchanged. SQLite registration only binds
 the existing capability and leaves its FTS5 and vec0 lifecycle unchanged.
 
+Memory provides that owner-controlled rebuild through `openclaw memory index --force`.
+On PostgreSQL, new vector dimensions are installed in the same transaction that
+publishes the rebuilt chunks and index metadata. Failed publication preserves the
+previous projection. Tokenizer changes update the memory trigram indexes at
+admission without replacing source text or the full-text columns.
+
 For a store that declares search indexes, install these extensions in the
 database before opening it. The default extension namespace is `public`:
 
