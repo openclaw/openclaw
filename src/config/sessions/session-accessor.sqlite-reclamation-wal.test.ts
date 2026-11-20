@@ -113,7 +113,7 @@ test.each(["reclaim", "resource-close", "shared-state-close"] as const)(
               "session.transcript.batch",
             );
             const blocked = await reclaim();
-            expect(blocked).toMatchObject({ checkpointCompleted: false, checkpointIncomplete: 1 });
+            expect(blocked).toMatchObject({ checkpointCompleted: false, checkpointIncomplete: 2 });
             expect(blocked.checkpoint?.health.state).toBe("blocked");
             expect(blocked.vacuumPasses).toBe(0);
             expect(freePages()).toBe(original);
