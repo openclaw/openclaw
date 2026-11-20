@@ -1,4 +1,8 @@
-import { getAiTransportHost } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  getDefaultAiTransportHost,
+} from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -15,6 +19,23 @@ import {
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
+
+it("preserves installed runtime ports when the SDK loads the base host later", async () => {
+  const installed = getDefaultAiTransportHost();
+  try {
+    // The SDK can evaluate the base installer separately after runtime preparation.
+    vi.resetModules();
+    await import("../llm/ai-transport-host.js");
+    const reloaded = getDefaultAiTransportHost();
+    expect(reloaded.plugin.resolveProviderStream).toBe(installed.plugin.resolveProviderStream);
+    expect(reloaded.plugin.wrapSimpleCompletionStream).toBe(
+      installed.plugin.wrapSimpleCompletionStream,
+    );
+    expect(reloaded.inheritManagedTransport).toBe(installed.inheritManagedTransport);
+  } finally {
+    configureAiTransportHost(installed);
+  }
+});
 
 const owners: PluginMetadataSnapshotOwnerMaps = {
   ...createEmptyPluginMetadataSnapshot().owners,

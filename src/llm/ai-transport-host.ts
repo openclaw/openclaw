@@ -1,6 +1,6 @@
 // Installs OpenClaw-owned transport and diagnostic policy before package helpers;
 // direct imports need the same wiring as the process-default stream facade.
-import { configureAiTransportHost } from "@openclaw/ai";
+import { configureAiTransportHost, getDefaultAiTransportHost } from "@openclaw/ai";
 import { configureProviderErrorRedactor } from "@openclaw/ai/diagnostics";
 import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-setting.js";
 import { getModelProviderLocalService } from "../agents/provider-local-service.js";
@@ -39,6 +39,8 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 }
 
 configureAiTransportHost({
+  // SDK loading can follow agent setup; retain its installed runtime ports.
+  ...getDefaultAiTransportHost(),
   immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData, isPlainData },
   runInDetachedAsyncContext,
   observePendingProviderWork: (pending) => {
