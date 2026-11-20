@@ -32,11 +32,11 @@ export type ModelsMenu = {
   providerLogins?: ReadonlyMap<string, ModelProviderLogin>;
 };
 
-/** The single resolved login route for a provider, when one exists. */
+// The single resolved login route for a provider, when one exists.
 export type ModelProviderLogin = {
   methodId: string;
   label: string;
-  /** Channel-login mode of the resolved route ("secret"/"setup" = key entry). */
+  // Channel-login mode of the resolved route ("secret"/"setup" = key entry).
   mode?: string;
 };
 
@@ -44,7 +44,7 @@ export type ModelSelectionAuthBlock = {
   label: string;
   recovery: string;
   notice: string;
-  /** A chat `/login <provider>` route exists and may be offered as a button. */
+  // A chat `/login <provider>` route exists and may be offered as a button.
   loginSupported: boolean;
 };
 

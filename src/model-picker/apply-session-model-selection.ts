@@ -90,14 +90,14 @@ export type ApplySessionModelSelectionParams = {
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   validateAuthProfileSelection?: () => string | undefined;
-  /**
-   * Supplying the picker's menu facts opts in to the shared auth-readiness
-   * policy: a selection whose provider has no working sign-in is rejected
-   * (reason "auth") before persistence, with the recovery block for the
-   * adapter to render. Adapters pass the menu they rendered; absence never
-   * blocks. Typed commands and session patches do not pass facts and keep
-   * current behavior. Default selections are never gated.
-   */
+  // Supplying the picker's menu facts opts in to the shared auth-readiness
+  // policy: a selection whose provider has no working sign-in is rejected
+  // (reason "auth") before persistence, with the recovery block for the
+  // adapter to render. Adapters pass the menu they rendered; absence never
+  // blocks. Typed commands and session patches do not pass facts and keep
+  // current behavior. Default selections are never gated.
+  // (Line comments keep this out of the size-budgeted plugin SDK declarations.)
+  /** Rendered picker menu; opts in to the sign-in gate. */
   authReadinessMenu?: ModelsMenu;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
@@ -139,7 +139,7 @@ export type ApplySessionModelSelectionResult =
       status: "rejected";
       reason: "auth";
       message: string;
-      /** Sign-in recovery; adapters render it with their own buttons. */
+      // Sign-in recovery; adapters render it with their own buttons.
       authBlock: ModelSelectionAuthBlock;
     }
   | { status: "conflict"; message: string };
