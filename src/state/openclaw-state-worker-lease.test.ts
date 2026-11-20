@@ -191,6 +191,74 @@ function createLeaseFixture() {
   };
 }
 
+it("keeps concurrent leases serving after a reused entry loses only its caller's admission", async () => {
+  const owner = getOpenClawStateWorkerOwner();
+  const first = fixture.lease();
+  const second = fixture.lease();
+  await Promise.all([first.ready, second.ready]);
+  let current = true;
+  const failure = new Error("concurrent agent create lost admission");
+  const opening = owner.open({
+    ...fixture.context,
+    admission: {
+      ...fixture.context.admission,
+      assertCurrent: () => {
+        if (!current) {
+          throw failure;
+        }
+      },
+    },
+  });
+  const rejected = opening.catch((error: unknown) => error);
+  current = false;
+  try {
+    await first.execute(endSession("first-live"));
+    expect(await owner.open(fixture.context)).toBe(physical.client!.store);
+    expect(await rejected).toBe(failure);
+    await second.execute(endSession("second-live"));
+    await first.release();
+    expect(physical.events).not.toContain("physical-close");
+    await second.release();
+    expect(physical.events).toContain("physical-close");
+  } finally {
+    await Promise.allSettled([first.release(), second.release(), rejected]);
+  }
+  await fixture.close();
+  fixture = createLeaseFixture();
+  const reopened = fixture.lease();
+  await reopened.ready;
+  await reopened.execute(endSession("reload-after-concurrent-create"));
+  await reopened.release();
+  expect(physical.events.at(-1)).toEqual(endSession("reload-after-concurrent-create"));
+});
+
+it("retires retained leases before closing their shared worker and permits a fresh open", async () => {
+  const first = fixture.lease();
+  const second = fixture.lease();
+  await Promise.all([first.ready, second.ready]);
+  const closing = getOpenClawStateWorkerOwner().close();
+  try {
+    await expect(first.execute(endSession("first"))).rejects.toThrow(
+      "Shared-state worker lease is closed",
+    );
+    await expect(second.execute(endSession("second"))).rejects.toThrow(
+      "Shared-state worker lease is closed",
+    );
+    await closing;
+  } finally {
+    await Promise.allSettled([first.release(), second.release()]);
+    await closing;
+  }
+  expect(physical.events).toEqual(["physical-close"]);
+  await fixture.close();
+  fixture = createLeaseFixture();
+  const reopened = fixture.lease();
+  await reopened.ready;
+  await reopened.execute(endSession("later-reload"));
+  await reopened.release();
+  expect(physical.events.at(-1)).toEqual(endSession("later-reload"));
+});
+
 it("closes fresh callback admission while accepted callbacks and terminal writes finish", async () => {
   const { maintenance } = fixture;
   const acceptedCommand = endSession("accepted");
