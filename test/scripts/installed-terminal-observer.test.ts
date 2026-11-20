@@ -577,7 +577,7 @@ it("preserves synchronous throws and unsafe metadata without claiming native com
       });
       expect(JSON.parse(observed.stdout).ran).toBe(mode === "encoding");
       if (mode === "max-buffer-array") {
-        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_OUT_OF_RANGE" });
+        expect(JSON.parse(observed.stdout).outcome).toMatchObject({ code: "ERR_INVALID_ARG_TYPE" });
       }
     }
     expect(() => readInstalledTerminalEvents(f.spec.directory), mode).toThrow(
