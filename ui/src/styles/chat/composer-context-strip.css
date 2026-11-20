@@ -112,14 +112,7 @@
   }
 }
 
-.chat-invite-access {
-  justify-content: space-between;
-  padding: 8px 12px;
-  color: var(--text-muted);
-}
-
 .chat-invite-access__stale {
   display: block;
   padding: 0.3rem 0.75rem;
-  color: var(--muted);
 }

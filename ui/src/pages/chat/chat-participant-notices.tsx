@@ -1,9 +1,14 @@
+import { lazy, Show } from "solid-js";
 import {
   renderChatComposerNotices as ChatComposerNotices,
   type ChatComposerNoticesProps,
 } from "./chat-view-notices.tsx";
-import { SessionApprovalNotice } from "./session-approval-notice.tsx";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import type { ParticipantApprovalNotice } from "./session-approval-projection.ts";
+
+const SessionApprovalNotice = lazy(() => import("./session-approval-notice.tsx"), {
+  export: "SessionApprovalNotice",
+});
 
 export function ChatParticipantNotices(
   props: ChatComposerNoticesProps & { participantApproval?: ParticipantApprovalNotice | null },
@@ -11,7 +16,13 @@ export function ChatParticipantNotices(
   return (
     <>
       <ChatComposerNotices {...props} />
-      <SessionApprovalNotice approval={props.participantApproval ?? null} />
+      <Show when={props.participantApproval}>
+        {(approval) => (
+          <ChatLazyBoundary>
+            <SessionApprovalNotice approval={approval()} />
+          </ChatLazyBoundary>
+        )}
+      </Show>
     </>
   );
 }

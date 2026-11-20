@@ -1,13 +1,13 @@
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 
 /** Host-stamped input authority. Never accept this field from message text or RPC parameters. */
-export type ParticipationCeiling = Readonly<{
-  kind: "send";
-  profileId: string;
-  sessionKey: string;
+export type ParticipationCeiling = {
+  readonly kind: "send";
+  readonly profileId: string;
+  readonly sessionKey: string;
   /** Exact core names captured at admission; omission retains the default for stored inputs. */
-  tools?: readonly string[];
-}>;
+  readonly tools?: readonly string[];
+};
 
 /** Participation defaults live here; other policy layers may only narrow these capabilities. */
 export const PARTICIPATION_EXEC_CEILING = "ask" as const;
