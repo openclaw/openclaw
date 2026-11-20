@@ -473,7 +473,7 @@ export async function maybeRestartService(
     readPackageReleaseSlotSync(activation.result.root ?? "")
   ) {
     recordPhase("restarting");
-    await waitForGitReleaseSuccessor(activation.serviceEnv, run?.deadline?.signal);
+    await waitForGitReleaseSuccessor(activation);
     assertCurrent();
     const outcome = await verifyRestartedGateway(
       normalizeOptionalString(expectedIdentity?.version),

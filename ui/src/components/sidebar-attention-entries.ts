@@ -59,9 +59,13 @@ export type SidebarInboxEntry =
     })
   | (SidebarInboxEntryBase<"system"> & {
       type: "update";
+      /** A current release and a historical outcome have separate controls and dismissals. */
+      surface?: "release" | "history";
       /** A stored dismissal kept while the row is shown without offering it. */
       retainedDismissal?: SidebarAttentionDismissal | null;
     });
+
+export type SidebarUpdateEntry = Extract<SidebarInboxEntry, { type: "update" }>;
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;
@@ -100,7 +104,7 @@ export function buildSidebarInboxEntries(params: {
   outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
   mentions: readonly MentionInboxItem[];
   scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
-  update: Extract<SidebarInboxEntry, { type: "update" }> | null;
+  updates: readonly SidebarUpdateEntry[];
 }): SidebarInboxEntry[] {
   const approvals: SidebarInboxEntry[] = params.approvals.map((approval) => ({
     type: "approval",
@@ -126,10 +130,10 @@ export function buildSidebarInboxEntries(params: {
   const entries: SidebarInboxEntry[] = [
     ...approvals,
     ...(params.outbox ?? []),
-    ...(params.update?.severity === "error" ? [params.update] : []),
+    ...params.updates.filter((entry) => entry.severity === "error"),
     ...(params.scopeUpgrade ? [params.scopeUpgrade] : []),
     ...errors,
-    ...(params.update?.severity === "warning" ? [params.update] : []),
+    ...params.updates.filter((entry) => entry.severity === "warning"),
     ...warnings,
     ...mentions,
   ];

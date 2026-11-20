@@ -297,7 +297,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
           }),
         ) ?? [];
     const overlay = this.sources.overlays.snapshot;
-    const update = resolveSidebarUpdateAttention(this.sources);
+    const updates = resolveSidebarUpdateAttention(this.sources);
     // Expected guest permissions are not a browser-repair incident. Profile keeps the explicit request.
     const scopeUpgrade = isRestrictedSessionGuest(gateway.hello?.auth ?? null)
       ? null
@@ -319,7 +319,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
-      update,
+      updates,
     });
   }
 

@@ -12,18 +12,20 @@ import {
   createSidebarAttentionStore,
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
+import { createUpdateProgressWatcher } from "../app/update-confirmation.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "../test-helpers/application-context.ts";
+import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
+import { createFailedVerificationRun } from "../test-helpers/update-run.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { cronPage } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
-import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 import { inboxMention } from "./sidebar-inbox.test-support.ts";
 import "./sidebar-attention.tsx";
 
@@ -284,6 +286,109 @@ describe("sidebar attention refresh ownership", () => {
     const trigger = element.querySelector<HTMLButtonElement>(".sidebar-issues-button")!;
     return { element, provider, store, trigger };
   }
+
+  it.each(["stable", "beta"] as const)(
+    "keeps %s release controls and a historical failure independently actionable and dismissible",
+    async (channel) => {
+      vi.stubGlobal("localStorage", createTestStorageMock());
+      const lastRun = createFailedVerificationRun();
+      const now = Date.now();
+      const campaign = channel === "beta";
+      const request = respond({
+        "update.status": {
+          lastRun,
+          updateAvailable: { currentVersion: "1.0.0", latestVersion: "3.0.0", channel },
+          schedule: {
+            channel,
+            autoEnabled: campaign,
+            install: { kind: "package" },
+            ...(campaign && {
+              target: { kind: "package", version: "3.0.0" },
+              campaign: {
+                id: "next",
+                state: "countdown",
+                announcedAtMs: now,
+                applyAtMs: now + 60_000,
+                forceAtMs: now + 120_000,
+                updatedAtMs: now,
+              },
+            }),
+          },
+        },
+        "cron.list": cronResponse(),
+        "cron.status": cronStatus(0),
+      });
+      const { gateway, update } = createGatewayHarness(mockClient(request));
+      update({
+        selfUser: { id: "alice", name: "Alice" },
+        hello: {
+          type: "hello-ok",
+          protocol: 1,
+          server: { bootId: "boot-a", version: "1.0.0", buildId: "unrelated-build" },
+          auth: { role: "operator", scopes: ["operator.admin"] },
+          features: { methods: ["update.status", "update.run", "update.hold"] },
+        },
+      });
+      const overlays = createApplicationOverlays(gateway);
+      const restoreDialog = installDialogPolyfill();
+      try {
+        await overlays.refreshUpdateStatus();
+        const { element, trigger } = await mountAttention({ gateway, overlays });
+        element.watchUpdateProgress = createUpdateProgressWatcher({ gateway, overlays });
+        await openPanel(element, trigger);
+        const rows = () => [
+          ...element.querySelectorAll<HTMLDetailsElement>("openclaw-sidebar-update-card details"),
+        ];
+        expect(
+          rows().map(
+            (row) => row.querySelector("summary .sidebar-issues-panel__entity")?.textContent,
+          ),
+        ).toEqual([
+          "Update available",
+          expect.stringMatching(/^Last update run failed.*unrelated-build/),
+        ]);
+        const [release, history] = rows();
+        expect(release!.textContent).toContain("3.0.0");
+        expect(Boolean(release!.querySelector('[role="timer"]'))).toBe(campaign);
+        expect(Boolean(release!.querySelector(".sidebar-update-card__hold"))).toBe(campaign);
+        expect(issues(element, "button__count")?.textContent).toBe("1");
+        expect(history!.textContent).not.toContain("now serving the target");
+        expect(release!.textContent).not.toContain("Last update run failed");
+        release!.querySelector("summary")!.click();
+        const action = release!.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!;
+        await waitForFast(() => expect(action.disabled).toBe(false));
+        action.click();
+        const { modal } = await getRenderedModalDialog(document.body);
+        expect(modal.textContent).toContain("Update and restart");
+        expect(modal.textContent).toContain("3.0.0");
+        modal.dispatchEvent(new Event("modal-cancel"));
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(false);
+        const dismiss = (row: HTMLDetailsElement) =>
+          row.querySelector<HTMLButtonElement>("summary button")!.click();
+        if (campaign) {
+          history!.querySelector("summary")!.click();
+          history!.querySelector<HTMLButtonElement>(".sidebar-update-card__action")!.click();
+          const { modal: report } = await getRenderedModalDialog(document.body);
+          expect(report.textContent).toContain("recorded serving build was before-build");
+          expect(report.textContent).not.toContain("Retry update");
+          report.dispatchEvent(new Event("modal-cancel"));
+        } else {
+          dismiss(release!);
+        }
+        await waitForFast(() => expect(rows()).toHaveLength(1));
+        expect(rows()[0]).toBe(campaign ? release : history);
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(campaign);
+        dismiss(rows()[0]!);
+        await waitForFast(() => expect(rows()).toHaveLength(0));
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(true);
+        expect(request.mock.calls.map(([method]) => method)).not.toContain("update.run");
+      } finally {
+        document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
+        restoreDialog();
+        overlays.dispose();
+      }
+    },
+  );
 
   it("prewarms without opening and keeps the attention panel inside its top-layer menu surface", async () => {
     const { element, trigger } = await mountAttention();
@@ -928,65 +1033,5 @@ describe("sidebar attention refresh ownership", () => {
 
     emit("cron");
     await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());
-  });
-});
-
-describe("update attention", () => {
-  it("hides an unhydrated campaign only while update status can be polled", () => {
-    const overlaySnapshot = {
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.1",
-        channel: "beta",
-        commitsBehind: 2,
-      },
-      updateSchedule: {
-        channel: "beta",
-        campaign: {
-          state: "waiting-for-idle",
-        },
-      },
-      updateCampaignStatusHydrated: false,
-      updateRunning: false,
-      updateStatusBanner: null,
-    };
-    const gatewaySnapshot = {
-      client: {} as GatewayBrowserClient,
-      phase: "connected" as const,
-      hello: {
-        auth: { role: "operator", scopes: ["operator.admin"] },
-        features: { methods: ["update.status"] },
-      },
-    };
-    const context = {
-      gateway: { snapshot: gatewaySnapshot },
-      overlays: { snapshot: overlaySnapshot },
-    } as unknown as ApplicationContext;
-
-    expect(resolveSidebarUpdateAttention(context)).toBeNull();
-
-    gatewaySnapshot.hello.auth.scopes = ["operator.read"];
-    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
-
-    gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
-    overlaySnapshot.updateCampaignStatusHydrated = true;
-    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
-  });
-
-  it("keeps restart reconciliation visible after update metadata clears", () => {
-    const context = {
-      gateway: { snapshot: { phase: "connected" } },
-      overlays: {
-        snapshot: {
-          updateAvailable: null,
-          updateSchedule: null,
-          updateRunning: false,
-          updateReconciliationPending: true,
-          updateStatusBanner: null,
-        },
-      },
-    } as unknown as ApplicationContext;
-
-    expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
   });
 });

@@ -554,14 +554,22 @@ describe("renderUpdates", () => {
   });
 
   it.each([
-    ["target-build", "1.0.0", false, true],
-    ["unrelated-build", "1.0.0", false, false],
-    ["unrelated-build", "2.0.0", false, false],
-    ["restored-build", "1.0.0", true, false],
+    ["post-update-failed", "target-build", "1.0.0", false, true],
+    ["build-id-mismatch", "target-build", "1.0.0", false, true],
+    ["version-mismatch", "target-build", "2.0.0", false, true],
+    ["post-update-failed", "restored-build", "1.0.0", true, false],
+    ["post-update-failed", "unrelated-build", "1.0.0", false, false],
+    ["build-id-mismatch", "unrelated-build", "1.0.0", false, false],
+    ["post-update-failed", "unrelated-build", "2.0.0", false, false],
+    ["version-mismatch", "restored-build", "2.0.0", true, false],
   ] as const)(
-    "separates serving %s / %s (rollback: %s) from recorded verification",
-    (buildId, version, restored, onTarget) => {
+    "separates %s from serving %s / %s (rollback: %s)",
+    (reason, buildId, version, restored, onTarget) => {
       const run = createFailedVerificationRun();
+      run.reason = reason;
+      if (reason === "version-mismatch") {
+        run.after.version = version;
+      }
       if (restored) {
         run.target = { kind: "git", channel: "dev" };
         run.before = { version };
@@ -578,13 +586,30 @@ describe("renderUpdates", () => {
       });
       const attempt = container.querySelector('[data-run-status="failed"]')!;
       const headline = attempt.querySelector("h3")!.textContent;
-      expect(headline).toContain("Last update run failed (post-update-failed)");
-      expect(headline).toContain(version === "1.0.0" ? buildId : version);
+      expect(headline).toContain(`Last update run failed (${reason})`);
+      expect(headline).toContain(onTarget || version === "1.0.0" ? buildId : version);
       expect(headline.includes("now serving the target build")).toBe(onTarget);
       expect(attempt.textContent).toContain("Recorded outcome: failed");
       expect(attempt.textContent).toContain("Verification at the time of the update");
       expect(attempt.querySelector('[data-oracle="version"]')?.getAttribute("data-state")).toBe(
         "fail",
+      );
+      expect(container.textContent).not.toContain("Retry update");
+    },
+  );
+
+  it.each(["version-mismatch", "build-id-mismatch"])(
+    "uses exact package version proof for %s only when a build was not required",
+    (reason) => {
+      const run = createFailedVerificationRun();
+      run.reason = reason;
+      run.target = { kind: "package", version: "2.0.0" };
+      run.after = { version: "2.0.0" };
+      renderUpdates({ gatewayVersion: "2.0.0", update: { updateRun: run } });
+      const headline = container.querySelector('[data-run-status="failed"] h3')!.textContent;
+      expect(headline).toContain(`Last update run failed (${reason})`);
+      expect(headline.includes("now serving the target version 2.0.0")).toBe(
+        reason === "version-mismatch",
       );
       expect(container.textContent).not.toContain("Retry update");
     },

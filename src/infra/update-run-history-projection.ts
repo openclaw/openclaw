@@ -38,7 +38,9 @@ export function projectUpdateRunHistory(
   // makes the observation historical; only a matching candidate identifies the target.
   const rollback = run.verification.rollbackOutcome?.status;
   if (
-    run.reason === "post-update-failed" &&
+    (run.reason === "post-update-failed" ||
+      run.reason === "version-mismatch" ||
+      run.reason === "build-id-mismatch") &&
     !run.verification.recovery?.packageRollbackVerified &&
     rollback !== "succeeded" &&
     rollback !== "failed" &&
@@ -51,7 +53,8 @@ export function projectUpdateRunHistory(
         build !== run.before.buildId &&
         build !== recordedBuild &&
         `build ${label(build)}`
-      : run.target?.kind === "package" &&
+      : run.reason !== "build-id-mismatch" &&
+        run.target?.kind === "package" &&
         version &&
         run.target.version === version &&
         recordedVersion &&

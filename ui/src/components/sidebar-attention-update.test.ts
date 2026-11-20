@@ -54,7 +54,7 @@ it.each([
   snapshot.updateAvailable!.channel = advertised;
   snapshot.updateSchedule =
     selected === null ? null : { ...snapshot.updateSchedule!, channel: selected };
-  expect(resolveSidebarUpdateAttention(context) !== null).toBe(visible);
+  expect(resolveSidebarUpdateAttention(context).length !== 0).toBe(visible);
 });
 
 it("keeps explicit dev update progress and errors visible", () => {
@@ -62,10 +62,10 @@ it("keeps explicit dev update progress and errors visible", () => {
   context.overlays.snapshot.updateSchedule!.channel = "dev";
   context.overlays.snapshot.updateAvailable!.channel = "dev";
   context.overlays.snapshot.updateRunning = true;
-  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(1);
   context.overlays.snapshot.updateRunning = false;
   context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
-  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(1);
 });
 
 it("retains the same failed outcome across reconnect until acknowledged or 24 hours old", () => {
@@ -83,18 +83,18 @@ it("retains the same failed outcome across reconnect until acknowledged or 24 ho
     features: { methods: ["update.run"] },
   };
   const dismissal = { kind: "updateAvailable", signature: JSON.stringify(["run", run.runId]) };
-  expect(resolveSidebarUpdateAttention(context)).toMatchObject({ dismissal, severity: "error" });
+  expect(resolveSidebarUpdateAttention(context)[0]).toMatchObject({ dismissal, severity: "error" });
   context.gateway.snapshot.hello.server!.buildId = "target-build";
-  expect(resolveSidebarUpdateAttention(context)).toMatchObject({
+  expect(resolveSidebarUpdateAttention(context)[0]).toMatchObject({
     dismissal,
     severity: "warning",
     requiresAction: false,
   });
   snapshot.updateRunAcknowledged = true;
-  expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(0);
   snapshot.updateRunAcknowledged = false;
   snapshot.updateRun = { ...run, finishedAtMs: Date.now() - 24 * 60 * 60 * 1000 };
-  expect(resolveSidebarUpdateAttention(context)).toBeNull();
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(0);
 });
 
 it.each([
@@ -113,5 +113,41 @@ it.each([
   };
   context.overlays.snapshot.updateRunning = forced;
 
-  expect(Boolean(resolveSidebarUpdateAttention(context)?.dismissal)).toBe(dismissible);
+  expect(Boolean(resolveSidebarUpdateAttention(context)[0]?.dismissal)).toBe(dismissible);
+});
+
+it("hides an unhydrated campaign only while update status can be polled", () => {
+  const context = contextWithGitStatus("behind");
+  const snapshot = context.overlays.snapshot;
+  snapshot.updateSchedule!.campaign = {
+    id: "waiting",
+    state: "waiting-for-idle",
+    announcedAtMs: 0,
+    forceAtMs: 1,
+    updatedAtMs: 0,
+  };
+  snapshot.updateCampaignStatusHydrated = false;
+  const hello = {
+    type: "hello-ok" as const,
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.admin"] },
+    features: { methods: ["update.status"] },
+  };
+  context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  context.gateway.snapshot.hello = hello;
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(0);
+  hello.auth.scopes = ["operator.read"];
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(1);
+  hello.auth.scopes = ["operator.admin"];
+  snapshot.updateCampaignStatusHydrated = true;
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(1);
+});
+
+it("keeps restart reconciliation visible after update metadata clears", () => {
+  const context = contextWithGitStatus("current");
+  const snapshot = context.overlays.snapshot;
+  snapshot.updateAvailable = null;
+  snapshot.updateSchedule = null;
+  snapshot.updateReconciliationPending = true;
+  expect(resolveSidebarUpdateAttention(context)).toHaveLength(1);
 });

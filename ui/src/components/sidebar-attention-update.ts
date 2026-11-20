@@ -12,7 +12,7 @@ import {
   resolveUpdateAttentionDismissal,
   type SidebarAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
-import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
+import type { SidebarInboxEntry, SidebarUpdateEntry } from "./sidebar-attention-entries.ts";
 
 /** The selected channel owns notification eligibility, not stale target metadata. */
 export function isReleaseUpdateAvailable(
@@ -48,7 +48,7 @@ export function retainedDismissals(entry: SidebarInboxEntry): SidebarAttentionDi
 
 export function resolveSidebarUpdateAttention(
   context: Pick<ApplicationContext, "gateway" | "overlays">,
-): Extract<SidebarInboxEntry, { type: "update" }> | null {
+): SidebarUpdateEntry[] {
   const snapshot = context.overlays.snapshot;
   const campaign = snapshot.updateSchedule?.campaign;
   const run = snapshot.updateRun;
@@ -67,8 +67,8 @@ export function resolveSidebarUpdateAttention(
   );
   const campaignPendingHydration =
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
-  const actionable =
-    busy || isReleaseUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
+  const release = isReleaseUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
+  const actionable = busy || release;
   if (
     !(
       runVisible ||
@@ -77,7 +77,7 @@ export function resolveSidebarUpdateAttention(
       (campaignPendingHydration ? snapshot.updateRunning : actionable)
     )
   ) {
-    return null;
+    return [];
   }
   const runDismissal =
     runVisible && run?.status !== "running"
@@ -87,8 +87,15 @@ export function resolveSidebarUpdateAttention(
   // run's outcome cannot also hide the restart. A stored dismissal of that outcome applies
   // again once the restart is gone.
   const finishing = isFinishingUpdateCampaign(snapshot.updateSchedule);
+  const historical =
+    run &&
+    context.gateway.snapshot.phase === "connected" &&
+    projectUpdateRunHistory(run, context.gateway.snapshot.hello?.server);
+  // A new release is a different action, not a retry of the recorded run. Give each
+  // its own row so a dismissal (or a busy campaign) applies only to its owner.
+  const separateRelease = historical && release && !finishing && !campaignPendingHydration;
   const dismissal =
-    runDismissal && !finishing
+    runDismissal && !finishing && !separateRelease
       ? runDismissal
       : resolveUpdateAttentionDismissal({
           gatewayBootId: context.gateway.snapshot.hello?.server?.bootId,
@@ -96,20 +103,30 @@ export function resolveSidebarUpdateAttention(
           updateSchedule: snapshot.updateSchedule,
         });
   const forced = busy || isUpdateAttentionForced(statusBanner?.tone);
-  const historical =
-    run &&
-    context.gateway.snapshot.phase === "connected" &&
-    projectUpdateRunHistory(run, context.gateway.snapshot.hello?.server);
-  return {
-    type: "update",
-    category: "system",
-    dismissal: canUpdate && !forced ? dismissal : null,
-    retainedDismissal: finishing ? runDismissal : null,
-    requiresAction: forced || (canUpdate && actionable),
-    severity:
-      statusBanner?.tone === "danger" ||
-      (!historical && snapshot.updateStatusBanner?.tone === "danger")
-        ? "error"
-        : "warning",
-  };
+  const entries: SidebarUpdateEntry[] = [
+    {
+      type: "update",
+      category: "system",
+      surface: separateRelease ? "release" : undefined,
+      dismissal: canUpdate && !forced ? dismissal : null,
+      retainedDismissal: finishing ? runDismissal : null,
+      requiresAction: forced || (canUpdate && actionable),
+      severity:
+        statusBanner?.tone === "danger" ||
+        (!historical && snapshot.updateStatusBanner?.tone === "danger")
+          ? "error"
+          : "warning",
+    },
+  ];
+  if (separateRelease && runDismissal) {
+    entries.push({
+      type: "update",
+      category: "system",
+      surface: "history",
+      dismissal: canUpdate ? runDismissal : null,
+      requiresAction: false,
+      severity: "warning",
+    });
+  }
+  return entries;
 }

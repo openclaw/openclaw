@@ -40,13 +40,15 @@ function inbox(
     attention: [],
     mentions: [],
     scopeUpgrade: null,
-    update: {
-      type: "update",
-      category: "system",
-      dismissal: null,
-      requiresAction,
-      severity: "warning",
-    },
+    updates: [
+      {
+        type: "update",
+        category: "system",
+        dismissal: null,
+        requiresAction,
+        severity: "warning",
+      },
+    ],
     ...overrides,
   });
 }
@@ -99,7 +101,7 @@ describe("sidebar attention projection", () => {
       attention: [cron!],
       mentions: [{ ...inboxMention("mention"), createdAt: 3_000 }],
       scopeUpgrade: { type: "scopeUpgrade" } as never,
-      update: null,
+      updates: [],
     });
     expect(
       entries.map((entry) => (entry.type === "approval" ? entry.approval.id : entry.type)),

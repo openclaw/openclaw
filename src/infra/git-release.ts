@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveConfigPath } from "../config/paths.js";
+import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
@@ -375,47 +376,61 @@ export async function collectGitReleases(params: {
 /** Let the watcher act first. While the update holds the installation lease the watcher
  * defers, so request a cooperative restart once and allow its normal active-work budget.
  * A new owner is not proof of a healthy release: the caller still verifies its exact build. */
-export async function waitForGitReleaseSuccessor(
-  env: NodeJS.ProcessEnv,
-  signal?: AbortSignal,
-): Promise<void> {
+export async function waitForGitReleaseSuccessor(params: {
+  serviceEnv: NodeJS.ProcessEnv;
+  gatewayPort: number;
+  allowGitReleaseRestartSignal?: boolean;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const signal = resolveCommandProcessSignal(params.signal);
+  signal?.throwIfAborted();
   const readOwner = () => {
     try {
-      return readGatewayOwnerLease({ env, current: true });
+      return readGatewayOwnerLease({
+        env: params.serviceEnv,
+        port: params.gatewayPort,
+        current: true,
+      });
     } catch {
-      return undefined;
+      // An unavailable observation is not evidence that the incumbent exited.
+      return null;
     }
   };
   const incumbent = readOwner();
-  if (!incumbent || incumbent.state !== "live") {
+  if (!incumbent || incumbent.state === "dead") {
     return;
   }
-  const stillServing = async (timeoutMs: number) => {
+  const waitForHandoff = async (timeoutMs: number) => {
     const until = performance.now() + timeoutMs;
+    let current: typeof incumbent | null = incumbent;
     while (performance.now() < until) {
       await sleep(Math.min(1_000, until - performance.now()), signal);
-      const current = readOwner();
+      const observed = readOwner();
       if (
-        current?.owner !== incumbent.owner ||
-        current.state !== "live" ||
-        current.pid !== incumbent.pid
+        observed === undefined ||
+        (observed &&
+          (observed.owner !== incumbent.owner ||
+            observed.pid !== incumbent.pid ||
+            observed.state === "dead"))
       ) {
-        return false;
+        return;
       }
+      current = observed;
     }
-    return true;
+    return current;
   };
   // The maintenance tick runs every 30s. Do not signal a successor it already started.
-  if (!(await stillServing(35_000))) {
+  const current = await waitForHandoff(35_000);
+  if (!params.allowGitReleaseRestartSignal || current?.state !== "live") {
     return;
   }
   signal?.throwIfAborted();
   try {
-    process.kill(incumbent.pid, "SIGUSR2");
+    process.kill(current.pid, "SIGUSR2");
   } catch {
     return;
   }
-  await stillServing(
+  await waitForHandoff(
     resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS,
   );
 }

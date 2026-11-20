@@ -199,13 +199,16 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={props.entry.type === "update"}>
-        <SidebarUpdateSurface
-          context={props.readContext()}
-          onDismiss={props.entry.dismissal ? dismiss : undefined}
-          onNavigate={() => props.panel.onNavigate("updates")}
-          watchUpdateProgress={props.panel.watchUpdateProgress}
-        />
+      <Match when={props.entry.type === "update" ? props.entry : null}>
+        {(entry) => (
+          <SidebarUpdateSurface
+            surface={entry().surface}
+            context={props.readContext()}
+            onDismiss={props.entry.dismissal ? dismiss : undefined}
+            onNavigate={() => props.panel.onNavigate("updates")}
+            watchUpdateProgress={props.panel.watchUpdateProgress}
+          />
+        )}
       </Match>
     </Switch>
   );
@@ -233,8 +236,9 @@ function inboxEntryIdentity(
         recoveryScope,
       ]);
     case "scopeUpgrade":
-    case "update":
       return entry.type;
+    case "update":
+      return entry.surface === "history" ? "update-history" : entry.type;
   }
   return entry satisfies never;
 }

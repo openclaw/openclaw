@@ -17,7 +17,7 @@ import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { SidebarApprovalRow } from "./exec-approval-card-solid.tsx";
 import { ScopeUpgradeActions, scopeUpgradeText } from "./scope-upgrade-actions.tsx";
-import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+import type { SidebarAttentionItem, SidebarUpdateEntry } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import {
   SidebarDismissButton,
@@ -158,6 +158,7 @@ export function renderSidebarApprovalItem(params: {
 }
 
 export function renderSidebarUpdateSurface(params: {
+  surface?: SidebarUpdateEntry["surface"];
   context: Pick<ApplicationContext, "gateway" | "overlays">;
   onDismiss?: () => void;
   onNavigate: () => void;
@@ -168,8 +169,15 @@ export function renderSidebarUpdateSurface(params: {
   const gateway = () => params.context.gateway.snapshot;
   const canCheck = () => canCallGatewayMethod(gateway(), "update.status", "operator.admin");
   const statusBanner = () => {
+    if (params.surface === "history") {
+      return null;
+    }
     const banner = snapshot().updateStatusCheckBanner;
-    return banner ? { ...banner, source: "read" as const } : snapshot().updateStatusBanner;
+    if (banner) {
+      return { ...banner, source: "read" as const };
+    }
+    const outcome = snapshot().updateStatusBanner;
+    return params.surface === "release" && outcome?.source !== "read" ? null : outcome;
   };
   const prepareRetry = async () => {
     const canRetry = () => {
@@ -198,11 +206,11 @@ export function renderSidebarUpdateSurface(params: {
       class="sidebar-issues-panel__update"
       data-attention-kind="updateAvailable"
       compact={true}
-      updateAvailable={snapshot().updateAvailable}
-      updateSchedule={snapshot().updateSchedule}
+      updateAvailable={params.surface === "history" ? null : snapshot().updateAvailable}
+      updateSchedule={params.surface === "history" ? null : snapshot().updateSchedule}
       heldUpdateCampaignId={snapshot().heldUpdateCampaignId}
       updateBusy={snapshot().updateRunning || snapshot().updateReconciliationPending}
-      updateRun={snapshot().updateRun}
+      updateRun={params.surface === "release" ? null : snapshot().updateRun}
       updateRunAcknowledged={snapshot().updateRunAcknowledged}
       connected={gateway().phase === "connected"}
       serving={gateway().hello?.server}
