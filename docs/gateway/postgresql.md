@@ -184,7 +184,11 @@ local SQLite. Daemon runtime pins remain in `control/services.sqlite` so service
 recovery does not require PostgreSQL. Device-local caches and file artifacts
 remain local; this includes Logbook frame images and cold transcript blobs.
 Incognito storage remains memory-only. The `memory-lancedb` plugin uses its own
-LanceDB store and is not switched by `database.engine`.
+LanceDB store and is not switched by `database.engine`. The
+[Knowledge](/plugins/knowledge#where-knowledge-keeps-data) memory provider uses
+local SQLite and vault files even when all five families use PostgreSQL. Its
+default layout keeps `registry.sqlite`, per-store `state.sqlite`, and `vault/`
+under `knowledge/` in the Gateway state directory.
 
 Client credentials live in the fixed-local `client/credentials.sqlite` store.
 Exec approvals go through the shared-state owner and require PostgreSQL to be
@@ -770,7 +774,7 @@ With the Gateway running, each PostgreSQL store is exported from its own
 not captured at one shared instant. Sequence allocation facts are read inside
 that snapshot, so a restored store never reissues a captured row ID.
 
-The archive combines local files and SQLite images with each actual PostgreSQL
+The archive combines local files and SQLite images with each captured PostgreSQL
 store's matched **format-2 envelope**: original anchor, portable SQLite export image, and manifest
 containing identity, schema versions, active fragments, allocation facts, sizes,
 and hashes. The DSN is not in that envelope. The surrounding archive contains
@@ -786,6 +790,16 @@ exports; see [Git backup redaction](/cli/backup#versioned-git-backups)
 for the credential scopes and restore requirements. Keep Logbook images, cold
 transcript blobs, workspaces, config includes, and local state with the database
 backup. Neither a server dump alone nor a copied anchor covers the installation.
+
+Copy the Knowledge registry, store databases, and vaults together while the
+Gateway is stopped. Include the paths of any stores adopted in place. The
+archive copies included unmanaged SQLite files as ordinary files. See
+[plugin backup resources](/plugins/manifest/surfaces#backupresources-reference)
+for snapshot coverage.
+
+Built-in PostgreSQL port, backup, and restore cover the five supported store
+families. Arrange backup and recovery for private plugin PostgreSQL stores
+through the plugin owner.
 
 ### Restore all PostgreSQL stores
 
