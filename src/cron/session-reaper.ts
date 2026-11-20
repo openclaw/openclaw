@@ -40,6 +40,8 @@ type ReaperTarget = {
   retentionMs: number;
   lastSweepAtMs: number;
   nextSweepAtMs: number;
+  /** Whether the recorded sweep saw job inventory; base-candidate discovery differs without it. */
+  hadInventory: boolean;
 };
 
 const reaper = resolveGlobalSingleton<{
@@ -182,9 +184,16 @@ export async function sweepCronRunSessions(params: {
   const previous = reaper.targets.get(targetKey);
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
-  // repeated session-store I/O.
+  // repeated session-store I/O. Inventory availability changes the discovery
+  // scope (base candidates appear only with inventory), so an availability
+  // change invalidates the recorded next-sweep deadline: without this, a
+  // sweep that ran without inventory records an infinite deadline from its
+  // run-only discovery and every later inventory-aware sweep stays skipped,
+  // leaving leaked base rows unpruned.
+  const hadInventory = params.knownJobIds !== undefined;
   if (
     previous?.retentionMs === retentionMs &&
+    previous.hadInventory === hadInventory &&
     now >= previous.lastSweepAtMs &&
     (now - previous.lastSweepAtMs < MIN_SWEEP_INTERVAL_MS || now < previous.nextSweepAtMs)
   ) {
@@ -199,6 +208,7 @@ export async function sweepCronRunSessions(params: {
     retentionMs,
     lastSweepAtMs: now,
     nextSweepAtMs: Infinity,
+    hadInventory,
   };
   reaper.targets.set(targetKey, target);
 

@@ -312,4 +312,31 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
     });
     expect(entries(sessionStorePath).map((row) => row.sessionKey)).toEqual([storedBaseKey]);
   });
+
+  it("keeps the store unpublished when the quarantine inventory read fails", async () => {
+    const failure = new Error("quarantine read failed");
+    const readRejects = vi
+      .spyOn(cronStoreModule, "loadCronQuarantinedJobs")
+      .mockRejectedValue(failure);
+    try {
+      await using context = await fixture([], {
+        resolveSessionStoreAgentIds: async () => ["main"],
+      });
+      const { state, sessionStorePath } = context;
+      state.deps.resolveSessionStorePath = () => sessionStorePath;
+      const storedBaseKey = "agent:main:cron:dailyreport";
+      await replaceSessionEntry(
+        { agentId: "main", storePath: sessionStorePath, sessionKey: storedBaseKey },
+        { sessionId: "dailyreport-base", updatedAt: baseNow - 25 * 3_600_000 },
+      );
+      await expect(onTimer(state)).rejects.toBe(failure);
+      // A half-published store would let the sweep see runnable-only inventory and
+      // prune the recoverable job's base session; the failed read must reject the
+      // whole load instead, like any other store-load failure.
+      expect(state.store).toBeNull();
+      expect(entries(sessionStorePath).map((row) => row.sessionKey)).toEqual([storedBaseKey]);
+    } finally {
+      readRejects.mockRestore();
+    }
+  });
 });

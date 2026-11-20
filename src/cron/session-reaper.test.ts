@@ -572,4 +572,16 @@ describe("sweepCronRunSessions", () => {
     await expectSweep(now, 1, true, { knownJobIds: new Set(["DailyReport"]) });
     expect(readSessionEntries(storePath)).toEqual({ [storedBaseKey]: storedBase });
   });
+
+  it("sweeps base candidates once inventory recovers after an inventory-less sweep", async () => {
+    const hookBaseKey = "agent:main:cron:hook-orphan";
+    const hookBase = expiredRun("hook-orphan", { delivery: { kind: "none" } });
+    await seedSessionEntries(storePath, { [hookBaseKey]: hookBase });
+    // Inventory unavailable: run-only discovery records an infinite next-sweep deadline.
+    await expectSweep(now, 0);
+    // Inventory recovers inside the minimum sweep interval; the recorded deadline
+    // must not keep skipping the now inventory-aware sweep.
+    await expectSweep(now + 60_000, 1, true, { knownJobIds: new Set(["stored-job"]) });
+    expect(readSessionEntries(storePath)).toEqual({});
+  });
 });
