@@ -1,0 +1,5 @@
+# Shutdown intent (openclaw/openclaw#129388, 🌊's ruling on upstream #201544, items 1-4) on the stage-2 pure candidate e7de8c3708. Net test-line growth, measured per file with scripts/check-test-lines-ratchet.mts semantics as (HEAD - 41bdde2111) minus (e7de8c3708 - 41bdde2111): +575.
+# Items 1-3, restart custody pins rendered at the delivery seams (root resume vs one child outcome, one outcome per unreached sibling in each of the four return modes, the graceful-stop and restart-interruption text) +271: subagent-registry.restart-terminal-custody.test.ts +7 (+203, -196) and the registry world both restart suites share, subagent-registry.restart-custody.test-support.ts +264, which holds the helpers moved out of the custody suite.
+# Item 4, the pre-deploy count, settle and undo of older shutdown quiet kills, booted through restore on fixtures the pre-#201544 shutdown wrote, +304: subagent-registry.shutdown-notices.test.ts +228, register.continuations.test.ts +76 (the commands' receipts and refusals).
+# Measured net, not a cap. Pending review; no approval claimed.
+575

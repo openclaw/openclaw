@@ -208,22 +208,28 @@ function parseBackupRow(value: unknown): BackupRow | undefined {
     return undefined;
   }
   const original = value.original;
-  const optionalText = (field: unknown) => field === null || typeof field === "string";
   if (
     !isRecord(original) ||
     typeof original.run_id !== "string" ||
     typeof original.child_session_key !== "string" ||
     typeof original.requester_session_key !== "string" ||
     typeof original.created_at !== "number" ||
-    typeof original.payload_json !== "string" ||
-    !optionalText(original.controller_session_key) ||
-    !optionalText(original.requester_store_path ?? null) ||
-    !optionalText(original.controller_store_path ?? null)
+    typeof original.payload_json !== "string"
   ) {
     return undefined;
   }
+  const optionalText = (field: unknown) => (typeof field === "string" ? field : null);
   return {
-    original: original as SubagentRunSqliteRow,
+    original: {
+      run_id: original.run_id,
+      child_session_key: original.child_session_key,
+      controller_session_key: optionalText(original.controller_session_key),
+      requester_session_key: original.requester_session_key,
+      requester_store_path: optionalText(original.requester_store_path),
+      controller_store_path: optionalText(original.controller_store_path),
+      created_at: original.created_at,
+      payload_json: original.payload_json,
+    },
     settledPayloadJson: value.settledPayloadJson,
   };
 }
