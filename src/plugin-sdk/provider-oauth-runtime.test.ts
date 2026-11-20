@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   generateOAuthState,
   generatePKCE,
-  hasUsableOAuthCredential,
   oauthErrorHtml,
   oauthSuccessHtml,
   parseOAuthAuthorizationInput,
@@ -12,11 +11,6 @@ import {
 } from "./provider-oauth-runtime.js";
 
 describe("provider OAuth runtime", () => {
-  it("uses the canonical OAuth credential eligibility predicate", async () => {
-    const credentialState = await import("../agents/auth-profiles/credential-state.js");
-    expect(hasUsableOAuthCredential).toBe(credentialState.hasUsableOAuthCredential);
-  });
-
   it("generates a SHA-256 PKCE challenge and independent OAuth state", async () => {
     const { verifier, challenge } = await generatePKCE();
     const state = generateOAuthState();

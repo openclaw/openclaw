@@ -195,6 +195,13 @@ describe("Codex control-plane request scope", () => {
 
   it("keeps exact-client retirement after cancellation without retiring a replacement or sibling", async () => {
     const harness = createHarness();
+    const replacementHarness = createClientHarness({
+      onWrite(line, send) {
+        const request = JSON.parse(line) as { id: number };
+        send({ id: request.id, result: { data: [] } });
+      },
+    });
+    clients.push(replacementHarness.client);
     const state = getSharedCodexAppServerClientState();
     const key = "control-plane-lifetime-fixture";
     const entry = getOrCreateSharedClientEntry(state, key);
@@ -230,16 +237,29 @@ describe("Codex control-plane request scope", () => {
       expect(retained.retire()).toEqual({ activeLeases: 1, closed: false });
       expect(retained.isCurrent()).toBe(false);
       expect(harness.client.getCloseError()).toBeUndefined();
+      await expect(harness.client.request("config/read", {})).resolves.toEqual({ data: [] });
       const replacement = getOrCreateSharedClientEntry(state, key);
+      // Leave the replacement unleased: retiring it by key would close its real transport.
+      replacement.client = replacementHarness.client;
+      state.entriesByClient.set(replacementHarness.client, replacement);
       retained.retire();
       expect(state.clients.get(key)).toBe(replacement);
+      expect(state.entriesByClient.get(replacementHarness.client)).toBe(replacement);
+      await expect(replacementHarness.client.request("config/read", {})).resolves.toEqual({
+        data: [],
+      });
       releaseSharedClientEntry(entry, "activeLeases");
       expect(harness.client.getCloseError()).toBeDefined();
+      expect(replacementHarness.client.getCloseError()).toBeUndefined();
+      await expect(replacementHarness.client.request("config/read", {})).resolves.toEqual({
+        data: [],
+      });
     } finally {
       blocked.resolve();
       await result.catch(() => {});
       state.clients.delete(key);
       state.entriesByClient.delete(harness.client);
+      state.entriesByClient.delete(replacementHarness.client);
     }
   });
 });

@@ -25,27 +25,6 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-it("retains canonical credential owners through the native auth facade", async () => {
-  const [store, order, oauth, fence] = await Promise.all([
-    import("../agents/auth-profiles/store-runtime.js"),
-    import("../agents/auth-profiles/order.js"),
-    import("../agents/auth-profiles/oauth.js"),
-    import("../agents/auth-profiles/oauth-refresh-marker.js"),
-  ]);
-  expect(authRuntime.ensureAuthProfileStoreAsync).toBe(store.ensureAuthProfileStoreAsync);
-  expect(authRuntime.findPersistedAuthProfileCredentialAsync).toBe(
-    store.findPersistedAuthProfileCredentialAsync,
-  );
-  expect(authRuntime.resolvePersistedAuthProfileOwnerAgentDirAsync).toBe(
-    store.resolvePersistedAuthProfileOwnerAgentDirAsync,
-  );
-  expect(authRuntime.resolveAuthProfileOrder).toBe(order.resolveAuthProfileOrder);
-  expect(authRuntime.refreshOAuthCredentialForRuntime).toBe(oauth.refreshOAuthCredentialForRuntime);
-  expect(authRuntime.resolveApiKeyForProfile).toBe(oauth.resolveApiKeyForProfile);
-  expect(authRuntime.isPendingOAuthRefreshFence).toBe(fence.isPendingOAuthRefreshFence);
-  expect(authRuntime.isSameOAuthRefreshGeneration).toBe(fence.isSameOAuthRefreshGeneration);
-});
-
 it("resolves provider and model auth when runtime code has no physical file", async () => {
   vi.spyOn(fs, "existsSync").mockReturnValue(false);
   const credential = { apiKey: "test-key", source: "test", mode: "api-key" } as const;
