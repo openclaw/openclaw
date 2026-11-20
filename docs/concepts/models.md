@@ -545,7 +545,9 @@ The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's
 provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
-preparation; a failed or superseded preparation leaves it in place. A provider
+preparation; a failed or superseded preparation leaves it in place. A
+preparation superseded by another publication, such as the config reload that
+changed the catalog source, retries after 10 seconds. A provider
 whose discovery fails publishes with the new generation's built-in rows.
 Admitted turns retain their captured model generation. If a newer catalog
 supersedes an agent RPC's runtime preparation before acceptance, the request
