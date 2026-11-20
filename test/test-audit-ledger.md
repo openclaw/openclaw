@@ -1177,11 +1177,18 @@ At `58dbe4055043f7c090a03b3c8a610a9e521e3452`, the metadata, native packaging an
 plugin selection suites clear their root trackers before removal. A failed
 removal loses the failed and unattempted roots. Reuse the shared cleanup owner
 in these three synchronous hooks, preserving metadata global restoration,
-fixture registration, child-process settlement, all cases and their assertions.
-Production and shared helpers remain unchanged.
+fixture registration and child-process settlement. Retain all 56 declarations /
+89 cases: metadata 26/56, native packaging 25/28 and plugin selection 5/5.
+Production and shared helpers remain unchanged; test code is three lines smaller.
 
-Independent classification, actual registered-hook failure/retry controls,
-clean baseline and candidate runs, and scoped checks are pending qualification.
+Captured registered-hook controls reproduce the lost failed and unattempted
+roots in all three suites. The shared owner preserves the same error, removes
+the healthy root, retains the failed root and removes it on retry. The native
+control uses the real root/alias pair and checks symlink existence with lstat;
+metadata globals are restored before the removal failure. Clean baseline and
+candidate runs each pass all 89 cases. Temporary instrumentation is restored
+byte for byte. Independent preservation reviews found no gaps. Scoped scripts-test
+typecheck, lint, formatting and both line-cap ratchets pass.
 
 ## Pending qualification and proof repairs
 

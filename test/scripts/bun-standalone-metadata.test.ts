@@ -42,11 +42,12 @@ import {
   safeRealpathSync,
 } from "../../src/plugins/path-safety.js";
 import { createPluginCacheSdk, getPluginSdkHostFacts } from "../../src/plugins/plugin-cache-sdk.js";
+import { cleanupTempDirs } from "../helpers/temp-dir.js";
 
 const temporaryRoots: string[] = [];
 afterEach(() => {
   vi.unstubAllGlobals();
-  temporaryRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
+  cleanupTempDirs(temporaryRoots);
 });
 
 const parse = createStandaloneSourceParser();
