@@ -788,7 +788,7 @@ describe("fal image-generation provider", () => {
     {
       name: "aspect ratio for Flux edit",
       request: { aspectRatio: "16:9", inputImages: [sourceImage("one")] },
-      error: "does not support aspectRatio overrides",
+      error: "does not support size, aspectRatio, or resolution overrides",
     },
     {
       name: "fal-ai/nano-banana edits above its reference limit",

@@ -306,8 +306,10 @@ both lyrics and instrumental mode.
 
 MiniMax Music 2.6 rejects `durationSeconds`; fal does not document a duration
 input for that endpoint. Stable Audio rejects fractional durations and values
-outside 1–190 seconds. ACE-Step accepts fractional seconds from 5–240. These
-constraints are checked before submission, without rounding or clamping.
+outside 1–190 seconds. The SDK and music runtime accept fractional ACE-Step
+durations from 5–240 seconds; the `music_generate` tool accepts only integer
+seconds. These constraints are checked before submission, without rounding or
+clamping.
 
 <Tip>
 The tables and accordions above cover the model families the bundled fal
