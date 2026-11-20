@@ -10,16 +10,16 @@ it("claims every selected recovery before overlapping acquisitions can consume o
   const first = createDeferredCore();
   const runs = [0, 0];
   const identity = "recovery-overlap";
-  const keys = ["agent:main:first", "agent:main:second"];
+  const keys = ["agent:main:first", "agent:main:second"] as const;
   const path = "/synthetic/recovery-overlap.sqlite";
   const owner = {};
   const markers = keys.map((key) => `file:${identity}\0${key}`);
   try {
     for (const [index, key] of keys.entries()) {
-      unknownSharingAuthorities.set(markers[index], { owner });
+      unknownSharingAuthorities.set(`file:${identity}\0${key}`, { owner });
       const recovery = captureSessionSharingAuthorityReconciliation(identity, [key], owner);
       recovery.prepare(path, async () => {
-        runs[index]++;
+        runs[index] = (runs[index] ?? 0) + 1;
         if (index === 0) {
           await first.promise;
         }

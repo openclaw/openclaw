@@ -2554,6 +2554,9 @@ src/config/sessions/session-entry-capability-facts.ts
 src/config/sessions/session-entry-navigation.ts
 src/config/sessions/session-entry-publication-source.ts
 src/config/sessions/session-pin-policy.ts
+src/config/sessions/session-sharing-authority-error.ts
+src/config/sessions/session-sharing-authority-reconciliation.ts
+src/config/sessions/session-sharing-authority-state.ts
 src/config/sessions/session-sharing-store.kernel.ts
 src/config/sessions/session-transcript-anchor-read.kernel.ts
 src/config/sessions/store-maintenance.ts

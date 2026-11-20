@@ -41,11 +41,8 @@ it.each(["replacement", "transcript"] as const)(
             configurable: true,
             get() {
               const committed: unknown = read();
-              if (!committed) {
-                return committed;
-              }
-              rejected++;
-              return { facts: { kind: "unexpected-native-receipt" } };
+              rejected += committed ? 1 : 0;
+              return committed && { facts: { kind: "unexpected-native-receipt" } };
             },
           });
           return admission;
@@ -55,8 +52,8 @@ it.each(["replacement", "transcript"] as const)(
         .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecutionAsync")
         .mockImplementation(async (...args) => {
           const execution = await capture(...args);
-          const runExisting: typeof execution.runExisting = (source, operation, options) => {
-            return execution.runExisting(
+          const runExisting: typeof execution.runExisting = (source, operation, options) =>
+            execution.runExisting(
               source,
               (worker) =>
                 operation({
@@ -74,7 +71,6 @@ it.each(["replacement", "transcript"] as const)(
                 }),
               options,
             );
-          };
           return new Proxy(execution, {
             get(target, property, receiver) {
               return property === "runExisting"
