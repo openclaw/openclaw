@@ -159,7 +159,32 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     },
   }[active];
   const header = page.locator(".plugins-hub-header");
-  expect(await header.getByRole("heading", { level: 1 }).textContent()).toBe(expected.title);
+  const heading = header.getByRole("heading", { level: 1 });
+  const title = await heading.textContent().catch(async (error: unknown) => {
+    const state = await header.evaluate((element) => {
+      const ancestors = [];
+      for (
+        let node: Element | null = element.querySelector("h1");
+        node;
+        node = node.parentElement
+      ) {
+        const style = getComputedStyle(node);
+        ancestors.push({
+          tag: node.tagName,
+          class: node.className,
+          hidden: node.hasAttribute("hidden"),
+          inert: node.hasAttribute("inert"),
+          ariaHidden: node.getAttribute("aria-hidden"),
+          display: style.display,
+          visibility: style.visibility,
+          contentVisibility: style.contentVisibility,
+        });
+      }
+      return { title: element.querySelector("h1")?.outerHTML, ancestors };
+    });
+    throw new Error(`Header heading is inaccessible: ${JSON.stringify(state)}`, { cause: error });
+  });
+  expect(title).toBe(expected.title);
   // The phone's floating header carries the title, leaving it for assistive tech.
   const floatingHeader = (await page.locator(".shell--floating-header").count()) > 0;
   await expect
