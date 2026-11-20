@@ -28,7 +28,9 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
     admit(() =>
       runOpenClawAgentWriteTransaction((writer) => {
         for (const id of ["marked", "fresh", "unrelated"]) {
-          const sessionKey = `agent:main:${id}`;
+          // Historical windows belong to this cleanup's own key prefix; the
+          // sweep must not reach windows outside it (#202134).
+          const sessionKey = `agent:main:pg-${id}`;
           // Public rollover retains lineage; seed genuinely unreferenced history.
           writeSessionEntry(writer, sessionKey, { sessionId: id, updatedAt: old });
           appendTranscriptEventsInTransaction(writer, { ...options, sessionKey, sessionId: id }, [
@@ -51,7 +53,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
       const plan = admit(() =>
         planSessionLifecycleArtifactCleanup(database, {
           agentId,
-          sessionKeySegmentPrefix: "unused-",
+          sessionKeySegmentPrefix: "pg-",
           transcriptContentMarker: marker,
           orphanTranscriptMinAgeMs: 300_000,
           archiveRemovedEntryTranscripts: false,
@@ -74,7 +76,7 @@ describe.skipIf(!mixedAgentConnection)("PostgreSQL lifecycle artifact cleanup", 
       cleanupSessionLifecycleArtifactsCore({
         ...options,
         storePath: database.path,
-        sessionKeySegmentPrefix: "unused-",
+        sessionKeySegmentPrefix: "pg-",
         transcriptContentMarker: marker,
         orphanTranscriptMinAgeMs: 300_000,
         archiveRemovedEntryTranscripts: false,
