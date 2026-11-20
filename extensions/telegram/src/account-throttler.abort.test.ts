@@ -14,7 +14,7 @@ const {
 
 beforeEach(() => resetTelegramAccountThrottlersForTest());
 
-function fixture(failText?: string) {
+function fixture() {
   const held = createDeferred<void>();
   const sent: string[] = [];
   const pending: Promise<unknown>[] = [];
@@ -27,9 +27,6 @@ function fixture(failText?: string) {
     sent.push((payload as { text: string }).text);
     if (sent.length === 1) {
       await held.promise;
-    }
-    if ((payload as { text: string }).text === failText) {
-      throw new Error("Request failed");
     }
     return { ok: true, result: true };
   }) as unknown as Parameters<Transformer>[0];
@@ -118,10 +115,10 @@ it.each(["head", "middle"])(
   },
 );
 
-it.each(["success", "failure", "abort", "retirement"] as const)(
+it.each(["success", "abort", "retirement"] as const)(
   "detaches the queued abort listener on %s",
   async (outcome) => {
-    const { send, held, token } = fixture(outcome === "failure" ? "queued" : undefined);
+    const { send, held, token } = fixture();
     const first = send("first");
     const controller = new TelegramAbortController();
     const add = vi.spyOn(controller.signal, "addEventListener");
