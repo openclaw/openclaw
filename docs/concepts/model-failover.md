@@ -315,6 +315,8 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
   </Step>
 </Steps>
 
+With multiple Codex subscriptions, **Settings → Models → Provider access → OpenAI** shows one bar per quota window. Each segment shows what is left on that account, not a share of a combined allowance. The Credits row shows each account’s reported balance separately: zero is a reported balance; a dash means no balance was reported. Select an account name for its plan and account actions, or a quota segment for its reset time. When the order is editable, drag a segment left or right (or focus it and use the arrow keys) to change the selected agent’s stored priority. This does not change a session’s explicitly selected account.
+
 If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth, then static token, then API key**).
@@ -479,7 +481,7 @@ State is stored in the per-agent SQLite auth state:
 }
 ```
 
-Overloaded and rate-limit errors allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
+Overload and temporary rate limits allow one same-provider auth-profile rotation by default before advancing to the next configured model fallback. The active runtime first uses its eligible same-model recovery budget. When Codex confirms an account has exhausted its usage window, OpenClaw skips further retries on that account and tries the next eligible account in order. These switches do not spend or reset the temporary rate-limit rotation budget. Auth-profile rotation and model fallback still require evidence that replaying the original attempt is safe.
 
 Confirmed pre-execution tool rejections do not by themselves make an attempt
 replay-unsafe. Non-replay-safe operations that started, or may have started,

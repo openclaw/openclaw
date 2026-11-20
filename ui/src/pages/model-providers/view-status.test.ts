@@ -38,6 +38,30 @@ it("uses the scoped check outcome without hiding catalog or account problems", (
   expect(status()).toBe("Ready");
 });
 
+it("labels a single measured account when per-login limits are unavailable", () => {
+  const profile = { profileId: "openai:first", type: "oauth" as const, status: "ok" as const };
+  const base = card({
+    apiKey: undefined,
+    auth: { kind: "ok" },
+    catalogStatus: "ready",
+    usage: {
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "Week", usedPercent: 100 }],
+    },
+  });
+  const view = (profiles: (typeof profile)[]) => props({ cards: [{ ...base, profiles }] });
+  const container = mount(view([profile, { ...profile, profileId: "openai:second" }]));
+  container.querySelector<HTMLButtonElement>(".provider-row__summary")!.click();
+  flush();
+  expect(text(container.querySelector(".provider-row__limits-pane"))).toContain(
+    "Limits for one account",
+  );
+  expect(text(container.querySelector(".provider-row__summary"))).not.toContain("0% left");
+  mount(view([profile]), container);
+  expect(text(container.querySelector(".provider-row__summary"))).toContain("Week 0% left");
+});
+
 it("uses catalog evidence for short-lived OAuth without treating expiry alone as sign-out", () => {
   const oauth = {
     profileId: "example:account",

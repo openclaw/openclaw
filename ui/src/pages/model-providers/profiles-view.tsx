@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, mapArray, onSettled, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
@@ -9,12 +10,18 @@ import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { isAccessTokenExpiry, isOAuthRefreshPending } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
-import { AccountLimits, type AccountUsageScope } from "./account-usage.tsx";
+import { AccountUsageBars } from "./account-usage-bars.tsx";
+import {
+  AccountLimits,
+  createAccountUsage,
+  type AccountUsageRead,
+  type AccountUsageScope,
+} from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
 import type { ModelProviderCard, ModelProviderPendingLogout } from "./data.ts";
+import { startProfileRowDrag } from "./profile-row-drag.ts";
 import {
   needsOAuthSignIn,
   profileAuthProblem,
@@ -73,8 +80,6 @@ export type ProviderProfilesViewProps = {
   onSignInAgain?: () => void;
 };
 
-const DRAGGING_CLASS = "model-providers__profile--dragging";
-const SORTING_CLASS = "model-providers__profiles--sorting";
 const PROFILE_SOURCE_LABELS = new Map([
   ["config", "modelProviders.profiles.sourceConfig"],
   ["inherited", "modelProviders.profiles.sourceInherited"],
@@ -239,110 +244,6 @@ function profileGroups(card: ModelProviderCard, drafts: Record<string, string[]>
   });
 }
 
-function startPointerDrag(params: {
-  event: PointerEvent;
-  canMove: boolean;
-  provider: string;
-  row: HTMLElement;
-  section: HTMLElement;
-  rows: HTMLElement[];
-  move: (targetId: string, position: ArrayDropPosition) => void;
-  drag: ReturnType<typeof createPointerDrag>;
-}): void {
-  if (!params.canMove || params.event.button !== 0) {
-    return;
-  }
-  const grip = params.event.currentTarget;
-  if (!(grip instanceof HTMLElement)) {
-    return;
-  }
-  const { row, section } = params;
-  const sectionTop = section.getBoundingClientRect().top;
-  // Use the original slots for hit testing. Measuring animated neighbors would
-  // make the insertion point oscillate as they move out from under the pointer.
-  const slots = params.rows
-    .filter((candidate) => candidate.dataset.profileProvider === params.provider)
-    .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
-  const source = slots.find((slot) => slot.element === row);
-  if (!source) {
-    return;
-  }
-  const others = slots.filter((slot) => slot !== source);
-  let target: (typeof slots)[number] | undefined;
-  let position: ArrayDropPosition = "before";
-  params.event.preventDefault();
-  section.classList.add(SORTING_CLASS);
-  row.classList.add(DRAGGING_CLASS);
-  const update = (event: PointerEvent) => {
-    const scrollOffset = sectionTop - section.getBoundingClientRect().top;
-    const deltaY = event.clientY - params.event.clientY + scrollOffset;
-    row.style.translate = `${event.clientX - params.event.clientX}px ${deltaY}px`;
-    const hit = document.elementFromPoint(event.clientX, event.clientY);
-    const hitRow = hit?.closest<HTMLElement>(".model-providers__profile");
-    const pointerY = event.clientY + scrollOffset;
-    const inside =
-      hit &&
-      section.contains(hit) &&
-      (!hitRow || hitRow.dataset.profileProvider === params.provider) &&
-      slots.some(
-        ({ bounds }) =>
-          event.clientX >= bounds.left &&
-          event.clientX <= bounds.right &&
-          pointerY >= bounds.top &&
-          pointerY <= bounds.bottom,
-      );
-    // Swap as the leading edge crosses a neighbor's center, without requiring
-    // the dragged row to travel a full slot before the neighbor makes room.
-    const leadingY = (deltaY > 0 ? source.bounds.bottom : source.bounds.top) + deltaY;
-    target = inside
-      ? others.find(({ bounds }) => leadingY < bounds.top + bounds.height / 2)
-      : undefined;
-    position = target ? "before" : "after";
-    if (inside && !target) {
-      target = others.at(-1);
-    }
-    const preview = target ? moveArrayEntry(slots, source, target, position) : slots;
-    if (preview.indexOf(source) === slots.indexOf(source)) {
-      target = undefined;
-    }
-    let top = slots[0]?.bounds.top ?? 0;
-    for (const slot of preview) {
-      if (slot !== source) {
-        slot.element.style.translate = `0px ${top - slot.bounds.top}px`;
-      }
-      top += slot.bounds.height;
-    }
-  };
-  const cleanup = () => {
-    stopKeydown();
-    section.classList.remove(SORTING_CLASS);
-    for (const { element } of slots) {
-      element.classList.remove(DRAGGING_CLASS);
-      element.style.removeProperty("translate");
-    }
-  };
-  const finish = (event: PointerEvent) => {
-    update(event);
-    const targetId = target?.element.dataset.profileId;
-    cleanup();
-    if (targetId) {
-      params.move(targetId, position);
-    }
-  };
-  const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      params.drag.cancel();
-    }
-  };
-  // A drag owns Escape before the Settings shell handles its back shortcut.
-  const stopKeydown = listen(document, "keydown", { handleEvent: handleKeyDown }, true);
-  if (!params.drag.start(params.event, grip, { move: update, end: finish, cancel: cleanup })) {
-    cleanup();
-  }
-}
-
 const PROFILE_KIND_KEYS = {
   api_key: "modelProviders.profiles.kindApiKey",
   token: "modelProviders.profiles.kindToken",
@@ -490,9 +391,57 @@ export function ProviderProfiles(
   const rows = createMemo(() =>
     groups().flatMap((group) => group.profiles.map((profile) => ({ group, profile }))),
   );
+  const subscriptions = createMemo(() =>
+    rows().filter(
+      ({ group, profile }) => group.provider === "openai" && profile.type !== "api_key",
+    ),
+  );
+  const readings = mapArray(
+    () => {
+      const scope = props.accountUsage;
+      return scope ? subscriptions().map(({ profile }) => ({ id: profile.profileId, scope })) : [];
+    },
+    (entry) =>
+      createAccountUsage(
+        () => entry().scope,
+        () => entry().id,
+      ),
+    { keyed: (entry) => entry.id },
+  );
+  const reads = createMemo(
+    () => new Map(readings().map((read) => [read.account().profileId, read])),
+  );
+  const grouped = () => readings().length > 1;
+  const subscriptionGroup = () => subscriptions()[0]?.group;
+  const canReorderBars = () =>
+    props.canMutate && Boolean(subscriptionGroup()?.complete) && !subscriptionGroup()?.lock;
   const explanations = () => [
     ...new Set(groups().flatMap((group) => (group.explanation ? [group.explanation] : []))),
   ];
+  const [expandedAccount, setExpandedAccount] = createSignal<string>();
+  const listedRows = createMemo(() =>
+    rows().filter(
+      ({ profile }) =>
+        !grouped() || !reads().has(profile.profileId) || profile.profileId === expandedAccount(),
+    ),
+  );
+  const profileList = () => (
+    <div class="model-providers__profile-list" role="list">
+      <For each={listedRows()} keyed={(row) => row.profile.profileId}>
+        {(row) => (
+          <ProviderProfileRow
+            {...props}
+            row={row()}
+            usageRead={reads().get(row().profile.profileId)}
+            grouped={grouped() && row().group === subscriptionGroup()}
+            section={() => section}
+            rowElements={rowElements}
+            identity={identities().get(row().profile.profileId)!}
+          />
+        )}
+      </For>
+    </div>
+  );
   return (
     <Show when={card().profiles.length > 0}>
       <section
@@ -526,19 +475,37 @@ export function ProviderProfiles(
             </div>
           </div>
         </Show>
-        <div class="model-providers__profile-list" role="list">
-          <For each={rows()} keyed={(row) => row.profile.profileId}>
-            {(row) => (
-              <ProviderProfileRow
-                {...props}
-                row={row()}
-                section={() => section}
-                rowElements={rowElements}
-                identity={identities().get(row().profile.profileId)!}
-              />
-            )}
-          </For>
-        </div>
+        <Show when={grouped()}>
+          <AccountUsageBars
+            readings={readings()}
+            identities={identities()}
+            expandedAccount={expandedAccount()}
+            onToggleAccount={(id) =>
+              setExpandedAccount((current) => (current === id ? undefined : id))
+            }
+            status={(id) => {
+              const profile = subscriptions().find((row) => row.profile.profileId === id)?.profile;
+              return (
+                profile && profileStatus(profile, card().catalogStatus === "auth-rejected", true)
+              );
+            }}
+            canReorder={canReorderBars()}
+            onReorder={(ids) => {
+              const group = subscriptionGroup();
+              if (!canReorderBars() || !group) {
+                return;
+              }
+              // Other kinds of credentials retain their exact priority slots.
+              let next = 0;
+              props.onProfileOrderChange(
+                card().id,
+                group.provider,
+                group.order.map((id) => (reads().has(id) ? ids[next++]! : id)),
+              );
+            }}
+          />
+        </Show>
+        <Show when={listedRows().length}>{profileList()}</Show>
       </section>
     </Show>
   );
@@ -551,6 +518,8 @@ function ProviderProfileRow(
     identity: string;
     section: () => HTMLElement;
     rowElements: Map<string, HTMLElement>;
+    usageRead?: AccountUsageRead;
+    grouped: boolean;
     keyAction?: () => JSX.Element;
   },
 ) {
@@ -569,8 +538,17 @@ function ProviderProfileRow(
   const index = () => order().indexOf(profile().profileId);
   const canMove = () =>
     props.canMutate && !group().lock && group().complete && order().length > 1 && index() >= 0;
-  const showMoves = () =>
-    !group().lock && (group().complete || group().stored) && order().length > 1;
+  const showGrip = () =>
+    !props.grouped && !group().lock && (group().complete || group().stored) && order().length > 1;
+  // Subscription columns can swap with each other, but not with a key. A key can
+  // choose any slot in the full order without needing a visible row to drop on.
+  const showKeyPriority = () =>
+    props.grouped && profile().type === "api_key" && group().complete && !group().lock;
+  const reorderLabel = () =>
+    t("modelProviders.profiles.reorder", {
+      account: props.identity,
+      position: String(index() + 1),
+    });
   const positioned = () => group().explicit && group().complete && index() >= 0;
   const firstApiKey = () =>
     profile().type === "api_key" &&
@@ -619,22 +597,19 @@ function ProviderProfileRow(
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
     >
-      <Show when={showMoves() || positioned()}>
+      <Show when={showGrip() || (positioned() && !showKeyPriority())}>
         <span class="model-providers__profile-order">
-          {showMoves() ? (
+          {showGrip() ? (
             <button
               type="button"
               class="model-providers__profile-grip"
               disabled={!canMove()}
-              aria-label={t("modelProviders.profiles.reorder", {
-                account: props.identity,
-                position: String(index() + 1),
-              })}
+              aria-label={reorderLabel()}
               aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
               title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
               onPointerDown={(event: PointerEvent) => {
                 drag.cancel();
-                startPointerDrag({
+                startProfileRowDrag({
                   event,
                   canMove: canMove(),
                   provider: provider(),
@@ -680,6 +655,25 @@ function ProviderProfileRow(
           : profileStatus(profile(), props.card.catalogStatus === "auth-rejected", true)}
       </span>
       <span class="model-providers__profile-actions">
+        <Show when={showKeyPriority()}>
+          <SettingsSelect
+            aria-label={reorderLabel()}
+            title={reorderBlocked() || undefined}
+            disabled={!canMove()}
+            value={String(index())}
+            options={order().map((_, slot) => ({
+              value: String(slot),
+              label: t("modelProviders.profiles.priority", { position: String(slot + 1) }),
+            }))}
+            onChange={(event) => {
+              const slot = event.currentTarget.selectedIndex;
+              const target = order()[slot];
+              if (target && slot !== index()) {
+                reorder(target, slot < index() ? "before" : "after");
+              }
+            }}
+          />
+        </Show>
         {firstApiKey() ? props.keyAction?.() : undefined}
         {canSignInAgain() ? (
           <button
@@ -724,8 +718,8 @@ function ProviderProfileRow(
           </button>
         ) : undefined}
       </span>
-      <Show when={provider() === "openai" && profile().type !== "api_key" && props.accountUsage}>
-        {(scope) => <AccountLimits scope={scope()} profileId={profile().profileId} />}
+      <Show when={props.usageRead}>
+        {(read) => <AccountLimits read={read()} grouped={props.grouped} />}
       </Show>
     </div>
   );

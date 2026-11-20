@@ -387,6 +387,41 @@ describe("handleEmbeddedPromptFailure", () => {
     ).toBe("hard_timeout");
   });
 
+  it.each([true, false])(
+    "suspends for a quota rejection only when no account can take over (rotated=%s)",
+    async (rotated) => {
+      const params = makeParams({
+        promptError: Object.assign(new Error("You've hit your usage limit."), { status: 429 }),
+        fallbackConfigured: false,
+        failover: { advanceAuthProfile: vi.fn(async () => rotated) },
+      });
+      const outcome = handleEmbeddedPromptFailure(params);
+      if (rotated) {
+        await expect(outcome).resolves.toMatchObject({ action: "retry" });
+        expect(params.runInput.suspendForFailure).not.toHaveBeenCalled();
+      } else {
+        await expect(outcome).rejects.toThrow("usage limit");
+        expect(params.runInput.suspendForFailure).toHaveBeenCalledWith(
+          expect.objectContaining({ reason: "quota_exhausted" }),
+        );
+      }
+    },
+  );
+
+  it("keeps quota suspension when rotation escalates to model fallback", async () => {
+    const cap = new FailoverError("Rotation cap reached", { reason: "rate_limit" });
+    const params = makeParams({
+      promptError: Object.assign(new Error("You've hit your usage limit."), { status: 429 }),
+      failover: {
+        advanceAuthProfile: vi.fn(async () => {
+          throw cap;
+        }),
+      },
+    });
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(cap);
+    expect(params.runInput.suspendForFailure).toHaveBeenCalledOnce();
+  });
+
   it.each(["prompt", "compaction", "tool_execution"] as const)(
     "retains an opaque %s watchdog failure without changing its retry routing",
     async (phase) => {

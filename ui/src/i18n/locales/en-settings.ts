@@ -1158,6 +1158,12 @@ const enSettings = {
     },
     limits: {
       title: "Plan limits",
+      oneAccount: "Limits for one account",
+      subscriptionLimits: "Subscription allowance left",
+      credits: "Credits",
+      detailsFor: "Account details: {account}",
+      notReported: "Not reported",
+      accountDetails: "Account details",
     },
     saving: "Saving…",
     requestFailed: "Couldn’t complete the request. Try again.",

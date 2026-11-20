@@ -17,6 +17,7 @@ import {
 import {
   hasLongWindowRateLimitEvidence,
   hasOrganizationTpmRateLimitEvidence,
+  isExhaustedUsageWindowCode,
 } from "../../failover/retry-evidence.js";
 import type { FailoverReason } from "../../failover/signal.js";
 import {
@@ -84,6 +85,7 @@ type AuthRetryTrace = TraceAttempt & { reason: FailoverReason };
 type TransientRetryReason = FailoverReason | "output_limit";
 
 type RateLimitAuthProfileContext = {
+  code?: string;
   failoverProvider: string;
   failoverModel: string;
   logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
@@ -200,6 +202,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
     // A replay-safe model fallback avoids spending another same-model budget there.
     if (sharedTpmFallback) {
       return false;
+    }
+    // An exhausted account has no transient requests to retry. Walk the remaining
+    // authorized candidates without charging the temporary-throttle rotation budget.
+    if (isExhaustedUsageWindowCode(context.code)) {
+      return advanceAttemptAuthProfile();
     }
     if (rateLimitProfileRotations >= MAX_RATE_LIMIT_PROFILE_ROTATIONS && fallbackConfigured) {
       const status = resolveFailoverStatus("rate_limit");
@@ -378,7 +385,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         params.isFinalFallbackAttempt !== true &&
         retry.failoverEligible !== false &&
         (sharedTpmFallback || hasOrganizationTpmRateLimitEvidence(retry.message));
-      if (rateLimit && hasLongWindowRateLimitEvidence(retry.message)) {
+      if (rateLimit && hasLongWindowRateLimitEvidence(retry.message, retry.code)) {
         recordDecision("rejected", "long_window_rate_limit");
         return false;
       }

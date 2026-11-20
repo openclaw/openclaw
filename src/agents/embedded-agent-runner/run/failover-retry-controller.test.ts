@@ -195,6 +195,18 @@ it("waits for the provider floor before exhausting recovery and rotating credent
   expect(advance).toHaveBeenCalledTimes(1);
 });
 
+it("does not spend or replenish transient rotations on a confirmed account limit", async () => {
+  controller = createRetryController({
+    fallbackConfigured: true,
+    runtime: { advanceAttemptAuthProfile: async () => true },
+  });
+  const exhausted = { ...rotationContext, code: "usage_limit_reached" };
+  await expect(controller.advanceAuthProfile("rate_limit", exhausted)).resolves.toBe(true);
+  await expect(rotate()).resolves.toBe(true);
+  await expect(controller.advanceAuthProfile("rate_limit", exhausted)).resolves.toBe(true);
+  await expect(rotate()).rejects.toMatchObject({ reason: "rate_limit" });
+});
+
 it.each([-90_000, 0, 90_000])(
   "bounds shared TPM recovery across a %sms wall-clock step by retries and elapsed waiting",
   async (wallStepMs) => {

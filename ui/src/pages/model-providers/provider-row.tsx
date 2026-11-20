@@ -22,6 +22,7 @@ import {
 } from "./data.ts";
 import { apiKeySource, profileIdentity, ProviderProfiles } from "./profiles-view.tsx";
 import {
+  hasSeparateAccountLimits,
   isProviderUsable,
   needsAuthAttention,
   renderMutationMessage,
@@ -528,7 +529,12 @@ export function ProviderRow(props: ProviderRowProps) {
   let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
-  const limits = () => (hasProviderUsageDetails(card().usage) ? card().usage : undefined);
+  const accountScoped = () => hasSeparateAccountLimits(card());
+  const limits = () =>
+    !(accountScoped() && props.accountUsage && props.canViewProfiles) &&
+    hasProviderUsageDetails(card().usage)
+      ? card().usage
+      : undefined;
   const [expanded, setExpanded] = createSignal<boolean>();
   // Work in progress and broken credentials start open; a click always wins.
   const startsOpen = () =>
@@ -563,7 +569,7 @@ export function ProviderRow(props: ProviderRowProps) {
           <span class="provider-row__name">{providerName(card())}</span>
           <span class="provider-row__meta settings-row__desc">
             <span class="provider-row__meta-part">{credential()}</span>
-            <Show when={card().usage?.plan}>
+            <Show when={!accountScoped() && card().usage?.plan}>
               {(plan) => <span class="provider-row__meta-part provider-row__plan">{plan()}</span>}
             </Show>
             <span class="provider-row__meta-part">{modelsText(card())}</span>
@@ -584,6 +590,9 @@ export function ProviderRow(props: ProviderRowProps) {
                 class="provider-row__limits-pane"
                 aria-label={t("modelProviders.limits.title")}
               >
+                <Show when={accountScoped()}>
+                  <span class="settings-row__title">{t("modelProviders.limits.oneAccount")}</span>
+                </Show>
                 <ProviderUsagePanel compact usage={usage()} />
               </section>
             )}

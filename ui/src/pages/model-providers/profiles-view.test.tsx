@@ -5,6 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import * as toast from "../../lib/toast.ts";
 import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import {
   expectAbsent,
   expectContent,
   profile as makeProfile,
@@ -478,6 +482,86 @@ it.each([undefined, "auth-rejected"] as const)(
     }
   },
 );
+
+it("moves a key across collapsed subscriptions and keeps credit and recovery details on the right account", async () => {
+  const failed = makeProfile("openai:failed", {
+    email: "failed@example.com",
+    status: "expired",
+    reasonCode: "refresh_failed",
+    logoutSupported: true,
+  });
+  const healthy = makeProfile("openai:other", { email: "other@example.com" });
+  const key = makeProfile("openai:key", { type: "api_key", status: "static" });
+  const profiles = [failed, key, healthy];
+  const onSignInAgain = vi.fn(),
+    onRequestLogout = vi.fn(),
+    onProfileOrderChange = vi.fn();
+  const request = createGatewayRequestMock(async (_method, params) => ({
+    updatedAt: 1,
+    providers: [
+      {
+        provider: "openai",
+        displayName: "OpenAI",
+        windows: [],
+        plan: "Pro",
+        billing:
+          (params as { profileId: string }).profileId === failed.profileId
+            ? [{ type: "balance", amount: 0, unit: "credits" }]
+            : [{ type: "spend", amount: 42, unit: "credits" }],
+      },
+    ],
+  }));
+  const { container } = mount(
+    orderedCard(
+      { openai: profiles.map((p) => p.profileId) },
+      { profiles, logoutTargets: [{ provider: "openai", profileIds: [failed.profileId] }] },
+    ),
+    {
+      ...props(),
+      accountUsage: { client: createTestGatewayClient(request), agentId: "main", revision: 0 },
+      canSignInAgain: () => true,
+      onSignInAgain,
+      onRequestLogout,
+      onProfileOrderChange,
+    },
+  );
+  await waitForSolid(() =>
+    expect(
+      container.querySelectorAll(".model-providers__credit > span:nth-child(2)")[0]?.textContent,
+    ).toBe("0"),
+  );
+  expect(
+    container.querySelectorAll(".model-providers__credit > span:nth-child(2)")[1]?.textContent,
+  ).toBe("—");
+  expect(container.textContent).not.toContain("No live usage data");
+  const keyRow = rowFor(container, key.profileId);
+  const priority = keyRow.querySelector<HTMLSelectElement>("select")!;
+  expect(priority?.selectedOptions[0]?.textContent).toBe("Priority 2");
+  for (const [slot, expected] of [
+    [0, [key.profileId, failed.profileId, healthy.profileId]],
+    [2, [failed.profileId, healthy.profileId, key.profileId]],
+  ] as const) {
+    priority.selectedIndex = slot;
+    priority.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onProfileOrderChange).toHaveBeenLastCalledWith("openai", "openai", expected);
+  }
+  expect(rowFor(container, failed.profileId)).toBeNull();
+  const name = container.querySelector<HTMLButtonElement>(".model-providers__segment-name")!;
+  expect(name.textContent).toContain("Sign-in expired");
+  name.click();
+  flush();
+  const row = rowFor(container, failed.profileId);
+  expectAbsent(container, gripSelector);
+  row.querySelector<HTMLButtonElement>("[data-models-sign-in-again]")!.click();
+  row.querySelector<HTMLButtonElement>(".model-providers__profile-logout")!.click();
+  expect(onSignInAgain).toHaveBeenCalledOnce();
+  expect(onRequestLogout).toHaveBeenCalledWith(
+    expect.objectContaining({ target: { provider: "openai", profileIds: [failed.profileId] } }),
+  );
+  expect(row.textContent).toContain("Pro");
+  expect(row.textContent).not.toContain("0 credits");
+  expect(rowFor(container, healthy.profileId)).toBeNull();
+});
 
 it("offers Sign in again only on OAuth accounts whose grant is gone", () => {
   const failed = makeProfile("openai:failed@example.com", {

@@ -425,6 +425,123 @@
   }
 }
 
+/* One equal-width slot per subscription. The fill is the allowance left on that login. */
+.model-providers__usage-bars {
+  display: grid;
+  gap: var(--space-2);
+  grid-template-columns: fit-content(25%) minmax(0, 1fr);
+  padding-block: var(--space-2);
+  margin-inline-start: calc(-1 * var(--provider-detail-indent));
+  min-width: 0;
+}
+.model-providers__usage-bars > small {
+  grid-column: 1 / -1;
+}
+.model-providers__usage-bars small,
+.model-providers__usage-label {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+.model-providers__usage-window {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  gap: var(--space-2);
+  align-items: center;
+}
+.model-providers__usage-label {
+  overflow-wrap: anywhere;
+}
+.model-providers__usage-track {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: var(--space-1);
+}
+.model-providers__usage-segment {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  min-height: 36px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+.model-providers__segment-name[data-movable],
+.model-providers__usage-segment[data-movable] {
+  user-select: none;
+  cursor: grab;
+  touch-action: pan-y;
+}
+.model-providers__usage-bars[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
+  transition: translate 100ms ease-out;
+}
+.model-providers__usage-track > [data-grabbed] {
+  position: relative;
+  z-index: 1;
+  cursor: grabbing;
+  border-radius: var(--radius-sm);
+  background-color: var(--card);
+  box-shadow: var(--shadow-md);
+}
+@media (prefers-reduced-motion: reduce) {
+  .model-providers__usage-bars[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
+    transition: none;
+  }
+}
+
+.model-providers__usage-segment:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.model-providers__usage-segment[data-known="false"] {
+  border-style: dashed;
+}
+.model-providers__segment-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: -1;
+  background: color-mix(in srgb, var(--segment-tone, var(--ok)) 32%, transparent);
+}
+.model-providers__usage-segment[data-tone="warning"] {
+  --segment-tone: var(--oc-status-warning-fg);
+}
+.model-providers__usage-segment[data-tone="error"] {
+  --segment-tone: var(--oc-status-error-fg);
+  color: var(--segment-tone);
+}
+.model-providers__credit {
+  text-align: center;
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.model-providers__segment-name {
+  display: grid;
+  justify-items: stretch;
+  align-content: start;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  padding: var(--space-1) 0;
+  text-align: center;
+  font-size: var(--control-ui-text-xs);
+}
+.model-providers__account-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* Codex limits belong to their account: they start under its name and run to the row's end. */
 .model-providers__account-limits {
   grid-column: 1 / -1;
@@ -444,6 +561,16 @@
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   text-transform: capitalize;
+}
+
+.model-providers__account-details > summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: var(--control-ui-text-xs);
+}
+
+.model-providers__account-details[open] > summary {
+  margin-block-end: var(--space-2);
 }
 
 /* Agent-scoped provider connection picker; the secure wizard keeps its own layout. */
@@ -702,6 +829,7 @@
 
 /* The open provider hangs off its name: credentials, what they allow, then its actions. */
 .provider-row__detail {
+  --provider-detail-indent: calc(var(--provider-row-icon) + var(--provider-row-gap));
   display: grid;
   gap: var(--space-4);
   padding: var(--space-1) var(--space-4) var(--space-4)
@@ -770,6 +898,7 @@
 
   /* A phone has no width to spare for hanging the detail off the name. */
   .provider-row__detail {
+    --provider-detail-indent: 0px;
     padding-inline-start: var(--space-4);
   }
 

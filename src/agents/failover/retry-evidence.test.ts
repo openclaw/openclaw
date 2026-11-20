@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyRateLimitWindow,
   hasOrganizationTpmRateLimitEvidence,
+  shouldRetryFailoverSignal,
   resolveRetryAfterMs,
 } from "./retry-evidence.js";
 
@@ -77,6 +78,21 @@ describe("resolveRetryAfterMs", () => {
 });
 
 describe("classifyRateLimitWindow", () => {
+  it.each([
+    ["usage_limit_reached", false],
+    ["rate_limit_exceeded", true],
+  ] as const)(
+    "distinguishes %s from a temporary 429 without parsing provider prose",
+    (code, retry) => {
+      expect(
+        shouldRetryFailoverSignal({
+          classification: { kind: "reason", reason: "rate_limit" },
+          signal: { status: 429, code },
+        }),
+      ).toBe(retry);
+    },
+  );
+
   it.each([
     ["请求过于频繁，请稍后重试", "short"],
     ["上下文长度上限为 128k tokens", "unknown"],

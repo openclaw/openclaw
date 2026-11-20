@@ -137,16 +137,6 @@ export async function handleEmbeddedPromptFailure(input: {
   const promptErrorDetails = describeFailoverError(
     normalizedPromptFailover ?? terminal.promptError,
   );
-  if (normalizedPromptFailover?.suspend) {
-    runInput.suspendForFailure({
-      cfg: runInput.runParams.config,
-      agentDir: runInput.agentDir,
-      sessionId: input.suspensionSessionId,
-      reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
-      failedProvider: normalizedPromptFailover.provider ?? preparedRuntime.provider,
-      failedModel: normalizedPromptFailover.model ?? preparedRuntime.modelId,
-    });
-  }
   const errorText = promptErrorDetails.message || formatErrorMessage(terminal.promptError);
   // A recorded CLI terminal stop outranks every text-derived recovery below:
   // its message repeats a backend-controlled reason, so an auth-shaped value
@@ -240,14 +230,29 @@ export async function handleEmbeddedPromptFailure(input: {
     });
   let failoverDecision = resolveDecision(false);
   let rotated = false;
-  if (failoverDecision.action === "rotate_profile") {
-    rotated = await input.failover.advanceAuthProfile(promptFailoverReason, {
-      failoverProvider: preparedRuntime.provider,
-      failoverModel: preparedRuntime.modelId,
-      logFallbackDecision: logFailoverDecision,
-    });
-    if (!rotated) {
-      failoverDecision = resolveDecision(true);
+  try {
+    if (failoverDecision.action === "rotate_profile") {
+      rotated = await input.failover.advanceAuthProfile(promptFailoverReason, {
+        code: promptErrorDetails.code,
+        failoverProvider: preparedRuntime.provider,
+        failoverModel: preparedRuntime.modelId,
+        logFallbackDecision: logFailoverDecision,
+      });
+      if (!rotated) {
+        failoverDecision = resolveDecision(true);
+      }
+    }
+  } finally {
+    // A rejected credential is not a suspended session when another profile can finish the turn.
+    if (!rotated && normalizedPromptFailover?.suspend) {
+      runInput.suspendForFailure({
+        cfg: runInput.runParams.config,
+        agentDir: runInput.agentDir,
+        sessionId: input.suspensionSessionId,
+        reason: resolveSessionSuspensionReason(normalizedPromptFailover.reason),
+        failedProvider: normalizedPromptFailover.provider ?? preparedRuntime.provider,
+        failedModel: normalizedPromptFailover.model ?? preparedRuntime.modelId,
+      });
     }
   }
   const markFailedProfilePromise = promptProfileFailureReason

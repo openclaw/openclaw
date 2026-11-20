@@ -33,16 +33,20 @@ describe("ModelProvidersPage usage convergence", () => {
     snapshot.hello = {
       type: "hello-ok",
       protocol: 3,
-      features: { methods: ["config.get", "config.patch", "codex.accountUsage"] },
+      features: {
+        methods: ["config.get", "config.patch", "codex.accountUsage", "models.authOrderSet"],
+      },
       auth: { role: "operator", scopes: ["operator.admin"] },
     };
     const original = request.getMockImplementation()!;
     let usedPercent = 10;
+    const slow = deferred();
     const accountRequests: unknown[] = [];
     request.mockImplementation(async (method, params?: unknown) => {
       if (method === "models.authStatus") {
         return createAuthStatus([
           {
+            profileOrder: ["openai:one", "openai:key", "openai:two"],
             profiles: [
               { profileId: "openai:one", type: "oauth", status: "ok" },
               { profileId: "openai:two", type: "token", status: "static" },
@@ -58,6 +62,9 @@ describe("ModelProvidersPage usage convergence", () => {
       }
       if (method === "codex.accountUsage") {
         accountRequests.push(params);
+        if (accountRequests.length === 2) {
+          await slow.promise;
+        }
         return {
           updatedAt: 1,
           providers: [
@@ -71,24 +78,22 @@ describe("ModelProvidersPage usage convergence", () => {
     await waitForProviders(page);
     const openai = await expandProvider(page, "openai");
     const anthropic = await expandProvider(page, "anthropic");
-    const limitsText = () =>
-      [...openai.querySelectorAll(".model-providers__account-limits")].map(
-        (limits) => limits.textContent,
-      );
+    const segments = () => [...openai.querySelectorAll("[data-account-segment]")];
     const expectLimits = (remaining: number) =>
-      expect(limitsText()).toEqual(
-        Array.from({ length: 2 }, () => expect.stringContaining(`${remaining}% left`)),
+      expect(segments().map((el) => el.getAttribute("aria-label"))).toEqual(
+        Array.from({ length: 2 }, () => expect.stringContaining(remaining + "% left")),
       );
+    await vi.waitFor(() => expect(segments().map((el) => el.textContent)).toEqual(["90%", "—"]));
+    slow.resolve();
     await vi.waitFor(() => expectLimits(90));
     expect(accountRequests).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },
     ]);
-    expect(
-      [...openai.querySelectorAll('.model-providers__account-limits [role="meter"]')].map((meter) =>
-        meter.getAttribute("aria-valuenow"),
-      ),
-    ).toEqual(["90", "90"]);
+    expect(segments().map((el) => el.getAttribute("data-account-segment"))).toEqual([
+      "openai:one",
+      "openai:two",
+    ]);
     for (const [row, id] of [
       [anthropic, "anthropic:one"],
       [openai, "openai:key"],
@@ -105,6 +110,14 @@ describe("ModelProvidersPage usage convergence", () => {
     page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
     await vi.waitFor(() => expectLimits(10));
     expect(accountRequests).toHaveLength(4);
+    segments()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("models.authOrderSet", {
+        provider: "openai",
+        agentId: "main",
+        profileIds: ["openai:two", "openai:key", "openai:one"],
+      }),
+    );
   });
 
   it.each(["reconnect", "manual refresh"] as const)(

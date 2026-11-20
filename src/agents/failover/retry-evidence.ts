@@ -126,8 +126,18 @@ export function resolveRetryAfterMs(
   return seconds === undefined ? undefined : Math.ceil(seconds * 1000);
 }
 
+export const isExhaustedUsageWindowCode = (code?: string) =>
+  code?.toLowerCase() === "usage_limit_reached";
+
 /** Usage-window evidence is distinct from a temporary throttle's retry floor. */
-export function hasLongWindowRateLimitEvidence(message: string | undefined): boolean {
+export function hasLongWindowRateLimitEvidence(
+  message: string | undefined,
+  code?: string,
+): boolean {
+  // A provider-confirmed usage window is not a short-lived request throttle.
+  if (isExhaustedUsageWindowCode(code)) {
+    return true;
+  }
   return Boolean(
     message &&
     (LONG_WINDOW_RATE_LIMIT_RE.test(message) || isPeriodicUsageLimitErrorMessage(message)) &&
@@ -198,7 +208,9 @@ export function shouldRetryFailoverSignal(params: {
   ) {
     return false;
   }
-  const hasLongLimitWindow = classifyRateLimitWindow(params.signal.message).kind === "long";
+  const hasLongLimitWindow =
+    isExhaustedUsageWindowCode(params.signal.code) ||
+    classifyRateLimitWindow(params.signal.message).kind === "long";
   return !(
     hasLongLimitWindow &&
     (reason === "billing" || reason === "rate_limit" || hasRateLimitRetryContext(params.signal))
