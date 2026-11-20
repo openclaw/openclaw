@@ -2,7 +2,7 @@ import Foundation
 
 /// Groups the Gateway's detected access and setup options into the first-run picker rows.
 /// Presentation only: the Gateway still owns detection, sign-in, activation, and verification.
-struct OnboardingAIPicker: Equatable {
+struct OnboardingAIPicker {
     typealias Model = OnboardingAISetupModel
 
     enum RowID: Hashable {
@@ -24,7 +24,7 @@ struct OnboardingAIPicker: Equatable {
         case localModel
     }
 
-    struct Row: Identifiable, Equatable {
+    struct Row: Identifiable {
         let id: RowID
         let action: Action
         let detected: Bool

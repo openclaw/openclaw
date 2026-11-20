@@ -647,9 +647,10 @@ describe("OpenAI Codex OAuth flow", () => {
     });
     try {
       await ready.promise;
-      await vi.advanceTimersByTimeAsync(60_999);
+      await vi.advanceTimersByTimeAsync(15_999);
       expect(onPrompt).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
+      expect(onPrompt).toHaveBeenCalledOnce();
       await expect(login).resolves.toMatchObject({ accountId: "manual-account" });
       expect(events).toEqual(["stop", "prompt"]);
       // Setup screens show every note as a step; a local sign-in just opens the browser.
@@ -714,7 +715,7 @@ describe("OpenAI Codex OAuth flow", () => {
     });
     try {
       await ready.promise;
-      await vi.advanceTimersByTimeAsync(61_000);
+      await vi.advanceTimersByTimeAsync(16_000);
       await promptOpen.promise;
       expect(stop).toHaveBeenCalledOnce();
       await requestCallback(buildCallbackUrl(authUrl), agent);
