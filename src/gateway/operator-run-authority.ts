@@ -56,6 +56,7 @@ import {
   isOperatorRoleSourcePolicyCurrent,
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
+import { retainGatewayOperatorInvocation } from "./operator-run-invocation.js";
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -321,7 +322,10 @@ export async function captureGatewayOperatorRunAuthority(input: {
           },
         });
     bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
-    return { authority, release: inherited.retain?.() ?? (() => {}) };
+    return retainGatewayOperatorInvocation(
+      { authority, release: inherited.retain?.() ?? (() => {}) },
+      params.invocationAuthority,
+    );
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
   const client = params.client;

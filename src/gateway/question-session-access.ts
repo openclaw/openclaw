@@ -21,6 +21,7 @@ import {
   hasOperatorBoundary,
   operatorSessionCap,
   resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { retainGatewayOperatorRunAuthority } from "./operator-run-cancellation.js";
@@ -69,6 +70,7 @@ function prepareQuestionSharing(
   cfg: OpenClawConfig,
   client: GatewayClient | null,
   isMember: (target: SessionSharingTarget, identityId: string) => boolean,
+  memberAccess?: NonNullable<Parameters<typeof prepareSessionSharing>[1]>["memberAccess"],
 ) {
   // Hosted callers carry an admitted role actor without a browser profile.
   // Keep sharing identity precedence and role assignment in their existing owners.
@@ -79,6 +81,8 @@ function prepareQuestionSharing(
       aliases: identity ? readResidentUserProfileAliases(identity.id) : new Set(),
       sessionCap: operatorSessionCap(client, cfg),
       isMember,
+      memberAccess,
+      policy: resolveOperatorRolePolicy(client, cfg),
     },
   );
 }
@@ -243,6 +247,10 @@ export async function withPreparedQuestionSessions<T>(
                     read.result.members?.[selected.canonicalKey]?.some(
                       (member) => member.identityId === identityId,
                     ) ?? false,
+                  (selected, identityId) =>
+                    read.result.members?.[selected.canonicalKey]?.find(
+                      (member) => member.identityId === identityId,
+                    )?.access,
                 );
                 recipients.set(client, sharing);
               }
@@ -618,6 +626,7 @@ export async function prepareQuestionCommitAuthority(
       currentCfg,
       options.client,
       (_target, identityId) => current?.membership.has(identityId) ?? false,
+      (_target, identityId) => current?.memberAccess?.[identityId],
     );
     // Policy callbacks can revoke the source; reread the owner-held facts afterward.
     authorization.assertCurrent();

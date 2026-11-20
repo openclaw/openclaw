@@ -1,8 +1,4 @@
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
@@ -19,10 +15,12 @@ import {
 import type { SessionMutationAuthorization } from "./server-methods/types.js";
 import * as methods from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import { createSessionParticipationAuthorization } from "./session-participation-authorization.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
+  resolveRequiredSessionMutationTargets,
   createSessionCreationAuthorizationRecorder,
   bindSessionMutationSharingReader,
   assertSessionMutationProjectionCurrent,
@@ -65,7 +63,6 @@ import {
   readSessionSharingStringParam,
   resolveSessionMutationGuardTarget,
   resolveProtectedSessionTargets,
-  resolveSessionMutationTargets,
   type SessionMutationTarget,
 } from "./session-sharing-target-input.js";
 import {
@@ -134,6 +131,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     consuming.sharing || consuming.profiles
       ? preparedPolicy(cfg)?.sessionCap
       : operatorSessionCap(params.client, cfg);
+  const participation = createSessionParticipationAuthorization(params);
   const authorizeTargetPolicy = (
     targetRef: SessionMutationTarget,
     target: SessionSharingTarget | null,
@@ -142,6 +140,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     projection?: SessionRowProjection,
     members?: readonly string[],
   ) => {
+    participation.signal?.throwIfAborted();
     const error =
       (target && authorizesAgentRun
         ? authorizeSessionAgentRun(
@@ -154,6 +153,8 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         sessionKey: targetRef.sessionKey,
         target,
       });
+    const participating = participation.authorize({ targetRef, target, policy, error });
+    if (participating) return participating.error;
     if (
       error ||
       !target ||
@@ -256,7 +257,11 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     }
   }
   const bindsOwnProfile = params.sessionScope === "operator.sessions.write";
-  const bindsLifecycle = bindsProgressLifecycle || bindsOwnProfile || params.method === "chat.send";
+  const bindsLifecycle =
+    bindsProgressLifecycle ||
+    bindsOwnProfile ||
+    params.participationRequired ||
+    params.method === "chat.send";
   const ownProfile = resolveOwnSessionProfileAuthorization({
     client: params.client,
     bindsOwnProfile,
@@ -267,29 +272,10 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const ownSessionProfileId = ownProfile.profileId;
   const requestedCreateKey = readSessionSharingStringParam(params.requestParams, "key");
   const permitsGeneratedSession = params.method === "sessions.create" && !requestedCreateKey;
-  const targetRefs =
-    talkTargets ??
-    resolveSessionMutationTargets({
-      method: params.method,
-      requestParams: params.requestParams,
-      context: params.context,
-    }) ??
-    (bindsOwnProfile && !methods.isRequiredSessionTargetMethod(params.method) ? [] : undefined);
-  if (params.expectedTarget && targetRefs?.length !== 1) {
-    return {
-      error: sessionMutationTargetChanged(params.method, params.expectedTarget.sessionKey).error,
-    };
-  }
-  if (!targetRefs) {
-    if (methods.isRequiredSessionTargetMethod(params.method)) {
-      return {
-        error: errorShape(ErrorCodes.INVALID_REQUEST, "session mutation target is unavailable", {
-          details: { code: "SESSION_MUTATION_TARGET_REQUIRED", method: params.method },
-        }),
-      };
-    }
-    return { error: null };
-  }
+  const targetResolution = resolveRequiredSessionMutationTargets(params, talkTargets);
+  if (targetResolution.error) return { error: targetResolution.error };
+  const targetRefs = targetResolution.targets;
+  if (!targetRefs) return { error: null };
   if (talkSessionTarget && authorizesAgentRun) {
     const cfg = getPolicyConfig();
     const policy = preparedPolicy(cfg);
@@ -318,19 +304,19 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     const policy = preparedPolicy(getPolicyConfig());
     const error =
       expectedSessionMutationTargetError(params.expectedTarget, target, params.method) ??
-      authorizeOwnSessionMutation({
-        client: params.client,
-        target,
-        expectedProfileId: ownSessionProfileId,
-        isCreator: policy?.isCreator,
-      }) ??
       authorizeTargetPolicy(
         targetRef,
         target,
         getPolicyConfig(),
         policy,
         "projection" in resolved ? resolved.projection : undefined,
-      );
+      ) ??
+      authorizeOwnSessionMutation({
+        client: params.client,
+        target,
+        expectedProfileId: participation.ceiling ? undefined : ownSessionProfileId,
+        isCreator: policy?.isCreator,
+      });
     if (error) {
       return { error };
     }
@@ -484,7 +470,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     const ownershipError = authorizeOwnSessionMutation({
       client: params.client,
       target: current,
-      expectedProfileId: ownSessionProfileId,
+      expectedProfileId: participation.ceiling ? undefined : ownSessionProfileId,
       isCreator: policy?.isCreator,
     });
     if (ownershipError) {
@@ -516,9 +502,11 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     params.preparedProfiles?.admit();
   }
   const admittedInput = createAdmittedSessionSharingAuthority({
+    onIncarnationTransition: (previous, current) =>
+      participation.followIncarnation(previous, current),
     target: chatTarget,
     request: params,
-    ownSessionProfileId,
+    ownSessionProfileId: participation.ceiling ? undefined : ownSessionProfileId,
     consumeSharing,
     assertTargetCurrent,
     changed: targetChanged,
@@ -571,7 +559,15 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       committingFacts = previous;
     }
   };
+  participation.retain(authorizedTargets[0]);
   const authorization: SessionMutationAuthorization = {
+    ...(participation.ceiling ? { participationCeiling: participation.ceiling } : {}),
+    ...(participation.signal
+      ? {
+          participationSignal: participation.signal,
+          release: participation.release,
+        }
+      : {}),
     ...(params.preparedTargets
       ? {
           bindCreation: (target, operation) =>
@@ -657,7 +653,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       targets: authorizedTargets,
       sourceConfig: getCfg(),
       request: params,
-      ownSessionProfileId,
+      ownSessionProfileId: participation.ceiling ? undefined : ownSessionProfileId,
       talk: talkInput,
       assertTalkTargetCurrent,
       assertTargetCurrent,

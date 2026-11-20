@@ -32,3 +32,26 @@ export function readQueuedChatInputAdmission(runId: string): QueuedChatInputAdmi
   const current = queuedChatInputAdmission.getStore();
   return current?.target.runId === runId ? current : undefined;
 }
+
+/** Only the recovery owner's exact input can use the participant method alternative. */
+export function readQueuedParticipationProfile(params: unknown): string | undefined {
+  if (
+    !params ||
+    typeof params !== "object" ||
+    !("idempotencyKey" in params) ||
+    typeof params.idempotencyKey !== "string"
+  )
+    return undefined;
+  const current = readQueuedChatInputAdmission(params.idempotencyKey);
+  const ceiling = current?.participationCeiling;
+  return ceiling &&
+    "sessionKey" in params &&
+    params.sessionKey === current.target.sessionKey &&
+    "sessionId" in params &&
+    params.sessionId === current.target.sessionId &&
+    ceiling.sessionKey === current.target.sessionKey &&
+    current.requesterProfile?.id === ceiling.profileId &&
+    current.requesterProfile.isCurrent()
+    ? ceiling.profileId
+    : undefined;
+}

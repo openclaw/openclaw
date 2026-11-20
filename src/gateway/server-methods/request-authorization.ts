@@ -389,6 +389,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       requestParams,
       context: params.context,
       sessionScope: scopeAuthorization.sessionScope,
+      participationRequired: scopeAuthorization.participationRequired,
       databaseAdmission:
         params.methodRegistry.getScope(params.method) === "operator.read"
           ? ("read" as const)

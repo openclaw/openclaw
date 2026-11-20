@@ -12,7 +12,7 @@ import {
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
 import { resolveAuthorizedBoardViewTicketClaims } from "./board-view-ticket.js";
-import type { operatorSessionCap } from "./operator-role-policy.js";
+import { resolveOperatorRolePolicy, type operatorSessionCap } from "./operator-role-policy.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
@@ -265,9 +265,23 @@ export function resolveTalkSessionTargetInput(
 
 export function resolveSessionMutationTargets(params: {
   method: string;
+  participationRequired?: true;
+  sessionScope?: string;
+  client?: GatewayClient | null;
   requestParams: unknown;
   context: GatewayRequestContext;
 }): SessionMutationTarget[] | undefined {
+  if (
+    (params.participationRequired ||
+      (params.sessionScope === "operator.sessions.write" &&
+        resolveOperatorRolePolicy(params.client ?? null, params.context.getRuntimeConfig())
+          ?.sessions.maxInvitedAccess)) &&
+    params.method === "session.typing"
+  ) {
+    const sessionKey = readSessionSharingStringParam(params.requestParams, "sessionKey");
+    const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
+    return sessionKey ? [{ sessionKey, ...(agentId ? { agentId } : {}) }] : undefined;
+  }
   if (params.method === "sessions.patchMany") {
     const targets =
       params.requestParams &&

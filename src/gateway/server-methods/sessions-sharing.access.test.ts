@@ -49,6 +49,7 @@ it("manages bounded invitation levels without granting send members session mana
     const context = sessionSharingTestContext(broadcast, cfg);
     const ownerClient = identifiedClient(owner.id);
     const guestClient = identifiedClient(guest.id);
+    guestClient.internal = { ...guestClient.internal, authenticatedOperator: true };
     const call = (
       method: Parameters<typeof callSessionSharingHandler>[0],
       params: Record<string, unknown> = {},

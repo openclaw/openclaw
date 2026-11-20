@@ -40,6 +40,7 @@ import { assertValidParams } from "./validation.js";
 export const sessionTypingHandler: GatewayRequestHandlers[string] = async (options) => {
   const { params: requestParams, respond, client, context, hasCurrentClientAuthority } = options;
   const ownSessionOnly =
+    !options.sessionMutationAuthorization?.participationCeiling &&
     readGatewayRequestMutationAuthority(options).sessionScope === "operator.sessions.write";
   const params = normalizeTypingRequestParams(requestParams);
   if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
@@ -61,6 +62,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     },
     () => {
       if (
+        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false
@@ -174,8 +176,12 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async (optio
     signature: `${effectiveTyping}\0${preview ?? ""}\0${cursor ?? ""}`,
     intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
     now,
+    release: options.sessionMutationAuthorization?.participationCeiling
+      ? options.sessionMutationAuthorization.retain?.()
+      : undefined,
     emit: () => {
       if (
+        options.sessionMutationAuthorization?.participationSignal?.aborted ||
         client?.invalidated ||
         client?.connectionSignal?.aborted ||
         hasCurrentClientAuthority?.() === false ||

@@ -303,6 +303,7 @@ export function createAdmittedSessionSharingAuthority(params: {
   target: AuthorizedSessionMutationTarget | undefined;
   request: SessionMutationAuthorizationParams;
   ownSessionProfileId?: string;
+  onIncarnationTransition?: (previous: string | null, current: string) => void;
   consumeSharing: ReturnType<typeof createSessionSharingConsumption>["consume"];
   assertTargetCurrent: Parameters<
     typeof withPreparedSessionSharingSource
@@ -336,6 +337,7 @@ export function createAdmittedSessionSharingAuthority(params: {
           (current.sessionId !== previous.sessionId ||
             current.lifecycleRevision !== previous.lifecycleRevision)
         ) {
+          params.onIncarnationTransition?.(admittedTarget.sessionId, current.sessionId);
           admittedTarget = {
             ...admittedTarget,
             sessionId: current.sessionId,
