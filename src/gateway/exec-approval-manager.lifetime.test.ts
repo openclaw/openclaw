@@ -168,7 +168,7 @@ describe("ExecApprovalManager lifetime", () => {
     });
     expect(manager.prepareConsumeAllowOnce(record.id, "cron.add:another-watcher")).toBeNull();
     expect(() => prepared.assertCurrent()).toThrow(
-      "This approval was already used. Start a new turn to request approval again.",
+      "This approval is no longer available. Start a new turn to request approval again.",
     );
   });
 
@@ -190,9 +190,7 @@ describe("ExecApprovalManager lifetime", () => {
       }
 
       expect(() => prepared.assertCurrent()).toThrow(
-        change === "grace expires"
-          ? "This approval has expired. Start a new turn to request approval again."
-          : "This approval was replaced or closed. Start a new turn to request approval again.",
+        "This approval is no longer available. Start a new turn to request approval again.",
       );
       expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
         outcome: "found",

@@ -375,7 +375,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const assertSessionCurrent = () => {
       if (context.systemAgentSessions.get(params.sessionId) !== ownedSession) {
         throw new Error(
-          "This OpenClaw chat was replaced while the change was being saved. Check the current settings before making a new request.",
+          "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
         );
       }
     };

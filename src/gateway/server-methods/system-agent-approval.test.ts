@@ -521,7 +521,10 @@ describe("Full Access delegated chat", () => {
         const result = await pending;
         expectReplyParts(result.payload, "gateway.port: Invalid input");
         if (outcome === "failed-correction") {
-          expectReplyParts(result.payload, "stopped after one corrective attempt");
+          expectReplyParts(
+            result.payload,
+            "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request.",
+          );
           fixture.expectRequests(2);
         }
         expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
@@ -562,16 +565,16 @@ describe("Full Access delegated chat", () => {
       });
       if (outcome === "session-replaced") {
         await expect(reply).rejects.toThrow(
-          "This OpenClaw chat was replaced while the change was being saved. Check the current settings before making a new request.",
+          "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
         );
         expect(noteAssistantMessage).toHaveBeenCalledWith(
-          "The system-agent session was replaced before the next proposal could be reviewed. Check the current settings before making a new request.",
+          "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request.",
         );
       } else {
         expectReplyParts(
           (await reply).payload,
           outcome === "correction-failed"
-            ? "stopped after one corrective attempt"
+            ? "The OpenClaw chat or proposed change is no longer available. Check the current settings before making a new request."
             : "[openclaw] done: config.set",
         );
       }
