@@ -563,10 +563,11 @@ export function createChangedCheckPlan(
           options.lintSelection.rootTestFiles ?? [],
           lintEnv,
           options.platform ?? process.platform,
-        ).map((command) => ({
-          ...command,
-          args: [...command.args, `--threads=${options.lintThreads ?? 1}`],
-        })),
+        ).map((command) =>
+          Object.assign({}, command, {
+            args: [...command.args, `--threads=${options.lintThreads ?? 1}`],
+          }),
+        ),
       );
     }
     return {

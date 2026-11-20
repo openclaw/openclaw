@@ -2,7 +2,10 @@ import { appendFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
-import { getChangedPathFacts, isTestFileTarget } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts as getHarnessChangedPathFacts,
+  isTestFileTarget,
+} from "./lib/changed-path-facts.mjs";
 import { blacksmithRunnerLabel } from "./lib/ci-blacksmith-capacity.mjs";
 import {
   formatIosSimulatorSelectionSummary,
@@ -2022,7 +2025,7 @@ const manifest = {
   changed_root_test_paths_json:
     runCheck && runtimePullRequest && !frozenTarget && !compatibilityTarget
       ? JSON.stringify(
-          (changedPaths ?? []).filter((file) => getChangedPathFacts(file).isRootTestSource),
+          (changedPaths ?? []).filter((file) => getHarnessChangedPathFacts(file).isRootTestSource),
         )
       : "[]",
   run_check_plan: runCheckPlan,
