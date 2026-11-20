@@ -290,19 +290,24 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
     const TARGET = `agent:main:prefix-randomized-target-${seed}`;
     const SENDER = `agent:main:prefix-randomized-sender-${seed}`;
     // Target requests in order, each tagged with the step that sent it.
-    const target: Array<{ step: number; kind: TurnKind; request: WireRequest }> = [];
+    const target: Array<{ step: number; kind: TurnKind; request: WireRequest; model: string }> = [];
+    // Numbered so a rebuild excuse can require the newest summary, not an older one.
+    let summaries = 0;
+    // The model a request names: in the body, or in the URL (Gemini, Bedrock).
+    let requestModel = "";
     const seen: string[] = [];
     // Sessions the journey does not expect; every request must belong to a known lineage.
     const unclassified: string[] = [];
     let step = -1;
     let ordinal = 0;
     const script = (request: WireRequest, thinkingEnabled: boolean): Reply => {
+      const model = requestModel;
       const latest = lastMessage(request);
       const toolResult = hasToolResult(latest);
       // Only a compaction summary request has no session of its own.
       const session = requestSession(request);
       if (!session) {
-        return { text: "Summary: the session ran a randomized journey." };
+        return { text: `Summary ${++summaries}: the session ran a randomized journey.` };
       }
       if (session === SENDER) {
         return toolResult || !latest.includes("forward a ping")
@@ -319,7 +324,7 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
         }
         return { text: "child-done" };
       }
-      target.push({ step, kind: journey[step] ?? "user", request });
+      target.push({ step, kind: journey[step] ?? "user", request, model });
       if (toolResult) {
         return { text: `acknowledged ${target.length}` };
       }
@@ -369,6 +374,8 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
       });
       request.on("end", () => {
         const parsed = JSON.parse(body) as Record<string, unknown>;
+        requestModel =
+          typeof parsed.model === "string" ? parsed.model : decodeURIComponent(request.url ?? "");
         const wire = readWireRequest(api, parsed);
         const thinking = parsed.thinking as { type?: string } | undefined;
         const reply = script(wire, Boolean(thinking?.type && thinking.type !== "disabled"));
@@ -383,8 +390,17 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
       const origin = await listenProofProvider(server);
       const provider = buildFakeProvider(api, origin, { reasoning: true });
       // A second provider on the same transport for the provider-switch step.
-      const alternate = { ...provider, providerId: `${provider.providerId}-alt` };
-      const alternateRef = `${alternate.providerId}/${provider.modelRef.split("/").slice(1).join("/")}`;
+      // Its own model id, so a request shows which provider served it.
+      const alternateModel = `${provider.modelRef.split("/").slice(1).join("/")}-alt`;
+      const alternate = {
+        ...provider,
+        providerId: `${provider.providerId}-alt`,
+        config: {
+          ...provider.config,
+          models: [{ ...provider.config.models[0]!, id: alternateModel }],
+        },
+      };
+      const alternateRef = `${alternate.providerId}/${alternateModel}`;
       const runtime = fakeTransportRuntime(api);
       transportEnv = captureEnv(Object.keys(runtime.env));
       for (const [key, value] of Object.entries(runtime.env)) {
@@ -477,6 +493,7 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
         for (step = 0; step < journey.length; step++) {
           const kind = journey[step]!;
           const before = target.length;
+          const summariesBefore = summaries;
           switch (kind) {
             case "user":
               await send(TARGET, `TARGET turn ${step}`);
@@ -567,6 +584,14 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
               await client.request("sessions.compact", { key: TARGET }, { timeoutMs: 65_000 });
               await settle();
               await send(TARGET, `TARGET after compaction ${step}`);
+              // The rebuild excuse needs a real compaction: the next turn carries its new summary.
+              expect(
+                target
+                  .slice(before)
+                  .some(({ request }) => request.text.includes(`Summary ${summaries}:`)) &&
+                  summaries > summariesBefore,
+                `step ${step} compaction left no new summary`,
+              ).toBe(true);
               break;
             case "modelSwitch":
               switched = !switched;
@@ -575,6 +600,11 @@ export function usePrefixRandomizedJourney(defaultSeeds: string) {
                 model: switched ? alternateRef : provider.modelRef,
               });
               await send(TARGET, `TARGET after model switch ${step}`);
+              // The rebuild excuse needs a real switch: the next turn comes from the selected model.
+              expect(
+                target.slice(before).map(({ model }) => model.includes(alternateModel)),
+                `step ${step} modelSwitch`,
+              ).toEqual(target.slice(before).map(() => switched));
               break;
           }
           const evidence = STEP_EVIDENCE[kind];
