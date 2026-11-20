@@ -91,7 +91,9 @@ it.each(["revoked continuation", "source owner changed"] as const)(
             delivery: { status: "pending", generation: 1 },
           });
           subagent.completion!.resultText = "CAPTURED ANSWER before policy edit";
-          if (route === "revoked continuation") armRequesterWake({ subagent });
+          if (route === "revoked continuation") {
+            armRequesterWake({ subagent });
+          }
           seedSubagentCompletionOwner({ subagent });
           enforceSharedGatewaySessionGenerationForConfigWrite({
             state: generation,
@@ -133,8 +135,11 @@ it.each(["revoked continuation", "source owner changed"] as const)(
                 : {}),
             });
           const flush = observeRootWork();
-          if (route === "revoked continuation") await driver.run();
-          else expect(driver.controller.startSubagentAnnounceCleanupFlow(subagent)).toBe(true);
+          if (route === "revoked continuation") {
+            await driver.run();
+          } else {
+            expect(driver.controller.startSubagentAnnounceCleanupFlow(subagent)).toBe(true);
+          }
           await flush();
           expect(model).not.toHaveBeenCalled();
           const stored = loadSubagentRegistryFromSqlite().get(subagent.runId);
