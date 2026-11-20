@@ -21,8 +21,10 @@ import {
   parseSlackConversationOpenInput,
   slackTeamIdSchema,
 } from "./conversation-open.js";
+import { fetchSlackChannelListPage, type SlackConversationListType } from "./cursor-pages.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
+import { enrichSlackWebApiError } from "./errors.js";
 import { normalizeSlackOutboundText } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
@@ -563,6 +565,69 @@ export async function readSlackMessages(
     messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),
   };
+}
+
+export type SlackConversationSummary = {
+  id: string;
+  name?: string;
+  type: SlackConversationListType;
+  isMember: boolean;
+  isArchived: boolean;
+  userId?: string;
+  topic?: string;
+  purpose?: string;
+};
+
+export async function listSlackConversations(
+  opts: SlackActionClientOpts & {
+    types: readonly SlackConversationListType[];
+    includeArchived: boolean;
+    limit: number;
+    cursor?: string;
+  },
+): Promise<{ conversations: SlackConversationSummary[]; nextCursor?: string }> {
+  slackTeamIdSchema.parse(opts.teamId);
+  const client = await getClient(opts);
+  const result = await fetchSlackChannelListPage(client, opts.cursor, {
+    types: opts.types.join(","),
+    excludeArchived: !opts.includeArchived,
+    limit: opts.limit,
+  }).catch((err: unknown) => {
+    // Name the missing *:read scope instead of Slack's bare error code.
+    throw enrichSlackWebApiError(err);
+  });
+  const conversations = (result.channels ?? []).flatMap((channel): SlackConversationSummary[] => {
+    const id = normalizeOptionalString(channel.id);
+    if (!id) {
+      return [];
+    }
+    const name = normalizeOptionalString(channel.name);
+    const userId = normalizeOptionalString(channel.user);
+    const topic = normalizeOptionalString(channel.topic?.value);
+    const purpose = normalizeOptionalString(channel.purpose?.value);
+    const type = channel.is_im
+      ? "im"
+      : channel.is_mpim
+        ? "mpim"
+        : channel.is_private || channel.is_group
+          ? "private_channel"
+          : "public_channel";
+    return [
+      {
+        id,
+        ...(name ? { name } : {}),
+        type,
+        // Slack lists DMs and group DMs only for participants and omits is_member on DMs.
+        isMember: type === "im" || type === "mpim" || channel.is_member === true,
+        isArchived: channel.is_archived === true,
+        ...(userId ? { userId } : {}),
+        ...(topic ? { topic } : {}),
+        ...(purpose ? { purpose } : {}),
+      },
+    ];
+  });
+  const nextCursor = normalizeOptionalString(result.response_metadata?.next_cursor);
+  return { conversations, ...(nextCursor ? { nextCursor } : {}) };
 }
 
 export async function getSlackMemberInfo(userId: string, opts: SlackActionClientOpts = {}) {

@@ -41,16 +41,17 @@ Slack actions are controlled by `channels.slack.actions.*`.
 
 Available action groups in current Slack tooling:
 
-| Group      | Default  |
-| ---------- | -------- |
-| channels   | disabled |
-| messages   | enabled  |
-| reactions  | enabled  |
-| pins       | enabled  |
-| memberInfo | enabled  |
-| emojiList  | enabled  |
+| Group       | Default  |
+| ----------- | -------- |
+| channels    | disabled |
+| messages    | enabled  |
+| reactions   | enabled  |
+| pins        | enabled  |
+| memberInfo  | enabled  |
+| emojiList   | enabled  |
+| channelInfo | enabled  |
 
-Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
+Current Slack message actions include `send`, `channel-create`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, `emoji-list`, and `channel-list`. `channel-create` creates a public workspace channel with Slack's `conversations.create` API. It is disabled until `channels.slack.actions.channels: true` is set (or set on the selected account). It requires the `channels:manage` OAuth scope; adding the requester to the created channel requires `channels:write.invites`. Add these scopes to the Slack app and reinstall or reauthorize existing installations before using this action. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
 Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 
@@ -81,6 +82,59 @@ Results are sorted by shortcode name. `limit` defaults to and cannot exceed 100:
 ```
 
 Use an entry's `identifier` directly as the `react` emoji; surrounding colons are optional. `channels.slack.actions.emojiList` controls discovery separately from the `reactions` gate, and the app needs the `emoji:read` scope.
+
+Use `channel-list` to find conversations to read:
+
+```json
+{ "action": "channel-list", "channel": "slack", "limit": 200 }
+```
+
+It lists conversations the selected account's read token can see. With a bot token,
+results include only conversations the bot is a member of. When `userToken` is
+configured, reads use it and results include every conversation that user can
+access, including public channels they have not joined (`isMember: false`).
+Results stop at conversations that `read` would reject for this caller: explicitly
+disabled channels, and for delegated calls, channels outside the group policy and
+DMs that are not configured.
+
+- `types`: any of `public_channel`, `private_channel`, `mpim`, and `im`. The default
+  is `["public_channel", "private_channel"]`; DMs are listed only on request.
+- `includeArchived`: archived conversations are excluded unless this is `true`.
+- `limit`: Slack page size, default `200`, maximum `1000`.
+- `pageToken`: pass the previous `nextPageToken` until it is absent. Filtering runs
+  after Slack returns a page, so a page can hold fewer results than `limit`, or none.
+
+```json
+{
+  "ok": true,
+  "channels": [
+    {
+      "id": "C0123456789",
+      "name": "general",
+      "type": "public_channel",
+      "isMember": true,
+      "isArchived": false,
+      "topic": "Company news",
+      "purpose": "Announcements"
+    },
+    {
+      "id": "D0123456789",
+      "type": "im",
+      "isMember": true,
+      "isArchived": false,
+      "userId": "U0123456789"
+    }
+  ],
+  "nextPageToken": "dGVhbTpDMDEyMzQ1Njc4OQ=="
+}
+```
+
+Pass an entry's `id` as `channelId` to `read`. `channels.slack.actions.channelInfo`
+controls this action. Listing uses `conversations.list`, which needs `channels:read`,
+`groups:read`, `mpim:read`, or `im:read` for each requested type; the default manifest
+includes all four. A missing scope returns Slack's `missing_scope` error with the
+needed scope. In Enterprise Grid, pass `teamId` or call from a Slack conversation in
+the target workspace.
 
 ## Live policy changes
 
