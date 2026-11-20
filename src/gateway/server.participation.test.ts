@@ -3,11 +3,20 @@ import { expect, it } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { retainEmbeddedSessionPromptState } from "../agents/embedded-agent-runner/session-prompt-state.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+
+function providerToolNames(body: string) {
+  return (JSON.parse(body) as { tools: { name: string }[] }).tools
+    .map(({ name }) => name)
+    .toSorted();
+}
+
+const creatorTools = ["exec", "ls", "message", "process", "read", "sessions_spawn", "skills_read"];
 
 it("retains exact invitation access through turns, patches, and creator-reviewed exec", async ({
   signal,
@@ -31,7 +40,7 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
       origin,
       events,
     }) => {
-      const { key } = await sender.request<{ key: string }>(
+      const { key, sessionId } = await sender.request<{ key: string; sessionId: string }>(
         "sessions.create",
         {
           agentId: "main",
@@ -47,6 +56,24 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         { signal },
       );
       const target = { sessionKey: key, agentId: "main" };
+      // Retain the same prompt owner across creator → participant → creator requests.
+      using promptOwner = retainEmbeddedSessionPromptState(sessionId);
+      const creatorTurn = async (runId: string, client = sender) => {
+        await client.request(
+          "chat.send",
+          { ...target, message: runId, idempotencyKey: runId },
+          { signal },
+        );
+        await expect(client.request("agent.wait", { runId }, { signal })).resolves.toMatchObject({
+          status: "ok",
+        });
+        return providerToolNames(providerRequests.at(-1)!);
+      };
+      const originalTools = await creatorTurn("creator-before-participation");
+      expect(originalTools).toEqual(creatorTools);
+      expect(promptOwner.state.toolSurface?.tools?.map(({ name }) => name).toSorted()).toEqual(
+        originalTools,
+      );
       const suggest = (sessionKey = key) =>
         invited.request(
           "session.suggestions.add",
@@ -119,6 +146,9 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
       expect
         .soft(providerRequests.some((body) => body.includes("Respond to the invited participant.")))
         .toBe(true);
+      expect
+        .soft(providerToolNames(providerRequests.at(-1)!))
+        .toEqual(["exec", "ls", "process", "read"]);
       await expect
         .soft(
           invited.request(
@@ -265,6 +295,11 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         );
         await expect(terminal).resolves.toMatchObject({ status: "ok" });
         expect(toolOutputs).toEqual(["participant-exec-proof"]);
+        expect
+          .soft(providerToolNames(providerRequests.at(-1)!))
+          .toEqual(["exec", "ls", "process", "read"]);
+        providerReplies.reply = undefined;
+        expect(await creatorTurn("creator-after-participation", creator)).toEqual(originalTools);
       } finally {
         await disconnectGatewayClient(creator);
       }
@@ -273,7 +308,7 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
       invitedScopes: ["operator.sessions.read"],
       maxInvitedAccess: "send",
       tools: {
-        allow: ["exec"],
+        allow: creatorTools,
         codeMode: { enabled: false },
         toolSearch: false,
         exec: { host: "gateway", security: "full", ask: "off" },
@@ -286,6 +321,134 @@ it("retains exact invitation access through turns, patches, and creator-reviewed
         ) {
           waiting.resolve(event.payload);
         }
+      },
+    },
+  );
+});
+
+it("serializes the exact invited tool ceiling without leaking it into creator or sibling turns", async ({
+  signal,
+}) => {
+  await withInvitedGuestGateway(
+    signal,
+    async ({ sender, invited, carol, providerRequests, providerReplies }) => {
+      const shared = await sender.request<{ key: string; sessionId: string }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          label: "Narrow participation",
+          visibility: "shared",
+          permissionMode: "full",
+        },
+        { signal },
+      );
+      const sibling = await sender.request<{ key: string; sessionId: string }>(
+        "sessions.create",
+        {
+          agentId: "main",
+          label: "Independent creator",
+          permissionMode: "full",
+        },
+        { signal },
+      );
+      using sharedOwner = retainEmbeddedSessionPromptState(shared.sessionId);
+      using siblingOwner = retainEmbeddedSessionPromptState(sibling.sessionId);
+      await sender.request(
+        "session.members.add",
+        {
+          sessionKey: shared.key,
+          agentId: "main",
+          identityId: carol.id,
+          access: "send",
+        },
+        { signal },
+      );
+      const turn = async (client: typeof sender, key: string, runId: string) => {
+        const start = providerRequests.length;
+        await client.request(
+          "chat.send",
+          {
+            sessionKey: key,
+            message: runId,
+            idempotencyKey: runId,
+          },
+          { signal },
+        );
+        await expect(sender.request("agent.wait", { runId }, { signal })).resolves.toMatchObject({
+          status: "ok",
+        });
+        const requests = providerRequests.slice(start);
+        expect(requests.length).toBeGreaterThan(0);
+        return requests;
+      };
+      const original = await turn(sender, shared.key, "narrow-creator-before");
+      const originalTools = providerToolNames(original[0]!);
+      expect(originalTools).toEqual([
+        "dispatch_action",
+        "exec",
+        "ls",
+        "message",
+        "process",
+        "read",
+        "tool_describe",
+        "tool_search",
+      ]);
+      expect(sharedOwner.state.toolSurface?.tools?.map(({ name }) => name).toSorted()).toEqual(
+        originalTools,
+      );
+      let issued = false;
+      providerReplies.reply = (_body, response) => {
+        if (!issued) {
+          issued = true;
+          // A provider can still emit a removed tool name; it must not reach an executor.
+          writeToolCall(response, "exec", {
+            command: "printf forbidden-exec-ran",
+            host: "gateway",
+            awaitResults: true,
+          });
+        } else {
+          writeOpenAiResponsesText(response, {
+            text: "Unavailable tool refused.",
+            messageId: "narrow-reply",
+            responseId: "narrow-response",
+          });
+        }
+      };
+      const narrowed = await turn(invited, shared.key, "narrow-participant");
+      for (const body of narrowed) {
+        expect.soft(providerToolNames(body)).toEqual(["ls", "read"]);
+      }
+      const outputs = (
+        JSON.parse(narrowed.at(-1)!) as { input: { type?: string; output?: string }[] }
+      ).input
+        .filter((item) => item.type === "function_call_output")
+        .map((item) => item.output);
+      expect(outputs).toHaveLength(1);
+      expect(outputs[0]).toMatch(/not found|not available|outside the tools/i);
+      expect(outputs[0]).not.toBe("forbidden-exec-ran");
+      providerReplies.reply = undefined;
+      expect(providerToolNames((await turn(sender, sibling.key, "narrow-sibling"))[0]!)).toEqual(
+        originalTools,
+      );
+      expect(siblingOwner.state.toolSurface?.tools?.map(({ name }) => name).toSorted()).toEqual(
+        originalTools,
+      );
+      expect(
+        providerToolNames((await turn(sender, shared.key, "narrow-creator-after"))[0]!),
+      ).toEqual(originalTools);
+      expect(
+        providerToolNames((await turn(invited, shared.key, "narrow-participant-again"))[0]!),
+      ).toEqual(["ls", "read"]);
+    },
+    {
+      invitedScopes: ["operator.sessions.read"],
+      maxInvitedAccess: "send",
+      invitedTools: ["read", "ls"],
+      tools: {
+        allow: creatorTools,
+        codeMode: false,
+        toolSearch: true,
+        exec: { host: "gateway", security: "full", ask: "off" },
       },
     },
   );

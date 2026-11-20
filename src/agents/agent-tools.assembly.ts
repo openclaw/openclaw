@@ -631,14 +631,9 @@ export function* assembleOpenClawCodingTools(
           (participationToolAllowlist(options.participationCeiling).includes(tool.name) &&
             !getPluginToolMeta(tool))),
     ),
-    sessionTools: options?.participationCeiling
-      ? completeTurnTools(
-          messageInvocationPolicy.filter({
-            ...capabilityProfile,
-            policy: { ...capabilityProfile.policy, participationCeiling: undefined },
-          }),
-        )
-      : handoff || fixedListing
+    // Participation narrows the provider schema as well as executable authority.
+    sessionTools:
+      !options?.participationCeiling && (handoff || fixedListing)
         ? completeTurnTools(
             messageInvocationPolicy.filter(
               capabilityProfile,

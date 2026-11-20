@@ -34,6 +34,7 @@ import {
 import { supportsModelTools } from "../../model-tool-support.js";
 import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { getPreparedModelRuntimePolicyConfigReader } from "../../prepared-model-runtime-auth.js";
+import { participationToolAllowlist } from "../../participation-ceiling.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -124,6 +125,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const toolsAllowWithForcedRuntimeTools = toolRunContext.runtimeToolAllowlist;
   const toolsEnabled = supportsModelTools(attempt.model);
   const isRawModelRun = attempt.modelRun === true || attempt.promptMode === "none";
+  const participationTools = attempt.participationCeiling
+    ? participationToolAllowlist(attempt.participationCeiling)
+    : undefined;
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
     trigger: attempt.trigger,
@@ -135,7 +139,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     modelId: attempt.modelId,
     codeModeOverride: attempt.participationCeiling ? false : attempt.codeModeOverride,
     participationCeiling: attempt.participationCeiling,
-    disableToolSearch: attempt.disableToolSearch,
+    // Without its controls, discovery would hide allowed tools or re-add forbidden ones.
+    disableToolSearch:
+      attempt.disableToolSearch ||
+      (participationTools &&
+        [...TOOL_SEARCH_CONTROL_TOOL_NAMES].some((name) => !participationTools.includes(name)))
+        ? true
+        : undefined,
     modelToolsEnabled: toolsEnabled,
     disableTools: attempt.disableTools,
     isRawModelRun,

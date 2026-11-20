@@ -156,6 +156,7 @@ async function prepareTools(
   return {
     dispatched,
     emptyAllowlistError: catalog.emptyExplicitToolAllowlistError?.message,
+    catalogNames: [...catalog.toolSearchRunPlan.liveAllowedToolNames].toSorted(),
     listed: tools.map((tool) => tool.name).toSorted(),
     callable: (
       await Promise.all(tools.map(async (tool) => ((await executes(tool)) ? [tool.name] : [])))
@@ -576,7 +577,7 @@ it("narrows an isolated cron session to its allowlist and keeps a shared session
   expect(shared.callable).toEqual(isolated.callable);
 });
 
-it("keeps participation tools gated through direct calls, preparers, and deferred dispatch", async () => {
+it("removes participation-excluded tools from construction and deferred dispatch", async () => {
   const participationCeiling = { kind: "send" as const, profileId: "guest", sessionKey };
   const config = { ...baseConfig, tools: { ...baseConfig.tools, alsoAllow: ["*"] } };
   const run = await prepareTools(
@@ -592,20 +593,23 @@ it("keeps participation tools gated through direct calls, preparers, and deferre
   );
   expect(run.callable.length).toBeGreaterThan(0);
   expect(run.callable.every((name) => PARTICIPATION_TOOL_ALLOWLIST.includes(name))).toBe(true);
-  expect(run.dispatched?.details).toMatchObject({ gated: true });
-  for (const [name, refused] of run.refusals) {
-    if (!PARTICIPATION_TOOL_ALLOWLIST.includes(name)) {
-      expect({ name, ...refused }).toEqual({ name, direct: true, preparer: true, dispatch: true });
-    }
-  }
+  expect(run.listed).toEqual(run.callable);
+  expect(run.catalogNames.every((name) => PARTICIPATION_TOOL_ALLOWLIST.includes(name))).toBe(true);
+  expect(run.dispatched).toBeUndefined();
   const ordinary = await prepareTools(
     { runId: "ordinary", trigger: "user", senderIsOwner: true },
     config,
   );
-  expect(run.listed).toEqual(ordinary.listed);
+  expect(ordinary.listed).toEqual(
+    expect.arrayContaining(["message", "sessions_spawn", "world__calendar_list"]),
+  );
 });
 
-it.each([[], ["read"], ["read", "sessions_list", "sessions_history"]].map((tools) => ({ tools })))(
+it.each(
+  [[], ["read"], ["read", "ls"], ["read", "sessions_list", "sessions_history"]].map((tools) => ({
+    tools,
+  })),
+)(
   "enforces configured participation tools $tools through real tool assembly",
   async ({ tools }) => {
     const run = await prepareTools(
@@ -618,15 +622,7 @@ it.each([[], ["read"], ["read", "sessions_list", "sessions_history"]].map((tools
       { ...baseConfig, agents: { entries: { main: { tools: { deny: ["sessions_history"] } } } } },
     );
     expect(run.callable).toEqual(tools.filter((name) => name !== "sessions_history").toSorted());
-    for (const [name, refused] of run.refusals) {
-      if (!tools.includes(name) || name === "sessions_history") {
-        expect({ name, ...refused }).toEqual({
-          name,
-          direct: true,
-          preparer: true,
-          dispatch: true,
-        });
-      }
-    }
+    expect(run.listed).toEqual(run.callable);
+    expect(run.catalogNames).toEqual(run.callable);
   },
 );
