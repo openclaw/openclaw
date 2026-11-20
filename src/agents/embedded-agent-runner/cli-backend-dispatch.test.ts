@@ -14,6 +14,7 @@ import {
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
+import { buildCliMcpGrantContext } from "../cli-runner/mcp-grant-context.js";
 import { loadCliSessionHistoryMessages } from "../cli-runner/session-history.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import { createEnteredGate } from "../entered-gate.test-support.js";
@@ -29,6 +30,7 @@ const resolveRuntimeCliBackends = vi.hoisted(() => vi.fn());
 const resolveCliRuntimeExecutionProvider = vi.hoisted(() => vi.fn());
 const runCliAgent = vi.hoisted(() => vi.fn());
 const retireSessionMcpRuntime = vi.hoisted(() => vi.fn());
+const readSessionEntryReadOnlyInWorker = vi.hoisted(() => vi.fn());
 const tempDirs = useSessionStoreTempDirs(afterAll, "cli-dispatch-history-");
 
 // mock-isolation: Dispatch eligibility uses fixture auth modes without host credential discovery.
@@ -50,6 +52,9 @@ vi.mock("../cli-runner.runtime.js", () => ({
 vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime,
+}));
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
   noteToolEvent: vi.fn(),
@@ -416,18 +421,41 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
   });
 
   // A session fork lists every session tool for its cache and executes only its own; on a
-  // subscription CLI only those reach the CLI, from the fork's in-memory conversation.
-  it("runs a session fork on the subscription CLI with only the fork's tools", async () => {
+  // subscription CLI only those run, under the source session's permission ceiling and requester.
+  it("runs a session fork on the subscription CLI under its source session's policy", async () => {
+    readSessionEntryReadOnlyInWorker.mockResolvedValue({
+      sessionId: "source-session",
+      updatedAt: 1,
+      permissionMode: "read-only",
+      sessionRoot: "/tmp/recall/workspace",
+    });
     const sessionManager = SessionManager.inMemory("/tmp/recall/workspace");
     await runDispatch({
       sessionFile: undefined,
       sessionManager,
+      sessionKey: "agent:main:internal-session-effects:fork",
+      sandboxSessionKey: "agent:main:source",
       toolsAllow: undefined,
       toolExecutionAllow: ["read", "ls"],
+      senderIsOwner: false,
+      inputProvenance: { kind: "internal_system", sourceTool: "session_fork" },
     });
-    expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
-      sessionFile: `in-memory:${sessionManager.getSessionId()}`,
-      cliToolAvailability: { native: [], openClaw: ["read", "ls"] },
+    const cliParams = runCliAgent.mock.calls[0]?.[0] as RunCliAgentParams;
+    expect(cliParams.sessionFile).toBe(`in-memory:${sessionManager.getSessionId()}`);
+    expect(cliParams.cliToolAvailability).toEqual({ native: [], openClaw: ["read", "ls"] });
+    const grant = buildCliMcpGrantContext({
+      run: cliParams,
+      config: {},
+      requireExplicitMessageTarget: true,
+      agentId: "main",
+      modelProvider: "claude-cli",
+      modelId: "claude-opus-4-8",
+    });
+    expect(grant).toMatchObject({
+      runtimePolicySessionKey: "agent:main:source",
+      sessionPermissionPolicy: { mode: "read-only", root: "/tmp/recall/workspace" },
+      senderIsOwner: false,
+      inputProvenance: { kind: "internal_system", sourceTool: "session_fork" },
     });
   });
 

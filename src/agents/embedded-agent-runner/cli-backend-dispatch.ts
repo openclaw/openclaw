@@ -1,6 +1,7 @@
 // Subscription-auth callers opt into CLI latency to avoid metered direct-API passthrough.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
@@ -102,6 +103,19 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   };
   const onAgentToolResult = params.onAgentToolResult;
   const { storePath, expectedLifecycleRevision, expectedWriterRunId } = params.sessionTarget;
+  // A run under another session's policy (a session fork) reads that session's permission
+  // ceiling, sandbox and exec placement, as the CLI's grant takes them from the session entry.
+  const policySessionKey =
+    params.sandboxSessionKey && params.sandboxSessionKey !== params.sessionKey
+      ? params.sandboxSessionKey
+      : undefined;
+  const policySessionEntry = policySessionKey
+    ? await readSessionEntryReadOnlyInWorker({
+        agentId: params.agentId,
+        sessionKey: policySessionKey,
+        storePath,
+      })
+    : undefined;
   // Durable turns mirror CLI output for transcript readers and timeout salvage.
   // Detached runs may borrow the identity without owning its transcript.
   const transcript =
@@ -216,6 +230,20 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      // The requester and policy the embedded run would check its tools against.
+      ...(policySessionKey ? { runtimePolicySessionKey: policySessionKey } : {}),
+      ...(policySessionEntry ? { sessionEntry: policySessionEntry } : {}),
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      inputProvenance: params.inputProvenance,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
