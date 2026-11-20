@@ -215,6 +215,14 @@ OPENCLAW_GATEWAY_TOKEN=<gateway-token>
 TELEGRAM_BOT_TOKEN=<bot-token>
 ```
 
+Create the bind-mount sources as your user before the first run. On a rootful
+Docker Engine, missing sources are created as `root`, so the image's `node` user
+cannot write to them and onboarding fails with `EACCES`.
+
+```bash
+mkdir -p ~/.openclaw/workspace ~/.openclaw-auth-profile-secrets
+```
+
 Run onboarding and channel provisioning without a pseudo-TTY, then start the Gateway:
 
 ```bash
@@ -237,6 +245,14 @@ The channel command fails before changing config if a plugin-declared environmen
 See [`openclaw channels`](/cli/channels) for credential-flag alternatives and other channel plugins.
 
 ### Manual flow
+
+Create the bind-mount sources as your user before the first run. On a rootful
+Docker Engine, missing sources are created as `root`, so the image's `node` user
+cannot write to them and onboarding fails with `EACCES`.
+
+```bash
+mkdir -p ~/.openclaw/workspace ~/.openclaw-auth-profile-secrets
+```
 
 ```bash
 BUILD_GIT_COMMIT="$(git rev-parse HEAD)"
