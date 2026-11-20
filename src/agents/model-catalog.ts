@@ -379,7 +379,8 @@ export async function buildPreparedModelCatalogSnapshot(
   );
   const manifestModels = declaredManifestModels.filter(
     (entry) =>
-      !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id)) &&
+      (params.includeProviderPluginAugmentation === false ||
+        !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
       (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry))),
   );
   // Static declarations are defaults, not a veto over independently discovered
