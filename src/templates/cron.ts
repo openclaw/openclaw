@@ -54,13 +54,12 @@ function templateCronSchedulerJobFromResult(value: unknown): { id: string } | un
   if (!value || typeof value !== "object") {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  if (typeof record.id === "string" && record.id) {
-    return { id: record.id };
+  if ("id" in value && typeof value.id === "string" && value.id) {
+    return { id: value.id };
   }
-  const job = record.job;
-  if (job && typeof job === "object" && typeof (job as Record<string, unknown>).id === "string") {
-    return { id: (job as Record<string, unknown>).id as string };
+  const job = "job" in value ? value.job : undefined;
+  if (job && typeof job === "object" && "id" in job && typeof job.id === "string") {
+    return { id: job.id };
   }
   return undefined;
 }
