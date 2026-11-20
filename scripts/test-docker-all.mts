@@ -1595,30 +1595,24 @@ async function runLane(
       // Normal admission stays closed. Finalization follows successful execution
       // cleanup and retains the same process/log custody and later-signal handling.
       const settle = `source ${shellQuote(path.join(HARNESS_ROOT_DIR, "scripts/lib/docker-e2e-container.sh"))} && docker_e2e_settle_container_cidfile ${shellQuote(env.DOCKER_E2E_CONTAINER_CIDFILE!)}`;
-      const destination =
-        recoveryIndex === -1
-          ? undefined
-          : await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
+      const destination = await fs.promises.mkdtemp(path.join(logDir, `${name}-diagnostics-`));
       await activeChildrenShutdownPromise;
       const publication = await runOwnedShellCommand({
-        command:
-          destination === undefined
-            ? settle
-            : `${settle} && exec ${[
-                process.execPath,
-                "--import",
-                path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
-                path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
-                "installed-recovery",
-                env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
-                destination,
-                String(result.status),
-                retirementCuts[recoveryIndex]!,
-                String(result.timedOut),
-                packageSha256 ?? "",
-              ]
-                .map(shellQuote)
-                .join(" ")}`,
+        command: `${settle} && exec ${[
+          process.execPath,
+          "--import",
+          path.join(HARNESS_ROOT_DIR, "scripts/tsx.mjs"),
+          path.join(HARNESS_ROOT_DIR, "scripts/upgrade-survivor-diagnostics.mjs"),
+          recoveryIndex === -1 ? "installed-terminal" : "installed-recovery",
+          env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR!,
+          destination,
+          String(result.status),
+          retirementCuts[recoveryIndex] ?? "",
+          String(result.timedOut),
+          packageSha256 ?? "",
+        ]
+          .map(shellQuote)
+          .join(" ")}`,
         env,
         label: `${name}-diagnostics`,
         logFile,

@@ -1392,16 +1392,22 @@ describe("Docker scheduler trusted harness execution", () => {
   );
 
   posixIt.each([
-    "timeout",
-    "timeout-no-tuple",
-    "signal",
-    "signal-publisher",
-    "publisher-failure",
-    "setup-failure",
-    "incomplete-success",
-  ])("publishes installed recovery after the lane group joins: %s", (mode) => {
+    ...[
+      "timeout",
+      "timeout-no-tuple",
+      "signal",
+      "signal-publisher",
+      "publisher-failure",
+      "setup-failure",
+      "incomplete-success",
+    ].map((mode) => ({ name: "package-installed-recovery-partial-previous", mode })),
+    ...["timeout", "signal", "incomplete-success"].map((mode) => ({
+      name: "installed-terminal",
+      mode,
+    })),
+  ])("publishes $name after the lane group joins: $mode", ({ name, mode }) => {
     const fixture = setupFixture("split");
-    const name = "package-installed-recovery-partial-previous";
+    const terminal = name === "installed-terminal";
     const catalog = path.join(fixture.harness, "scripts/lib/docker-e2e-scenarios.mts");
     const marker = path.join(fixture.root, "recovery-child.cjs");
     const pidFile = path.join(fixture.root, "recovery-child.pid");
@@ -1453,6 +1459,21 @@ describe("Docker scheduler trusted harness execution", () => {
         fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
         fs.writeFileSync(${JSON.stringify(schedulerPidFile)}, String(process.ppid));
         fs.writeFileSync(${JSON.stringify(privateRootFile)}, root);
+        ${
+          terminal
+            ? `
+        (async () => {
+          const summary = {
+            status: 'running', scope: 'installed-terminal-package-settlement',
+            sourcePackageSha256: process.env.OPENCLAW_CURRENT_PACKAGE_SHA256,
+            cells: [], commands: [{ name: 'healthy-update', status: 'running' }]
+          };
+          fs.writeFileSync(path.join(root, 'installed-terminal.json'), JSON.stringify(summary));
+          fs.writeFileSync(path.join(root, 'healthy-update.out'), 'candidate prepared\\n');
+          fs.writeFileSync(path.join(root, 'healthy-update.err'), ${JSON.stringify(`token=${secret}\n`)});
+          fs.writeFileSync(path.join(root, 'private-config.json'), ${JSON.stringify(secret)});
+        `
+            : `
         const run = fs.mkdtempSync(path.join(root, 'installed-recovery-'));
         fs.mkdirSync(path.join(run, 'partial-previous'));
         fs.writeFileSync(path.join(run, 'partial-previous/displacement.out'), 'candidate prepared\\n');
@@ -1463,8 +1484,11 @@ describe("Docker scheduler trusted harness execution", () => {
             stdout: 'partial-previous/displacement.out', stderr: 'partial-previous/displacement.err',
             startedAt: Date.now(), elapsedMs: 0 }
         }));
+        `
+        }
         if (${cancelled}) process.kill(process.ppid, 'SIGTERM');
         if (${JSON.stringify(mode)} !== 'incomplete-success') setInterval(() => {}, 1000);
+        ${terminal ? "})().catch(error => { console.error(error); process.exitCode = 1; });" : ""}
       `,
     );
     // Exercise the actual trusted publisher/redactor, after independently
@@ -1524,7 +1548,7 @@ describe("Docker scheduler trusted harness execution", () => {
     expect(annotations).toEqual(
       mode.startsWith("timeout") || mode === "signal"
         ? [
-            `::error title=Upgrade survivor failure::phase=${timedOut ? "installed-recovery-timeout" : "installed-recovery"}; exitStatus=128; signal=none`,
+            `::error title=Upgrade survivor failure::phase=${terminal ? "installed-terminal" : "installed-recovery"}${timedOut ? "-timeout" : ""}; exitStatus=128; signal=none`,
           ]
         : [],
     );
@@ -1540,9 +1564,38 @@ describe("Docker scheduler trusted harness execution", () => {
       const directory = readdirSync(logDir).find((entry) =>
         entry.startsWith(`${name}-diagnostics-`),
       )!;
-      const text = readFileSync(path.join(logDir, directory, "failure.json"), "utf8");
+      const published = path.join(logDir, directory);
+      const text = readFileSync(
+        path.join(published, terminal ? "publication.json" : "failure.json"),
+        "utf8",
+      );
       expect(text).not.toContain(secret);
       const report = JSON.parse(text);
+      if (terminal) {
+        expect(report).toMatchObject({
+          outcome: "failed",
+          exitStatus: 128,
+          packageSha256: fixture.sha256,
+          host: { processGroupJoined: true, producerSettled: true, timedOut },
+          export: { status: "unavailable" },
+        });
+        const partialText = readFileSync(path.join(published, "partial-diagnostics.json"), "utf8");
+        expect(partialText).not.toContain(secret);
+        expect(JSON.parse(partialText)).toMatchObject({
+          status: "incomplete",
+          qualification: "diagnostic-only",
+          observedStatus: "running",
+          current: {
+            name: "healthy-update",
+            status: "running",
+            treeJoined: null,
+            stdout: "candidate prepared\n",
+          },
+        });
+        expect(existsSync(path.join(published, "installed-terminal.json"))).toBe(false);
+        expect(existsSync(path.join(published, "private-config.json"))).toBe(false);
+        return;
+      }
       expect(report).toMatchObject({
         exitStatus: 128,
         packageSha256: fixture.sha256,
@@ -1692,9 +1745,7 @@ fs.writeFileSync(${JSON.stringify(published)}, 'producer settled before evidence
               lane.publicationStatus,
               readFileSync(path.join(fixture.root, "logs", `${name}.log`), "utf8"),
             ).toBe(mode === "daemon-query-failure" ? 1 : 0);
-            expect(existsSync(published)).toBe(
-              name !== "installed-terminal" && mode !== "daemon-query-failure",
-            );
+            expect(existsSync(published)).toBe(mode !== "daemon-query-failure");
             if (mode !== "daemon-query-failure") {
               expect(isProcessAlive(producer.pid!)).toBe(false);
             }
