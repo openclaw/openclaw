@@ -381,15 +381,23 @@ export async function fetchClawHubPackageDetail(
   });
 }
 
+export type ClawHubTemplatesOverviewOptions = ClawHubFetchOptions & {
+  limit?: number;
+  includeCategoryEntries?: boolean;
+};
+
 /** An older registry can decline the bounded overview without hiding upstream failures. */
 export async function fetchClawHubTemplatesOverview(
-  params: ClawHubFetchOptions & { limit?: number },
+  params: ClawHubTemplatesOverviewOptions,
 ): Promise<unknown> {
   try {
     return await fetchClawHubJson<unknown>({
       ...params,
       path: "/api/v1/templates/overview",
-      search: { limit: String(params.limit ?? 8) },
+      search: {
+        limit: String(params.limit ?? 8),
+        include: params.includeCategoryEntries === true ? "categoryEntries" : undefined,
+      },
     });
   } catch (error) {
     if (error instanceof ClawHubRequestError && error.status === 404) {

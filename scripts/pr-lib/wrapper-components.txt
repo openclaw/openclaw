@@ -1938,6 +1938,7 @@ src/process/exec-termination.ts
 src/process/exec.ts
 src/process/gateway-work-admission-state.ts
 src/process/gateway-work-admission.ts
+src/process/idle-io-priority.ts
 src/process/kill-tree.ts
 src/process/linux-core-dump.ts
 src/process/linux-exec-cgroup-device.ts
@@ -2874,6 +2875,8 @@ src/sessions/transcript-visible-record.ts
 src/sessions/user-turn-transcript.metadata.ts
 src/sessions/user-turn-transcript.message.ts
 src/shared/assistant-display-content.ts
+src/shared/automation-creation.ts
+src/shared/automation-saved-definition.ts
 src/shared/chat-content.ts
 src/shared/chat-envelope.ts
 src/shared/keyboard-shortcuts.generated.ts
@@ -2947,6 +2950,7 @@ packages/gateway-protocol/src/schema/approval-id.ts
 src/agents/delivery-evidence-values.ts
 src/agents/embedded-agent-runner/message-visibility.ts
 src/auto-reply/reply-payload.ts
+src/chat/automation-job-result.ts
 src/chat/canvas-render.ts
 src/chat/tool-content.ts
 src/gateway/chat-display-projection.canvas.ts

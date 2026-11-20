@@ -134,13 +134,13 @@ function ScopedTemplateReferenceView(props: {
                     >
                       {(item) => (
                         <>
-                          <header>
-                            <span class="template-reference-card__art">
+                          <header class="row">
+                            <span class="template-art">
                               <TemplateArtwork src={item().iconUrl} />
                             </span>
                             <span>
                               <strong>{item().displayName}</strong>
-                              <small>
+                              <small class="muted">
                                 {t("templatesCatalog.byCreator", {
                                   creator: `@${item().ownerHandle}`,
                                 })}
@@ -153,11 +153,7 @@ function ScopedTemplateReferenceView(props: {
                     </Show>
                   </Loading>
                 </Errored>
-                <button
-                  type="button"
-                  class="btn template-reference-card__view"
-                  onClick={() => setOpened(value)}
-                >
+                <button type="button" class="btn" onClick={() => setOpened(value)}>
                   {t("templatesCatalog.viewTemplate")}
                 </button>
               </div>

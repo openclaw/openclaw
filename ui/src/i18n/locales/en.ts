@@ -567,6 +567,12 @@ const startupEnglish = {
     description: "The agent is getting ready. This view will load automatically.",
     short: "Starting up…",
   },
+  routeNotFound: {
+    title: "Page not found",
+    description:
+      "This link is invalid or no longer available. Check the address or return to chat.",
+    goToChat: "Go to chat",
+  },
   lazyView: {
     errorTitle: "Couldn’t load this panel.",
     genericSubtitle: "Try again.",
@@ -1238,6 +1244,7 @@ const startupEnglish = {
       viewingNow: "Viewing now",
       recentSessions: "Recent sessions",
       noRecentSessions: "No recent visible sessions.",
+      recentSessionsUnavailable: "Recent sessions unavailable.",
       viewActivity: "View activity",
       web: "Web app",
       cli: "Command line",
@@ -1506,25 +1513,6 @@ const startupEnglish = {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
-    inlineSwarm: {
-      title: "Swarm",
-      progress: "{done} of {total} settled",
-      childStatus: "{name}: {status}",
-      overflow: "+{count}",
-      moreWorkers: "{count} more workers",
-      status: {
-        queued: "Queued",
-        running: "Running",
-        done: "Completed",
-        failed: "Failed or stopped",
-      },
-      count: {
-        queued: "{count} queued",
-        running: "{count} running",
-        done: "{count} completed",
-        failed: "{count} failed or stopped",
-      },
-    },
     sessionAutomation: {},
     activityPills: {},
     mobileDetails: {
@@ -1632,6 +1620,7 @@ const startupEnglish = {
       preparingContext: "Preparing reply",
       memoryFlushing: "Saving conversation memory",
       startingModel: "Waiting for a response",
+      preparingTool: "Preparing a tool call",
       waitingForLocalModel: "Waiting for the local model to respond",
       waitingForModelSlot: "Waiting for a free model slot",
       waitingForState: "Temporarily busy—retrying",

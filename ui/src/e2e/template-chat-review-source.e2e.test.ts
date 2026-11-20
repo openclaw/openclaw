@@ -97,7 +97,11 @@ it.skipIf(!available)(
         },
       });
       await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
-      const card = page.locator(".template-creator");
+      const compact = page.getByRole("region", { name: "Publish Template" });
+      await compact.getByRole("button", { name: "Preview", exact: true }).click();
+      const card = page
+        .getByRole("dialog", { name: "Preview Template" })
+        .getByRole("region", { name: "Review your Template" });
       const heading = card.getByRole("heading", { name: "Research Brief", exact: true });
       await heading.waitFor();
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe("custom");
@@ -249,7 +253,7 @@ it.skipIf(!available).each([true, false, "failed", "bootstrap"] as const)(
           }),
       );
       if (templatesEnabled === "bootstrap") {
-        await inline.locator(".callout, .template-creator__header").first().waitFor();
+        await inline.locator(".callout, .template-publish-card").first().waitFor();
       }
       const artifacts = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
         ? createControlUiE2eArtifactDir("template-readiness-" + templatesEnabled)

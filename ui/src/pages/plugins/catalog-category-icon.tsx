@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Icon } from "../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
+import { TemplateCategoryIcon } from "../../components/solid/template-category-icon.tsx";
 import type { PluginDiscoveryCategory } from "../../lib/plugins/index.ts";
 import { templateCategories } from "../../lib/template-categories.ts";
 
@@ -100,7 +101,7 @@ const CATEGORY_ICONS: Readonly<Record<string, () => JSX.Element>> = {
 export function categoryIcon({ slug, icon }: PluginDiscoveryCategory): JSX.Element {
   const template = templateCategories.find(([category]) => category === slug);
   if (template) {
-    return <Icon name={template[2]} />;
+    return <TemplateCategoryIcon icon={template[2]} />;
   }
   const render = Object.hasOwn(CATEGORY_ICONS, icon) && CATEGORY_ICONS[icon];
   return render ? render() : <Icon name="box" />;
