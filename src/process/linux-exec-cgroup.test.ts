@@ -103,15 +103,21 @@ beforeEach(() => {
   startAgentExecCgroupCleanup(cleanupController.signal, cleanupLog);
   cleanupLog.info.mockClear();
   watchers.clear();
-  vi.spyOn(fs, "watch").mockImplementation((file, options, listener) => {
-    const watcher = new CgroupWatcher();
-    const callback = typeof options === "function" ? options : listener;
-    if (callback) {
-      watcher.on("change", callback);
-    }
-    watchers.set(String(file), watcher);
-    return watcher;
-  });
+  vi.spyOn(fs, "watch").mockImplementation(
+    (
+      file: fs.PathLike,
+      options: fs.WatchOptions | fs.WatchListener<string>,
+      listener?: fs.WatchListener<string>,
+    ) => {
+      const watcher = new CgroupWatcher();
+      const callback = typeof options === "function" ? options : listener;
+      if (callback) {
+        watcher.on("change", callback);
+      }
+      watchers.set(String(file), watcher);
+      return watcher;
+    },
+  );
   mockProcessPlatform("linux");
   vi.spyOn(os, "totalmem").mockReturnValue(2400 * MiB);
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
