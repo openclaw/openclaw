@@ -1,10 +1,9 @@
 /* The message column aligns bubbles at the start. Size this bubble from the column,
-   not the intrinsic width of a pending name or a newly loaded schedule. */
+   not the intrinsic width of the job name or a newly loaded schedule. */
 .chat-group.assistant .chat-bubble:has(.chat-created-automations) {
   width: min(100%, 384px);
 }
 
-/* A plan reserves the reading and action columns before the scheduler has any jobs. */
 .chat-created-automations {
   width: min(100%, 360px);
   min-width: 0;
@@ -122,30 +121,8 @@
   }
 }
 
-.chat-created-automations__schedule-placeholder,
-.chat-created-automations__switch-placeholder {
-  border-radius: var(--radius-full);
-  background: var(--skeleton-base-raised);
-}
-
-.chat-created-automations__schedule-placeholder {
-  width: min(70%, 108px);
-  height: 7px;
-  margin-block: 5px;
-}
-
-.chat-created-automations__switch-placeholder {
-  width: calc(28px * var(--control-ui-text-scale, 1));
-  height: calc(16px * var(--control-ui-text-scale, 1));
-}
-
-.chat-created-automations__action .chat-created-automations__failed,
-.chat-created-automations__copy .chat-created-automations__failed,
 .chat-created-automations__error {
   color: var(--danger);
-}
-
-.chat-created-automations__error {
   grid-column: 1 / -1;
   margin-block-end: 8px;
   overflow-wrap: anywhere;
