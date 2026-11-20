@@ -1513,14 +1513,33 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     const middle = path.join(f.root, "teardown-middle.mjs");
     const actor = path.join(f.root, "teardown-actor.mjs");
     const script = path.join(f.root, "teardown-parent.mjs");
+    const barrier = path.join(f.root, "constructor-barrier.mjs");
+    const witness = path.join(f.root, "constructor-return.json");
+    const finalizer = path.join(f.root, "dist/infra/update-migrated-finalize.worker.js");
+    fs.mkdirSync(path.dirname(finalizer), { recursive: true });
+    fs.writeFileSync(finalizer, "process.stdin.resume();");
+    fs.writeFileSync(
+      barrier,
+      `import assert from 'node:assert/strict'; import fs from 'node:fs';
+       import threads from 'node:worker_threads'; import {syncBuiltinESMExports} from 'node:module';
+       const NativeWorker = threads.Worker;
+       threads.Worker = class extends NativeWorker { constructor(file, options) {
+         super(file, options);
+         if (options?.workerData?.barrier) {
+           const gate = new Int32Array(options.workerData.barrier);
+           Atomics.wait(gate, 0, 0, 5000); assert.equal(Atomics.load(gate, 0), 1);
+           fs.writeFileSync(${JSON.stringify(witness)}, JSON.stringify(String(process.hrtime.bigint())));
+         }
+       }}; syncBuiltinESMExports();`,
+    );
     fs.writeFileSync(
       leaf,
-      "import {parentPort} from 'node:worker_threads'; parentPort.postMessage('ready'); setInterval(() => {}, 1000);",
+      "import {parentPort,workerData} from 'node:worker_threads'; const gate=new Int32Array(workerData.barrier); Atomics.store(gate,0,1); Atomics.notify(gate,0); parentPort.postMessage('ready'); setInterval(() => {}, 1000);",
     );
     fs.writeFileSync(
       middle,
       `import {Worker, parentPort} from 'node:worker_threads';
-       const child = new Worker(${JSON.stringify(leaf)});
+       const child = new Worker(${JSON.stringify(leaf)}, {workerData:{barrier:new SharedArrayBuffer(4)}});
        child.once('message', () => parentPort.postMessage('ready'));`,
     );
     fs.writeFileSync(
@@ -1532,13 +1551,19 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     );
     fs.writeFileSync(
       script,
-      ending === "sync-process"
+      (ending === "sync-process"
         ? `import {spawnSync} from 'node:child_process';
            const child = spawnSync(process.execPath, [${JSON.stringify(actor)}], {stdio:'inherit'});
            console.log('joined:' + child.status);`
         : `import {spawn} from 'node:child_process';
            const child = spawn(process.execPath, [${JSON.stringify(actor)}], {stdio:'inherit'});
-           child.once('close', code => { console.log('joined:' + code); });`,
+           await new Promise(resolve => child.once('close', code => { console.log('joined:' + code); resolve(); }));`) +
+        `const {spawn: launch} = await import('node:child_process');
+         const finalizer=launch(process.execPath,[${JSON.stringify(finalizer)}],{env:{...process.env},stdio:['pipe','pipe','pipe']});
+         finalizer.stdout.resume(); finalizer.stderr.resume();
+         const closed=new Promise(resolve=>finalizer.once('close',resolve));
+         finalizer.stdin.end(JSON.stringify({resultPath:${JSON.stringify(path.join(f.root, "result.json"))},params:{opts:{run:{runId:'fixture'}},result:{root:${JSON.stringify(f.root)}},schemaVersions:[]}}));
+         await closed;`,
     );
     const plain = runProcess(
       node,
@@ -1546,7 +1571,12 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
       { ...process.env, NODE_OPTIONS: "", OPENCLAW_INSTALLED_TERMINAL_OBSERVER: "" },
       10_000,
     );
-    const observed = runProcess(node, [script], f.env, 10_000);
+    const observed = runProcess(
+      node,
+      [script],
+      { ...f.env, NODE_OPTIONS: `--import=${barrier} ${f.env.NODE_OPTIONS}` },
+      10_000,
+    );
     expect(plain.status, plain.stderr).toBe(0);
     expect(observed.status, observed.stderr).toBe(0);
     expect(observed.stdout).toBe(plain.stdout);
@@ -1574,16 +1604,24 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     );
     const parentExit = rows.find((row) => row.event === "exit" && row.pid === parent.pid);
     assert(parentExit && typeof parentExit.time === "string");
-    const scope = { time: String(BigInt(parentExit.time) - 1n), child: -1, databases: [] };
+    const handoff = rows.find((row) => row.event === "handoff")!;
+    const scope = { time: String(handoff.time), child: Number(handoff.child), databases: [] };
+    expect(BigInt(String(leafStart.time))).toBeLessThan(
+      BigInt(JSON.parse(fs.readFileSync(witness, "utf8"))),
+    );
+    const untouched = readInstalledTerminalEvents(f.spec.directory);
+    const originalExport = exportedObservation(untouched);
+    expect(() =>
+      buildInstalledTerminalSummary(
+        originalExport.summary,
+        originalExport.manifest,
+        originalExport.read,
+      ),
+    ).not.toThrow();
     const rewrite = (change: (events: Record<string, unknown>[]) => Record<string, unknown>[]) => {
       writeJson(path.join(f.spec.directory, "handoff.json"), scope);
       for (const [name, events] of original) {
-        const terminal = events.at(-1);
-        assert(terminal);
-        const current =
-          events[0]?.pid === parent.pid
-            ? [...events.slice(0, -1), { ...terminal, event: "handoff", ...scope }, terminal]
-            : events;
+        const current = events.map((row) => (row.event === "handoff" ? { ...row, ...scope } : row));
         fs.writeFileSync(
           path.join(f.spec.directory, name),
           change(current)
@@ -1623,6 +1661,49 @@ it("bounds suppressed Worker callbacks by actual enclosing native teardown", () 
     expect(() =>
       buildInstalledTerminalSummary(changedBound, exported.manifest, exported.read),
     ).toThrow();
+    for (const source of [{}, { event: "thread-exit" }]) {
+      const changed = structuredClone(exported.summary);
+      (changed.cells[0]!.workerLifetimeBounds[0]!.bound as Record<string, unknown>).source = source;
+      expect(() =>
+        buildInstalledTerminalSummary(changed, exported.manifest, exported.read),
+      ).toThrow();
+    }
+    if (ending === "worker") {
+      const changed = structuredClone(exported.summary);
+      const row = changed.cells[0]!.workerLifetimeBounds[0]!;
+      const later = qualified.find((event) => event.event === "spawn-exit")!;
+      const { coverage: _coverage, lifetimeBound: _bound, ...record } = later;
+      row.nativeExit = {
+        source: `${later.pid}-${later.thread}.jsonl`,
+        sequence: later.sequence,
+        event: later.event,
+        sha256: createHash("sha256").update(JSON.stringify(record)).digest("hex"),
+      };
+      row.bound = {
+        ...(row.bound as Record<string, unknown>),
+        time: later.time,
+        sourceKind: "process-native-exit",
+        source: Object.fromEntries(
+          [
+            "event",
+            "pid",
+            "thread",
+            "spawnId",
+            "child",
+            "time",
+            "code",
+            "signal",
+            "spawned",
+            "sequence",
+          ]
+            .filter((key) => later[key] !== undefined)
+            .map((key) => [key, later[key]]),
+        ),
+      };
+      expect(() =>
+        buildInstalledTerminalSummary(changed, exported.manifest, exported.read),
+      ).toThrow("Changed enclosing native lifetime");
+    }
 
     const bound = bounded.at(-1)?.lifetimeBound;
     assert(bound && typeof bound === "object" && "time" in bound && typeof bound.time === "string");
@@ -1727,12 +1808,14 @@ it("exports compact launch summaries with exact raw references and unchanged bou
       sequence: rows.length,
       spawnId: 0,
       child: 200,
+      spawned: true,
       code: 0,
       signal: null,
       time: "60",
     });
   }
   rows.push({ event: "handoff", pid: 100, thread: 0, sequence: rows.length, time: "100" });
+  rows.push({ event: "exit", pid: 100, thread: 0, sequence: rows.length, time: "101" });
   assert(rows[1]);
   const raw = rows.map(({ coverage: _coverage, lifetimeBound: _bound, ...event }) => event);
   assert(raw[1]);
@@ -1811,7 +1894,7 @@ it("exports compact launch summaries with exact raw references and unchanged bou
   const lifecycleOnly = bundle(raw.filter((event) => event.sequence !== 1));
   expect(() =>
     buildInstalledTerminalSummary(summary, lifecycleOnly.bytes, lifecycleOnly.read),
-  ).not.toThrow();
+  ).toThrow();
   const swapped = structuredClone(summary);
   swapped.cells[0]!.workersWithoutPreload[0]!.nativeExit =
     swapped.cells[0]!.workersWithoutPreload[1]!.nativeExit;
@@ -1824,15 +1907,60 @@ it("exports compact launch summaries with exact raw references and unchanged bou
   ];
   expect(() =>
     buildInstalledTerminalSummary(foreignProcess, evidence.bytes, evidence.read),
-  ).toThrow("Process settlement belongs to another launch");
+  ).toThrow("Process settlement set changed");
+  for (const indices of [[0], [1], [0, 0, 1], [1, 0]]) {
+    const changed = structuredClone(summary);
+    const process = changed.cells[0]!.processesWithoutPreload[0]!;
+    const settlements = process.nativeSettlement as unknown[];
+    process.nativeSettlement = indices.map((index) => settlements[index]!);
+    expect(() => buildInstalledTerminalSummary(changed, evidence.bytes, evidence.read)).toThrow(
+      "Process settlement set changed",
+    );
+  }
+  const invalidRows = structuredClone(rows);
+  const invalidOutcome = invalidRows.map(
+    ({ coverage: _coverage, lifetimeBound: _bound, ...row }) => row,
+  );
+  invalidOutcome.find((event) => event.event === "spawn-exit")!.spawned = false;
+  invalidRows.find((event) => event.event === "spawn-exit")!.spawned = false;
+  const outcome = bundle(invalidOutcome, invalidOutcome);
+  const invalidSummary = {
+    status: "passed",
+    cells: [{ name: "healthy", ...summarizeInstalledTerminalLaunches(invalidRows) }],
+  };
+  expect(() => buildInstalledTerminalSummary(invalidSummary, outcome.bytes, outcome.read)).toThrow(
+    "Spawn has no qualified native start outcome",
+  );
   const noReferences = { status: "passed", cells: [{ name: "healthy" }] };
-  const emptyLaunches = exportedObservation([
-    { event: "startup", pid: 100, thread: 0, sequence: 0, time: "1" },
-    { event: "handoff", pid: 100, thread: 0, sequence: 1, time: "2", child: -1, databases: [] },
-  ]);
+  const empty = fixture();
+  const emptyRun = runProcess(node, ["-e", ""], empty.env, 10_000);
+  expect(emptyRun.status, emptyRun.stderr).toBe(0);
+  const complete = empty.records();
+  const exit = complete.at(-1)!;
+  expect(exit.event).toBe("exit");
+  complete.splice(complete.length - 1, 0, {
+    ...exit,
+    event: "handoff",
+    time: String(BigInt(String(exit.time)) - 1n),
+    child: -1,
+    databases: [],
+  });
+  const emptyLaunches = exportedObservation(
+    complete.map((row, sequence) => ({ ...row, sequence })),
+  );
   expect(() =>
     buildInstalledTerminalSummary(noReferences, emptyLaunches.manifest, emptyLaunches.read),
   ).not.toThrow();
+  const cut = exportedObservation(
+    complete.slice(0, -1).map((row, sequence) => ({ ...row, sequence })),
+  );
+  expect(() => buildInstalledTerminalSummary(noReferences, cut.manifest, cut.read)).toThrow(
+    "Observer isolate has no unique creation",
+  );
+  const startupOnly = bundle([raw[0]!], []);
+  expect(() =>
+    buildInstalledTerminalSummary(noReferences, startupOnly.bytes, startupOnly.read),
+  ).toThrow("Passed trace has no unique handoff");
   expect(() =>
     buildInstalledTerminalSummary(
       noReferences,
@@ -3901,6 +4029,10 @@ it.each([
   [true, 39, 38, "valid"],
   [true, 39, 39, "native-input-errors"],
   [true, 39, 39, "handoff-window"],
+  [true, 39, 39, "typed-view"],
+  [true, 39, 39, "held-open"],
+  [true, 39, 39, "native-nonzero"],
+  [true, 39, 39, "historical"],
   [true, 39, 39, "delegated"],
   [true, 39, 39, "missing-delegation"],
   [true, 39, 39, "wrong-delegation"],
@@ -3920,7 +4052,7 @@ it.each([
       successful &&
       headerVersion === 39 &&
       metadataVersion === 39 &&
-      ["valid", "native-input-errors", "handoff-window", "delegated"].includes(mode);
+      ["valid", "native-input-errors", "handoff-window", "delegated", "historical"].includes(mode);
     const selected = !["foreign-entry", "foreign-runtime", "shell"].includes(mode);
     const worker = path.join(
       f.root,
@@ -3945,6 +4077,8 @@ it.each([
     const response = { result: { root: request.params.result.root, runId: 'run', status: ${JSON.stringify(successful ? "ok" : "error")} }, terminalRunId: 'run', exitCode: ${successful ? 0 : 1}, ${mode === "delegated" ? "executorDelegation:'pid-start-v1'," : mode === "wrong-delegation" ? "executorDelegation:'unqualified'," : ""} };
     fs.writeFileSync(request.resultPath, JSON.stringify(response));
     process.stdout.write(JSON.stringify(${mode === "changed-stdout" ? "{...response.result, runId:'another-run'}" : "response.result"}));
+    ${mode === "held-open" ? "process.send('ready'); process.once('message', () => process.disconnect());" : ""}
+    ${mode === "native-nonzero" ? "process.exitCode = 7;" : ""}
     }
   `,
     );
@@ -3973,10 +4107,11 @@ it.each([
         const exited = once(probe, 'close'); probe.stdin.end('{}'); assert.equal((await exited)[0], 0);
       }
       const resultPath = spec.root + '/result.json';
-      const child = spawn(${mode === "foreign-runtime" ? JSON.stringify(runtime) : "process.execPath"}, [${JSON.stringify(worker)}], { stdio: ['pipe','pipe','pipe'], shell: ${mode === "shell"} });
+      const child = spawn(${mode === "foreign-runtime" ? JSON.stringify(runtime) : "process.execPath"}, [${JSON.stringify(worker)}], { env: {...process.env}, stdio: ['pipe','pipe','pipe'${mode === "held-open" ? ",'ipc'" : ""}], shell: ${mode === "shell"} });
       child.stdout.resume(); child.stderr.resume();
       const closed = once(child, 'close');
-      const request = JSON.stringify({ resultPath, ${["delegated", "missing-delegation", "wrong-delegation"].includes(mode) ? "executor:{scope:'fixture'}," : ""} params: { opts:{run:{runId:'run'}},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:spec.root} } });
+      ${mode === "held-open" ? "const ready = once(child, 'message');" : ""}
+      const request = JSON.stringify({ resultPath, ${["delegated", "missing-delegation", "wrong-delegation"].includes(mode) ? "executor:{scope:'fixture'}," : ""} params: { opts:{run:{runId:'run',env:{SENTINEL:'private-request-sentinel'}}},ownedManagedUpdateEnv:{SENTINEL:'private-request-sentinel'},rollbackBlockedReason:'state-migrated-no-rollback',schemaVersions:[{path:spec.stateDatabase,userVersion:39},{path:spec.agentDatabase,userVersion:25,contentVersion:25}],result:{root:spec.root} } });
       ${
         mode === "native-input-errors"
           ? `
@@ -4009,20 +4144,45 @@ it.each([
       `
           : `
       let writeCallbacks = 0, endCallbacks = 0;
+      ${
+        mode === "typed-view"
+          ? `
+      const nativeBytes = Buffer.from(request);
+      const view = new Uint8Array(Buffer.from('foreign bytes'));
+      Object.defineProperties(view, {buffer:{value:nativeBytes.buffer},byteOffset:{value:nativeBytes.byteOffset},byteLength:{value:nativeBytes.byteLength}});
+      assert.equal(child.stdin.end(view, error => {assert.ifError(error); endCallbacks++;}), child.stdin);
+      `
+          : `
       assert.equal(child.stdin.write(request.slice(0, 10), error => {assert.ifError(error); writeCallbacks++;}), true);
       assert.equal(child.stdin.end(request.slice(10), error => {assert.ifError(error); endCallbacks++;}), child.stdin);
+      `
+      }
       ${mode === "native-input-errors" ? "assert.equal(getterReads, 0); delete child.stdin.writableEnded;" : ""}
       `
       }
-      assert.equal((await closed)[0], 0);
-      ${mode === "handoff-window" ? "" : "assert.equal(writeCallbacks, 1); assert.equal(endCallbacks, 1);"}
+      ${
+        mode === "held-open"
+          ? `
+      try {
+        await ready;
+        assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, 'ok');
+        assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));
+      } finally {
+        child.send('release'); await closed;
+      }
+      `
+          : ""
+      }
+      assert.equal((await closed)[0], ${mode === "native-nonzero" ? 7 : 0});
+      ${mode === "handoff-window" ? "" : `assert.equal(writeCallbacks, ${mode === "typed-view" ? 0 : 1}); assert.equal(endCallbacks, 1);`}
       ${mode.startsWith("isolate-failure") ? `fs.writeFileSync(require('node:path').join(spec.directory, '99-1.failure.json${mode.endsWith("-temp") ? ".tmp" : ""}'), '{"status":"unqualified"}');` : ""}
       ${mode === "shared-failure" ? "fs.writeFileSync(require('node:path').join(spec.directory, 'observer-failed.json'), '{\"status\":\"unqualified\"}');" : ""}
       ${mode === "dangling-escrow" ? "fs.symlinkSync('missing-original', spec.escrow);" : ""}
-      assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, ${JSON.stringify(successful ? "ok" : "error")});
+      ${mode === "held-open" ? "" : `assert.equal(JSON.parse(await fsp.readFile(resultPath, 'utf8')).result.status, ${JSON.stringify(successful ? "ok" : "error")});`}
       ${admitted ? "assert.notEqual(identity(spec.bin), original); assert.equal(identity(spec.escrow), original); assert.equal(fs.readlinkSync(spec.bin), fs.readlinkSync(spec.escrow));" : "assert.equal(identity(spec.bin), original); assert(!fs.existsSync(spec.escrow));"}
+      ${mode === "historical" ? `process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(resultPath, 'utf8')).result)); process.stderr.write('Update backup cleanup failed: Selected package launcher identity changed.. Inspect /fixture/backup before manual cleanup.\\n'); process.exitCode = 1;` : ""}
       ${
-        admitted
+        admitted && mode !== "historical"
           ? `
       // More unrelated completed pairs than the recorder event budget must not
       // crowd out the canonical-store proof or change the actual native calls.
@@ -4039,13 +4199,28 @@ it.each([
   `,
     );
     const result = runProcess(node, [parent], f.env, 10_000);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stderr).toBe(mode === "historical" ? 1 : 0);
     const rows = f.records();
+    expect(JSON.stringify(rows)).not.toContain("private-request-sentinel");
+    if (mode === "historical") {
+      assertInstalledTerminalOutput(
+        rows,
+        { ...f.spec, historical: true },
+        {
+          pid: Number(rows.find((row) => row.event === "handoff")!.pid),
+          code: result.status,
+          stdout: result.stdout,
+          stderr: result.stderr,
+        },
+      );
+    }
     const closed = rows.findIndex((row) => row.event === "worker-closed");
-    if (selected) {
+    if (selected && !["typed-view", "held-open"].includes(mode)) {
       expect(closed).toBeGreaterThanOrEqual(0);
     } else {
       expect(closed).toBe(-1);
+    }
+    if (!selected) {
       expect(rows.some((row) => row.event === "handoff")).toBe(false);
     }
     if (admitted) {
@@ -4072,27 +4247,56 @@ it.each([
         // Keeping it in the handoff window prevents a false no-reopen verdict.
         expect(Number(reopened.sequence)).toBeLessThan(Number(handoff.sequence));
       }
-      const lateJournal = rows.filter(
-        (row) =>
-          row.event === "sqlite-construct" &&
-          row.location === f.spec.journal &&
-          BigInt(String(row.time)) > BigInt(String(handoff.time)),
-      );
-      expect(lateJournal).toHaveLength(1); // Reentrant stdout keeps its ordinary pair.
-      expect(
-        rows.find(
-          (row) =>
-            row.event === "sqlite-open" && row.location === path.join(f.root, "agent-alias.sqlite"),
-        ),
-      ).toMatchObject({ opened: true });
-      expect(
-        rows.find(
+      if (mode !== "historical") {
+        const lateJournal = rows.filter(
           (row) =>
             row.event === "sqlite-construct" &&
-            row.location === path.join(f.root, "changed.sqlite"),
-        ),
-      ).toMatchObject({ opened: true });
+            row.location === f.spec.journal &&
+            BigInt(String(row.time)) > BigInt(String(handoff.time)),
+        );
+        expect(lateJournal).toHaveLength(1); // Reentrant stdout keeps its ordinary pair.
+        expect(
+          rows.find(
+            (row) =>
+              row.event === "sqlite-open" &&
+              row.location === path.join(f.root, "agent-alias.sqlite"),
+          ),
+        ).toMatchObject({ opened: true });
+        expect(
+          rows.find(
+            (row) =>
+              row.event === "sqlite-construct" &&
+              row.location === path.join(f.root, "changed.sqlite"),
+          ),
+        ).toMatchObject({ opened: true });
+      }
       expect(() => readInstalledTerminalEvents(f.spec.directory)).not.toThrow();
+      if (mode === "valid") {
+        for (const name of [
+          "candidate-package-identity",
+          "package-hasher-contract",
+          "package-heartbeat-contracts",
+          "installed-terminal-contracts",
+          "healthy-dependencies",
+        ]) {
+          writeJson(path.join(f.root, `${name}.json`), {});
+        }
+        fs.cpSync(f.spec.directory, path.join(f.root, "healthy"), { recursive: true });
+        publishInstalledTerminalEvidence(f.root, {
+          status: "failed",
+          commands: [],
+          cells: [{ name: "healthy" }],
+        });
+        const exported: { files: { name: string }[] } = JSON.parse(
+          fs.readFileSync(path.join(f.root, "export/manifest.json"), "utf8"),
+        );
+        for (const file of exported.files) {
+          const bytes = fs.readFileSync(path.join(f.root, "export", file.name));
+          expect((file.name.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString()).not.toContain(
+            "private-request-sentinel",
+          );
+        }
+      }
       // Event corruption cannot erase an independently acknowledged fault.
       const parentLog = fs.readdirSync(f.spec.directory).find((name) => name.endsWith("-0.jsonl"));
       expect(parentLog).toBeDefined();
@@ -4209,8 +4413,31 @@ it("holds an unknown replacement and restores only a recorded or absent replacem
     "Unacknowledged replacement retained",
   );
   expect(identity(f.spec.escrow)).toBe(intent.identity);
+  const replacement = identity(f.spec.bin);
+  writeJson(path.join(f.spec.directory, "launcher-replaced.json"), {
+    ...intent,
+    replacementIdentity: replacement,
+  });
+  const rename = fs.renameSync;
+  const refusal = new Error("fixture rename refused");
+  fs.renameSync = (from, to) => {
+    if (from === f.spec.escrow && to === f.spec.bin) throw refusal;
+    return rename(from, to);
+  };
+  try {
+    assert.throws(
+      () => restoreInstalledTerminalLauncher(f.spec),
+      (error) => error === refusal,
+    );
+    expect(identity(f.spec.bin)).toBe(replacement);
+    expect(identity(f.spec.escrow)).toBe(intent.identity);
+  } finally {
+    fs.renameSync = rename;
+  }
+  expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
+  expect(identity(f.spec.bin)).toBe(intent.identity);
+  fs.renameSync(f.spec.bin, f.spec.escrow);
   // Simulate the acknowledged boundary immediately after rename, before symlink.
-  fs.unlinkSync(f.spec.bin);
   expect(restoreInstalledTerminalLauncher(f.spec).status).toBe("restored");
   expect(identity(f.spec.bin)).toBe(intent.identity);
 });

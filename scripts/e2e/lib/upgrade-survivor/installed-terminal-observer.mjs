@@ -8,7 +8,7 @@ import fsp from "node:fs/promises";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { fileURLToPath, URL, URLSearchParams } from "node:url";
-import { types } from "node:util";
+import { isDeepStrictEqual, types } from "node:util";
 import workerThreads from "node:worker_threads";
 import { gunzipSync, gzipSync } from "node:zlib";
 import {
@@ -1061,6 +1061,9 @@ function install(spec) {
         newTarget === observedWorker && isolatedWorkerRole(launch, "heartbeat")
           ? heartbeatWorkerData(options)
           : undefined;
+      // Worker JS can start before its constructor returns to this isolate.
+      // Bind lifetime to invocation; publish only after native construction succeeds.
+      const startedAt = String(process.hrtime.bigint());
       const child = Reflect.construct(target, args, newTarget);
       observe("thread", () => {
         const childThread = child.threadId;
@@ -1109,6 +1112,7 @@ function install(spec) {
           }
         }
         report("thread", {
+          time: startedAt,
           childThread,
           entry: entry ?? "unknown",
           packageHasher,
@@ -1366,17 +1370,13 @@ function install(spec) {
             if (value !== undefined && value !== null && typeof value !== "function") {
               // Copy only inert input. Coercion and public stream getters must
               // never replace the native operation's return, callback or error.
-              assert(
-                typeof value === "string" || (!types.isProxy(value) && types.isUint8Array(value)),
-                "Migrated input has no inert byte representation",
+              // The production caller sends JSON strings. Other native forms
+              // still pass through unchanged, but cannot qualify this observer.
+              assert.equal(typeof value, "string", "Migrated input is not a JSON string");
+              prepared.chunk = Buffer.from(
+                value,
+                typeof encoding === "string" ? encoding : state.defaultEncoding,
               );
-              prepared.chunk =
-                typeof value === "string"
-                  ? Buffer.from(
-                      value,
-                      typeof encoding === "string" ? encoding : state.defaultEncoding,
-                    )
-                  : Buffer.copyBytesFrom(value);
               assert(
                 selected.inputBytes + prepared.chunk.length <= maxInputBytes,
                 "Migrated input exceeded observer budget",
@@ -1428,7 +1428,7 @@ function install(spec) {
             selected.request = prepared.request;
             scope = prepared.scope;
             writeInstalledRecoveryEvidence(scopeFile, scope);
-            report("handoff", { ...scope, request: selected.request });
+            report("handoff", scope);
           }
         };
         const write = child.stdin.write;
@@ -1667,8 +1667,9 @@ export function restoreInstalledTerminalLauncher(spec) {
     assert(current.isSymbolicLink());
     assert.equal(fileIdentity(spec.bin), replaced.replacementIdentity);
     assert.equal(fs.readlinkSync(spec.bin), intent.link);
-    fs.unlinkSync(spec.bin);
   }
+  // Linux rename atomically replaces the acknowledged symlink. Unlinking first
+  // would leave the launcher absent if the rename itself fails.
   fs.renameSync(spec.escrow, spec.bin);
   assert.equal(fileIdentity(spec.bin), intent.identity);
   return { status: "restored", row: intent.row };
@@ -1773,6 +1774,157 @@ function assertRecordingHealthy(directory) {
   return names;
 }
 
+function assertIsolateRows(rows, complete = true) {
+  const startups = rows.filter((row) => row.event === "startup");
+  assert.equal(startups.length, 1, "Observer isolate has no unique startup");
+  rows.forEach((row, index) => {
+    assert.equal(row.pid, startups[0].pid);
+    assert.equal(row.thread, startups[0].thread);
+    assert(Number.isSafeInteger(row.sequence) && row.sequence >= 0);
+    assert(
+      complete ? row.sequence === index : index === 0 || row.sequence > rows[index - 1].sequence,
+    );
+  });
+}
+
+const eventIdentity = (row) =>
+  Object.fromEntries(
+    [
+      "event",
+      "pid",
+      "thread",
+      "spawnId",
+      "child",
+      "childThread",
+      "time",
+      "code",
+      "signal",
+      "spawned",
+      "sequence",
+    ]
+      .filter((key) => row[key] !== undefined)
+      .map((key) => [key, row[key]]),
+  );
+
+const nativeExitsFor = (rows, created) =>
+  rows.filter((event) =>
+    created.event === "spawn"
+      ? event.event ===
+          (created.api === "spawnSync"
+            ? "spawn-sync-return"
+            : created.child === null
+              ? "spawn-close"
+              : "spawn-exit") &&
+        event.pid === created.pid &&
+        event.thread === created.thread &&
+        event.spawnId === created.spawnId
+      : event.event === "thread-exit" &&
+        event.pid === created.pid &&
+        event.thread === created.thread &&
+        event.childThread === created.childThread,
+  );
+
+function requireUniqueExit(created, exits) {
+  assert.equal(
+    exits.length,
+    1,
+    `Child has no unique native exit: ${JSON.stringify({
+      created: eventIdentity(created),
+      matches: exits.slice(0, 8).map(eventIdentity),
+      omitted: Math.max(0, exits.length - 8),
+    })}`,
+  );
+  return exits[0];
+}
+
+// Both the private reader and exported proof select the nearest actual native
+// owner. A later ancestor's exit cannot replace a recorded child-owner exit.
+function nativeLifetimeReader(rows, onEnclosing = () => {}) {
+  const cache = new Map();
+  return function end(created, ancestors = new Set()) {
+    if (created.event === "thread") {
+      assert.equal(
+        rows.filter(
+          (row) =>
+            row.event === "thread" &&
+            row.pid === created.pid &&
+            row.childThread === created.childThread,
+        ).length,
+        1,
+        "Duplicate Worker creation identity",
+      );
+    }
+    const direct = nativeExitsFor(rows, created);
+    if (direct.length || created.event === "spawn") return requireUniqueExit(created, direct);
+    if (cache.has(created)) return cache.get(created);
+    assert(!ancestors.has(created), "Cyclic Worker creation ancestry");
+    for (const thread of [created.thread, created.childThread]) {
+      assert.equal(
+        rows.filter(
+          (row) => row.event === "startup" && row.pid === created.pid && row.thread === thread,
+        ).length,
+        1,
+        "Enclosing bound requires unique Worker startup",
+      );
+    }
+    const owners = rows.filter((row) =>
+      created.thread === 0
+        ? row.event === "spawn" && row.child === created.pid
+        : row.event === "thread" && row.pid === created.pid && row.childThread === created.thread,
+    );
+    assert.equal(owners.length, 1, "Child has no unique native exit or enclosing owner");
+    const ended = end(owners[0], new Set(ancestors).add(created));
+    onEnclosing(created, ended);
+    cache.set(created, ended);
+    return ended;
+  };
+}
+
+function assertSpawnOutcome(created, ended) {
+  assert.equal(ended.child, created.child, "Spawn PID changed before closure");
+  assert(
+    created.child === null
+      ? ended.spawned === false &&
+          (created.api === "spawnSync"
+            ? ended.code === null && typeof ended.errorCode === "string"
+            : Number.isInteger(ended.code) && ended.code < 0) &&
+          ended.signal === null
+      : Number.isInteger(created.child) &&
+          created.child > 0 &&
+          ended.spawned === true &&
+          ((Number.isInteger(ended.code) && ended.code >= 0 && ended.signal === null) ||
+            (ended.code === null && typeof ended.signal === "string")),
+    "Spawn has no qualified native start outcome",
+  );
+}
+
+const processSettlements = (rows, created) =>
+  rows.filter(
+    (event) =>
+      ["spawn-exit", "spawn-sync-return", "spawn-close"].includes(event.event) &&
+      event.pid === created.pid &&
+      event.thread === created.thread &&
+      event.spawnId === created.spawnId,
+  );
+
+function assertIsolateEnded(isolate, rows, nativeEnd) {
+  if (isolate.at(-1).event === "exit") return;
+  const { pid, thread } = isolate[0];
+  const created = rows.filter((row) =>
+    thread === 0
+      ? row.event === "spawn" && row.child === pid
+      : row.event === "thread" && row.pid === pid && row.childThread === thread,
+  );
+  assert.equal(created.length, 1, "Observer isolate has no unique creation");
+  const ended = nativeEnd(created[0]);
+  assert(
+    (thread !== 0 || isolate[0].ppid === created[0].pid) &&
+      BigInt(created[0].time) < BigInt(isolate[0].time) &&
+      isolate.every((row) => BigInt(row.time) < BigInt(ended.time)),
+    "Observer isolate exceeds its native lifetime",
+  );
+}
+
 function readIsolates(directory) {
   const names = assertRecordingHealthy(directory);
   const files = names.filter((name) => name.endsWith(".jsonl"));
@@ -1792,13 +1944,7 @@ function readIsolates(directory) {
       .trimEnd()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const startup = rows.filter((row) => row.event === "startup");
-    assert.equal(startup.length, 1);
-    rows.forEach((row, index) => {
-      assert.equal(row.sequence, index);
-      assert.equal(row.pid, startup[0].pid);
-      assert.equal(row.thread, startup[0].thread);
-    });
+    assertIsolateRows(rows);
     return rows;
   });
   return { files, isolates };
@@ -2071,60 +2217,7 @@ function readObservation(directory, spec = {}) {
           return created.length === 1 ? threadEnd(created[0]) : undefined;
         })());
   const spawnIds = new Set();
-  const identity = ({
-    event,
-    pid,
-    thread,
-    spawnId,
-    child,
-    childThread,
-    time,
-    code,
-    signal,
-    spawned,
-    sequence,
-  }) => ({
-    event,
-    pid,
-    thread,
-    spawnId,
-    child,
-    childThread,
-    time,
-    code,
-    signal,
-    spawned,
-    sequence,
-  });
-  const nativeExits = (created) =>
-    rows.filter((event) =>
-      created.event === "spawn"
-        ? event.event ===
-            (created.api === "spawnSync"
-              ? "spawn-sync-return"
-              : created.child === null
-                ? "spawn-close"
-                : "spawn-exit") &&
-          event.pid === created.pid &&
-          event.thread === created.thread &&
-          event.spawnId === created.spawnId
-        : event.event === "thread-exit" &&
-          event.pid === created.pid &&
-          event.thread === created.thread &&
-          event.childThread === created.childThread,
-    );
-  const requireUniqueExit = (created, exits) => {
-    assert.equal(
-      exits.length,
-      1,
-      `Child has no unique native exit: ${JSON.stringify({
-        created: identity(created),
-        matches: exits.slice(0, 8).map(identity),
-        omitted: Math.max(0, exits.length - 8),
-      })}`,
-    );
-    return exits[0];
-  };
+  const nativeExits = (created) => nativeExitsFor(rows, created);
   const processEnd = (created) => {
     const direct = nativeExits(created);
     if (direct.length || created.child === null || created.api === "spawnSync") {
@@ -2167,52 +2260,7 @@ function readObservation(directory, spec = {}) {
     lifetimeBounds.set(created, receipt);
     return receipt;
   };
-  const threadEnds = new Map();
-  function threadEnd(created, ancestors = new Set()) {
-    assert.equal(
-      rows.filter(
-        (event) =>
-          event.event === "thread" &&
-          event.pid === created.pid &&
-          event.childThread === created.childThread,
-      ).length,
-      1,
-      "Duplicate Worker creation identity",
-    );
-    const direct = nativeExits(created);
-    if (direct.length !== 0) {
-      return requireUniqueExit(created, direct);
-    }
-    if (threadEnds.has(created)) {
-      return threadEnds.get(created);
-    }
-    assert(!ancestors.has(created), "Cyclic Worker creation ancestry");
-    const next = new Set(ancestors).add(created);
-    assert.equal(
-      startups.filter((start) => start.pid === created.pid && start.thread === created.childThread)
-        .length,
-      1,
-      "Child has no unique native exit; enclosing bound requires unique Worker startup",
-    );
-    const owners = rows.filter((event) =>
-      created.thread === 0
-        ? event.event === "spawn" && event.child === created.pid
-        : event.event === "thread" &&
-          event.pid === created.pid &&
-          event.childThread === created.thread,
-    );
-    assert.equal(owners.length, 1, "Child has no unique native exit or enclosing owner");
-    assert.equal(
-      startups.filter((start) => start.pid === created.pid && start.thread === created.thread)
-        .length,
-      1,
-      "Child has no unique native exit; enclosing owner startup is missing",
-    );
-    const owner = owners[0];
-    const end =
-      owner.event === "spawn"
-        ? requireUniqueExit(owner, nativeExits(owner))
-        : threadEnd(owner, next);
+  const threadEnd = nativeLifetimeReader(rows, (created, end) => {
     const before = handoff && BigInt(end.time) < BigInt(handoff.time);
     assert(before || candidate.has(created.pid), "Enclosing native bound spans predecessor window");
     // Node disables JS callbacks before recursively joining Workers at teardown.
@@ -2244,14 +2292,12 @@ function readObservation(directory, spec = {}) {
     );
     lifetimeBounds.set(created, {
       sourceKind: end.event === "thread-exit" ? "worker-native-exit" : "process-native-exit",
-      source: identity(end),
+      source: eventIdentity(end),
       time: end.time,
       ownExitCode: null,
       reason: before ? "settled-before-handoff" : "candidate-subtree",
     });
-    threadEnds.set(created, end);
-    return end;
-  }
+  });
   const qualifiedPackageEntry = (entry, row, own = false) => {
     const packageContract = spec.heartbeatWorkers?.find(
       (item) =>
@@ -2315,23 +2361,7 @@ function readObservation(directory, spec = {}) {
     if (row.event === "spawn" || row.event === "thread") {
       nativeExit = row.event === "thread" ? threadEnd(row) : processEnd(row);
       if (row.event === "spawn" && !lifetimeBounds.has(row)) {
-        assert.equal(nativeExit.child, row.child, "Spawn PID changed before closure");
-        assert(
-          row.child === null
-            ? nativeExit.spawned === false &&
-                (row.api === "spawnSync"
-                  ? nativeExit.code === null && typeof nativeExit.errorCode === "string"
-                  : Number.isInteger(nativeExit.code) && nativeExit.code < 0) &&
-                nativeExit.signal === null
-            : Number.isInteger(row.child) &&
-                row.child > 0 &&
-                nativeExit.spawned === true &&
-                ((Number.isInteger(nativeExit.code) &&
-                  nativeExit.code >= 0 &&
-                  nativeExit.signal === null) ||
-                  (nativeExit.code === null && typeof nativeExit.signal === "string")),
-          "Spawn has no qualified native start outcome",
-        );
+        assertSpawnOutcome(row, nativeExit);
       }
       if (!lifetimeBounds.has(row)) {
         const parentExit = ownerExit(row);
@@ -2616,32 +2646,11 @@ function readObservation(directory, spec = {}) {
     }
   }
   for (const isolate of isolates) {
-    if (isolate.at(-1).event === "exit") {
-      continue;
+    assertIsolateEnded(isolate, rows, threadEnd);
+    if (isolate[0].thread === 0 && isolate.at(-1).event !== "exit") {
+      // SIGKILL cannot run the JS exit hook; keep this complete native-bounded trace.
+      fullTraceProcesses.add(isolate[0].pid);
     }
-    const { pid, thread } = isolate[0];
-    if (thread === 0) {
-      // SIGKILL cannot run the child's JS exit hook. Reuse the direct native
-      // lifetime validated above; later absence is not this settlement fact.
-      const created = rows.filter((row) => row.event === "spawn" && row.child === pid);
-      assert.equal(created.length, 1, "Observer isolate has no unique process creation");
-      const end = requireUniqueExit(created[0], nativeExits(created[0]));
-      assert(
-        isolate[0].ppid === created[0].pid &&
-          BigInt(created[0].time) < BigInt(isolate[0].time) &&
-          isolate.every((row) => BigInt(row.time) < BigInt(end.time)),
-        "Observer isolate exceeds its direct native lifetime",
-      );
-      fullTraceProcesses.add(pid);
-      continue;
-    }
-    // Native teardown can suppress the isolate's JS exit hook. Every creation
-    // above already has a direct exit or qualified enclosing native bound.
-    assert(
-      thread !== 0 &&
-        rows.some((row) => row.event === "thread" && row.pid === pid && row.childThread === thread),
-      "Observer isolate did not settle",
-    );
   }
   const excluded = new Map();
   for (const [index, isolate] of isolates.entries()) {
@@ -2829,12 +2838,7 @@ export function summarizeInstalledTerminalLaunches(rows) {
           !startups.some((start) => start.pid === row.pid && start.thread === row.childThread),
       )
       .map((row) => {
-        const exits = rows.filter(
-          (event) =>
-            event.event === "thread-exit" &&
-            event.pid === row.pid &&
-            event.childThread === row.childThread,
-        );
+        const exits = nativeExitsFor(rows, row);
         assert.equal(exits.length, 1);
         return {
           pid: row.pid,
@@ -2857,21 +2861,13 @@ export function summarizeInstalledTerminalLaunches(rows) {
         evidence: reference(row),
         coverage: row.coverage,
         ...(row.lifetimeBound ? { lifetimeBound: row.lifetimeBound } : {}),
-        nativeSettlement: rows
-          .filter(
-            (event) =>
-              ["spawn-exit", "spawn-sync-return", "spawn-close"].includes(event.event) &&
-              event.pid === row.pid &&
-              event.thread === row.thread &&
-              event.spawnId === row.spawnId,
-          )
-          .map(reference),
+        nativeSettlement: processSettlements(rows, row).map(reference),
       })),
     workerLifetimeBounds: rows
       .filter((row) => row.event === "thread" && row.lifetimeBound)
       .map((row) => {
         const matches = rows.filter((event) =>
-          Object.entries(row.lifetimeBound.source).every(([key, value]) => event[key] === value),
+          isDeepStrictEqual(eventIdentity(event), row.lifetimeBound.source),
         );
         assert.equal(matches.length, 1, "Missing enclosing native lifetime event");
         return {
@@ -2942,8 +2938,12 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
         events.set(key, { row, encoded, kinds: new Set([kind]) });
       }
     };
+    const fullIsolates = new Map();
     for (const row of read(`${cell.name}-observer.jsonl.gz`, 32 * 1024 * 1024)) {
       add(row, "raw");
+      const key = `${row.pid}:${row.thread}`;
+      if (!fullIsolates.has(key)) fullIsolates.set(key, []);
+      fullIsolates.get(key).push(row);
     }
     const lifecycleName = `${cell.name}-lifetimes.jsonl.gz`;
     if (names.has(lifecycleName)) {
@@ -2995,6 +2995,25 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
           ended.child === created.child);
     const raw = [...events.values()].map(({ row }) => row);
     const handoffs = raw.filter((event) => event.event === "handoff");
+    const nativeEnd = nativeLifetimeReader(raw);
+    if (summary.status === "passed" || cell.status === "passed") {
+      assert.equal(handoffs.length, 1, "Passed trace has no unique handoff");
+      const isolates = new Map();
+      for (const event of raw) {
+        const key = `${event.pid}:${event.thread}`;
+        if (!isolates.has(key)) isolates.set(key, []);
+        isolates.get(key).push(event);
+      }
+      for (const [key, events] of isolates) {
+        const complete = fullIsolates.get(key);
+        // Only the declared lifecycle projection can omit intermediate events.
+        // Full raw isolates must retain every sequence and a qualified ending.
+        if (complete) assertIsolateRows(complete);
+        const ordered = events.toSorted((a, b) => a.sequence - b.sequence);
+        assertIsolateRows(ordered, false);
+        assertIsolateEnded(ordered, raw, nativeEnd);
+      }
+    }
     for (const row of cell.workersWithoutPreload ?? []) {
       const created = launch(row, "thread");
       const ended = resolve(row.nativeExit);
@@ -3006,6 +3025,12 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
     }
     for (const row of cell.processesWithoutPreload ?? []) {
       const created = launch(row, "spawn");
+      const supplied = row.nativeSettlement.map(resolve);
+      assert.deepEqual(
+        supplied,
+        processSettlements(raw, created),
+        "Process settlement set changed",
+      );
       for (const ref of row.nativeSettlement) {
         const ended = resolve(ref);
         assert(owns(created, ended), "Process settlement belongs to another launch");
@@ -3036,17 +3061,14 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
         );
         assert(raw.every((event) => BigInt(event.time) < BigInt(bound.time)));
       } else {
-        assert(row.nativeSettlement.length > 0, "Process has no native settlement evidence");
+        assertSpawnOutcome(created, nativeEnd(created));
       }
     }
     for (const row of cell.workerLifetimeBounds ?? []) {
-      let created = launch(row, "thread");
+      const created = launch(row, "thread");
       const ended = resolve(row.nativeExit);
       assert(["spawn-exit", "spawn-sync-return", "thread-exit"].includes(ended.event));
-      assert.deepEqual(
-        Object.fromEntries(Object.keys(row.bound.source).map((key) => [key, ended[key]])),
-        row.bound.source,
-      );
+      assert.deepEqual(eventIdentity(ended), row.bound.source);
       assert.equal(row.bound.ownExitCode, null);
       assert.equal(row.bound.time, ended.time);
       assert.equal(
@@ -3054,23 +3076,7 @@ export function buildInstalledTerminalSummary(summary, manifestBytes, readArtifa
         ended.event === "thread-exit" ? "worker-native-exit" : "process-native-exit",
       );
       assert(BigInt(created.time) < BigInt(ended.time));
-      const visited = new Set();
-      while (true) {
-        assert(!visited.has(created), "Cyclic enclosing lifetime");
-        visited.add(created);
-        const owners = raw.filter((event) =>
-          created.thread === 0
-            ? event.event === "spawn" && event.child === created.pid
-            : event.event === "thread" &&
-              event.pid === created.pid &&
-              event.childThread === created.thread,
-        );
-        assert.equal(owners.length, 1, "Enclosing native lifetime has no unique owner");
-        created = owners[0];
-        if (owns(created, ended)) {
-          break;
-        }
-      }
+      assert.equal(nativeEnd(created), ended, "Changed enclosing native lifetime");
     }
   }
   const result = {
