@@ -531,9 +531,7 @@ Gateway to publish the new prices.
 
 OpenClaw can refresh the model metadata shipped by installed provider plugins
 without waiting for a new OpenClaw release. The Gateway makes one background
-JSON `GET` at startup and then checks at most every six hours. Changing
-`models.catalogRefresh.url` or `models.catalogRefresh.enabled` on a running
-Gateway checks the new source at once. The request sends
+JSON `GET` at startup and then checks at most every six hours. The request sends
 no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
@@ -545,9 +543,7 @@ The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, including each agent's
 provider model discovery, then publishes its model rows and prices together
 without restarting. Picker reads keep using the current generation during
-preparation; a failed or superseded preparation leaves it in place. A
-preparation superseded by another publication, such as the config reload that
-changed the catalog source, retries after 10 seconds. A provider
+preparation; a failed or superseded preparation leaves it in place. A provider
 whose discovery fails publishes with the new generation's built-in rows.
 Admitted turns retain their captured model generation. If a newer catalog
 supersedes an agent RPC's runtime preparation before acceptance, the request
