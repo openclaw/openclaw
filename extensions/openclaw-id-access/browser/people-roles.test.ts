@@ -19,3 +19,23 @@ it("shows config-valid but protocol-invalid roles as unavailable, never as the d
   ]);
   expect(options[0]?.description).toContain("1–64 lowercase letters");
 });
+
+it.each(["read", "suggest", "send"] as const)(
+  "describes the %s invitation ceiling without changing other role details",
+  (maxInvitedAccess) => {
+    const role: Role = {
+      name: "guest",
+      defined: true,
+      sessions: "none",
+      maxInvitedAccess,
+      requiresSandbox: true,
+      admin: false,
+    };
+    expect(roleOptions([role], "en-US")[0]?.description).toBe(
+      `Only sessions they’re invited to · Can be invited up to ${maxInvitedAccess[0]!.toUpperCase()}${maxInvitedAccess.slice(1)} · Sandbox required · No administrator access`,
+    );
+    expect(roleOptions([{ ...role, maxInvitedAccess: undefined }], "en-US")[0]?.description).toBe(
+      "No access to other people's sessions · Sandbox required · No administrator access",
+    );
+  },
+);

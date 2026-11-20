@@ -48,7 +48,9 @@ export function useChatSessionSharingMenu(
       owner()?.label,
     );
   const showPermissions = () =>
-    props.membersAvailable !== false && visibility() !== "shared" && visibility() !== "draft";
+    props.membersAvailable !== false &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess));
   const people = createMemo(() =>
     projectChatSessionSharingRoster(props).filter((row) => !row.owner),
   );
@@ -254,6 +256,9 @@ export function useChatSessionSharingMenu(
         () => (!showPermissions() ? [] : matches()),
         (row): MenuEntry => {
           const identity = () => row().identity;
+          const loweringAccessNote = (
+            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
+          );
           const branch: MenuEntry = {
             id: `permission:${identity().id}`,
             class: "chat-pane__sharing-permission",
@@ -278,13 +283,21 @@ export function useChatSessionSharingMenu(
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${identity().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              if (row().loweringAccessNote) {
+                options.push({
+                  kind: "content",
+                  id: `permission-note:${identity().id}`,
+                  content: loweringAccessNote,
+                });
+              }
+              return options;
             },
           };
           return {
