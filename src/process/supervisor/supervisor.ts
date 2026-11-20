@@ -13,11 +13,7 @@ import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { watchHostExecMemory } from "../child-memory.js";
-import {
-  applyAgentExecMemoryBudget,
-  releaseAgentExecCgroupScope,
-  usesAgentExecHostMemoryBudget,
-} from "../linux-exec-cgroup.js";
+import * as execCgroup from "../linux-exec-cgroup.js";
 import { setProcessTimeout } from "../process-deadline.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
@@ -156,7 +152,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
-    const hostExec = usesAgentExecHostMemoryBudget(input);
+    const hostExec = execCgroup.usesAgentExecHostMemoryBudget(input);
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );
@@ -235,7 +231,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       await input.prepareSpawn();
     }
     if (hostExec && !owner.terminationReason) {
-      await applyAgentExecMemoryBudget();
+      await execCgroup.applyAgentExecMemoryBudget();
     }
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
@@ -441,7 +437,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         })
         .then((outcome) => {
           if (hostExec) {
-            void releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
+            void execCgroup.releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
           }
           return outcome;
         });
