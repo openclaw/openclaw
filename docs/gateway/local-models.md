@@ -386,6 +386,51 @@ the discarded text. Earlier unaffected blocks and completed tool work remain.
 Side effects are not retried automatically. Choose a stronger model or request a
 smaller output, then start a new turn.
 
+## Background automations on a shared local server
+
+New installs get one **Proactive check** automation for the owner agent (see
+[First setup](/gateway/heartbeat#first-setup)). It runs every 30 minutes as an
+agent turn in that agent's main conversation, so each run sends the
+conversation's full prompt: system prompt, tool definitions, and history. On a
+hosted model this is an ordinary request. On a local server it is a full
+prefill of a prompt that grows with the main conversation, and it holds one of
+the server's parallel slots while it runs. On a server with few slots it can
+also evict the cached prompt of the conversation you are using, so your next
+turn starts with a slow re-read.
+
+Two details make the cost easy to miss:
+
+- The job delivers to the owner's direct-message route. When no channel can
+  reach the owner (for example, a Gateway used only through the Control UI or
+  the API), each run still calls the model and then records
+  `Owner delivery unavailable (no-route)`.
+- `skipIfScratchEmpty` skips only an explicitly empty checklist. A job with no
+  stored scratch runs every time.
+
+List the job and its last delivery status:
+
+```bash
+openclaw automations list --all
+```
+
+Then choose what fits your setup:
+
+```bash
+# Stop it
+openclaw automations disable <job-id>
+
+# Run it less often
+openclaw automations edit <job-id> --every 2h
+
+# Run it on a smaller local model
+openclaw automations edit <job-id> --model <provider/smaller-model>
+```
+
+An isolated run (`--session isolated --light-context`) keeps each prompt small
+but drops the conversation context the check normally reviews. Give it a
+[scratch checklist](/automation/cron-jobs/payloads#job-scratch-and-quiet-results)
+instead.
+
 ## Troubleshooting
 
 - **Gateway can't reach the proxy?** `curl http://127.0.0.1:1234/v1/models`.
