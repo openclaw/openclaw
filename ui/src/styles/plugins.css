@@ -174,9 +174,10 @@
   max-height: 34px;
   aspect-ratio: 1;
   padding: 7px;
-  border-color: var(--border);
+  border-color: transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  box-shadow: none;
   color: var(--muted);
 }
 
