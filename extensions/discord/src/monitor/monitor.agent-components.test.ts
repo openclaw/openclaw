@@ -232,6 +232,73 @@ it("disables the controls of a controls-only message so a second tap cannot fire
   expect(JSON.stringify(updated)).toContain('"disabled":true');
 });
 
+it("consumes an agent control that a plugin handler claims", async () => {
+  dispatchPluginInteractiveHandlerMock.mockImplementation(async (params: unknown) => {
+    // SAFETY: the Discord plugin dispatcher always passes its respond helpers.
+    const { respond } = params as { respond: { acknowledge: () => Promise<void> } };
+    await respond.acknowledge();
+    return { matched: true, handled: true, duplicate: false };
+  });
+  const components = sendMarked([
+    { type: "buttons", buttons: [{ label: "Confirm", value: "orders:confirm" }] },
+  ]);
+  const [customId] = controlIds(components);
+
+  const { update, acknowledge } = await tap({
+    components,
+    customId: customId!,
+    type: ComponentType.Button,
+  });
+
+  expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledOnce();
+  expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0]).toMatchObject({
+    data: "::orders:confirm",
+  });
+  expect(JSON.stringify(update.mock.calls[0]?.[0])).toContain('"disabled":true');
+  expect(acknowledge).not.toHaveBeenCalled();
+  expect(dispatchReplyMock).not.toHaveBeenCalled();
+});
+
+it("gives a plugin handler the selected option labels of a stateless select", async () => {
+  dispatchPluginInteractiveHandlerMock.mockResolvedValue({
+    matched: true,
+    handled: true,
+    duplicate: false,
+  });
+  const components = sendMarked([
+    { type: "select", placeholder: "Size", options: [{ label: "Medium", value: "sizes:m" }] },
+  ]);
+  const [customId] = controlIds(components);
+
+  await tap({
+    components,
+    customId: customId!,
+    type: ComponentType.StringSelect,
+    values: ["::sizes:m"],
+  });
+
+  expect(dispatchPluginInteractiveHandlerMock.mock.calls[0]?.[0]).toMatchObject({
+    data: "::sizes:m",
+    ctx: { interaction: { kind: "select", values: ["Medium"] } },
+  });
+});
+
+it.each([
+  ["short first", ["pick", "x".repeat(120)]],
+  ["long first", ["x".repeat(120), "pick"]],
+])(
+  "renders all agent controls through the registry when one value does not fit (%s)",
+  (_name, values) => {
+    const components = sendMarked([
+      { type: "buttons", buttons: values.map((value, index) => ({ label: `${index}`, value })) },
+      { type: "select", placeholder: "Size", options: [{ label: "M", value: "size:m" }] },
+    ]);
+    const ids = controlIds(components);
+    expect(ids).toHaveLength(3);
+    expect(ids.filter((id) => /^agent(?:sel)?:/u.test(id))).toEqual([]);
+  },
+);
+
 it("keeps duplicate agent values distinct in one message", () => {
   const components = sendMarked([
     {

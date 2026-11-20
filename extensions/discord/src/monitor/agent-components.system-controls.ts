@@ -39,11 +39,35 @@ function withAgentControlsDisabled<T extends MessageComponent>(components: reado
     if ("custom_id" in component && isDiscordAgentControlCustomId(component.custom_id)) {
       return { ...component, disabled: true };
     }
-    if (component.type === ComponentType.ActionRow || component.type === ComponentType.Container) {
+    if (component.type === ComponentType.ActionRow) {
+      return { ...component, components: withAgentControlsDisabled(component.components) };
+    }
+    if (component.type === ComponentType.Container) {
       return { ...component, components: withAgentControlsDisabled(component.components) };
     }
     return component;
   });
+}
+
+// Plugin handlers get the selected option labels, as for registry selects.
+function selectedOptionLabels(
+  components: readonly MessageComponent[],
+  customId: string,
+  values: readonly string[],
+): string[] | undefined {
+  for (const component of components) {
+    if (component.type === ComponentType.StringSelect && component.custom_id === customId) {
+      const labels = new Map(component.options.map((option) => [option.value, option.label]));
+      return values.map((value) => labels.get(value) ?? value);
+    }
+    if (component.type === ComponentType.ActionRow || component.type === ComponentType.Container) {
+      const found = selectedOptionLabels(component.components, customId, values);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return undefined;
 }
 
 /** A stateless agent control: the marked value travels with the tap, so it never expires. */
@@ -77,27 +101,43 @@ async function runAgentControlInteraction(params: {
     return;
   }
   const messageId = interaction.message?.id;
+  const components = interaction.rawData.message?.components ?? [];
+  // Consume before any handler runs, so a plugin-handled tap is single use too.
+  let consumed = false;
+  if (!params.reusable) {
+    try {
+      await interaction.update({ components: withAgentControlsDisabled(components) });
+      consumed = true;
+    } catch (err) {
+      logError(`${label}: failed to consume the controls: ${String(err)}`);
+    }
+  }
   const pluginDispatch = await dispatchPluginDiscordInteractiveEvent({
     ...authorized,
     interaction,
     isAuthorizedSender: authorized.commandAuthorized,
     data: value,
     kind,
+    values:
+      kind === "select"
+        ? selectedOptionLabels(
+            components,
+            resolveInteractionCustomId(interaction) ?? "",
+            interaction.values,
+          )
+        : undefined,
     messageId,
+    sourceAnswered: consumed,
   });
   if (pluginDispatch === "handled") {
     return;
   }
-  try {
-    if (params.reusable) {
+  if (!consumed) {
+    try {
       await interaction.acknowledge();
-    } else {
-      await interaction.update({
-        components: withAgentControlsDisabled(interaction.rawData.message?.components ?? []),
-      });
+    } catch (err) {
+      logError(`${label}: failed to answer the interaction: ${String(err)}`);
     }
-  } catch (err) {
-    logError(`${label}: failed to answer the interaction: ${String(err)}`);
   }
   // The conversation's session owns the tap, as if the user had typed the value.
   await dispatchDiscordComponentEvent({
