@@ -409,9 +409,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
               )
             : undefined
         }
+        notices={<PluginNotices {...props} />}
         panel={
           <>
-            <PluginNotices {...props} />
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({

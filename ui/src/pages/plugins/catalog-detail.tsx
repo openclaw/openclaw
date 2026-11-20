@@ -157,12 +157,12 @@ function CatalogDetailContent(props: {
           onSelect={props.state.onSelectPrompt}
         />
       }
+      notices={renderPluginRowMessage(props.state.message, {
+        busy: props.state.busy,
+        onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
+      })}
       panel={
         <>
-          {renderPluginRowMessage(props.state.message, {
-            busy: props.state.busy,
-            onContinue: props.state.canInstall ? props.state.onContinueInstall : undefined,
-          })}
           {renderPluginContentCapabilities({
             contracts: detail().contracts,
             uiCapabilities: detail().uiCapabilities,

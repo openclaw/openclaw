@@ -509,7 +509,7 @@ const enPluginManagement = {
       auth: { oauth: "OAuth", "api-key": "API key", none: "None" },
     },
     detailTabs: {
-      readme: "README",
+      readme: "Readme",
       skills: "Skills",
       configuration: "Configuration",
       mcpServers: "MCP servers",

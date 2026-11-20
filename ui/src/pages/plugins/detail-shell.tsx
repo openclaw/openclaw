@@ -91,6 +91,8 @@ export function renderPluginDetailShell(props: {
   sidebar?: JSX.Element;
   recommendations?: JSX.Element;
   panel: JSX.Element;
+  /** Status about the whole plugin (errors, pending reads); opens the reading column. */
+  notices?: JSX.Element;
   /** Plugin pages: actions beside the name, the summary opens the reading column, facts in a rail. */
   rail?: boolean;
 }): JSX.Element {
@@ -136,6 +138,9 @@ export function renderPluginDetailShell(props: {
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
+          {props.notices ? (
+            <div class="plugin-catalog-detail__notices">{props.notices}</div>
+          ) : undefined}
           {props.rail ? summary() : undefined}
           {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>

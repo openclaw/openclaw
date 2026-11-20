@@ -39,6 +39,14 @@
   .plugins-hub-header .hub-tabs {
     box-shadow: none;
   }
+
+  /* Without tabs, the subtitle and the gear share one row. */
+  .content-header.hub-page-header--untabbed.plugins-hub-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "title actions";
+    align-items: center;
+    min-height: 32px;
+  }
 }
 
 .installed-plugins-card__head {
@@ -2133,6 +2141,11 @@
     font-size: 13px;
   }
 
+  .plugin-catalog-results--rows .plugin-card-title-row .plugin-card-author--linked {
+    margin-block: -6px;
+    padding-block: 6px;
+  }
+
   .settings-page.oc-app-surface
     .plugin-catalog-results--rows
     .btn.plugin-catalog-section__view-all {
@@ -2282,11 +2295,17 @@
 }
 
 .plugin-catalog-detail--rail .plugin-catalog-detail__main {
-  gap: 0;
+  gap: 32px;
 }
 
-.plugin-catalog-detail--rail .plugin-catalog-detail__main > * + * {
-  margin-top: 32px;
+/* Whole-plugin status opens the reading column; with nothing to say it takes no space. */
+.plugin-catalog-detail__notices {
+  display: contents;
+}
+
+.plugin-catalog-detail--rail .plugin-recommended-prompts {
+  min-height: 0;
+  padding: 20px;
 }
 
 .plugin-catalog-detail--rail .plugin-catalog-detail__summary {
@@ -2322,8 +2341,8 @@
   text-transform: none;
 }
 
-.plugin-catalog-detail--rail .plugin-catalog-detail__readme-section > h2 {
-  margin-bottom: 10px;
+.plugin-catalog-detail--rail .plugin-catalog-detail__readme-section > h2.settings-section__heading {
+  margin: 0 0 10px;
 }
 
 .plugin-catalog-detail--rail .plugin-capabilities .settings-group {
@@ -2335,9 +2354,9 @@
 }
 
 .plugin-catalog-detail--rail .plugin-capabilities .settings-row {
-  align-items: flex-start;
+  align-items: center;
   gap: 14px;
-  min-height: 0;
+  min-height: 56px;
   padding: 10px 12px;
   border: 0;
   border-radius: calc(12px * var(--openclaw-corner-radius-scale));
@@ -2789,8 +2808,16 @@
   }
 
   .plugin-catalog-detail__readme-toggle {
-    margin: 2px 0 -8px;
+    margin: -2px 0 -8px;
     padding: 8px 14px 8px 0;
+  }
+
+  .plugin-metadata__facts--rail .plugin-catalog-detail__security .oc-icon-button {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+    margin-block: -9px;
+    margin-inline: -4px;
   }
 
   .plugin-metadata__audit-link {
