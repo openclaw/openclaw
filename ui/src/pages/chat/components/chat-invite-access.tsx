@@ -43,6 +43,7 @@ export function ChatInviteAccess(props: {
                 id: level,
                 label: t(labels[level]),
                 type: "radio",
+                closeOnSelect: true,
                 checked: level === mention().access,
               }))}
               onSelect={(item) => {

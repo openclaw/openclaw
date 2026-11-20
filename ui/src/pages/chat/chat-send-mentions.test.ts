@@ -12,22 +12,27 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 const recipient = (profileId: string, start = 0) => ({ profileId, start, end: start + 5 });
 
-it("offsets selected recipients past reply and annotation", async () => {
-  const host = makeChatHost({
-    chatMessage: "  🔎 @Alex please review  ",
-    chatMentions: [recipient("profile-alex", 5)],
-    chatAttachments: [createBrowserAnnotationAttachment("mention", "@Other context")],
-    chatReplyTarget: { messageId: "reply", text: "@Other quote", senderLabel: "Reader" },
-    getWorkContext: () => ({ page: "chat", title: "@Other work context" }),
-    requestHandlers: { "chat.send": { status: "started" } },
-  });
-  await handleSendChat(host);
-  const expected = "> **Reader:** @Other quote\n\n@Other context\n\n🔎 @Alex please review";
-  expect(findChatSendPayload(host)).toMatchObject({
-    message: expected,
-    mentions: [recipient("profile-alex", expected.indexOf("@Alex"))],
-  });
-});
+it.each([undefined, "read", "suggest", "send"] as const)(
+  "offsets selected recipients past reply and annotation with access %s",
+  async (access) => {
+    const host = makeChatHost({
+      chatMessage: "  🔎 @Alex please review  ",
+      chatMentions: [{ ...recipient("profile-alex", 5), ...(access ? { access } : {}) }],
+      chatAttachments: [createBrowserAnnotationAttachment("mention", "@Other context")],
+      chatReplyTarget: { messageId: "reply", text: "@Other quote", senderLabel: "Reader" },
+      getWorkContext: () => ({ page: "chat", title: "@Other work context" }),
+      requestHandlers: { "chat.send": { status: "started" } },
+    });
+    await handleSendChat(host);
+    const expected = "> **Reader:** @Other quote\n\n@Other context\n\n🔎 @Alex please review";
+    expect(findChatSendPayload(host)).toMatchObject({
+      message: expected,
+      mentions: [
+        { ...recipient("profile-alex", expected.indexOf("@Alex")), ...(access ? { access } : {}) },
+      ],
+    });
+  },
+);
 
 it("retains replacement recipients during history loading", async () => {
   const history = createDeferred<ChatHistoryResult>();
