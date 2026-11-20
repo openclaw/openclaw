@@ -388,7 +388,7 @@ it.each([
       storePath: target.storePath,
       target: { canonicalKey: SESSION, storeKeys: [SESSION] },
     });
-    expect(await accessor.loadSessionEntry(target)).toBeUndefined();
+    expect(accessor.loadSessionEntry(target)).toBeUndefined();
     expect(await session.loadCronSessionEntryLatest(target.storePath, SESSION)).toBeUndefined();
   } else if (scenario === "session edited" || scenario === "session replaced") {
     // Publish the replacement through the owner before admitting the next occurrence.
@@ -730,7 +730,7 @@ it.each([
     if (deletedSource) {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
-      expect(await accessor.loadSessionEntry(target)).toBeUndefined();
+      expect(accessor.loadSessionEntry(target)).toBeUndefined();
     } else if (scenario === "role revoked") {
       expect(entered).toBe(0);
       expect(state.lastRunStatus, state.lastError).toBe("error");
