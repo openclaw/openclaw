@@ -138,6 +138,11 @@ suite.define(() => {
 
         const observation = await visit(page, route);
         if (route === "plugins") {
+          const tools = page.locator('[data-catalog-section="tools"]');
+          expect(await tools.locator(".plugin-catalog-card").count()).toBe(8);
+          await tools
+            .getByRole("button", { name: "Install Data plugin 0000", exact: true })
+            .waitFor();
           expect(tooltipRequests, "Audit tooltip presentation loads only on reveal").toBe(0);
         }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
@@ -151,9 +156,16 @@ suite.define(() => {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          const shelf = page.getByRole("button", { name: /Installed skills.*Data skill 0000/u });
+          await shelf.click();
+          const installed = page.locator('[data-catalog-section="installed"]');
+          await installed
+            .locator('[aria-setsize="1000"] [data-skill-id="local:data-skill-0000"]')
+            .waitFor();
+          expect(readerRequests, "Opening the installed census does not open a reader").toBe(0);
           const held = await holdModuleResponse(page, reader);
           try {
-            await page
+            await installed
               .getByRole("button", { name: "Open Data skill 0000 details", exact: true })
               .click();
             await held.request;

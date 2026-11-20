@@ -731,7 +731,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       "The measured action edits the access value; provider activation and verification are excluded.",
   },
   plugins: {
-    ready: "openclaw-plugins-page .plugin-catalog-card",
+    ready: 'openclaw-plugins-page .plugin-catalog-card[data-plugin-id="data-catalog-0000"]',
+    rows: { selector: ".plugin-catalog-card", minimum: 8 },
     source: requiredScenario(dataCatalogScenarios, "data-catalog-category-first-render"),
     action: {
       label: "Open the Tools catalog category",
@@ -877,12 +878,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery [data-skill-id]",
-    rows: {
-      selector: ".skill-discovery [data-skill-id]",
-      minimum: 1000,
-      totalSelector: ".skill-discovery [aria-setsize]",
-    },
+    // Discovery summarizes the populated installed report until the user opens its shelf.
+    ready: ".skill-installed-shelf__names:not(:empty)",
     action: {
       label: "Filter discovered skills to one installed skill",
       run: async (page) => {
