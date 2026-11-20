@@ -344,22 +344,24 @@ describe("createCopilotToolBridge", () => {
         workspaceDir,
       });
       try {
-        const { tools, callableToolNames } = result.promptToolPolicy.apply();
+        const { tools } = result.promptToolPolicy.apply();
         expect(tools.map((tool) => tool.name)).toEqual(
           expect.arrayContaining(["read", "apply_patch", "write"]),
         );
-        for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
-          expect(callableToolNames).not.toContain(denied);
-        }
+        expect(tools.map((tool) => tool.name)).not.toContain("ask_user");
         const outputPath = path.join(workspaceDir, "denied.txt");
-        await expect(
-          invoke(sdkToolNamed(result, "write"), {
-            path: outputPath,
-            content: "must not be written",
-          }),
-        ).resolves.toMatchObject({
-          textResultForLlm: expect.stringContaining("write is outside the tools this run allows."),
-        });
+        for (const denied of ["exec", "process", "write", "edit"]) {
+          await expect(
+            invoke(sdkToolNamed(result, denied), {
+              path: outputPath,
+              content: "must not be written",
+            }),
+          ).resolves.toMatchObject({
+            textResultForLlm: expect.stringContaining(
+              `${denied} is outside the tools this run allows.`,
+            ),
+          });
+        }
         await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         result.cleanup?.();
