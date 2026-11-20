@@ -383,44 +383,42 @@ export function readModelContextNavigationPages(params: {
       return { rows, entries, anchorFound, prepared: undefined };
     }
     // Page receipts are captured above; publish only if no write landed since the read began.
-    if (readIsCurrent()) {
-      const requests = collectSessionModelContextRequests(entries);
-      const pending = collectSessionPendingBackgroundResultRequests(entries);
-      snapshot = {
-        sessionId,
-        generation,
-        navigationToken,
-        through,
-        maxEvents,
-        anchorId,
-        leafId: anchorId ?? leafId,
-        appendParentId,
-        pages,
-        rows: new Map(
-          [...requests, ...pending].map(({ entry }) => [entry.seq, rows.get(entry.seq)!]),
-        ),
-        requests,
-        pending,
-        entries: [],
-        prefixCount: 0,
-        prefixBytes: 0,
-        prefixHasUser: false,
-        model: entries.findLast(
-          (entry) =>
-            entry.type === "model_change" ||
-            (entry.type === "message" &&
-              entry.message.role === "assistant" &&
-              !isPendingBackgroundResultMessage(entry.message)),
-        ),
-        thinking: entries.findLast((entry) => entry.type === "thinking_level_change"),
-        pairing: createModelContextPairing(
-          messages(requests),
-          messages(requests.slice(-maxEvents)),
-        ),
-      };
-      trimRequests(snapshot);
-      cache.snapshot = snapshot;
+    if (!readIsCurrent()) {
+      return { rows, entries, anchorFound, prepared: undefined };
     }
+    const requests = collectSessionModelContextRequests(entries);
+    const pending = collectSessionPendingBackgroundResultRequests(entries);
+    snapshot = {
+      sessionId,
+      generation,
+      navigationToken,
+      through,
+      maxEvents,
+      anchorId,
+      leafId: anchorId ?? leafId,
+      appendParentId,
+      pages,
+      rows: new Map(
+        [...requests, ...pending].map(({ entry }) => [entry.seq, rows.get(entry.seq)!]),
+      ),
+      requests,
+      pending,
+      entries: [],
+      prefixCount: 0,
+      prefixBytes: 0,
+      prefixHasUser: false,
+      model: entries.findLast(
+        (entry) =>
+          entry.type === "model_change" ||
+          (entry.type === "message" &&
+            entry.message.role === "assistant" &&
+            !isPendingBackgroundResultMessage(entry.message)),
+      ),
+      thinking: entries.findLast((entry) => entry.type === "thinking_level_change"),
+      pairing: createModelContextPairing(messages(requests), messages(requests.slice(-maxEvents))),
+    };
+    trimRequests(snapshot);
+    cache.snapshot = snapshot;
   }
   return { rows, entries, anchorFound, prepared: undefined };
 }
