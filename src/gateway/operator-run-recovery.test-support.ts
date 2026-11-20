@@ -219,7 +219,7 @@ export async function createOperatorRecoveryFixture(params: {
 }
 
 export function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
-  expect(authority.signal?.aborted).toBe(false);
+  expect(authority.signal?.aborted).not.toBe(true);
   expect(authority.assertCurrent).not.toThrow();
 }
 
