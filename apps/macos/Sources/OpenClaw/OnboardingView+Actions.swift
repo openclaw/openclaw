@@ -80,7 +80,7 @@ extension OnboardingView {
     }
 
     func commitRecommendedConnectionIfNeeded(for pageIndex: Int) {
-        if pageIndex == connectionPageIndex,
+        if pageIndex == welcomePageIndex,
            defaultsToLocalGateway, !remoteSetupSelected,
            state.connectionMode == .unconfigured
         {
@@ -88,13 +88,22 @@ extension OnboardingView {
         }
     }
 
+    /// A verified AI connection completes setup: there is no tour or confirmation
+    /// page. OpenClaw ID builds first offer optional reachability for this Mac.
     func advanceAfterInference() {
         guard self.activePageIndex != self.reachabilityPageIndex,
               self.activePageIndex != self.readyPageIndex else { return }
-        let destination = self.state.connectionMode == .local && MacOpenClawIDFeature.isEnabled
-            ? self.reachabilityPageIndex : self.readyPageIndex
-        if let cursor = self.pageOrder.firstIndex(of: destination) {
+        if self.state.connectionMode == .local, MacOpenClawIDFeature.isEnabled,
+           let cursor = self.pageOrder.firstIndex(of: self.reachabilityPageIndex)
+        {
             withAnimation { self.currentPage = cursor }
+            return
+        }
+        // Finish after the connected callback returns: closing the window resets
+        // route-bound AI state that its caller still reads.
+        Task { @MainActor in
+            guard self.aiSetup.connected else { return }
+            self.finish()
         }
     }
 

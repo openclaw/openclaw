@@ -708,7 +708,7 @@ struct OnboardingView: View {
     static let minimumWindowHeight: CGFloat = 520
 
     let pageWidth: CGFloat = Self.windowWidth
-    let connectionPageIndex = 1
+    let welcomePageIndex = 0
     let cliPageIndex = 2
     let aiPageIndex = 3
     let findPageIndex = 4
@@ -727,18 +727,20 @@ struct OnboardingView: View {
         joinedClaw: Bool = false,
         openClawIDEnabled: Bool = MacOpenClawIDFeature.isEnabled) -> [Int]
     {
+        // The welcome page asks where to run. A verified AI connection finishes
+        // onboarding, so only flows without that handoff end on the ready page.
         // The OpenClaw ID claw owns its AI setup, which needs operator.admin a member key does
         // not hold; there is no Gateway to find either.
-        if mode == .remote, joinedClaw { return [0, 1, 9] }
+        if mode == .remote, joinedClaw { return [0, 9] }
         return switch mode {
         case .local:
-            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + (openClawIDEnabled ? [5, 9] : [9])
+            (requiresCLIInstall ? [0, 2, 3] : [0, 3]) + (openClawIDEnabled ? [5] : [])
         case .remote:
-            [0, 1, 4, 3, 9]
+            [0, 4, 3]
         case .unconfigured:
             // "Set up later" has no gateway to hand off to; keep the native
             // ready page so the flow still ends with a visible outcome.
-            [0, 1, 9]
+            [0, 9]
         }
     }
 
@@ -755,7 +757,7 @@ struct OnboardingView: View {
     }
 
     var pageOrder: [Int] {
-        if self.finishState.connectionCompletion != nil { return [0, 1, 4, 9] }
+        if self.finishState.connectionCompletion != nil { return [0, 4, 9] }
         return Self.pageOrder(
             for: self.selectedConnectionMode,
             requiresCLIInstall: self.requiresLocalCLI && !self.cliInstalled,
@@ -802,6 +804,9 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String {
+        if self.activePageIndex == self.welcomePageIndex, self.selectedConnectionMode == .local {
+            return "Use this Mac"
+        }
         if self.activePageIndex == self.reachabilityPageIndex { return "Not now" }
         return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
@@ -812,7 +817,7 @@ struct OnboardingView: View {
 
     /// Onboarding must not finish without working inference: the AI page
     /// blocks Next until a candidate passed its live test (config is authored
-    /// server-side on that success). "Configure later" on the connection page
+    /// server-side on that success). "Set up later" on the welcome page
     /// remains the explicit skip path.
     var isAISetupBlocking: Bool {
         Self.shouldBlockAISetup(

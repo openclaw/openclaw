@@ -115,18 +115,20 @@ private func transientVerificationErrorResponse(id: String) -> Data {
         """.utf8)
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct OnboardingDashboardHandoffTests {
     @Test(
         .enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil),
-        arguments: ["primary", "browser", "node"])
-    func `node and browser completion do not offer primary Gateway actions`(completion: String) async throws {
+        arguments: ["later", "browser", "node"])
+    func `ready page names only its non-AI outcome`(completion: String) async throws {
         let output = try OnboardingRenderTests.outputDirectory()
         let state = AppState(preview: true)
         state.connectionMode = .local
         state.isPaused = true
         let view = OnboardingView(state: state)
+        // Choosing "Set up later" leaves an explicit unconfigured selection.
+        if completion == "later" { state.connectionMode = .unconfigured }
         if completion == "browser" { view.savedBrowserGatewayName = "Fixture browser Gateway" }
         if completion == "node" { view.finishState.connectionCompletion = .node("Fixture node Gateway") }
         _ = AppKitTestSupport.application
@@ -151,15 +153,12 @@ struct OnboardingDashboardHandoffTests {
         try #require(names.contains("You’re all set!"))
         #expect(names.contains("Gateway added") == (completion == "browser"))
         #expect(names.contains("Node setup complete") == (completion == "node"))
-        #expect(names.contains("Open Settings → Channels") == (completion == "primary"))
-        #expect(names.contains("Open Skills") == (completion == "primary"))
-        if completion != "primary" {
-            try OnboardingRenderTests.capturePage(
-                view.readyPage(),
-                name: "done-\(completion)",
-                label: "Native page · \(completion) completion fixture · navigation omitted",
-                output: output)
-        }
+        #expect(names.contains("Configure later") == (completion == "later"))
+        try OnboardingRenderTests.capturePage(
+            view.readyPage(),
+            name: "done-\(completion)",
+            label: "Native page · \(completion) completion fixture · navigation omitted",
+            output: output)
     }
 
     @Test func `saving a primary route clears browser completion and restores AI verification`() {
@@ -173,27 +172,6 @@ struct OnboardingDashboardHandoffTests {
         #expect(view.pageOrder.contains(view.aiPageIndex))
         #expect(!view.aiSetup.connected)
         view.configuredGatewayProbe.invalidate()
-    }
-
-    @Test func `fresh inference waits for the optional native steps before finishing once`() {
-        let state = AppState(preview: true)
-        state.connectionMode = .local
-        var handoffs: [OnboardingDashboardHandoff] = []
-        let view = OnboardingView(
-            state: state,
-            dashboardHandoffOpener: { handoffs.append($0) })
-
-        view.prepareSystemAgentHandoff()
-        view.aiSetup.onConnected?()
-
-        #expect(!view.finishState.didFinish)
-        #expect(handoffs.isEmpty)
-        #expect(view.finish())
-        #expect(view.finishState.didFinish)
-        // Fresh connections own the remaining first-run steps via the custodian.
-        #expect(handoffs == [.custodianOnboarding])
-        #expect(!view.finish())
-        #expect(handoffs == [.custodianOnboarding])
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -314,11 +292,11 @@ struct OnboardingDashboardHandoffTests {
             #expect(OnboardingSystemAgentResumeStore.activationOwner(for: "local", defaults: defaults) == nil)
         } else {
             #expect(view.aiSetup.connected)
-            #expect(!view.finishState.didFinish)
-            #expect(handoffs.isEmpty)
-            #expect(view.finish())
-            #expect(view.finishState.didFinish)
+            // The live test completes onboarding; no final page asks to confirm it.
+            try await TestWait.observed("verified AI finishes onboarding") { view.finishState.didFinish }
             #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
+            #expect(!view.finish())
+            #expect(handoffs.count == 1)
             #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
         }
         #expect(await methods.snapshot().filter { $0 != "health" } == [
@@ -371,10 +349,7 @@ struct OnboardingDashboardHandoffTests {
 
         #expect(view.aiSetup.connected)
         #expect(view.aiSetup.selectedKind == "existing-model")
-        #expect(!view.finishState.didFinish)
-        #expect(handoffs.isEmpty)
-        #expect(view.finish())
-        #expect(view.finishState.didFinish)
+        try await TestWait.observed("resumed inference finishes onboarding") { view.finishState.didFinish }
         #expect(handoffs == [.dashboard])
         #expect(!view.finish())
 
@@ -626,10 +601,7 @@ struct OnboardingDashboardHandoffTests {
         } else {
             #expect(aiSetup.connected)
             #expect(!aiSetup.verifiedExistingInference)
-            #expect(!view.finishState.didFinish)
-            #expect(handoffs.isEmpty)
-            #expect(view.finish())
-            #expect(view.finishState.didFinish)
+            try await TestWait.observed("cold-launch verification finishes onboarding") { view.finishState.didFinish }
             #expect(handoffs == [.custodianOnboarding])
             #expect(OnboardingSystemAgentResumeStore.pendingState(
                 for: routeIdentity,

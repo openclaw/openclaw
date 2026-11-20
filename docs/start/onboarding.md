@@ -18,23 +18,23 @@ manager. If you already use OpenClaw, setup keeps your existing connection.
 For terminal-based setup, see [Onboarding overview](/start/onboarding-overview).
 </Tip>
 
-## Automatic first run
+## First run
 
-On a fresh install, open the app and follow **Setting up OpenClaw on this Mac**:
+<a id="automatic-first-run" />
 
-1. The app prepares its runtime and starts a local Gateway.
-2. The dashboard opens and connects available AI access.
-3. A live AI test verifies the connection before guided setup continues.
+Open the app. The welcome screen introduces OpenClaw and asks where it runs:
 
-An already configured model is kept. You can then set up optional features
-and start chatting. To choose the connection yourself, select **Set up manually**.
+1. Choose **Use this Mac**. The app prepares its runtime and starts a local
+   Gateway, showing each step as it runs.
+2. Connect your AI. Setup must pass a live AI test.
+3. When the test passes, setup closes and the dashboard opens.
+
+An already configured model is kept. To use a Gateway on another computer,
+choose **On another computer** before continuing.
 
 Existing configurations and saved connections keep their settings; setup does
-not automatically switch to a discovered Gateway. Older apps may open manual setup first; developer builds and Gateways without
-automatic setup support use it instead. Nix mode and
-background-only launches do not run automatic first setup.
-
-If setup fails, the app opens the relevant manual step with the error visible.
+not automatically switch to a discovered Gateway. Nix mode and
+background-only launches do not run first-run setup.
 If you close setup early, reopen it from the app menu.
 
 ## macOS prompts
@@ -69,15 +69,17 @@ in macOS System Settings.
 </Step>
 </Steps>
 
-## Manual setup
+## Setup steps
 
-Choose **Set up manually** to use these steps. The app also opens them when
-automatic setup cannot finish. The screenshots show an earlier manual flow;
-your build may use different labels or layouts.
+<a id="manual-setup" />
+
+The screenshots show an earlier flow; your build may use different labels or
+layouts.
 
 <Steps>
-<Step title="Read the security notice">
+<Step title="Choose where OpenClaw runs">
 <a id="welcome-and-security-notice" />
+<a id="local-vs-remote" />
 OpenClaw is a personal agent designed for one trusted operator. For shared use,
 separate trust boundaries and limit tool access; see [Security](/gateway/security).
 Use a strong modern model and strict tool policy or sandboxing when enabling
@@ -90,19 +92,19 @@ any other tool settings that change it, and how to add a tool. A full tool profi
 permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
 These rules apply to automatic setup too.
 
-<Frame>
-<img src="/assets/macos-onboarding/03-security-notice.png" alt="OpenClaw welcome screen with the security notice" />
-</Frame>
-</Step>
-<Step title="Choose where the Gateway runs">
-<a id="local-vs-remote" />
+The welcome screen shows this notice with the choice of where OpenClaw runs:
 
-- **This Mac (Local only):** set up authentication and save credentials on this Mac.
-- **Remote (over SSH/Tailnet):** connect to a Gateway that already has credentials
+- **On this Mac** (selected by default): choose **Use this Mac** to set up
+  authentication, save credentials on this Mac, and start preparing the runtime.
+- **On another computer:** connect to a Gateway that already has credentials
   on its host. The app does not configure local authentication. Its remote token
   field saves the connection token and preserves an existing
   `gateway.remote.token` SecretRef until you replace it.
-- **Configure later:** leave the app unconfigured.
+- **Set up later:** leave the app unconfigured.
+
+<Frame>
+<img src="/assets/macos-onboarding/03-security-notice.png" alt="OpenClaw welcome screen with the security notice" />
+</Frame>
 
 <Frame>
 <img src="/assets/macos-onboarding/04-choose-gateway.png" alt="Manual setup choices for a local or remote Gateway" />
@@ -116,9 +118,11 @@ any local process connect; use it only on a fully trusted machine.
 </Step>
 <Step title="Prepare the local runtime">
 <a id="cli" />
-Wait for **Getting things ready** to finish. This step appears only when local
-runtime setup is needed. Connecting to an independently managed Gateway skips
-installation without taking over its CLI or service. See
+**Getting things ready** shows each step while the app prepares its runtime
+and starts the Gateway. If a step fails, the error stays on this page; choose
+**Try again** to retry it. This step appears only when local runtime setup is
+needed. Connecting to an independently managed Gateway skips installation
+without taking over its CLI or service. See
 [Gateway on macOS](/platforms/mac/bundled-gateway#automatic-setup) for runtime details.
 
 macOS may offer to install Command Line Tools when OpenClaw initializes Git in
@@ -128,7 +132,8 @@ if you want to use Git.
 <Step title="Connect your AI">
 Choose a detected connection, sign in to a provider, or enter an API key or
 token. The manual picker waits for your choice before testing, installing,
-or saving anything. Setup must pass a live AI test before you can continue.
+or saving anything. Setup must pass a live AI test; when it passes, setup
+finishes and the dashboard opens.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,
 local models, and custom endpoints.

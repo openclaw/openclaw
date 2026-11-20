@@ -5,8 +5,6 @@ public enum DashboardRouteMap {
     public static let appearanceSettingsPath = "/settings/appearance"
     public static let deviceSettingsPath = "/settings/device"
     public static let devicePermissionsSettingsPath = "/settings/device/permissions"
-    public static let channelsSettingsPath = "/settings/channels"
-    public static let skillsPagePath = "/skills"
     public static let cronJobsPagePath = "/automations"
     public static let activityPagePath = "/activity"
     public static let workboardPagePath = "/workboard"

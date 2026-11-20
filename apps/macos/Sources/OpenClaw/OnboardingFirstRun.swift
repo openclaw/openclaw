@@ -4,7 +4,7 @@ import Foundation
 @MainActor
 enum OnboardingFirstRun {
     enum Page: Int {
-        case welcome = 0, connection = 1, runtime = 2, aiSetup = 3
+        case welcome = 0, runtime = 2, aiSetup = 3
     }
 
     static func presentIfNeeded(

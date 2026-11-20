@@ -47,7 +47,10 @@ struct OpenClawIDSignInRenderTests {
         let view = OnboardingView(state: state, gatewaySelectionPersister: { true }, dashboardHandoffOpener: { _ in })
         let height = OnboardingView.contentHeight(for: OnboardingView.windowHeight)
         try OnboardingRenderTests.capturePage(
-            view.pageView(for: 1, contentHeight: height), name: "mac-a02-where", label: Self.label, output: output)
+            view.pageView(for: view.welcomePageIndex, contentHeight: height),
+            name: "mac-a02-where",
+            label: Self.label,
+            output: output)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OPENCLAW_ONBOARDING_RENDER_DIR"] != nil))
