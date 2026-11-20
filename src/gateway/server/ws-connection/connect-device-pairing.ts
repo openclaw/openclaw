@@ -52,6 +52,7 @@ import {
 import { createGatewayConnectDeviceTokenPreparation } from "./connect-device-tokens.js";
 import { authorizeExistingGatewayDevice } from "./connect-existing-device.js";
 import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.js";
+import { prepareOpenClawIdMemberConnect } from "./connect-openclaw-id-member-grant.js";
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
@@ -141,6 +142,18 @@ export async function authorizeGatewayConnectDevice(
   } = state;
   const isConnectAuthorizationCurrent = () =>
     resolveGatewayConnectPolicyFailure(context, state) === undefined;
+  const memberRoleScopes = await prepareOpenClawIdMemberConnect(
+    context,
+    state,
+    isConnectAuthorizationCurrent,
+  );
+  if (memberRoleScopes === undefined) {
+    return undefined;
+  }
+  if (memberRoleScopes) {
+    scopes = memberRoleScopes;
+    connectParams.scopes = scopes;
+  }
   const failPairingHandshake = (params: {
     message: string;
     details?:

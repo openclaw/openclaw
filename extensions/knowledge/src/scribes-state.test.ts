@@ -4,6 +4,7 @@ import {
   checkRunMessage,
   defaultOptions,
   repairPrompt,
+  rescheduledRunMessage,
   REVIEW_NIGHTLY_SCHEDULE,
   REVIEW_WEEKLY_SCHEDULE,
   scribeById,
@@ -105,6 +106,31 @@ describe("scribes catalog", () => {
         schedule: { kind: "cron", expr: "5 1 * * 2", tz: "UTC" },
       }),
     ).toContain("- Runs on cron `5 1 * * 2`, time zone UTC.");
+  });
+
+  it("moves a generated consolidation run message to the new schedule's run amounts", () => {
+    const generated = (schedule: typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE) =>
+      setupPrompt(scribeSetup("claim-consolidation", "ongoing", { schedule }, "UTC")).match(
+        /Run message:\n\n```text\n([\s\S]+)\n```$/,
+      )![1]!;
+    const weekly = { kind: "cron", expr: REVIEW_WEEKLY_SCHEDULE };
+    const nightly = { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE };
+    const custom = { kind: "cron", expr: "0 6 * * 1" };
+    const move = (message: string, from: typeof weekly, to: typeof weekly) =>
+      rescheduledRunMessage("claim-consolidation", message, from, to);
+    expect(move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, nightly)).toBe(
+      generated(REVIEW_NIGHTLY_SCHEDULE),
+    );
+    // A custom schedule leaves the amounts to the skill, and an offered one brings them back.
+    const onCustom = move(generated(REVIEW_WEEKLY_SCHEDULE), weekly, custom);
+    expect(onCustom).not.toContain("- Each run:");
+    expect(move(onCustom, custom, weekly)).toBe(generated(REVIEW_WEEKLY_SCHEDULE));
+    // An edited message, or another scribe's, is kept as it is.
+    const edited = `${generated(REVIEW_WEEKLY_SCHEDULE)}\nAlso tidy page titles.`;
+    expect(move(edited, weekly, nightly)).toBe(edited);
+    expect(rescheduledRunMessage("granola", "Granola message", weekly, nightly)).toBe(
+      "Granola message",
+    );
   });
 
   it("writes a Granola prompt that names the meetings and the meeting-ingest work", () => {

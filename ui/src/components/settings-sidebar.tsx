@@ -34,7 +34,6 @@ import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   settingsNavigationLabelForRoute,
   settingsNavigationOwnerRoute,
-  settingsParentRoute,
   settingsSearchTextMatches,
   settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
@@ -48,8 +47,8 @@ import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import "./agent-select-registration.ts";
 import "../styles/settings.css";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
+import { IconButton } from "./solid/icon-button.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerRouteSubtitlesEnglish();
@@ -243,7 +242,7 @@ function SettingsBlockItem(props: { sidebar: SettingsSidebarProps; block: Settin
   );
 }
 
-function SettingsAgentSelector(props: SettingsSidebarProps) {
+function SettingsAgentSelector(props: SettingsSidebarProps & { inHeader?: boolean }) {
   const identitySource = createMemo(() => props.agentIdentity);
   const selectionSource = createMemo(() => props.settingsAgentSelection);
   const identities = createMemo(() => projectOwner(identitySource(), (source) => source.entries()));
@@ -283,7 +282,7 @@ function SettingsAgentSelector(props: SettingsSidebarProps) {
     })),
   );
   return (
-    <div class="settings-sidebar__agent">
+    <div class={["settings-sidebar__agent", { "settings-sidebar__agent--header": props.inHeader }]}>
       <openclaw-agent-select
         prop:options={options()}
         prop:identityTargetsRef={(read) => {
@@ -675,23 +674,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       >
         <aside class="settings-sidebar">
           <header class="settings-sidebar__header" onMouseDown={beginNativeWindowDragFromTopInset}>
-            <button type="button" class="settings-sidebar__back" onClick={() => props.onExit()}>
-              <span class="settings-sidebar__back-icon" aria-hidden="true">
-                <Icon name="arrowLeft" />
-              </span>
-              {t("nav.exitSettings")}
-              {/* On a subpage Escape goes up a level, so it does not mean this button. */}
-              <Show
-                when={
-                  !settingsParentRoute(props.activeRouteId, props.activePathname, props.basePath)
-                }
-              >
-                <Kbd keys="esc" class="settings-sidebar__esc" ariaHidden />
-              </Show>
-            </button>
+            <IconButton
+              class="settings-sidebar__back"
+              icon="arrowLeft"
+              label={t("nav.exitSettings")}
+              onClick={() => props.onExit()}
+            />
             <h1 class="settings-sidebar__title">{t("nav.settings")}</h1>
+            <SettingsAgentSelector {...props} inHeader />
           </header>
-          <SettingsAgentSelector {...props} />
           <SettingsSearch />
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">
