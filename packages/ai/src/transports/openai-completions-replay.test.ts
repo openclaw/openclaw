@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { preparedRequestSuffix } from "../provider-options.js";
+import { PROVIDER_DEFERRED_TOOL_NAMES } from "../provider-types.js";
 import type { Context, Model } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
@@ -144,6 +145,34 @@ describe("Chat Completions historical tools", () => {
         role: "assistant",
         content: "[tool result id=call_bad name=session_status] Tool session_status not found",
       },
+    ]);
+  });
+
+  it("keeps a hydrated deferred tool exchange native without declaring the tool", () => {
+    const context: Context = {
+      tools: [replayTool],
+      messages: [
+        { role: "user", content: "Search", timestamp: 1 },
+        {
+          role: "assistant",
+          api: openAIModel.api,
+          provider: openAIModel.provider,
+          model: openAIModel.id,
+          content: [{ type: "toolCall", id: "call_1", name: "web_search", arguments: {} }],
+          usage: createZeroUsage(),
+          stopReason: "toolUse",
+          timestamp: 2,
+        },
+        makeTextToolResult("call_1", "web_search", "results", false, 3),
+      ],
+    };
+    const params = buildOpenAICompletionsParams(openAIModel, context, {
+      [PROVIDER_DEFERRED_TOOL_NAMES]: new Set(["web_search"]),
+    });
+    expect(params.tools?.map((entry) => entry.function.name)).toEqual(["lookup_weather"]);
+    expect(params.messages.slice(-2)).toMatchObject([
+      { role: "assistant", tool_calls: [{ id: "call_1", function: { name: "web_search" } }] },
+      { role: "tool", tool_call_id: "call_1", content: "results" },
     ]);
   });
 });
