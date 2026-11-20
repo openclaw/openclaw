@@ -248,12 +248,20 @@ if (trial && counts) {
   }
 }
 // A supervisor on a live trial runs the fallback release; the trial's children run the target.
+// Supervisors built before this launcher start their child with process.argv[1], so it stays on
+// this launcher (the child is then counted and runs the target). The fallback still sees itself as
+// the main module through pm_exec_path, which its entry already accepts (src/infra/is-main.ts).
 const supervisorFallback =
   supervisor && trial && linked(fs.readlinkSync(slot)) === linked(trial.target)
-    ? linked(trial.previous)
+    ? path.join(linked(trial.previous), "dist", "index.js")
     : undefined;
-process.argv[1] = path.join(supervisorFallback ?? slot, "dist", gatewayRun ? "index.js" : "entry.js");
-await import(pathToFileURL(process.argv[1]).href);
+if (supervisorFallback) {
+  process.env.pm_exec_path = supervisorFallback;
+  process.argv[1] = fileURLToPath(import.meta.url);
+} else {
+  process.argv[1] = path.join(slot, "dist", gatewayRun ? "index.js" : "entry.js");
+}
+await import(pathToFileURL(supervisorFallback ?? process.argv[1]).href);
 `;
 
 export async function writeGitReleaseLauncher(prefix: string): Promise<string> {

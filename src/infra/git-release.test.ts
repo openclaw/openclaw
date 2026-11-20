@@ -139,28 +139,42 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       );
     });
 
-    it("keeps the Windows task supervisor on the fallback while its children try the release", async () => {
+    it("rolls back a broken Windows trial from one task supervisor start", async () => {
       const { prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old " + process.argv[1]);\n');
+      // The previous release's supervisor, as shipped before the launcher global: it restarts a
+      // crashed child up to three times and starts each child with process.argv[1].
+      const supervisorSource = `
+        const { spawnSync } = require("node:child_process");
+        if (process.argv.includes("--task-supervisor")) {
+          for (let attempt = 0; attempt < 4; attempt++) {
+            const child = spawnSync(process.execPath, [process.argv[1], "gateway", "--task-supervisor-child=70000"], { encoding: "utf8" });
+            process.stdout.write(child.stdout);
+            process.stderr.write(child.stderr);
+            if (child.status === 0) break;
+          }
+        } else {
+          console.log("old gateway");
+        }
+      `;
+      const good = await release(prefix, "1.0.0", supervisorSource);
       await publishGitRelease({ prefix, releaseRoot: good, trial: true });
       await publishGitRelease({
         prefix,
         releaseRoot: await release(prefix, "2.0.0", 'throw new Error("boot");\n'),
         trial: true,
       });
-      const launch = (...args: string[]) =>
-        spawnSync(process.execPath, [path.join(prefix, "openclaw-launcher.mjs"), ...args], {
-          encoding: "utf8",
-        });
-      // Task Scheduler does not restart a task whose action exits with an error: a broken trial
-      // release must not take the supervisor down, and its starts do not count.
-      const supervisor = launch("gateway", "--task-supervisor");
-      expect(supervisor.status).toBe(0);
-      expect(supervisor.stdout).toContain(path.join(good, "dist", "index.js"));
-      // The supervisor's crash restarts of its child count, and the third switches back.
-      expect(launch("gateway", "--task-supervisor-child=70000").status).not.toBe(0);
-      expect(launch("gateway", "--task-supervisor-child=70000").status).not.toBe(0);
-      expect(launch("gateway", "--task-supervisor-child=70000").stdout).toContain("old");
+
+      // Task Scheduler does not restart a task whose action exits with an error, so one start of
+      // the task supervisor must try the release and switch back by itself.
+      const supervisor = spawnSync(
+        process.execPath,
+        [path.join(prefix, "openclaw-launcher.mjs"), "gateway", "--task-supervisor"],
+        { encoding: "utf8" },
+      );
+
+      expect(supervisor.stderr).toContain("failed to start twice; switched back");
+      expect(supervisor.stdout).toContain("old gateway");
+      expect(await fs.realpath(gitReleaseSlot(prefix))).toBe(await fs.realpath(good));
     });
 
     it("switches back and restores upgraded state after two failed trial starts", async () => {
