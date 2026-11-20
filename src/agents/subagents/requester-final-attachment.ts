@@ -151,20 +151,6 @@ export function transferRequesterFinalAttachment(
   return true;
 }
 
-export function revokeRequesterFinalAttachment(
-  params: RequesterFinalAttachmentOwner &
-    Partial<RequesterFinalAttachmentBatch> & {
-      requesterSessionId?: string;
-    },
-): boolean {
-  const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  if (!getCurrentAttachment(params)) {
-    return false;
-  }
-  state.byOwner.delete(key);
-  return true;
-}
-
 /** A settled yield batch either attaches its visible final or releases the attachment. */
 export function finalizeRequesterFinalAttachment(params: {
   requesterAgentId?: string;
