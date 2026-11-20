@@ -2,9 +2,10 @@ import { aroundEach, expect, it, vi } from "vitest";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { compactSubagentRunForMemory, subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import { listSubagentRunsForRequester } from "./subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -74,6 +75,28 @@ function expectSelected(
     }),
   ).toEqual({ ready: true, value: undefined });
 }
+
+it("hydrates the exact delivered child result after resident payload eviction", async () => {
+  const childToken = "ULTRA-CHILD-TEST";
+  const child = createRun("delivered-child", {
+    collect: false,
+    execution: { status: "terminal", endedAt: 200, outcome: { status: "ok" } },
+    cleanupCompletedAt: 300,
+    completion: { required: true, capturedAt: 200, resultText: childToken },
+    delivery: { status: "delivered" },
+  });
+  saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
+  subagentRuns.set(child.runId, compactSubagentRunForMemory(child));
+  const listed = listSubagentRunsForRequester(child.requesterSessionKey);
+  expect(listed).toHaveLength(1);
+  expect(listed[0]?.completion?.resultText).toBeUndefined();
+  const prepared = await createReadApi(subagentRuns).prepareSubagentRunsByRunIds([child.runId]);
+  expect(
+    prepared.consume((runs) => {
+      expect(runs.get(child.runId)?.completion?.resultText).toContain(childToken);
+    }),
+  ).toEqual({ ready: true, value: undefined });
+});
 
 it("uses the replacement owner published while collector payload hydration is pending", async () => {
   const original = createRun("original", { swarmRunId: "collector" });
