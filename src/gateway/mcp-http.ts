@@ -6,6 +6,7 @@ import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-i
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -435,6 +436,32 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
                 responses.push(
                   jsonRpcResult(readJsonRpcRequestId(message), {
                     content: [{ type: "text", text: "Tools are not callable during compaction." }],
+                    isError: true,
+                  }),
+                );
+              }
+              continue;
+            }
+            const calledTool =
+              message.method === "tools/call" && isRecord(message.params)
+                ? String(message.params.name)
+                : undefined;
+            // A session fork lists the session's tools; a call outside its own returns a normal
+            // result, as on the built-in runtime.
+            if (
+              calledTool !== undefined &&
+              requestContext.toolCallsAllow &&
+              !requestContext.toolCallsAllow.includes(normalizeToolPolicyName(calledTool))
+            ) {
+              if (shouldSendJsonRpcResponse(message)) {
+                responses.push(
+                  jsonRpcResult(readJsonRpcRequestId(message), {
+                    content: [
+                      {
+                        type: "text",
+                        text: `${calledTool} is not available in this background run.`,
+                      },
+                    ],
                     isError: true,
                   }),
                 );

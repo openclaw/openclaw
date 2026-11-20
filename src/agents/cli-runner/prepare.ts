@@ -68,7 +68,7 @@ import {
   cliBackendSupportsExactToolAvailability,
   resolveCliBackendConfig,
 } from "../cli-backends.js";
-import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
+import { hashCliSessionText } from "../cli-session.js";
 import {
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
@@ -151,6 +151,7 @@ import {
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
+import { resolveCliReusableSessionCandidate } from "./reusable-session.js";
 import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -1225,31 +1226,22 @@ async function prepareCliRunContextWithinReadFence(
     // `sessionMode: none` may still use a live transport in-process, but neither a
     // returned nor previously stored id is authority for cross-process continuity.
     const ignoreCliSessionCandidate = preparedBackendFinal.backend.sessionMode === "none";
-    // Native controls target the already-owned transcript without rebuilding its turn-time MCP
-    // topology. Re-validating that topology here would discard the session being compacted.
-    const controlOperationCliSessionId = isControlOperation
-      ? params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim()
-      : undefined;
-    const reusableCliSessionCandidate: CliReusableSession = ignoreCliSessionCandidate
-      ? { mode: "none" }
-      : controlOperationCliSessionId
-        ? { mode: "reuse", sessionId: controlOperationCliSessionId }
-        : params.cliSessionBinding
-          ? resolveCliSessionReuse({
-              binding: params.cliSessionBinding,
-              authProfileId: effectiveAuthProfileId,
-              authEpoch,
-              authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-              extraSystemPromptHash,
-              messageToolPolicyHash,
-              promptToolNamesHash,
-              cwdHash,
-              mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-              mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-            })
-          : params.cliSessionId
-            ? { mode: "reuse", sessionId: params.cliSessionId }
-            : { mode: "none" };
+    const reusableCliSessionCandidate = resolveCliReusableSessionCandidate({
+      run: params,
+      backendId: backendResolved.id,
+      stateless: ignoreCliSessionCandidate,
+      facts: {
+        authProfileId: effectiveAuthProfileId,
+        authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        extraSystemPromptHash,
+        messageToolPolicyHash,
+        promptToolNamesHash,
+        cwdHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+      },
+    });
     const backendReusableCliSession: CliReusableSession =
       reusableCliSessionCandidate.mode === "reuse-with-drift" &&
       !canTransportSystemPrompt(preparedBackendFinal.backend)

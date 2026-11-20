@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import { resolveCollapsedSessionAuthPinSource } from "../config/sessions/auth-profile-override-provenance.js";
 import type { Message } from "../llm/types.js";
 import {
   attachProviderAuthAuthority,
@@ -30,7 +29,6 @@ import { resolveAgentHarnessOwnerPluginId } from "./harness/registry.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import type { AgentHarnessPreparedModelProvider } from "./harness/selection-decision.js";
 import {
-  resolveAvailableAgentHarnessPolicy,
   selectAgentHarness,
   selectAgentHarnessForPreparedModelProviders,
 } from "./harness/selection.js";
@@ -41,16 +39,13 @@ import {
 import type { AgentHarness } from "./harness/types.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import { applySecretRefHeaderSentinels, requireApiKey } from "./model-auth.js";
-import {
-  isCliRuntimeAliasForProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "./model-runtime-aliases.js";
 import { preparedModelRuntimeConfigsMatch } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
 import { unwrapSecretSentinelsForProviderEgress } from "./provider-secret-egress.js";
 import { scopeAuthProfileStoreToPreparedPlan } from "./runtime-plan/resolve-auth.js";
 import { resolveSandboxContext } from "./sandbox/context.js";
+import { resolveSessionCliRuntime } from "./session-cli-runtime.js";
 import { resolveSessionModelRef } from "./session-model-ref.js";
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
@@ -482,47 +477,18 @@ export async function runBtwSideQuestion(
       throw new Error("No active session context.");
     }
 
-    const fallbackPolicy = resolveAvailableAgentHarnessPolicy({
-      provider: params.provider,
-      modelId: params.model,
-      config: params.cfg,
-      agentId: sessionAgentId,
-      sessionKey: params.sessionKey,
-    });
-    const fallbackRuntime = fallbackPolicy.runtime.trim();
-    const sessionAuthProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
-    const sessionAuthProfileSource = sessionAuthProfileId
-      ? resolveCollapsedSessionAuthPinSource(params.sessionEntry)
-      : undefined;
-    const cliSelection = {
-      provider: params.provider,
+    const cliRuntime = resolveSessionCliRuntime({
       cfg: params.cfg,
       agentId: sessionAgentId,
-      modelId: params.model,
-    };
-    const cliProviderFromSessionAuth = sessionAuthProfileId
-      ? resolveCliRuntimeExecutionProvider({
-          ...cliSelection,
-          authProfileId: sessionAuthProfileId,
-        })?.trim()
-      : undefined;
-    const cliProviderFromAuthOrder =
-      !sessionAuthProfileId || sessionAuthProfileSource === "auto"
-        ? resolveCliRuntimeExecutionProvider(cliSelection)?.trim()
-        : undefined;
-    const resolvedCliProvider = cliProviderFromSessionAuth ?? cliProviderFromAuthOrder;
-    const cliProvider =
-      resolvedCliProvider ??
-      (isCliRuntimeAliasForProvider({
-        runtime: fallbackRuntime,
-        provider: params.provider,
-        cfg: params.cfg,
-      })
-        ? fallbackRuntime
-        : undefined);
-    if (cliProvider) {
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.model,
+      sessionEntry: params.sessionEntry,
+    });
+    if (cliRuntime) {
       if (params.sessionFork) {
-        throw new Error(`Session forks are not supported for CLI runtime ${cliProvider}.`);
+        // CLI sessions fork their native session through the same owner, `runSessionFork`.
+        return await params.sessionFork();
       }
       return runCliBtwSideQuestion({
         cfg: params.cfg,
@@ -536,8 +502,8 @@ export async function runBtwSideQuestion(
         sessionKey: params.sessionKey,
         sessionAgentId,
         workspaceDir,
-        cliProvider,
-        authProfileId: cliProviderFromSessionAuth ? sessionAuthProfileId : undefined,
+        cliProvider: cliRuntime.provider,
+        authProfileId: cliRuntime.authProfileId,
         resolvedThinkLevel: params.resolvedThinkLevel,
         messages,
         inFlightPrompt,

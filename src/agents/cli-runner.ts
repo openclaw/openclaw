@@ -292,7 +292,8 @@ async function runPreparedCliAgentOwned(
   } as const;
 
   context.beforeModelRequest = createCliRunModelRequestGate({
-    hookRunner,
+    // A session fork fires no turn hooks; its request passes the final model request policy.
+    hookRunner: params.controlOperation === "fork" ? getGlobalHookRunner() : hookRunner,
     hookContext: buildAgentHookContext(hookContext),
     run: params,
     model: context.modelId,

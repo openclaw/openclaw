@@ -93,7 +93,7 @@ export function resolveCliExecutionTarget(context: {
       placement: { nodeId, ...(entry.execCwd?.trim() ? { cwd: entry.execCwd.trim() } : {}) },
     };
   }
-  return context.execute && context.params.controlOperation !== "compact"
+  return context.execute && context.params.controlOperation === undefined
     ? { kind: "plugin", execute: context.execute }
     : { kind: "process" };
 }

@@ -167,3 +167,108 @@ it.each([
     expect(grantContexts.map((context) => context.toolCallsRefused)).toEqual([undefined, true]);
   },
 );
+
+const FORK_CHECKPOINT = "11111111-2222-3333-4444-555555555555";
+
+it("a session fork branches the native session and runs only its own tools", async () => {
+  const { dir, sessionTarget } = fixture.session;
+  vi.stubEnv("HOME", dir);
+  const config: OpenClawConfig = {
+    agents: { defaults: { workspace: dir } },
+    session: { store: sessionTarget.storePath },
+    plugins: { enabled: false },
+    tools: { allow: ["read", "ls", "exec"] },
+  };
+  setRuntimeConfigSnapshot(config);
+  let fork: { argv: string[] } | undefined;
+  supervisorSpawnMock.mockImplementationOnce(async (spawn) => {
+    if (spawn.mode !== "child") {
+      throw new Error("a fork must run as its own child process");
+    }
+    fork = { argv: spawn.argv };
+    const stdout = [
+      {
+        type: "system",
+        subtype: "init",
+        session_id: "fork-successor",
+        tools: ["mcp__openclaw__read"],
+      },
+      { type: "result", subtype: "success", result: "fork answer", session_id: "fork-successor" },
+    ];
+    return createManagedRun({
+      ...createSuccessfulProcessExit(),
+      stdout: stdout.map((record) => JSON.stringify(record)).join("\n"),
+    });
+  });
+  const context = await fixture.prepare({
+    config,
+    sessionKey: sessionTarget.sessionKey,
+    runtimePolicySessionKey: sessionTarget.sessionKey,
+    provider: "claude-cli",
+    model: "opus",
+    prompt: "Improve the next prompt",
+    controlOperation: "fork",
+    cliSessionId: nativeSessionId,
+    cliSessionBinding: { sessionId: nativeSessionId },
+    forkCliSessionOnResume: true,
+    cliSessionResumeAt: FORK_CHECKPOINT,
+    toolCallsAllow: ["read"],
+    disableCliLiveSession: true,
+  });
+  try {
+    await expect(executePreparedCliRun(context, nativeSessionId)).resolves.toMatchObject({
+      text: "fork answer",
+      sessionId: "fork-successor",
+    });
+  } finally {
+    await context.preparedBackend.cleanup?.();
+  }
+
+  expect(sent).toEqual([]);
+  expect(fork?.argv).toEqual(
+    expect.arrayContaining([
+      "--resume",
+      nativeSessionId,
+      "--fork-session",
+      "--resume-session-at",
+      FORK_CHECKPOINT,
+    ]),
+  );
+  // Claude's native execution tools stay off (only MCP discovery remains). The grant lists the
+  // session's tools, so the resumed native session keeps its catalog, and runs only the fork's.
+  const argv = fork?.argv ?? [];
+  expect(argv[argv.indexOf("--tools") + 1]?.split(",")).toEqual(["ToolSearch"]);
+  expect(grantContexts).toHaveLength(1);
+  expect(grantContexts[0]?.toolsAllow).toEqual(expect.arrayContaining(["read", "ls", "exec"]));
+  expect(grantContexts[0]?.toolCallsAllow).toEqual(["read"]);
+  expect(grantContexts[0]?.toolCallsRefused).toBeUndefined();
+});
+
+it("a session fork refuses a native session from another auth profile", async () => {
+  const { dir, sessionTarget } = fixture.session;
+  vi.stubEnv("HOME", dir);
+  const config: OpenClawConfig = {
+    agents: { defaults: { workspace: dir } },
+    session: { store: sessionTarget.storePath },
+    plugins: { enabled: false },
+  };
+  setRuntimeConfigSnapshot(config);
+  supervisorSpawnMock.mockClear();
+
+  await expect(
+    fixture.prepare({
+      config,
+      sessionKey: sessionTarget.sessionKey,
+      provider: "claude-cli",
+      model: "opus",
+      prompt: "Improve the next prompt",
+      controlOperation: "fork",
+      cliSessionId: nativeSessionId,
+      cliSessionBinding: { sessionId: nativeSessionId, authProfileId: "anthropic:other-account" },
+      forkCliSessionOnResume: true,
+      cliSessionResumeAt: FORK_CHECKPOINT,
+      toolCallsAllow: [],
+    }),
+  ).rejects.toThrow("cannot fork this session: its native session is not reusable (auth-profile)");
+  expect(supervisorSpawnMock).not.toHaveBeenCalled();
+});

@@ -38,6 +38,7 @@ import {
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import {
   readLiveSessionForkRequest,
   type SessionForkPin,
@@ -46,6 +47,8 @@ import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-promp
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
 import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import { resolveSessionCliRuntime } from "./session-cli-runtime.js";
+import { resolveCliSessionForkAnchor, runCliSessionFork } from "./session-fork-cli.js";
 import {
   readSessionForkRequesterFromTurn,
   type SessionForkRequester,
@@ -529,6 +532,38 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         }) ?? workspaceDir)
       : workspaceDir;
 
+  // A CLI backend keeps the conversation in its own native session, so the fork branches that
+  // session. A CLI turn records its runtime as the provider (`claude-cli/<model>`): that ref keeps
+  // the CLI as owner and runs its canonical provider's model. Plugin tool grants do not reach a
+  // CLI backend's MCP surface; those forks stay on the built-in runtime.
+  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
+    runtime: params.model.provider,
+    config,
+    includeSetupRegistry: true,
+  });
+  const cliRuntime = params.runtimePluginToolGrant?.toolNames.length
+    ? undefined
+    : canonicalProvider
+      ? { provider: params.model.provider }
+      : resolveSessionCliRuntime({
+          cfg: config,
+          agentId,
+          sessionKey,
+          provider: params.model.provider,
+          model: params.model.model,
+          sessionEntry: entry ?? {},
+        });
+  const cliEntry = cliRuntime
+    ? await readSessionEntryReadOnlyInWorker({ agentId, sessionKey, storePath: source.storePath })
+    : undefined;
+  const cliAnchor = cliRuntime
+    ? resolveCliSessionForkAnchor({
+        config,
+        provider: cliRuntime.provider,
+        sessionManager,
+        entry: cliEntry,
+      })
+    : undefined;
   const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
   // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
   // request carry the session's system prompt and tool definitions too.
@@ -544,8 +579,54 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
     projectSessionLifecycle: false,
     projectSessionMessages: false,
   });
+  // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
+  const toolExecutionAllow = params.tools.filter(
+    (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
+  );
+  const inputProvenance = {
+    kind: "internal_system" as const,
+    sourceTool: SESSION_FORK_SOURCE_TOOL,
+    sourceSessionKey: sessionKey,
+    runId,
+  };
+  const usageScope = {
+    config,
+    agentId,
+    agentDir,
+    sessionId: forkSession.sessionId,
+    sessionKey: forkSession.sessionKey,
+    provider: params.model.provider,
+    model: params.model.model,
+  };
   try {
     abortSignal.throwIfAborted();
+    if (cliAnchor) {
+      const result = await runCliSessionFork({
+        anchor: cliAnchor,
+        config,
+        agentId,
+        agentDir,
+        sourceSessionKey: sessionKey,
+        sourceEntry: cliEntry,
+        forkSession,
+        sessionManager,
+        preparedRunAdmission,
+        workspaceDir: executionWorkspaceDir,
+        prompt: params.prompt,
+        model: { ...params.model, provider: canonicalProvider ?? params.model.provider },
+        toolCallsAllow: toolExecutionAllow,
+        ...(params.requester ? { requester: params.requester } : {}),
+        conversation: sessionConversationFacts(entry),
+        inputProvenance,
+        runId,
+        lane: getBackgroundOwnerLane(params.owner),
+        timeoutMs: params.timeoutMs,
+        thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+        abortSignal,
+      });
+      await emitInternalRunUsageDiagnostic(result, usageScope);
+      return result;
+    }
     const { runEmbeddedAgent } = await import("./embedded-agent.js");
     const result = await runEmbeddedAgent({
       agentId,
@@ -562,12 +643,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       ...(params.runtimePluginToolGrant
         ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
         : {}),
-      inputProvenance: {
-        kind: "internal_system",
-        sourceTool: SESSION_FORK_SOURCE_TOOL,
-        sourceSessionKey: sessionKey,
-        runId,
-      },
+      inputProvenance,
       sessionManager,
       workspaceDir: executionWorkspaceDir,
       permissionMode: sourceEntry.permissionMode,
@@ -591,10 +667,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.
-      // exec is not on the owner-only list, so a fork runs it only on the owner's own turn.
-      toolExecutionAllow: params.tools.filter(
-        (tool) => tool !== "exec" || params.requester?.senderIsOwner === true,
-      ),
+      toolExecutionAllow,
       sessionForkRequest: {
         ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
         ...(pin ? { pin } : {}),
@@ -612,15 +685,7 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });
-    await emitInternalRunUsageDiagnostic(result, {
-      config,
-      agentId,
-      agentDir,
-      sessionId: forkSession.sessionId,
-      sessionKey: forkSession.sessionKey,
-      provider: params.model.provider,
-      model: params.model.model,
-    });
+    await emitInternalRunUsageDiagnostic(result, usageScope);
     return result;
   } finally {
     preparedRunAdmission.close();

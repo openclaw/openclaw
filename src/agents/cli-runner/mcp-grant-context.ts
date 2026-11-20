@@ -208,7 +208,8 @@ export function buildCliMcpGrantContext(params: {
     ...(normalizeOptionalString(params.run.cwd) ? { cwd: params.run.cwd?.trim() } : {}),
     ...(params.run.toolOverrides?.webSearch === false ? { webSearchDisabled: true as const } : {}),
     // Compaction lists the session's tools only so its request prefix matches the turns'.
-    ...(params.run.controlOperation ? { toolCallsRefused: true as const } : {}),
+    ...(params.run.controlOperation === "compact" ? { toolCallsRefused: true as const } : {}),
+    ...(params.run.toolCallsAllow ? { toolCallsAllow: [...params.run.toolCallsAllow] } : {}),
     // Same enforcement point for the fallback delegation gate, so an
     // unrestricted run keeps its exact prior grant shape.
     ...(delegationCapability ? { delegationCapability } : {}),

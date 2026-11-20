@@ -95,8 +95,17 @@ export type RunCliAgentParams = Pick<
   /** Diagnostic attribution only; must not change execution policy or timeout selection. */
   isolatedCompletionPurpose?: IsolatedCompletionPurpose;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
-  /** Internal backend control command: reuse the native session without recording a conversation turn. */
-  controlOperation?: "compact";
+  /**
+   * Internal backend control command: reuse the native session without recording a conversation
+   * turn. `fork` resumes `cliSessionId` once with the backend's fork argument at
+   * `cliSessionResumeAt`, runs only the granted tools, and keeps the successor session nowhere.
+   */
+  controlOperation?: "compact" | "fork";
+  /**
+   * Session fork: the Gateway grant lists the source session's tools, so the resumed native
+   * session keeps its tool catalog, and runs only these. Native CLI tools stay off.
+   */
+  toolCallsAllow?: readonly string[];
   /** Persist the successful CLI assistant reply into the OpenClaw session transcript. */
   persistAssistantTranscript?: boolean;
   /** Session store path used when assistant transcript persistence is enabled. */

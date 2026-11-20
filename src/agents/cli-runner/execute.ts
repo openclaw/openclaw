@@ -637,13 +637,22 @@ export async function executePreparedCliRun(
             // A one-shot compactor rewrites persisted history behind the warm process.
             await restartCliLiveSession(context);
           }
+          if (params.controlOperation === "fork" && !(params.forkCliSessionOnResume && useResume)) {
+            throw new Error("CLI session fork needs a resumable native session");
+          }
           if (params.forkCliSessionOnResume && useResume) {
-            if (!params.persistCliSessionForkSuccessor) {
-              throw new Error("CLI session fork successor persistence is unavailable");
-            }
-            forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
-            if (!forkResumeClaimed) {
-              throw new Error("CLI session fork marker is no longer available");
+            if (params.controlOperation === "fork") {
+              // A hidden fork keeps no successor; the successor check below still proves the
+              // CLI branched instead of writing into the source session.
+              forkResumeClaimed = true;
+            } else {
+              if (!params.persistCliSessionForkSuccessor) {
+                throw new Error("CLI session fork successor persistence is unavailable");
+              }
+              forkResumeClaimed = (await params.claimCliSessionFork?.()) === true;
+              if (!forkResumeClaimed) {
+                throw new Error("CLI session fork marker is no longer available");
+              }
             }
             // The fork argument only applies at process startup; a cached warm child
             // would run inside the source session. Force a fresh spawn.

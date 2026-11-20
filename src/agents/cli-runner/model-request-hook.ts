@@ -118,7 +118,11 @@ export function createCliRunModelRequestGate(params: {
   hookContext: PluginHookAgentContext;
   run: Pick<
     RunCliAgentParams,
-    "provider" | "inputProvenance" | "senderIsOwner" | "userTurnTranscriptRecorder"
+    | "provider"
+    | "inputProvenance"
+    | "senderIsOwner"
+    | "userTurnTranscriptRecorder"
+    | "controlOperation"
   >;
   model: string;
   prompt: string;
@@ -134,6 +138,8 @@ export function createCliRunModelRequestGate(params: {
     hookContext: { ...params.hookContext, modelProviderId: run.provider, modelId: params.model },
     provider: run.provider,
     model: params.model,
+    // Session forks pass the same policy as forks on the built-in runtime.
+    ...(run.controlOperation === "fork" ? { requestKind: "side_question" as const } : {}),
     messages: async () => {
       currentTurn ??= Promise.resolve(run.userTurnTranscriptRecorder?.resolveMessage()).then(
         (message) =>

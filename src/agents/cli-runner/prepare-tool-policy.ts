@@ -41,6 +41,22 @@ export async function resolveCliRuntimeToolPolicy(input: {
   let { params } = input;
   let runtimeToolsAllowPolicy: string[] | undefined;
   let managedNativeTools: string[] = [];
+  if (params.toolCallsAllow !== undefined) {
+    if (!input.canEnforceExactToolAvailability || !input.bundleMcp) {
+      throw new Error(`CLI backend ${input.backendId} cannot enforce a session fork's tools`);
+    }
+    // A session fork lists the session's own tools through the exact grant, which runs only
+    // toolCallsAllow; no native tool is selectable.
+    return {
+      params: {
+        ...params,
+        toolsAllow: undefined,
+        cliToolAvailability: { native: [], openClaw: [] },
+      },
+      runtimeToolsAllowPolicy: ["*"],
+      managedNativeTools,
+    };
+  }
   if (params.toolsAllow !== undefined) {
     if (params.cliToolAvailability !== undefined) {
       throw new Error(`CLI backend ${input.backendId} received conflicting runtime tool policies`);

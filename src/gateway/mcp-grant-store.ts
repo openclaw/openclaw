@@ -111,6 +111,11 @@ export type McpLoopbackRequestContext = {
    */
   toolCallsRefused?: true;
   /**
+   * Host-minted for session forks: the grant lists the session's tools so the resumed native
+   * session keeps its catalog, but only these run.
+   */
+  toolCallsAllow?: string[];
+  /**
    * Attempt-local authority to start or redirect delegated work, stamped into
    * the grant so a fallback completion-report turn running on a CLI backend
    * gets the same gate as an embedded attempt. The loopback surface enforces

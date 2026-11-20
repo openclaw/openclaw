@@ -92,6 +92,29 @@ it("keeps private search denial, callable sibling tools, and live grant revocati
         expect((await request(compactionGrant, "message")).result?.isError).toBe(true);
         expect(mocks.message).not.toHaveBeenCalled();
         expect(mocks.beforeTool).not.toHaveBeenCalled();
+        // Session fork grants list the session's tools and run only the fork's own.
+        const fork = grants.mintMcpLoopbackClientGrant({
+          context: {
+            sessionKey: "agent:main:main",
+            senderIsOwner: true,
+            toolCallsAllow: ["message"],
+          },
+          runtimeOwnerToken: runtime.ownerToken,
+          admittedRunContext,
+        });
+        const forkGrant = {
+          grant: fork,
+          capture: mcp.captureGrant(fork.token, "fork", runtime.ownerToken),
+        };
+        mcp.expectMcpToolNames(await request(forkGrant), ["web_search", "message"]);
+        const refused = await request(forkGrant, "web_search");
+        expect(refused.result).toMatchObject({
+          isError: true,
+          content: [{ text: "web_search is not available in this background run." }],
+        });
+        expect(mocks.search).not.toHaveBeenCalled();
+        expect((await request(forkGrant, "message")).result?.isError).toBe(false);
+        expect(mocks.message).toHaveBeenCalledOnce();
         const disabled = makeGrant(true);
         expect((await request(disabled)).result?.tools?.map(({ name }) => name)).toEqual([
           "message",

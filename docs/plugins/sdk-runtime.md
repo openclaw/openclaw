@@ -188,13 +188,47 @@ bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts. CLI
-runtimes are not supported.
+stored user message recorded. Plugins cannot supply requester facts. On a CLI
+runtime the fork branches the CLI's native session; see
+[Forks on a CLI runtime](#forks-on-a-cli-runtime).
 
 Sandboxed managed-worktree forks prepare the same private workspace and selected
 working directory as an ordinary turn of the source session. The durable project
 workspace remains the transcript cwd. Host-executed forks retain their durable
 workspace behavior.
+
+#### Forks on a CLI runtime
+
+A CLI backend keeps the conversation in its own native session. When the
+session's model runs on a backend that can branch that session at a recorded
+reply (the bundled Claude CLI, `claude-cli`), a fork starts a new CLI process
+that resumes the native session with the backend's fork argument at the
+anchored turn's reply (`--fork-session --resume-session-at` for Claude). No API
+key is needed beyond what the session's own turns use. The source transcript,
+the source native session and its binding stay unchanged, and the branched
+native session is not kept.
+
+- The fork reads through a finished reply that the CLI recorded in the
+  session's current native session. When the anchored turn has no such reply
+  (it is still running, it ran on another runtime, or a newer native session
+  replaced it), the fork fails before any CLI or provider I/O.
+- The source session's account boundary applies: a native session bound to
+  another auth profile or account is refused, as it is for the session's next
+  turn.
+- The Gateway's MCP grant for the process lists the session's OpenClaw tools,
+  so the resumed native session keeps its tool catalog, and runs only the
+  fork's tools; a call to any other tool returns "not available in this
+  background run". Claude's native execution tools stay off. `read`, `ls` and
+  `exec` run as OpenClaw tools under the same policy, owner and approval rules
+  as above.
+- The fork's request passes the final model request policy
+  (`before_model_request` with `requestKind: "side_question"`) and fires no
+  other turn hooks.
+- `forkSession` forks the same way, with no tools.
+- A `runForkedTurn` call that grants the plugin's own tools still runs on the
+  built-in runtime: plugin tool grants and `toolContext.backgroundRun` do not
+  reach a CLI backend's tools. Without a credential for the model's provider,
+  that fork fails with the provider's missing-credential error.
 
 #### Tool-free forks
 
