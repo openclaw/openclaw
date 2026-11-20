@@ -497,7 +497,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           </Errored>
         )}
       </SettingsWorkspace>
-      <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
+      <PluginSkillPreview
+        preview={props.page.skillPreview}
+        state={props.page.skillPreview.read()}
+      />
       <WizardLogin
         controller={props.page.mcpLogin.dialog}
         signInIcon={

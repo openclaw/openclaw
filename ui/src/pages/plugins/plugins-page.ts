@@ -138,7 +138,7 @@ export function createPluginsPage(options: {
       ),
     onSnapshot: handleGatewaySnapshot,
   });
-  const skillPreview = createPluginPreview(gateway, publish);
+  const skillPreview = createPluginPreview(gateway);
   const mcpLogin = createPluginMcpLogin(gateway, {
     getDetail: () => state.detail,
     getName: (pluginId) => state.result?.plugins.find((plugin) => plugin.id === pluginId)?.name,
@@ -349,7 +349,6 @@ export function createPluginsPage(options: {
       event.stopPropagation();
       return;
     }
-    // The file viewer owns Escape inside its shadow-root modal.
     if (skillPreview.state) {
       return;
     }

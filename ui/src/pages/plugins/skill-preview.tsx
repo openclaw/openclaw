@@ -1,98 +1,106 @@
-import { createMemo, Errored, lazy, Loading, onSettled } from "solid-js";
+import { Show, onSettled } from "solid-js";
 import type {
   PluginsSkillsReadParams,
   PluginsSkillsReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
+import { stripFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
-import { SettingsLoadingSkeleton } from "../../components/solid/settings-ui.tsx";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { formatUiError, UserFacingError } from "../../lib/format-error.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { projectCallbackOwner } from "../../lib/reactive/callback-owner.ts";
 import "./custom-elements.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import "../../styles/sidebar-markdown.css";
 import { renderPluginCapabilitySection as PluginCapabilitySection } from "./overview.tsx";
 import "./skill-preview.css";
 import { showPluginToolPreview, type PluginToolPreview } from "./tool-preview.tsx";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
-const FilePreviewModal = lazy(() => import("../../components/file-preview-modal.tsx"), {
-  export: "FilePreviewModal",
-});
+type SkillRequest =
+  | Omit<Extract<PluginsSkillsReadParams, { source: "installed" }>, "path">
+  | Omit<Extract<PluginsSkillsReadParams, { source: "catalog" }>, "path">;
 
-export type PluginSkillPreviewState = {
-  request: PluginsSkillsReadParams;
-  inventoryRequest: Promise<void>;
-  result: PluginsSkillsReadResult | null;
-  activePath: string;
-  fileRequests: Map<string, { promise: Promise<void>; resolve: () => void; active: boolean }>;
-};
+type SkillDocument =
+  | { status: "loading" }
+  | { status: "ready"; content: string }
+  | { status: "error"; message: string; retryable: boolean };
 
-export function createPluginPreview(
+type PluginSkillPreviewState = { request: SkillRequest; document: SkillDocument };
+
+export function createPluginPreview(gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">) {
+  // Preview changes must not rerender the invoking row while the modal owns its focus.
+  const { owner, view } = projectCallbackOwner(
+    (notify) => createPluginPreviewOwner(gateway, notify),
+    (preview) => preview.state,
+  );
+  return Object.assign(owner, { read: view.read });
+}
+
+function createPluginPreviewOwner(
   gateway: Pick<GatewayPageBinding, "capture" | "isCurrent">,
   onChange: () => void,
 ) {
   let active: PluginSkillPreviewState | null = null;
   let toolAbort = new AbortController();
-  let releaseInventory = () => {};
-  const retire = () => {
-    // Release presentation even when a retired transport read remains pending.
-    releaseInventory();
-    for (const request of active?.fileRequests.values() ?? []) {
-      request.resolve();
-    }
-    toolAbort.abort();
+  onSettled(() => () => {
     active = null;
-  };
-  onSettled(() => retire);
+    toolAbort.abort();
+  });
   const preview = {
     get state() {
       return active;
     },
-    async open(request: PluginsSkillsReadParams): Promise<void> {
-      preview.close();
-      const connection = gateway.capture();
-      const receipt = Promise.withResolvers<void>();
-      releaseInventory = receipt.resolve;
-      void receipt.promise.catch(() => {});
-      const state: PluginSkillPreviewState = {
-        request: { ...request },
-        inventoryRequest: receipt.promise,
-        result: null,
-        activePath: "SKILL.md",
-        fileRequests: new Map(),
-      };
-      active = state;
+    async open(request: SkillRequest): Promise<void> {
+      toolAbort.abort();
+      toolAbort = new AbortController();
+      const pending: PluginSkillPreviewState = { request, document: { status: "loading" } };
+      active = pending;
       onChange();
+      const connection = gateway.capture();
+      let skill: SkillDocument;
+      let selected = request;
       if (!connection) {
-        receipt.reject(new UserFacingError(t("pluginsPage.connectToManage")));
-        return;
-      }
-      const current = () => active === state && gateway.isCurrent(connection);
-      try {
-        const result = await connection.client.request<PluginsSkillsReadResult>(
-          "plugins.skills.read",
-          request,
-        );
-        if (current()) {
-          state.result = result;
-          state.activePath = result.entryPath;
+        skill = { status: "error", message: t("pluginsPage.connectToManage"), retryable: true };
+      } else {
+        try {
+          // Omitting path reads the declared entry body, without reading sibling bodies.
+          const result = await connection.client.request<PluginsSkillsReadResult>(
+            "plugins.skills.read",
+            request,
+          );
+          const entry = result.files.find((file) => file.path === result.entryPath);
           if (result.version) {
-            state.request = { ...state.request, version: result.version };
+            selected = { ...request, version: result.version };
           }
+          if (entry?.status === "ready" && entry.content !== undefined) {
+            skill = { status: "ready", content: entry.content };
+          } else {
+            const tooLarge = entry?.status === "too-large";
+            skill = {
+              status: "error",
+              message: t(
+                tooLarge
+                  ? "pluginsPage.skillPreview.tooLarge"
+                  : "pluginsPage.skillPreview.unavailable",
+              ),
+              retryable: !tooLarge,
+            };
+          }
+        } catch (error) {
+          skill = { status: "error", message: formatUiError(error), retryable: true };
         }
-      } catch (error) {
-        if (current()) {
-          receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
-        }
-      } finally {
-        if (current()) {
-          onChange();
-        }
-        receipt.resolve();
+      }
+      if (active === pending && (!connection || gateway.isCurrent(connection))) {
+        active = { request: selected, document: skill };
+        onChange();
       }
     },
 
@@ -102,81 +110,15 @@ export function createPluginPreview(
     },
 
     retry(): void {
-      if (active?.result) {
-        void preview.select(active.activePath);
-      } else if (active) {
+      if (active?.document.status === "error" && active.document.retryable) {
         void preview.open(active.request);
       }
     },
-    async select(path: string): Promise<void> {
-      const state = active;
-      const file = state?.result?.files.find((candidate) => candidate.path === path);
-      if (!state || !file) {
-        return;
-      }
-      state.activePath = path;
-      onChange();
-      if (
-        state.fileRequests.get(path)?.active ||
-        (file.status !== "deferred" && file.status !== "unavailable")
-      ) {
-        return;
-      }
-      const receipt = Promise.withResolvers<void>();
-      void receipt.promise.catch(() => {});
-      const request = { promise: receipt.promise, resolve: receipt.resolve, active: true };
-      state.fileRequests.set(path, request);
-      onChange();
-      const connection = gateway.capture();
-      if (!connection) {
-        request.active = false;
-        receipt.reject(new UserFacingError(t("pluginsPage.connectToManage")));
-        return;
-      }
-      const current = () => active === state && gateway.isCurrent(connection);
-      try {
-        const result = await connection.client.request<PluginsSkillsReadResult>(
-          "plugins.skills.read",
-          { ...state.request, path },
-        );
-        if (!current() || !state.result) {
-          return;
-        }
-        const selected = result.files.find((candidate) => candidate.path === path);
-        if (
-          result.version !== state.result.version ||
-          result.rootPath !== state.result.rootPath ||
-          !selected ||
-          selected.status === "deferred"
-        ) {
-          throw new Error(t("filePreview.bundle.unavailable"));
-        }
-        // Merge only this requested body. Late sibling responses never replace the
-        // foreground selection or discard already loaded bodies in this preview.
-        state.result = {
-          ...state.result,
-          files: state.result.files.map((candidate) =>
-            candidate.path === path ? selected : candidate,
-          ),
-        };
-        if (selected.status === "unavailable") {
-          throw new UserFacingError(t("filePreview.bundle.unavailable"));
-        }
-      } catch (error) {
-        if (current()) {
-          receipt.reject(new UserFacingError(formatUiError(error), { cause: error }));
-        }
-      } finally {
-        if (current()) {
-          request.active = false;
-          onChange();
-        }
-        receipt.resolve();
-      }
-    },
+
     /** Dismissal, route changes and connection changes retire outstanding reads. */
     close(this: void): void {
-      retire();
+      active = null;
+      toolAbort.abort();
       toolAbort = new AbortController();
       onChange();
     },
@@ -185,125 +127,71 @@ export function createPluginPreview(
 }
 
 export function PluginSkillPreview(props: {
-  preview: ReturnType<typeof createPluginPreview>;
+  preview: ReturnType<typeof createPluginPreviewOwner>;
   state: PluginSkillPreviewState | null;
 }) {
-  const state = () => props.state;
-  const files = createMemo(
-    () =>
-      state()?.result?.files.map((file) => ({
-        path: file.path,
-        size: "",
-        contents: file.content ?? "",
-        message:
-          file.status !== "ready" && file.status !== "deferred"
-            ? t(`filePreview.bundle.${file.status}`)
-            : undefined,
-      })) ?? [],
-    { lazy: true },
-  );
-  const readInventory = createMemo(() => state()?.inventoryRequest ?? null);
-  const fileRequest = () => {
-    const current = state();
-    return current?.fileRequests.get(current.activePath)?.promise ?? current?.inventoryRequest;
-  };
-  const readFile = createMemo(
-    () => {
-      const current = state();
-      const request = current?.fileRequests.get(current.activePath)?.promise;
-      if (request) {
-        return request;
-      }
-      const file = current?.result?.files.find((entry) => entry.path === current.activePath);
-      if (file?.status === "unavailable") {
-        throw new UserFacingError(t("filePreview.bundle.unavailable"));
-      }
-      return current?.inventoryRequest ?? null;
-    },
-    { lazy: true },
-  );
-  const incomplete = createMemo(() => {
-    const result = state()?.result;
-    return (
-      result &&
-      (!result.inventoryComplete ||
-        result.files.some((file) => file.status === "unavailable" || file.status === "too-large"))
-    );
-  });
   return (
-    <>
-      {props.state && (
-        <Errored
-          fallback={(error, reset) => (
-            <openclaw-modal-dialog
-              label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
-              onModal-cancel={() => props.preview.close()}
-            >
-              <div class="oc-dialog">
-                <DialogHeader
-                  title={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
-                  onClose={() => props.preview.close()}
-                />
-                <div class="oc-dialog__body">
-                  <InlineAlert tone="danger" role="alert">
-                    {formatUiError(error())}
-                  </InlineAlert>
-                </div>
+    <Show when={props.state}>
+      {(state) => {
+        const skill = () => state().document;
+        const error = () => {
+          const current = skill();
+          return current.status === "error" ? current : undefined;
+        };
+        const document = () => {
+          const current = skill();
+          return current.status === "ready" ? current : undefined;
+        };
+        const close = () => props.preview.close();
+        return (
+          <openclaw-modal-dialog
+            class="plugin-skill-dialog"
+            label={state().request.skillName}
+            onModal-cancel={close}
+          >
+            <div class="oc-dialog plugin-skill-dialog__frame">
+              <DialogHeader title={state().request.skillName} onClose={close} />
+              <div
+                class="oc-dialog__body plugin-skill-dialog__body"
+                aria-busy={skill().status === "loading" ? "true" : "false"}
+              >
+                <Show when={skill().status === "loading"}>
+                  <PanelLoadingSkeleton variant="document" label={t("common.loading")} compact />
+                </Show>
+                <Show when={error()}>
+                  {(failure) => (
+                    <InlineAlert tone="danger" role="alert">
+                      {failure().message}
+                    </InlineAlert>
+                  )}
+                </Show>
+                <Show when={document()}>
+                  {(ready) => (
+                    <SanitizedHtml
+                      tag="article"
+                      class="sidebar-markdown"
+                      html={toSanitizedMarkdownHtml(stripFrontmatterBlock(ready().content), {
+                        mode: "document",
+                        remoteImages: false,
+                        codeBlockChrome: "none",
+                        relativeLinks: false,
+                      })}
+                    />
+                  )}
+                </Show>
+              </div>
+              <Show when={error()?.retryable}>
                 <openclaw-modal-actions class="oc-dialog__footer">
-                  <button
-                    type="button"
-                    class="btn oc-action oc-action-secondary"
-                    onClick={() => props.preview.close()}
-                  >
-                    {t("common.close")}
-                  </button>
-                  <button type="button" class="btn primary" onClick={reset}>
-                    {t("pluginsPage.tryAgain")}
+                  <button type="button" class="btn" onClick={() => props.preview.retry()}>
+                    {t("common.retry")}
                   </button>
                 </openclaw-modal-actions>
-              </div>
-            </openclaw-modal-dialog>
-          )}
-        >
-          <Loading
-            fallback={
-              <openclaw-modal-dialog
-                label={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
-                onModal-cancel={() => props.preview.close()}
-              >
-                <div class="oc-dialog">
-                  <DialogHeader
-                    title={props.state?.request.skillName ?? t("pluginsPage.detailTabs.skills")}
-                    onClose={() => props.preview.close()}
-                  />
-                  <div class="oc-dialog__body">
-                    <SettingsLoadingSkeleton rows={5} />
-                  </div>
-                </div>
-              </openclaw-modal-dialog>
-            }
-          >
-            <FilePreviewModal
-              label={props.state.request.skillName}
-              files={files()}
-              directories={props.state.result?.directories ?? []}
-              activePath={props.state.activePath}
-              layout="document"
-              readInventory={readInventory}
-              inventoryRequest={() => props.state?.inventoryRequest}
-              readFile={readFile}
-              fileRequest={fileRequest}
-              notice={incomplete() ? t("filePreview.bundle.incomplete") : ""}
-              onFile-preview-select={(event: CustomEvent<string>) =>
-                void props.preview.select(event.detail)
-              }
-              onFile-preview-retry={() => props.preview.retry()}
-              onFile-preview-close={() => props.preview.close()}
-            />
-          </Loading>
-        </Errored>
-      )}
-    </>
+              </Show>
+            </div>
+          </openclaw-modal-dialog>
+        );
+      }}
+    </Show>
   );
 }
 
