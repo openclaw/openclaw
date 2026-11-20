@@ -52,8 +52,11 @@ export function selectHandoff<T>(input: {
   /** Ids of turns an earlier bounded read already omitted, oldest first. */
   priorOmittedIds?: readonly string[];
   sessionKey?: string;
+  /** Delivered size of the notice; native seeds wrap it in a serialized user message. */
+  noticeBytes?: (notice: string) => number;
 }) {
   const { items, summary } = input;
+  const noticeBytes = input.noticeBytes ?? ((notice: string) => Buffer.byteLength(notice) + 2);
   const all = summary ? [summary, ...items] : items;
   const priorOmitted = input.priorOmitted ?? 0;
   const fits = (bytes: number, tokens: number) =>
@@ -67,10 +70,10 @@ export function selectHandoff<T>(input: {
   let ids = allIds.slice(-MAX_LISTED_OMITTED_IDS);
   const noticeFor = (listed: string[]) =>
     handoffNotice(all.length, priorOmitted + all.length, listed, input.sessionKey);
-  while (ids.length && Buffer.byteLength(noticeFor(ids)) > input.maxBytes / 4) {
+  while (ids.length && noticeBytes(noticeFor(ids)) > input.maxBytes / 4) {
     ids = ids.slice(1);
   }
-  const reserve = Buffer.byteLength(noticeFor(ids)) + 2;
+  const reserve = noticeBytes(noticeFor(ids));
   if (reserve > input.maxBytes || Math.ceil(reserve / 4) > input.maxTokens) {
     // No room for history and its notice; the native turn runs on its own context.
     return { values: [], omittedCount: priorOmitted + all.length, notice: undefined };
@@ -246,6 +249,8 @@ export function bindHandoff(
       priorOmittedIds: facts.omittedIds,
       // Name the recovery tool only when the native thread can call it.
       ...(request.historyToolAvailable ? { sessionKey } : {}),
+      noticeBytes: (content) =>
+        Buffer.byteLength(JSON.stringify({ role: "user", content, timestamp: 0 })) + 1,
     });
     if (!selection.values.length && selection.omittedCount) {
       log.warn(

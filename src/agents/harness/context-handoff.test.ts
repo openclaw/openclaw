@@ -87,6 +87,24 @@ it("renders a CLI handoff the reseed parser accepts, without a tool hint when th
   expect(rendered).not.toContain("sessions_history");
 });
 
+it("narrows CLI history to a small model's window", () => {
+  const rendered = buildCliSessionHistoryPrompt({
+    messages: Array.from({ length: 10 }, (_, index) => ({
+      id: `e-${index}`,
+      role: index % 2 ? ("assistant" as const) : ("user" as const),
+      content: `${index} ${"w".repeat(5_000)}`,
+    })),
+    prompt: "Current question",
+    maxHistoryChars: 8_192,
+  });
+  const history = rendered!.slice(
+    rendered!.indexOf("<conversation_history>"),
+    rendered!.indexOf("</conversation_history>"),
+  );
+  expect(Buffer.byteLength(history)).toBeLessThanOrEqual(8_192);
+  expect(history).toContain("User: 8 w");
+});
+
 it("keeps a notice-only CLI envelope when no intact history item fits", () => {
   const rendered = buildCliSessionHistoryPrompt({
     messages: [
@@ -95,6 +113,7 @@ it("keeps a notice-only CLI envelope when no intact history item fits", () => {
     ],
     prompt: "Current question",
     sessionKey: "agent:main:huge",
+    historyToolAvailable: true,
   });
   expect(rendered).toContain("<conversation_history>");
   expect(rendered).toContain("[OpenClaw context handoff]");
@@ -178,6 +197,12 @@ it("bounds a tool-heavy transcript without a model call and tolerates a failing 
     // Omitted turns are named by the transcript entry ids sessions_history accepts.
     expect(JSON.stringify(seeded[0])).toMatch(/Newest omitted messageIds: [0-9a-f-]{8,}/);
     expect(JSON.stringify(seeded)).toContain("follow-up 12");
+    // The delivered seed, notice message included, stays inside the byte allowance.
+    const delivered = seeded.reduce(
+      (sum, message) => sum + Buffer.byteLength(JSON.stringify(message)) + 1,
+      0,
+    );
+    expect(delivered).toBeLessThanOrEqual(1_500 * 4);
     const data = { phase: "context_bounded", message: BOUNDED_CONTEXT_NOTICE };
     expect(observer).toHaveBeenCalledWith({ stream: "compaction", data });
     // Channel conversations' Control UI panes observe the Gateway event, not the observer.

@@ -108,12 +108,14 @@ function renderHistoryMessage(entry: CliSessionReseedMessage): string {
   return text ? `${entry.timestamp ? `[${entry.timestamp}] ` : ""}${role}: ${text}` : "";
 }
 
-/** Fresh CLI sessions receive the shared intact-turn handoff. Pass sessionKey only with sessions_history. */
+/** Fresh CLI sessions receive the shared intact-turn handoff. */
 export function buildCliSessionHistoryPrompt(params: {
   messages: CliSessionReseedMessage[];
   prompt: string;
   maxHistoryChars?: number;
   sessionKey?: string;
+  /** The session can call sessions_history, so the notice may name it. */
+  historyToolAvailable?: boolean;
 }): string | undefined {
   const items = params.messages.flatMap((message) => {
     const value = renderHistoryMessage(message);
@@ -123,14 +125,17 @@ export function buildCliSessionHistoryPrompt(params: {
       : [];
   });
   const summary = items[0]?.role === "compactionSummary" ? items[0] : undefined;
+  // The fixed handoff cap, narrowed by a small model's own allowance.
   const maxBytes =
-    (params.maxHistoryChars ?? HANDOFF_MAX_BYTES) - CLI_SESSION_RESEED_CURRENCY_GUIDANCE.length - 1;
+    Math.min(params.maxHistoryChars ?? HANDOFF_MAX_BYTES, HANDOFF_MAX_BYTES) -
+    CLI_SESSION_RESEED_CURRENCY_GUIDANCE.length -
+    1;
   const selection = selectHandoff({
     items: summary ? items.slice(1) : items,
     summary,
     maxBytes,
     maxTokens: Math.floor(maxBytes / 4),
-    sessionKey: params.sessionKey,
+    ...(params.historyToolAvailable ? { sessionKey: params.sessionKey } : {}),
   });
   // A notice-only envelope still tells the fresh session that history exists and how to read it.
   if (!selection.values.length && !selection.notice) {

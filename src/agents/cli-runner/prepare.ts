@@ -1499,9 +1499,9 @@ async function prepareCliRunContextWithinReadFence(
       ? buildCliSessionHistoryPrompt({
           messages: sessionPromptContext?.reseedMessages ?? [],
           prompt: historyPromptCurrentTurn,
-          sessionKey: promptTools.some((tool) => tool.name === "sessions_history")
-            ? params.sessionKey
-            : undefined,
+          maxHistoryChars: contextWindowInfo.tokens, // history stays under a quarter of the window
+          sessionKey: params.sessionKey,
+          historyToolAvailable: promptTools.some((tool) => tool.name === "sessions_history"),
         })
       : undefined;
     systemPrompt = skipsTurnPrefix
