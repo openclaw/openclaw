@@ -152,7 +152,7 @@ export function readTranscriptMirrorFacts(
         let query = events
           .where("identity.session_id", "=", resolved.sessionId)
           .where("identity.message_idempotency_key", "in", batch)
-          .select((eb) => eb.lit(0).as("is_source"));
+          .select((eb) => eb.lit<number>(0).as("is_source"));
         if (params.activeBranchOnly) {
           query = query.where("active.event_seq", "is not", null);
         }

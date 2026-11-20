@@ -204,7 +204,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
           "requested.binding_key",
         )
         .select(columns)
-        .select((eb) => eb.lit(1).as("is_exact"))
+        .select((eb) => eb.lit<number>(1).as("is_exact"))
         .unionAll((selection) =>
           selection
             .selectFrom("requested")
@@ -216,7 +216,7 @@ function createCurrentConversationBindingQueries(db: EngineConnection) {
                 .on("candidate.conversation_kind", "=", CURRENT_BINDING_CONVERSATION_KIND),
             )
             .select(columns)
-            .select((eb) => eb.lit(0).as("is_exact"))
+            .select((eb) => eb.lit<number>(0).as("is_exact"))
             .where((eb) =>
               eb.not(
                 eb.exists(
