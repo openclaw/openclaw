@@ -164,14 +164,30 @@ export async function continueTemplateSetup(
             });
             return resolved.value;
           };
+          // The user is waiting for the greeting. Preparing the opening turn and installing
+          // dependencies both contend for the Gateway's main thread, so installation starts
+          // once that turn has sent its first model request, or has ended without one.
+          const openingRequested = Promise.withResolvers<void>();
           const [opening, dependencies] = await Promise.allSettled([
             setup.openingComplete
               ? Promise.resolve()
               : (async () => {
-                  await input.onAgentCreated?.(agent, setup.report, true);
+                  try {
+                    await input.onAgentCreated?.(
+                      agent,
+                      setup.report,
+                      true,
+                      openingRequested.resolve,
+                    );
+                  } finally {
+                    openingRequested.resolve();
+                  }
                   await save((current) => ({ ...current, openingComplete: true }));
                 })(),
             (async () => {
+              if (!setup.openingComplete) {
+                await openingRequested.promise;
+              }
               const installed = await install();
               await save((current) => {
                 const { dependenciesPending: _pending, ...settled } = current;

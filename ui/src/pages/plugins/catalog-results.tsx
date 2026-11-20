@@ -341,7 +341,7 @@ function CategoryChips(props: PluginCatalogResultsProps): JSX.Element {
                 <CatalogDiscoveryChip
                   active={props.category === item().slug}
                   onClick={() => props.onCategoryChange(item().slug)}
-                  icon={categoryIcon(item().icon)}
+                  icon={categoryIcon(item())}
                 >
                   {item().label}
                 </CatalogDiscoveryChip>

@@ -606,6 +606,24 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
+  it.for(["before the prompt", "while awaiting the decision"])(
+    "finishes the approval when the upload gate closes %s",
+    async (stage, testContext) => {
+      const fixture = createPolicyApprovalFixture(testContext);
+      let uploadAllowed = stage !== "before the prompt";
+      await fixture.run(async () => {
+        setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+        const { record, pending } = await fixture.request(createOperatorClient(), {
+          isApprovalAuthorityActive: () => uploadAllowed,
+        });
+        uploadAllowed = false;
+
+        await expectApprovalResolution(pending, fixture.manager, record);
+        expect(fixture.invoke).not.toHaveBeenCalled();
+      });
+    },
+  );
+
   it("fails closed when the allow-once claim cannot be consumed", async (testContext) => {
     const fixture = createPolicyApprovalFixture(testContext);
     const { manager } = fixture;

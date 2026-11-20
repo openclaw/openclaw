@@ -1036,7 +1036,7 @@ initialize_state() {
   else
     openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
-  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+  if [ "$UPDATE_RESTART_MODE" = "auto-auth" ] || [ "$SCENARIO" = "git-release" ]; then
     account_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
     if [ -z "$account_home" ]; then
       echo "Could not resolve the current account home" >&2
@@ -2479,6 +2479,12 @@ phase storage-preflight storage_preflight
 phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
+if [ "$SCENARIO" = "git-release" ]; then
+  source scripts/e2e/lib/upgrade-survivor/git-release.sh
+  run_git_release_survivor
+  run_completed="1"
+  exit 0
+fi
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "session-share" ]; then
