@@ -3,10 +3,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { FailoverError } from "../agents/failover-error.js";
 import "../agents/model-fallback-runner.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
-import "./summary-model.runtime.js";
 import { summarizeTranscripts } from "./summary.js";
+import "./summary-model.runtime.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 const { runIsolatedCompletion, resolveSimpleCompletionSelectionForAgent } = vi.hoisted(() => ({
   runIsolatedCompletion: vi.fn(),
