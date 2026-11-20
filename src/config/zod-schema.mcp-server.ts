@@ -66,6 +66,7 @@ export const McpServerSchema = z
           )
           .min(1)
           .optional(),
+        startupReadiness: z.enum(["connection", "catalog"]).optional(),
         defaultToolsApprovalMode: z.enum(["auto", "prompt", "approve"]).optional(),
       })
       .optional(),

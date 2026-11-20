@@ -99,6 +99,11 @@ requires [`uv`/`uvx`](https://docs.astral.sh/uv/getting-started/installation/).
   Non-empty `codex.agents` limits the server to the listed OpenClaw agent ids.
   Empty, blank, or invalid scoped agent lists are rejected by config validation
   and omitted by the runtime projection path instead of becoming global.
+  `codex.startupReadiness` maps to Codex's native `startup_readiness`.
+  Set it to `"catalog"` to let Codex use a valid cached tool catalog for startup,
+  or `"connection"` for live connection readiness. Codex controls cache eligibility
+  and can still open the connection in the background. OpenClaw prepares its
+  conversation tool policy before it starts the Codex thread.
   `codex.defaultToolsApprovalMode` emits Codex's native
   `default_tools_approval_mode` for that server. OpenClaw strips the `codex`
   block before passing native `mcp_servers` config to Codex. Omit the block to
