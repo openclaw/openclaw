@@ -8,6 +8,7 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "../../agents/model-runtime-choice.test-support.js";
+import { PARTICIPATION_WORKER_ERROR } from "../../agents/participation-ceiling.js";
 import * as preparedModelRuntime from "../../agents/prepared-model-runtime.js";
 import {
   installSessionPlacementAdmissionProvider,
@@ -68,6 +69,52 @@ describe("worker turn launcher local placement", () => {
     localProvider = createLauncher();
   });
   afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+
+  it.each(["worker-turn", "remote-exec"] as const)(
+    "refuses participating %s before a worker claim, credentials, or local fallback",
+    async (executionMode) => {
+      await fx.seedActivePlacement(executionMode);
+      const original = fx.placements.get(fx.SESSION_ID);
+      const environments = fx.unusedEnvironments();
+      const provider = createLauncher({ environments });
+      const runLocal = vi.fn(localResult);
+      const input = {
+        ...fx.turn("participant-worker"),
+        participationCeiling: {
+          kind: "send" as const,
+          profileId: "guest",
+          sessionKey: fx.SESSION_KEY,
+        },
+      };
+      await expect(provider.executeTurn(runIdentity(input.runId), input, runLocal)).rejects.toThrow(
+        PARTICIPATION_WORKER_ERROR,
+      );
+      expect(fx.placements.get(fx.SESSION_ID)).toEqual(original);
+      expectUncalled(
+        runLocal,
+        environments.acquireTurnCredential,
+        environments.startTunnel,
+        environments.ensureRetainedRunning,
+        environments.inspectTurnLease,
+      );
+    },
+  );
+
+  it("keeps participating Gateway-local turns on their own admitted execution path", async () => {
+    const runLocal = vi.fn(localResult);
+    const input = {
+      ...fx.turn("participant-local"),
+      participationCeiling: {
+        kind: "send" as const,
+        profileId: "guest",
+        sessionKey: fx.SESSION_KEY,
+      },
+    };
+    await expect(
+      localProvider.executeTurn(runIdentity(input.runId), input, runLocal),
+    ).resolves.toEqual(await localResult());
+    expect(runLocal).toHaveBeenCalledOnce();
+  });
 
   it("reads absent sandbox placement without caller-thread SQL", async () => {
     using cleanup = new DisposableStack();
