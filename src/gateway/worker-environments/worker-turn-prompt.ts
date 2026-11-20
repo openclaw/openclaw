@@ -43,6 +43,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
+import { resolveWorkerTurnAgentProfile } from "./worker-turn-agent-profile.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
 
 export const WORKER_CONTEXT_ENGINE_HOST = {
@@ -121,9 +122,11 @@ export async function prepareWorkerTurnPrompt(params: {
         pluginMetadataSnapshot: preparedModelRuntime.metadataSnapshot,
       }),
   };
+  const agentProfile = resolveWorkerTurnAgentProfile({ turn });
   const bootstrap = await prepareEmbeddedAttemptBootstrap({
     attempt,
     setup,
+    agentProfile,
     hasReadTool: capabilityToolNames.has("read"),
     isRawModelRun,
   });
@@ -131,6 +134,7 @@ export async function prepareWorkerTurnPrompt(params: {
   const prompt = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     setup,
+    agentProfile,
     bootstrap,
     remoteWorkspace: true,
     referencePaths: { docsPath: null, sourcePath: null },

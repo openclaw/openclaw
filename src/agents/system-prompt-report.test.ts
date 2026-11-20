@@ -57,6 +57,17 @@ function expectSkills(systemPrompt: string, rendered: string, skillsPrompt = cat
 }
 
 describe("buildSystemPromptReport", () => {
+  it("records Agent Profile selection diagnostics", () => {
+    const report = makeReport({
+      agentProfile: { id: "openclaw/small", selectionSource: "model" },
+    });
+
+    expect(report.agentProfile).toEqual({
+      id: "openclaw/small",
+      selectionSource: "model",
+    });
+  });
+
   it("resolves catalog provenance with linear work and preserves first visible matches", () => {
     const tools = Array.from({ length: 400 }, (_, index) => makeTool(`tool_${index}`));
     let nameReads = 0;

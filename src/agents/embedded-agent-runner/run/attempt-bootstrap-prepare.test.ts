@@ -4,8 +4,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -67,6 +69,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         effectiveWorkspace: options.effectiveWorkspace ?? sessionWorkspace,
         resolvedWorkspace: sessionWorkspace,
       }),
+      agentProfile: resolveAgentProfile({}),
       hasReadTool: true,
       isRawModelRun: options.isRawModelRun ?? false,
     });
@@ -333,5 +336,49 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     });
 
     expect(explicit).toEqual(omitted);
+  });
+
+  it("composes the small profile with bounded workspace identity", async () => {
+    const workspace = await makeWorkspace("small-profile-workspace", {
+      "AGENTS.md": "a".repeat(12_000),
+      "SOUL.md": "Helpful and concise",
+      "IDENTITY.md": "Name: Bob\nEmoji: 🦞",
+      "USER.md": "User: Onur",
+    });
+    const agentProfile = resolveAgentProfile({
+      config: { agents: { defaults: { agentProfileId: "openclaw/small" } } },
+    });
+
+    const result = await prepareEmbeddedAttemptBootstrap({
+      attempt: {
+        sessionId: "session-small",
+        sessionKey: "agent:main:session-small",
+        trigger: "user",
+        isCanonicalWorkspace: true,
+        config: { agents: { defaults: { workspace } } },
+      } as EmbeddedRunAttemptParams,
+      setup: createAttemptSetupFixture({
+        effectiveWorkspace: workspace,
+        resolvedWorkspace: workspace,
+      }),
+      agentProfile,
+      hasReadTool: true,
+      isRawModelRun: false,
+    });
+    const systemPrompt = buildAgentSystemPrompt({
+      workspaceDir: workspace,
+      contextFiles: result.contextFiles,
+      toolNames: ["read", "exec"],
+      promptMode: "full",
+    });
+
+    expect(result.workspaceContextReport).toMatchObject({
+      totalMaxChars: 11_500,
+      injectedChars: expect.any(Number),
+    });
+    expect(result.workspaceContextReport?.injectedChars).toBeLessThanOrEqual(11_500);
+    expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+    expect(systemPrompt).toContain("Name: Bob");
+    expect(systemPrompt).toContain("Emoji: 🦞");
   });
 });

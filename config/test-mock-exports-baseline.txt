@@ -1428,7 +1428,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-abort.test.ts","../runs.js","104cc8fe863e5c6ae7ebdb3f13321e026ea4475feb8f2dd6c7fd6cd0ed48fbcc",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../agent-bundle-lsp-runtime.js","fd72b3b7c87429a46303bb4ad50b9364eed90c11777d303fbd6edd929ed69a88",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../agent-bundle-mcp-tools.js","b917ea3e287ef614ed7e15735541aafc581d3d4aca5f927bc6b96dfb844f58fe",1]
-["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../local-model-lean.js","d238e34102df2a839ba22583ee58ba7b9569749a58d32d8cb6df758aabab9a16",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../runtime-plan/tools.js","0f5bc9f9a4b93d6940eb9cde2d79ed539bb9b0909e3fa3f647804ecea1c4ad9c",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../tool-schema-projection.js","b7329cf73ab5eff7c86846529c43ba71fc47eb812d1a85eb07aed515383a2892",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../effective-tool-policy.js","00a8323dbcbe303916be2c250315b4b74f34bcf566af9c5e94fe8e54f6f9557c",1]

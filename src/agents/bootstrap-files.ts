@@ -12,6 +12,8 @@ import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveAgentProfile } from "./agent-profiles.js";
+import { prepareAgentProfileWorkspaceContext } from "./agent-profiles/workspace-context.js";
 import {
   resolveAgentConfig,
   resolveAgentWorkspaceDir,
@@ -425,14 +427,40 @@ async function resolveBootstrapFiles(
   return sanitized;
 }
 
-/** Resolves both raw bootstrap metadata and bounded context files for a run. */
+/**
+ * Resolves both raw bootstrap metadata and bounded context files for a run.
+ * When the caller names the model the turn actually runs, the selected Agent Profile's
+ * workspace budget bounds the context files.
+ */
 export async function resolveBootstrapContextForRun(
-  params: BootstrapFileResolutionParams,
+  params: BootstrapFileResolutionParams & {
+    modelProvider?: string;
+    modelId?: string;
+  },
 ): Promise<{
   bootstrapFiles: WorkspaceBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 }> {
   const bootstrapFiles = await resolveBootstrapFilesForRun(params);
+  if (params.modelProvider || params.modelId) {
+    const profileContext = await prepareAgentProfileWorkspaceContext({
+      resolvedProfile: resolveAgentProfile({
+        config: params.config,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      }),
+      bootstrapFiles,
+      config: params.config,
+      agentId: params.agentId,
+      warn: params.warn,
+    });
+    if (profileContext) {
+      return {
+        bootstrapFiles: profileContext.bootstrapFiles,
+        contextFiles: profileContext.contextFiles,
+      };
+    }
+  }
   const contextFiles = buildBootstrapContextForFiles(bootstrapFiles, params);
   return { bootstrapFiles, contextFiles };
 }

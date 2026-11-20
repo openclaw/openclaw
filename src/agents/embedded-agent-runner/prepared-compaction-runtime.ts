@@ -20,11 +20,7 @@ import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarningNotice,
 } from "../bootstrap-budget.js";
-import {
-  makeBootstrapWarn,
-  resolveBootstrapContextForRun,
-  resolveContextInjectionMode,
-} from "../bootstrap-files.js";
+import { makeBootstrapWarn, resolveContextInjectionMode } from "../bootstrap-files.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
@@ -53,6 +49,7 @@ import {
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
 import { prepareWatchedSessionsPromptAsync } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
+import { resolveCompactionWorkspaceContext } from "./compaction-workspace-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { log } from "./logger.js";
@@ -147,20 +144,23 @@ export async function buildPreparedCompactionRuntime(
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
     const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
+    const bootstrapWarn = makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => log.warn(message),
+    });
     const { bootstrapFiles, contextFiles } =
       contextInjectionMode === "never"
         ? { bootstrapFiles: [], contextFiles: [] }
-        : await resolveBootstrapContextForRun({
-            workspaceDir: effectiveWorkspace,
+        : await resolveCompactionWorkspaceContext({
             config: params.config,
+            agentId: sessionAgentId,
             sessionKey: params.sessionKey,
             sessionId: params.sessionId,
             chatType: params.chatType,
-            agentId: sessionAgentId,
-            warn: makeBootstrapWarn({
-              sessionLabel,
-              warn: (message) => log.warn(message),
-            }),
+            workspaceDir: effectiveWorkspace,
+            provider,
+            modelId,
+            warn: bootstrapWarn,
           });
     // Mirror ordinary-turn bootstrap disclosure so compaction summaries do not
     // silently omit later workspace files when the aggregate budget is spent.

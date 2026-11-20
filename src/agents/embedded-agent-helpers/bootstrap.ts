@@ -34,7 +34,7 @@ const AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN =
 const AGENTS_POLICY_DIGEST_HIGH_PRIORITY_PATTERN =
   /\b(?:AGENTS\.md|scoped|required|must|never|do not|before subtree|read scoped|security|secret|credential)\b|(?:🔴|禁止|嚴禁|不得|絕不|絕對不|切勿)/iu;
 
-type TrimBootstrapResult = {
+export type TrimBootstrapResult = {
   content: string;
   truncated: boolean;
   maxChars: number;
@@ -192,7 +192,7 @@ function trimAgentsBootstrapContent(trimmed: string, maxChars: number): string {
   return rendered.length > maxChars ? truncateUtf16Safe(rendered, maxChars) : rendered;
 }
 
-function trimBootstrapContent(
+export function trimBootstrapContent(
   content: string,
   fileName: string,
   maxChars: number,

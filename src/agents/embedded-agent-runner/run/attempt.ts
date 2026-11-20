@@ -322,6 +322,7 @@ async function runEmbeddedAttemptOwned(
       prepareEmbeddedAttemptBootstrap({
         attempt: params,
         setup,
+        agentProfile: preparedToolBase.agentProfile,
         hasReadTool: toolsEnabled && toolsRaw.some((tool) => tool.name === "read"),
         isRawModelRun,
       }),
@@ -391,6 +392,7 @@ async function runEmbeddedAttemptOwned(
           setup,
           bootstrap: preparedBootstrap,
           capabilityToolNames: toolSearchRunPlan.capabilityToolNames,
+          agentProfile: preparedToolBase.agentProfile,
           effectiveTools,
           isRawModelRun,
           modelToolsEnabled: toolsEnabled,
