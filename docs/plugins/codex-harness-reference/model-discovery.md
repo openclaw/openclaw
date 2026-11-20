@@ -23,7 +23,7 @@ gateway to see the live catalog for that harness and account.
 The OpenAI provider's ChatGPT subscription list is separate. It sends the latest
 published stable `@openai/codex` version from npm as `client_version`, never lower
 than the bundled Codex version. Successful lookups are cached for six hours.
-If the registry is unavailable, times out after five seconds, or returns an
+If the registry is unavailable, times out after one second, or returns an
 invalid version, listing uses the bundled version and retries the lookup on the
 next discovery attempt. This does not change Responses attribution headers or
 select, install, or update the Codex binary.

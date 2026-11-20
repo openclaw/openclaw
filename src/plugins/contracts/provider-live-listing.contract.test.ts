@@ -1,9 +1,11 @@
 // Bundled hosted providers list models from the account, so a new vendor model appears and
 // runs without an OpenClaw release (docs/plugins/sdk-provider-plugins/model-catalogs.md).
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { resolveProviderRequestPolicy } from "../../agents/provider-attribution.js";
 import { clearLiveCatalogCacheForTests } from "../../plugin-sdk/provider-catalog-live-runtime.js";
 import type { LiveModelCatalogFetchGuard } from "../../plugin-sdk/provider-catalog-live-runtime.js";
@@ -175,6 +177,74 @@ describe("OpenAI subscription models list and run without a release", () => {
     clearLiveCatalogCacheForTests();
     fetchWithSsrFGuard.mockReset();
     vi.unstubAllEnvs();
+  });
+
+  it("lists with bundled Codex when npm stalls within the selected-account discovery budget", async () => {
+    const { runProviderCatalogWithTimeout } =
+      await import("../../agents/models-config.providers.implicit.js");
+    const { default: plugin } = (await import(
+      path.join(repoRoot, "extensions/openai/index.ts")
+    )) as { default: Parameters<typeof registerProviderPlugins>[0] };
+    const provider = (await registerProviderPlugins(plugin)).find((entry) => entry.id === "openai");
+    if (!provider) {
+      throw new Error("extensions/openai registers no openai provider");
+    }
+    const agentDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "codex-catalog-timeout-"));
+    const registryStarted = createDeferred();
+    const listedAs: string[] = [];
+    fetchWithSsrFGuard.mockImplementation(async ({ url, timeoutMs }) => {
+      const target = new URL(url);
+      if (target.hostname === "registry.npmjs.org") {
+        registryStarted.resolve();
+        // Simulate an unresponsive registry honoring the transport's request deadline.
+        return new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("registry request timed out")), timeoutMs);
+        });
+      }
+      listedAs.push(target.searchParams.get("client_version") ?? "");
+      await new Promise((resolve) => {
+        setTimeout(resolve, 500);
+      });
+      return {
+        response: Response.json({ models: [{ slug: PROBE_MODEL_ID, visibility: "list" }] }),
+        finalUrl: url,
+        release: async () => {},
+      };
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const credential = {
+        apiKey: "contract-probe-oauth",
+        discoveryApiKey: "contract-probe-oauth",
+      };
+      const pending = runProviderCatalogWithTimeout({
+        provider,
+        providerIds: ["openai"],
+        config: {},
+        env: {},
+        agentDir,
+        authStore: { version: 1, profiles: {} },
+        timeoutMs: 5_000,
+        resolveProviderApiKey: () => credential,
+        resolveProviderAuth: () => ({ ...credential, mode: "oauth", source: "env" }),
+      });
+      await awaitGateBeforeSettlement(
+        registryStarted.promise,
+        pending,
+        "registry was not requested",
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await pending;
+      const published = [
+        ...(result && "provider" in result ? [result.provider] : []),
+        ...(result && "providers" in result ? Object.values(result.providers ?? {}) : []),
+      ].flatMap((entry) => entry?.models ?? []);
+      expect(published.map((model) => model.id)).toContain(PROBE_MODEL_ID);
+      expect(listedAs).toEqual(["0.169.0"]);
+    } finally {
+      vi.useRealTimers();
+      await fs.promises.rm(agentDir, { recursive: true });
+    }
   });
 
   it("lists with the newest published Codex, and OpenClaw turns pass the model gate", async () => {

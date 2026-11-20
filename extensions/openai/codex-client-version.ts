@@ -9,7 +9,8 @@ const OPENAI_CODEX_CLIENT_VERSION_FLOOR = "0.169.0";
 
 const CODEX_LATEST_VERSION_URL = "https://registry.npmjs.org/@openai/codex/latest";
 const CODEX_LATEST_VERSION_TTL_MS = 6 * 60 * 60_000;
-const CODEX_LATEST_VERSION_TIMEOUT_MS = 5_000;
+// Leave most of the selected-account discovery's five-second budget for /models.
+const CODEX_LATEST_VERSION_TIMEOUT_MS = 1_000;
 const STABLE_VERSION = /^(\d+)\.(\d+)\.(\d+)$/;
 
 function compareStableVersions(left: string, right: string): number {
