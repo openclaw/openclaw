@@ -4,10 +4,10 @@
  * [baseline-ref|-]. Alternate revisions in fresh processes; compare record digests
  * and use external time for total CPU and peak RSS. This does not measure compilation.
  */
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { registerHooks } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -60,7 +60,16 @@ if (ids.length === 0 || missing.length > 0) {
 }
 const projects = prepareExtensionBoundaryProjects(root, ids);
 const metadata = projects.flatMap((project) => project.metadataInputs);
-const counts = { exists: 0, realpath: 0, nativeRealpath: 0 };
+const counts = { exists: 0, realpath: 0, nativeRealpath: 0, compilerProcesses: 0 };
+childProcess.spawn = new Proxy(childProcess.spawn, {
+  apply(target, receiver, args) {
+    if (Array.isArray(args[1]) && args[1].includes("--api")) {
+      counts.compilerProcesses++;
+    }
+    return Reflect.apply(target, receiver, args);
+  },
+});
+syncBuiltinESMExports();
 fs.existsSync = new Proxy(fs.existsSync, {
   apply(target, receiver, args) {
     counts.exists++;
@@ -81,6 +90,9 @@ fs.realpathSync = new Proxy(fs.realpathSync, {
 });
 const started = performance.now();
 const snapshot = new BoundaryInputSnapshot(root, metadata);
+if (revision === "-") {
+  snapshot.prepareConfigs(projects.map((project) => project.config));
+}
 const digest = createHash("sha256");
 for (const { extensionId, config } of projects) {
   const receipt = path.join(directory, `${extensionId}.inputs.json`);
