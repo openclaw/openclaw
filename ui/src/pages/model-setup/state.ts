@@ -21,6 +21,12 @@ export type ModelSetupActivationPreferences = Pick<
   "nativeSessionCatalogsEnabled" | "completeFirstAgent"
 > & { selectModel?: true };
 
+export type ModelSetupAuthOption = Pick<ProviderLoginOption, "id" | "label"> & {
+  brandId?: string;
+  kind: ProviderLoginOption["kind"] | "install" | "custom";
+  modelTarget?: "utility";
+};
+
 export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
@@ -120,6 +126,20 @@ export type ModelSetupState = {
   detectionRequest: object | null;
   cancellationNotice: string | null;
 };
+
+/** One request preference projection for every first-run activation entrypoint. */
+export function modelSetupActivationPreferences(
+  firstRun: boolean | undefined,
+  state: ModelSetupState,
+): ModelSetupActivationPreferences {
+  return {
+    ...(firstRun ? { completeFirstAgent: true } : {}),
+    ...(state.pageState.phase === "ready" &&
+    state.pageState.result.nativeSessionCatalogPreferenceRequired === true
+      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
+      : {}),
+  };
+}
 
 export function createModelSetupState(): ModelSetupState {
   return {

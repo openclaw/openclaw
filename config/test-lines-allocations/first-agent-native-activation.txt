@@ -3,5 +3,7 @@
 # Keep these production-owner regressions rather than replace them with mock-only checks.
 # Native sign-in regression and real hello negotiation cover the reviewed missing request path.
 # Browser focus assertion protects the unsent starter handoff; native Swift wire tests are separate.
-# Measured net test growth over the prepared PR base: 467; allocation covers the 67-line excess.
-67
+# Header Connect AI needs the actual models.authLogin/config/workspace boundary, browser
+# picker-to-main handoff, and retained wizard admission proof; these are distinct entrypoints.
+# Measured net test growth over the prepared PR base: 645; allocation covers the 245-line excess.
+245

@@ -332,6 +332,66 @@ suite.define(() => {
     });
   });
 
+  it("completes first-agent setup from the header Connect AI picker", async () => {
+    await suite.withPage(options, async ({ page }) => {
+      const gateway = await install(page, {
+        historyMessages: [],
+        featureMethods: ["models.authLogin", "models.authStatus"],
+        deferredMethods: ["models.authLogin"],
+        methodResponses: {
+          "models.authStatus": {
+            ts: 1,
+            providers: [],
+            providerCapabilities: [
+              {
+                provider: "meta",
+                apiKeySupported: false,
+                quickApiKeySetup: false,
+                loginOptions: [
+                  {
+                    id: "meta/muse-code",
+                    brandId: "meta",
+                    label: "Muse Code",
+                    kind: "device-code",
+                    featured: true,
+                    requiresSetup: true,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "settings/model-setup?firstRun=1");
+      await page.locator("[data-models-connect]").click();
+      await page.locator('[data-models-login-provider="meta"]').click();
+      await page
+        .locator("[data-models-login-choice] button")
+        .filter({ hasText: "Muse Code" })
+        .click();
+      expect((await gateway.waitForRequest("models.authLogin")).params).toMatchObject({
+        authChoice: "meta/muse-code",
+        agentId: "main",
+        selectModel: true,
+        completeFirstAgent: true,
+      });
+      await gateway.resolveDeferred("models.authLogin", {
+        done: true,
+        status: "done",
+        modelActivation: { modelRef: "fixture/native", firstAgent: configured.firstAgent },
+      });
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor();
+      expect(new URL(page.url()).pathname).toBe("/chat/main");
+      expect(await composer.inputValue()).toBe("Wake up, my friend!");
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    });
+  });
+
   it("verifies a native model choice before first-agent handoff", async () => {
     await suite.withPage(options, async ({ page }) => {
       const gateway = await install(page, {

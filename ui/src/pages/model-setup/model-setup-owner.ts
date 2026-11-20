@@ -32,9 +32,10 @@ import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./
 import {
   activationTargetId,
   createModelSetupState,
+  modelSetupActivationPreferences,
   updateModelSetupWizardDraft,
   type ModelSetupActivationState,
-  type ModelSetupActivationPreferences,
+  type ModelSetupAuthOption,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
@@ -142,6 +143,8 @@ export function createModelSetup(
       manualProviderRevealPending = true;
       selectManualProvider(authChoice);
     },
+    getSetupAuthHandler: () =>
+      routeData()?.firstRun ? (option) => startAuth(option, "models.authLogin") : undefined,
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
@@ -395,19 +398,29 @@ export function createModelSetup(
     state.activationState = { phase: "testing", targetId };
     pendingPrepareOption = null;
     state.wizardMode = "activate";
-    await runWizardMutation(() =>
-      wizard.activate({ ...params, ...nativeSessionCatalogPreference() }, targetId),
-    );
+    await runWizardMutation(() => wizard.activate({ ...params, ...preferences() }, targetId));
   }
 
-  function nativeSessionCatalogPreference(): ModelSetupActivationPreferences {
-    return {
-      ...(routeData()?.firstRun ? { completeFirstAgent: true } : {}),
-      ...(state.pageState.phase === "ready" &&
-      state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-        ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-        : {}),
-    };
+  const preferences = () => modelSetupActivationPreferences(routeData()?.firstRun, state);
+
+  function startAuth(
+    option: ModelSetupAuthOption,
+    method: "models.authLogin" | "openclaw.setup.auth.start",
+  ): void {
+    wizard.prepareSignIn(option.kind, option.label, option.brandId);
+    pendingPrepareOption = null;
+    state.wizardMode = "auth";
+    void runWizardMutation(() =>
+      wizard.start(
+        option.id,
+        method,
+        {
+          ...preferences(),
+          ...(method === "models.authLogin" ? { selectModel: true } : {}),
+        },
+        option.modelTarget,
+      ),
+    );
   }
 
   function connectManual(): void {
@@ -503,7 +516,7 @@ export function createModelSetup(
         wizardMutationActive = false;
         wizardSaving.retire();
         const prepareOption = pendingPrepareOption;
-        const catalogPreference = nativeSessionCatalogPreference();
+        const catalogPreference = preferences();
         pendingPrepareOption = null;
         await completeModelSetupWizard(
           { state, firstRun, wizard, detect, activate },
@@ -636,19 +649,7 @@ export function createModelSetup(
           candidateActivation(candidate),
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
-      onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
-        wizard.prepareSignIn(option.kind, option.label, option.brandId);
-        pendingPrepareOption = null;
-        state.wizardMode = "auth";
-        void runWizardMutation(() =>
-          wizard.start(
-            option.id,
-            "openclaw.setup.auth.start",
-            nativeSessionCatalogPreference(),
-            option.modelTarget,
-          ),
-        );
-      },
+      onStartAuth: (option: ModelSetupAuthOption) => startAuth(option, "openclaw.setup.auth.start"),
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         pendingPrepareOption = option;
         state.wizardMode = "prepare";
