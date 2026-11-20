@@ -5,6 +5,7 @@ import type { User } from "../internal/discord.js";
 import { resolveDiscordDmCommandAccess, type DiscordDmPolicy } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
 import { formatDiscordUserTag } from "./format.js";
+import { createDiscordMessageSourceAdmission } from "./message-handler.admission.js";
 import type {
   DiscordMessagePreflightParams,
   DiscordSenderIdentity,
@@ -53,6 +54,18 @@ export async function resolveDiscordDmPreflightAccess(params: {
       conversationParentId: conversation?.parentId,
       conversationThreadId: conversation?.threadId,
       ...(contextBinding ? { contextBinding } : {}),
+      childSessionPublication: contextBinding
+        ? createDiscordMessageSourceAdmission({
+            preflight: params.preflight,
+            sender: params.sender,
+            messageChannelId: params.conversationId,
+            channelInfo: null,
+            isGuildMessage: false,
+            isDirectMessage: true,
+            isGroupDm: false,
+            hasControlCommand: false,
+          })
+        : undefined,
     });
   const dmAccess = await resolveChannelIngress();
   if (params.preflight.isPolicyCurrent?.() === false) {

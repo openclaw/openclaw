@@ -29,7 +29,6 @@ import {
   resolveDiscordMentionPolicy,
 } from "./allow-list.js";
 import { resolveDiscordChannelNameSafe } from "./channel-access.js";
-import { resolveDiscordTextCommandAccess } from "./dm-command-auth.js";
 import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
@@ -38,6 +37,7 @@ import {
   resolveDiscordMessageStickers,
   resolveDiscordReferencedReplyMessage,
 } from "./message-forwarded.js";
+import { createDiscordChannelMessageIngress } from "./message-handler.admission.js";
 import { resolveDiscordDmPreflightAccess } from "./message-handler.dm-preflight.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
@@ -578,31 +578,20 @@ export async function preflightDiscordMessage(
   const hasAbortRequest = isAbortRequestText(baseText);
 
   if (!isDirectMessage) {
-    const resolveCommandIngress = async (
-      contextBinding?: Parameters<typeof resolveDiscordTextCommandAccess>[0]["contextBinding"],
-      conversation?: { parentId?: string; threadId?: string },
-    ) =>
-      await resolveDiscordTextCommandAccess({
-        accountId: params.accountId,
-        cfg: params.cfg,
-        ownerAllowFrom: params.allowFrom,
-        sender: {
-          id: sender.id,
-          name: sender.name,
-          tag: sender.tag,
-          isPluralKit: sender.isPluralKit,
-          authorKind: author.bot ? "bot" : "user",
-        },
-        memberAccessConfigured: hasAccessRestrictions,
-        memberAllowed,
-        allowNameMatching,
-        allowTextCommands,
-        hasControlCommand: hasControlCommandInMessage,
-        conversationId: messageChannelId,
-        conversationParentId: conversation?.parentId,
-        conversationThreadId: conversation?.threadId,
-        ...(contextBinding ? { contextBinding } : {}),
-      });
+    const resolveCommandIngress = createDiscordChannelMessageIngress({
+      preflight: params,
+      sender,
+      messageChannelId,
+      channelInfo,
+      isGuildMessage,
+      isDirectMessage,
+      isGroupDm,
+      memberAccessConfigured: hasAccessRestrictions,
+      memberAllowed,
+      allowNameMatching,
+      allowTextCommands,
+      hasControlCommand: hasControlCommandInMessage,
+    });
     const commandAccess = await resolveCommandIngress();
     if (params.isPolicyCurrent?.() === false) {
       return null;
