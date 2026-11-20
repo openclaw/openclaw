@@ -2,6 +2,7 @@
 
 import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Icon } from "../../components/solid/icon.tsx";
 import { i18n } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
@@ -358,6 +359,31 @@ describe("renderPluginCatalogResults", () => {
       }
     },
   );
+
+  it("prefers Template glyphs for matching category slugs, not similar labels", async () => {
+    const { container } = await mount(
+      baseProps({
+        categories: (
+          [
+            ["productivity", "Productivity", "package"],
+            ["research", "Research", "globe"],
+            ["web", "Research", "globe"],
+          ] as const
+        ).map(([slug, label, icon], order) => ({ slug, label, icon, description: label, order })),
+      }),
+    );
+    const expected = mountSolid(() => (
+      <>
+        <Icon name="listTodo" />
+        <Icon name="search" />
+        <Icon name="globe" />
+      </>
+    ));
+    const shapes = (nodes: Iterable<SVGElement>) => Array.from(nodes, (svg) => svg.innerHTML);
+    expect(
+      shapes(container.querySelectorAll<SVGElement>(".plugin-catalog-chip svg")).slice(3),
+    ).toEqual(shapes(expected.container.querySelectorAll("svg")));
+  });
 
   it("uses the package fallback for unknown and inherited category icon names", async () => {
     const { container } = await mount(

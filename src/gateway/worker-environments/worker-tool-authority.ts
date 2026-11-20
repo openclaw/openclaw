@@ -1,4 +1,3 @@
-import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -33,10 +32,6 @@ export async function resolveWorkerToolAuthority(params: {
   computerAvailable?: boolean;
 }) {
   const turn = params.turn;
-  const authSourceAgentDir = turn.agentDir?.trim();
-  const authProfileStoreSource = authSourceAgentDir
-    ? await hasAnyAuthProfileStoreSourceAsync(authSourceAgentDir)
-    : false;
   params.assertCurrent();
   turn.abortSignal?.throwIfAborted();
   const sandboxSessionKey =
@@ -152,7 +147,6 @@ export async function resolveWorkerToolAuthority(params: {
         location,
       }));
       return {
-        authProfileStoreSource,
         capabilityProfile,
         policy: corePolicy,
         exec,

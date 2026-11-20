@@ -2536,8 +2536,12 @@ src/config/sessions/session-transcript-context-facts.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age-queries.ts
 src/config/sessions/session-accessor.sqlite-maintenance-age.ts
 src/config/sessions/session-accessor.sqlite-metadata-read.ts
+src/config/sessions/session-accessor.sqlite-history-navigation.ts
+src/config/sessions/session-accessor.sqlite-model-context-navigation.ts
 src/config/sessions/session-accessor.sqlite-model-context.ts
 src/config/sessions/session-accessor.sqlite-projection-read.ts
+src/config/sessions/session-accessor.sqlite-reset-window.ts
+src/config/sessions/session-transcript-navigation.ts
 src/config/sessions/session-accessor.sqlite-read.ts
 src/config/sessions/session-accessor.sqlite-sharing-acquisition.ts
 src/config/sessions/session-accessor.sqlite-transcript-parent.ts
