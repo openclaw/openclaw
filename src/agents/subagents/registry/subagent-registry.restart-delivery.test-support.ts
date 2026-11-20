@@ -11,6 +11,7 @@ import {
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { resumeMarkedSessions } from "../../../gateway/session-restart-resume.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { sessionControllerMailboxes } from "../../../sessions/session-controller.mailbox.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -48,6 +49,67 @@ export function registerRequesterRestartDeliveryTests<Response>({
   | "createGatewayContext"
   | "getLifecycleHandler"
 > & { callGatewayMock: Mock<(request: GatewayRequest) => Promise<Response>> }): void {
+  it("shows every consumed result when a frozen batch settles in separate owner partitions", async () => {
+    const contexts = [createGatewayContext(), createGatewayContext()];
+    await registry.initSubagentRegistry();
+    await registry.activateSubagentRegistry(() => contexts[0]!);
+    const batchRunIds = ["partition-alpha", "partition-beta"];
+    for (const [index, runId] of batchRunIds.entries()) {
+      const childSessionKey = `agent:main:subagent:${runId}`;
+      const sessionEntry = await prepareChildSession(childSessionKey, `sess-${runId}`);
+      await registry.addSubagentRunForTests({
+        runId,
+        childSessionKey,
+        childAgentId: "main",
+        childSessionIdentity: sessionEntry,
+        requesterSessionKey,
+        requesterAgentId: "main",
+        expectsCompletionMessage: true,
+        completionTarget: "parent",
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+        completion: { required: true, resultText: `Saved answer from ${runId}` },
+        delivery: {
+          status: "pending",
+          requesterDelivery: { state: "consumed", runId: "shared-requester", at: Date.now() },
+        },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          requesterYieldBatch: true,
+          requesterRunId: "shared-requester",
+          batchRunIds,
+          rearmGeneration: 1,
+        },
+      });
+      bindGatewayContextResolver(subagentRuns.get(runId)!, contexts[index]!.resolveGatewayContext);
+    }
+    for (const runId of batchRunIds) {
+      registry.resumeSubagentRun(runId);
+      await flushOwnedWork();
+      expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
+    }
+    expect(getRequesterWakeCalls()).toEqual([]);
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionKey: requesterSessionKey,
+      storePath: getFixture().sessionStorePath,
+      sessionId: getFixture().sessionStore[requesterSessionKey]!.sessionId,
+    });
+    const reports = events.filter(
+      (event) => isRecord(event) && event.customType === "subagent-completion" && event.display,
+    );
+    expect(reports).toHaveLength(2);
+    for (const runId of batchRunIds) {
+      expect(
+        reports.some(
+          (event) =>
+            isRecord(event) && String(event.content).includes(`Saved answer from ${runId}`),
+        ),
+      ).toBe(true);
+    }
+  });
+
   it.each([
     "yielded settle",
     "aborted announce",

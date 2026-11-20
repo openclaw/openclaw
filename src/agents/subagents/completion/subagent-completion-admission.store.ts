@@ -105,7 +105,7 @@ export async function recordRequiredCompletionNotice(
     return;
   }
   // Share the yielded requester's failure identity with its lifecycle settlement.
-  const runId =
+  const noticeId =
     wake?.requesterYieldBatch || batch.length > 1
       ? (wake?.requesterRunId ??
         buildAnnounceIdempotencyKey(
@@ -119,6 +119,16 @@ export async function recordRequiredCompletionNotice(
           }:delivery-failure`,
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
+  // Independently admitted partitions contain different saved results, even within one wake.
+  const runId =
+    kind === "result"
+      ? buildAnnounceIdempotencyKey(
+          `${noticeId}:result:${batch
+            .map((child) => child.runId)
+            .toSorted()
+            .join(",")}`,
+        )
+      : noticeId;
   // Report delivery state without borrowing its retired execution authority.
   // Address the current chat, including a compaction successor; deletion and Stop get no notice.
   const requester = {
