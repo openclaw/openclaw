@@ -136,12 +136,13 @@
   font-size: var(--control-ui-text-md);
 }
 
-/* The calendar reads like a select's chevron: same color, stroke, size and inset. */
-.oc-sheet__body input[type="date"] {
+/* Meeting filters use the same calendar in their sheet and anchored popover. */
+:is(.transcripts-filter-popover, .oc-sheet__body) input[type="date"] {
   padding-inline-end: 10px;
 }
 
-.oc-sheet__body input[type="date"]::-webkit-calendar-picker-indicator {
+:is(.transcripts-filter-popover, .oc-sheet__body)
+  input[type="date"]::-webkit-calendar-picker-indicator {
   width: 16px;
   height: 16px;
   margin: 0;
@@ -176,8 +177,7 @@
     height: 16px;
     background: var(--text-tertiary);
     content: "";
-    mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='m6 9 6 6 6-6'/></svg>")
-      center / contain no-repeat;
+    mask: var(--field-chevron-mask);
     pointer-events: none;
   }
 }

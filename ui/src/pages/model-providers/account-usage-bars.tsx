@@ -218,34 +218,43 @@ export function AccountUsageBars(props: {
           <span />
           <div class="model-providers__usage-track">
             <For each={ids()}>
-              {(id, index) => (
-                <button
-                  type="button"
-                  aria-expanded={props.expandedAccount === id ? "true" : "false"}
-
-                  onClick={(e) => {
-                    if (!e.detail || !suppressPointerClick) {
-                      props.onToggleAccount(id);
+              {(id, index) => {
+                const plan = () => props.readings[index()]?.result().snapshot?.plan?.trim();
+                return (
+                  <button
+                    type="button"
+                    aria-expanded={props.expandedAccount === id ? "true" : "false"}
+                    onClick={(e) => {
+                      if (!e.detail || !suppressPointerClick) {
+                        props.onToggleAccount(id);
+                      }
+                    }}
+                    aria-keyshortcuts={props.canReorder ? "ArrowLeft ArrowRight" : undefined}
+                    onKeyDown={(e) => reorderByKey(e, id, index())}
+                    class="model-providers__segment-name"
+                    aria-description={plan() || undefined}
+                    title={
+                      preview()
+                        ? undefined
+                        : [props.identities.get(id), plan()].filter(Boolean).join(" · ")
                     }
-                  }}
-                  aria-keyshortcuts={props.canReorder ? "ArrowLeft ArrowRight" : undefined}
-                  onKeyDown={(e) => reorderByKey(e, id, index())}
-                  class="model-providers__segment-name"
-                  title={preview() ? undefined : props.identities.get(id)}
-                  data-movable={props.canReorder || undefined}
-                  data-grabbed={preview()?.source === index() || undefined}
-                  style={{ translate: translation(index()) }}
-                  onPointerDown={(e) => startDrag(e, index())}
-                >
-                  <span class="settings-control__sr-label">
-                    {t("modelProviders.limits.detailsFor", { account: props.identities.get(id)! })}
-                  </span>
-                  <span class="model-providers__account-name" aria-hidden="true">
-                    {props.identities.get(id)}
-                  </span>
-                  {props.status(id)}
-                </button>
-              )}
+                    data-movable={props.canReorder || undefined}
+                    data-grabbed={preview()?.source === index() || undefined}
+                    style={{ translate: translation(index()) }}
+                    onPointerDown={(e) => startDrag(e, index())}
+                  >
+                    <span class="settings-control__sr-label">
+                      {t("modelProviders.limits.detailsFor", {
+                        account: props.identities.get(id)!,
+                      })}
+                    </span>
+                    <span class="model-providers__account-name" aria-hidden="true">
+                      {props.identities.get(id)}
+                    </span>
+                    {props.status(id)}
+                  </button>
+                );
+              }}
             </For>
           </div>
         </div>
@@ -346,6 +355,29 @@ export function AccountUsageBars(props: {
             </For>
           </div>
         </div>
+        <For each={props.readings}>
+          {(read) => {
+            const outcome = () => {
+              const { loading, error, snapshot } = read.result();
+              const failure = error ?? snapshot?.error;
+              if (failure !== undefined) {
+                return failure
+                  ? t("modelProviders.limits.readFailed", { error: failure })
+                  : t("usage.providerUsage.unavailable");
+              }
+              return loading ? t("common.loading") : undefined;
+            };
+            return (
+              <Show when={outcome()}>
+                {(message) => (
+                  <small role="status">
+                    {props.identities.get(read.account().profileId)}: {message()}
+                  </small>
+                )}
+              </Show>
+            );
+          }}
+        </For>
         <Show when={selectedDetail()}>{(detail) => <small role="status">{detail()}</small>}</Show>
       </Loading>
     </section>

@@ -35,15 +35,6 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.model-providers__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-width: 0;
-  min-block-size: 2.75rem;
-}
-
 .model-providers__icon {
   width: 26px;
   height: 26px;
@@ -55,7 +46,10 @@
 }
 
 .model-providers__profiles-heading-copy span,
-.model-providers__profile-copy span {
+.model-providers__profile-copy span,
+.model-providers__usage-bars small,
+.model-providers__usage-label,
+.model-providers__account-plan {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -205,18 +199,6 @@
 
 .model-providers__profile--dragging .model-providers__profile-grip {
   cursor: grabbing;
-}
-
-.model-providers__profiles--sorting
-  .model-providers__profile:not(.model-providers__profile--dragging) {
-  transition: translate 100ms ease-out;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .model-providers__profiles--sorting
-    .model-providers__profile:not(.model-providers__profile--dragging) {
-    transition: none;
-  }
 }
 
 .model-providers__profile-avatar {
@@ -412,17 +394,6 @@
     width: 100%;
     max-width: none;
   }
-
-  .model-providers__head {
-    align-items: flex-start;
-    flex-wrap: wrap;
-  }
-
-  .model-providers__head > .settings-row__control {
-    flex: 1 1 100%;
-    justify-content: flex-start;
-    width: 100%;
-  }
 }
 
 /* One equal-width slot per subscription. The fill is the allowance left on that login. */
@@ -436,11 +407,6 @@
 }
 .model-providers__usage-bars > small {
   grid-column: 1 / -1;
-}
-.model-providers__usage-bars small,
-.model-providers__usage-label {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
 }
 .model-providers__usage-window {
   display: grid;
@@ -476,14 +442,20 @@
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
 }
-.model-providers__segment-name[data-movable],
-.model-providers__usage-segment[data-movable] {
+.model-providers__usage-track > [data-movable] {
   user-select: none;
   cursor: grab;
   touch-action: pan-y;
 }
+/* Row and column reordering use the same motion; the lifted item follows the pointer. */
+.model-providers__profiles--sorting
+  .model-providers__profile:not(.model-providers__profile--dragging),
 .model-providers__usage-bars[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
   transition: translate 100ms ease-out;
+
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
 }
 .model-providers__usage-track > [data-grabbed] {
   position: relative;
@@ -493,12 +465,6 @@
   background-color: var(--card);
   box-shadow: var(--shadow-md);
 }
-@media (prefers-reduced-motion: reduce) {
-  .model-providers__usage-bars[data-sorting] .model-providers__usage-track > :not([data-grabbed]) {
-    transition: none;
-  }
-}
-
 .model-providers__usage-segment:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
@@ -558,14 +524,12 @@
 }
 
 .model-providers__account-plan {
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
   text-transform: capitalize;
 }
 
 .model-providers__account-details > summary {
   width: fit-content;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   font-size: var(--control-ui-text-xs);
 }
 
@@ -752,6 +716,8 @@
   align-items: center;
   gap: var(--provider-row-gap);
   inline-size: 100%;
+  min-width: 0;
+  justify-content: space-between;
   min-height: var(--list-row-min-height);
   padding: var(--list-row-padding);
   border: 0;

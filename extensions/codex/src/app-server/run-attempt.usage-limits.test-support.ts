@@ -75,11 +75,11 @@ async function waitForRequest(
 function expectRateRead(harness: Harness, called: boolean) {
   expect(harness.requests.some(({ method }) => method === "account/rateLimits/read")).toBe(called);
 }
-function expectResetError(result: Result) {
+function expectResetError(result: Result, confirmed = true) {
   const error = expectUsageLimitPromptError(result);
   expect(error.message).toContain("Codex reported a usage or quota limit.");
   expect(error.message).toContain("Next reset in");
-  expect(error).toMatchObject({ code: "usage_limit_reached" });
+  expect(Reflect.get(error, "code")).toBe(confirmed ? "usage_limit_reached" : undefined);
   return error;
 }
 
@@ -265,21 +265,18 @@ export function registerCodexUsageLimitTests() {
       },
     );
 
-    it.each([
-      { source: "primary", phase: "startup" },
-      { source: "unrelated", phase: "startup" },
-      { source: "unrelated", phase: "terminal" },
-    ])(
-      "preserves reset details and attributes only current limits ($source update, $phase)",
-      async ({ source, phase }) => {
+    it.each(["primary startup", "unrelated startup", "unrelated terminal"])(
+      "preserves reset details and attributes only current limits (%s update)",
+      async (source) => {
         const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-        const primary = source === "primary";
+        const primary = source === "primary startup";
+        const terminal = source === "unrelated terminal";
         const unrelated = {
           method: "account/rateLimits/updated",
           params: { rateLimits: exhaustedLimit(resetsAt + 60, "codex_other", 60) },
         };
         const harness: Harness = createStartedThreadHarness(async (method) => {
-          if (method === "turn/start" && phase === "startup") {
+          if (method === "turn/start" && !terminal) {
             const revision = readCodexRateLimitsRevision(harness.client);
             await harness.notify(primary ? rateLimitsUpdated(resetsAt) : unrelated);
             if (primary) {
@@ -294,7 +291,7 @@ export function registerCodexUsageLimitTests() {
         }
         const params = createUsageParams(primary ? "agent" : undefined);
         const run = runCodexAppServerAttempt(params);
-        if (phase === "terminal") {
+        if (terminal) {
           await waitForRequest(harness, run, "turn/start");
           await harness.notify(unrelated);
           await harness.notify(
@@ -302,13 +299,9 @@ export function registerCodexUsageLimitTests() {
           );
         }
         const result = await run;
-        if (primary) {
-          expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
-          expectResetError(result);
-        } else {
-          const error = expectUsageLimitPromptError(result);
-          expect(error.message).toContain("Next reset in");
-          expect(Reflect.get(error, "code")).toBeUndefined();
+        expect(readAttemptTerminal(result).promptErrorSource).toBe("prompt");
+        expectResetError(result, primary);
+        if (!primary) {
           expect(params.authProfileStore.usageStats?.["openai:work"]?.blockedUntil).toBeUndefined();
         }
       },

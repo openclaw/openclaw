@@ -1,9 +1,6 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  createApiKeyCredential,
-  createOAuthRefreshCredential,
-} from "../auth-profiles/credential-fixtures.test-support.js";
+import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import type { AgentHarness } from "../harness/types.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -288,45 +285,6 @@ describe("native harness auth failover", () => {
       expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
     },
   );
-
-  it("continues a replay-safe Codex thread on the next subscription after a weekly limit", async () => {
-    const run = prepareAuthFailoverRun();
-    // The overflow fixture normally erases structured provider errors. This test needs the real classifier.
-    const failover = await import("../failover-error.js");
-    const actual = await vi.importActual<typeof failover>("../failover-error.js");
-    vi.mocked(failover.coerceToFailoverError).mockImplementation(actual.coerceToFailoverError);
-    vi.mocked(failover.describeFailoverError).mockImplementation(actual.describeFailoverError);
-    mockedEnsureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {
-        [failedProfile]: createOAuthRefreshCredential({ accountId: "first" }),
-        [backupProfile]: createOAuthRefreshCredential({ accountId: "second" }),
-      },
-      order: { openai: [failedProfile, backupProfile] },
-    });
-    const failure = Object.assign(
-      new Error(
-        "Codex reported a usage or quota limit. You hit your spend cap set in your workspace. Increase your spend cap to continue. Next reset in 5d, Nov 25. Wait until the reset time, use another Codex account if available, or switch to another configured model/provider.",
-      ),
-      { status: 429, code: "usage_limit_reached" },
-    );
-    mockedRunEmbeddedAttempt.mockImplementation(async (attempt) =>
-      attempt.authProfileId === backupProfile
-        ? makeAttemptResult({ assistantTexts: ["OK"] })
-        : makeAttemptResult({
-            assistantTexts: [],
-            providerRetryMaxRetries: 1,
-            promptError: failure,
-            promptErrorSource: "prompt",
-          }),
-    );
-    const outcome = await run(createCodexAuthRunParams());
-    expect(mockedRunEmbeddedAttempt.mock.calls.map(([a]) => a.authProfileId)).toEqual([
-      failedProfile,
-      backupProfile,
-    ]);
-    expect(outcome).toMatchObject({ payloads: [{ text: "OK" }] });
-  });
 
   it("does not rotate or mark profiles for a preflight harness failure", async () => {
     const runEmbeddedAgent = prepareAuthFailoverRun();

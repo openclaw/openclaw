@@ -2,7 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
-import { expectAbsent, expectContent, expectPresent } from "../../test-helpers/model-providers.ts";
+import {
+  expectAbsent,
+  expectContent,
+  expectPresent,
+  profile,
+} from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   appendPage,
@@ -30,16 +35,10 @@ describe("ModelProvidersPage usage convergence", () => {
   it("keeps account quotas during config saves and refreshes them from the page", async () => {
     const { context, request, snapshot, runtimeConfig, notifyRuntimeConfig } =
       createHarness("main");
-    snapshot.hello = {
-      type: "hello-ok",
-      protocol: 3,
-      features: {
-        methods: ["config.get", "config.patch", "codex.accountUsage", "models.authOrderSet"],
-      },
-      auth: { role: "operator", scopes: ["operator.admin"] },
-    };
+    snapshot.hello!.features!.methods!.push("codex.accountUsage");
     const original = request.getMockImplementation()!;
     let usedPercent = 10;
+    const initial = deferred();
     const slow = deferred();
     const accountRequests: unknown[] = [];
     request.mockImplementation(async (method, params?: unknown) => {
@@ -48,21 +47,23 @@ describe("ModelProvidersPage usage convergence", () => {
           {
             profileOrder: ["openai:one", "openai:key", "openai:two"],
             profiles: [
-              { profileId: "openai:one", type: "oauth", status: "ok" },
-              { profileId: "openai:two", type: "token", status: "static" },
-              { profileId: "openai:key", type: "api_key", status: "static" },
+              profile("openai:one"),
+              profile("openai:two", { type: "token", status: "static" }),
+              profile("openai:key", { type: "api_key", status: "static" }),
             ],
           },
-          {
-            provider: "anthropic",
-            displayName: "Anthropic",
-            profiles: [{ profileId: "anthropic:one", type: "oauth", status: "ok" }],
-          },
+          { provider: "anthropic", displayName: "Anthropic", profiles: [profile("anthropic:one")] },
         ]);
       }
       if (method === "codex.accountUsage") {
         accountRequests.push(params);
+        if (accountRequests.length === 1) {
+          throw new Error("Offline");
+        }
         if (accountRequests.length === 2) {
+          return initial.promise;
+        }
+        if (accountRequests.length === 4) {
           await slow.promise;
         }
         return {
@@ -79,27 +80,33 @@ describe("ModelProvidersPage usage convergence", () => {
     const openai = await expandProvider(page, "openai");
     const anthropic = await expandProvider(page, "anthropic");
     const segments = () => [...openai.querySelectorAll("[data-account-segment]")];
-    const expectLimits = (remaining: number) =>
-      expect(segments().map((el) => el.getAttribute("aria-label"))).toEqual(
-        Array.from({ length: 2 }, () => expect.stringContaining(remaining + "% left")),
-      );
+    const bars = openai.querySelector(".model-providers__usage-bars")!;
+    const refresh = () =>
+      page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!.click();
+    await vi.waitFor(() =>
+      expectContent(bars, ["Signed-in account: Offline", "Access token: Loading"]),
+    );
+    initial.reject(new Error("Timed out"));
+    const retryHint = "Access token: Timed out · Refresh to try again.";
+    await vi.waitFor(() => expectContent(bars, [retryHint]));
+    expect(segments()).toHaveLength(0);
+    refresh();
+    const expectLimits = (percent: number) => {
+      const left = expect.stringContaining(`${percent}% left`);
+      expect(segments().map((el) => el.ariaLabel)).toEqual([left, left]);
+    };
     await vi.waitFor(() => expect(segments().map((el) => el.textContent)).toEqual(["90%", "—"]));
     slow.resolve();
     await vi.waitFor(() => expectLimits(90));
-    expect(accountRequests).toEqual([
+    expectAbsent(bars, "small[role=status]");
+    expect(accountRequests.slice(2)).toEqual([
       { agentId: "main", profileId: "openai:one" },
       { agentId: "main", profileId: "openai:two" },
     ]);
-    expect(segments().map((el) => el.getAttribute("data-account-segment"))).toEqual([
-      "openai:one",
-      "openai:two",
-    ]);
-    for (const [row, id] of [
-      [anthropic, "anthropic:one"],
-      [openai, "openai:key"],
-    ] as const) {
-      expectAbsent(row, `[data-profile-id="${id}"] .model-providers__account-limits`);
-    }
+    const ids = segments().map((el) => el.getAttribute("data-account-segment"));
+    expect(ids).toEqual(["openai:one", "openai:two"]);
+    expectAbsent(anthropic, ".model-providers__account-limits");
+    expectAbsent(openai, '[data-profile-id="openai:key"] .model-providers__account-limits');
     runtimeConfig.state.configSaving = true;
     notifyRuntimeConfig();
     await page.updateComplete;
@@ -107,9 +114,9 @@ describe("ModelProvidersPage usage convergence", () => {
     runtimeConfig.state.configSaving = false;
     notifyRuntimeConfig();
     usedPercent = 90;
-    page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')?.click();
+    refresh();
     await vi.waitFor(() => expectLimits(10));
-    expect(accountRequests).toHaveLength(4);
+    expect(accountRequests).toHaveLength(6);
     segments()[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.authOrderSet", {

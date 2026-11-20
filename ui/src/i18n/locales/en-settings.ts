@@ -1163,6 +1163,7 @@ const enSettings = {
       credits: "Credits",
       detailsFor: "Account details: {account}",
       notReported: "Not reported",
+      readFailed: "{error} · Refresh to try again.",
       accountDetails: "Account details",
     },
     saving: "Saving…",

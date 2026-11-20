@@ -32,23 +32,22 @@
   background: var(--oc-accent-secondary);
 }
 
-.oc-menu-panel-usage {
+/* The value column is shared by the billing rows, whatever their label length. */
+.provider-usage__rows {
   display: grid;
-  padding: var(--oc-space-2) var(--oc-space-3);
-  border-bottom: 1px solid var(--oc-border-subtle);
   gap: var(--oc-space-2);
+  grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content);
 }
 
-.oc-menu-panel-usage-row {
+.provider-usage__rows > * {
+  grid-column: 1 / -1;
+}
+
+.provider-usage__row {
   display: grid;
   align-items: center;
   gap: var(--oc-space-2);
-  grid-template-columns: auto minmax(0, 1fr) auto;
-}
-
-.oc-menu-panel-usage-row .oc-inspector-meter,
-.oc-menu-panel-usage-row meter {
-  min-width: 0;
+  grid-template-columns: subgrid;
 }
 
 .oc-menu-panel-usage-label {
@@ -58,38 +57,18 @@
 .oc-menu-panel-usage-value {
   color: var(--oc-text-muted);
   font-variant-numeric: tabular-nums;
-}
-
-/* Shared provider usage rows on Carapace data rows; each surface owns its padding. */
-.provider-usage {
-  display: grid;
-  gap: var(--oc-space-3);
-  min-width: 0;
-}
-
-/* One column track for every row, so meters line up whatever the label length. */
-.provider-usage__rows {
-  grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content);
-  padding: 0;
-  border-bottom: 0;
-}
-
-.provider-usage__rows > * {
-  grid-column: 1 / -1;
-}
-
-.provider-usage__row {
-  grid-template-columns: subgrid;
-}
-
-.provider-usage__row .oc-menu-panel-usage-value {
   font-family: var(--oc-font-mono);
   overflow-wrap: anywhere;
   text-align: end;
 }
 
+.provider-usage {
+  min-width: 0;
+}
+
 /* One row per fact: label, then its mark and value on one fixed track so marks line up,
    then when it comes back. The same two columns hold at every width. */
+.provider-usage,
 .provider-usage__group {
   display: grid;
   gap: var(--oc-space-3);
@@ -193,10 +172,6 @@
 
   .provider-usage__row > span:empty {
     display: none;
-  }
-
-  .provider-usage__row .oc-menu-panel-usage-value {
-    overflow-wrap: anywhere;
   }
 
   /* Phones have no room for the trend beside its totals; the totals keep their single line. */
