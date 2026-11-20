@@ -28,7 +28,7 @@ const enUpdateActions = {
       noDetails: "No step details recorded yet.",
       verification: "Verification checks",
       recordedVerification: "Verification at the time of the update",
-      recordedFailure: "Recorded outcome: failed",
+      servingTarget: "The Gateway is now serving the update target.",
       report: "Update report",
       restarting: "Gateway restarting…",
       reconnecting: "Reconnecting automatically. Update progress is saved on the gateway.",

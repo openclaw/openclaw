@@ -346,7 +346,7 @@ describe("renderSidebarUpdateSurface", () => {
       if (state === "acknowledged") {
         overlays.acknowledgeUpdateRun();
       }
-      const dismissal = resolveSidebarUpdateAttention(context)[0]?.dismissal;
+      const dismissal = resolveSidebarUpdateAttention(context)?.dismissal;
       const expected = {
         kind: "updateAvailable",
         signature: JSON.stringify(
@@ -410,7 +410,7 @@ describe("renderSidebarUpdateSurface", () => {
     expect(overlays.snapshot.updateRun?.runId).toBe(lastRun.runId);
 
     // The run's outcome dismissal would otherwise hide the restart with it.
-    expect(resolveSidebarUpdateAttention(context)[0]?.dismissal).toBeNull();
+    expect(resolveSidebarUpdateAttention(context)?.dismissal).toBeNull();
     const card = renderUpdate(context);
     expect(card.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
       "Finishing update",

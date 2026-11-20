@@ -72,7 +72,7 @@ function inboxEntries(attention: SidebarAttentionItem[], mentions: MentionInboxI
     attention,
     mentions,
     scopeUpgrade: null,
-    updates: [],
+    update: null,
   });
 }
 type PanelFixtureParams = SidebarAttentionPanelParams & {

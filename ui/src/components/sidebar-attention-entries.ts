@@ -23,7 +23,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system"> & {
   type: "attention";
-  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "updateAvailable" | "outbox">;
+  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
   icon: IconName;
   label: string;
   detail: string;
@@ -59,13 +59,9 @@ export type SidebarInboxEntry =
     })
   | (SidebarInboxEntryBase<"system"> & {
       type: "update";
-      /** A current release and a historical outcome have separate controls and dismissals. */
-      surface?: "release" | "history";
       /** A stored dismissal kept while the row is shown without offering it. */
       retainedDismissal?: SidebarAttentionDismissal | null;
     });
-
-export type SidebarUpdateEntry = Extract<SidebarInboxEntry, { type: "update" }>;
 
 export function buildScopeUpgradeInboxEntry(params: {
   scopes: readonly string[] | undefined;
@@ -104,7 +100,7 @@ export function buildSidebarInboxEntries(params: {
   outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
   mentions: readonly MentionInboxItem[];
   scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
-  updates: readonly SidebarUpdateEntry[];
+  update: Extract<SidebarInboxEntry, { type: "update" }> | null;
 }): SidebarInboxEntry[] {
   const approvals: SidebarInboxEntry[] = params.approvals.map((approval) => ({
     type: "approval",
@@ -130,10 +126,10 @@ export function buildSidebarInboxEntries(params: {
   const entries: SidebarInboxEntry[] = [
     ...approvals,
     ...(params.outbox ?? []),
-    ...params.updates.filter((entry) => entry.severity === "error"),
+    ...(params.update?.severity === "error" ? [params.update] : []),
     ...(params.scopeUpgrade ? [params.scopeUpgrade] : []),
     ...errors,
-    ...params.updates.filter((entry) => entry.severity === "warning"),
+    ...(params.update?.severity === "warning" ? [params.update] : []),
     ...warnings,
     ...mentions,
   ];

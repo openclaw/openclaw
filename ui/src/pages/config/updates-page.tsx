@@ -8,7 +8,11 @@ import {
 import { canReportUpdateFailure } from "../../app/update-failure-report-owner.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { projectGateway, projectOverlays } from "../../lib/reactive/application.ts";
+import {
+  projectApplicationConfig,
+  projectGateway,
+  projectOverlays,
+} from "../../lib/reactive/application.ts";
 import type { UpdatesCommandPresentation } from "./updates-types.ts";
 import { Updates } from "./updates.tsx";
 
@@ -24,6 +28,7 @@ export function UpdatesPage(props: {
 }) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
   const overlays = createMemo(() => projectOverlays(props.context.overlays));
+  const config = createMemo(() => projectApplicationConfig(props.context.config));
   const snapshot = () => gateway().read().snapshot;
   return (
     <Updates
@@ -33,7 +38,7 @@ export function UpdatesPage(props: {
       captureCommandPresentation={props.captureCommandPresentation}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
       configObject={props.configObject}
-      gatewayVersion={snapshot().hello?.server?.version ?? null}
+      gatewayVersion={snapshot().hello?.server?.version ?? config().read().serverVersion ?? null}
       gatewayBuildId={snapshot().hello?.server?.buildId}
       controlUiCommit={CONTROL_UI_BUILD_INFO.commit}
       controlUiCommitAt={CONTROL_UI_BUILD_INFO.commitAt}

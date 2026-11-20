@@ -1,7 +1,9 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunServingIdentity } from "../../../src/infra/update-run-history-projection.ts";
-import { projectUpdateRunHistory } from "../../../src/infra/update-run-history-report.ts";
+import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
   isUpdateRepairRun,
@@ -22,6 +24,41 @@ export function updateRunStepOwner(step: string): string {
   return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
 }
 
+function isServingUpdateTarget(
+  run: UpdateRunRecord,
+  { version, buildId }: UpdateRunServingIdentity,
+) {
+  const { reason, before, after, target, verification } = run;
+  const rollback = verification.rollbackOutcome?.status;
+  // Rollback can rewrite `after` with the restored package, even at the same version.
+  if (
+    (reason !== "post-update-failed" &&
+      reason !== "version-mismatch" &&
+      reason !== "build-id-mismatch") ||
+    rollback === "succeeded" ||
+    rollback === "failed" ||
+    verification.recovery?.packageRollbackVerified ||
+    (after.version && after.version !== version) ||
+    (target.version && target.version !== version) ||
+    (target.sha && target.sha !== after.sha)
+  ) {
+    return false;
+  }
+  return after.buildId
+    ? buildId === after.buildId &&
+        buildId !== before.buildId &&
+        buildId !== verification.runningBuildId
+    : reason !== "build-id-mismatch" &&
+        target.kind === "package" &&
+        Boolean(
+          version &&
+          target.version === version &&
+          verification.runningVersion &&
+          version !== verification.runningVersion &&
+          version !== before.version,
+        );
+}
+
 export function projectUpdateRun(
   run: UpdateRunRecord,
   connected = true,
@@ -31,8 +68,16 @@ export function projectUpdateRun(
   const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const targetNote =
+    historical && serving && isServingUpdateTarget(run, serving)
+      ? t("updates.run.servingTarget")
+      : null;
   const report = historical
-    ? { headline: historical, lines: [], markdown: historical }
+    ? {
+        headline: historical,
+        lines: targetNote ? [targetNote] : [],
+        markdown: targetNote ? `${historical}\n\n${targetNote}` : historical,
+      }
     : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
@@ -117,7 +162,6 @@ export function projectUpdateRun(
   return {
     report,
     terminal,
-    historical: Boolean(historical),
     reconciled: isAcknowledgedAbandonedUpdateRun(run),
     headline:
       !connected &&
@@ -125,11 +169,9 @@ export function projectUpdateRun(
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
         : report.headline,
-    compactLabel: historical
-      ? t("updates.run.recordedFailure")
-      : managedByOcm
-        ? ""
-        : t("updates.run.progress", { completed: String(completed), total: String(total) }),
+    compactLabel: managedByOcm
+      ? ""
+      : t("updates.run.progress", { completed: String(completed), total: String(total) }),
     phases: managedByOcm
       ? []
       : phases.map(({ step, status, label }) => ({
@@ -145,6 +187,7 @@ export function projectUpdateRun(
     })),
     detailStep: detailStep?.step,
     details,
+    historicalVerificationLabel: historical ? t("updates.run.recordedVerification") : undefined,
     oracles: managedByOcm ? [] : oracles,
   };
 }

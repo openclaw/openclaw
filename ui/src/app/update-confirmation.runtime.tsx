@@ -9,7 +9,6 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { render } from "@solidjs/web";
 import { createMemo, createStore, Errored, For, isPending, Loading, Show } from "solid-js";
-import { resolveUpdateRunServingChange } from "../../../src/infra/update-run-history-projection.ts";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome-classification.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
@@ -167,16 +166,7 @@ export async function confirmAndStartUpdateRuntime(
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
-      const serving = latestProgress
-        ? latestProgress.connected
-          ? latestProgress.serving
-          : undefined
-        : params.existingServing;
-      const failed =
-        current.kind === "failed" ||
-        (run !== null &&
-          isReportableUpdateRun(run) &&
-          !resolveUpdateRunServingChange(run, serving));
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
       const showRecovery =
         failed || Boolean(readError) || (current.kind !== "confirm" && statusRead !== null);
       const disconnected = latestProgress?.connected === false;
@@ -190,10 +180,8 @@ export async function confirmAndStartUpdateRuntime(
               : `${route.message} ${t("updates.confirm.impact")}`;
       return {
         route,
-        title: finished ? t("updates.run.report") : route.title,
         details,
         run,
-        serving,
         working,
         finished,
         failed,
@@ -232,12 +220,16 @@ export async function confirmAndStartUpdateRuntime(
         return (
           <openclaw-modal-dialog
             prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
-            label={view.title}
+            label={view.route.title}
             description={view.body}
             onModal-cancel={finish}
           >
             <div class="oc-dialog confirm-dialog update-run-dialog">
-              <DialogHeader title={view.title} description={<p>{view.body}</p>} onClose={finish} />
+              <DialogHeader
+                title={view.route.title}
+                description={<p>{view.body}</p>}
+                onClose={finish}
+              />
               <div class="oc-dialog__body">
                 <For each={[view.statusRead]}>
                   {(read) => {
@@ -287,13 +279,7 @@ export async function confirmAndStartUpdateRuntime(
                   }}
                 </For>
                 <Show when={view.run}>
-                  {(run) => (
-                    <UpdateRunView
-                      run={run()}
-                      connected={!view.disconnected}
-                      serving={view.serving}
-                    />
-                  )}
+                  {(run) => <UpdateRunView run={run()} connected={!view.disconnected} />}
                 </Show>
               </div>
               <openclaw-modal-actions class="oc-dialog__footer">

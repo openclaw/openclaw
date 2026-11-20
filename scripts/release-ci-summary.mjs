@@ -81,6 +81,9 @@ import {
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  readReleaseValidationWaivers,
+  readReleaseValidationWaiversAsync,
+  RELEASE_VALIDATION_WAIVERS_PATH,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import {
@@ -1324,7 +1327,10 @@ export function validateParentManifest(value, expected) {
       "Runtime waiver inputs are no longer accepted; run Full Release Validation under checked-in release-tooling policy.",
     );
   }
-  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value);
+  const advisoryJobs = validateReleaseManifestAdvisoryJobs(value, {
+    deferWaiverPolicy: expected.deferWaiverPolicy,
+    waiverPolicy: expected.waiverPolicy,
+  });
   const childRuns = value.childRuns;
   if (!childRuns || typeof childRuns !== "object" || Array.isArray(childRuns)) {
     throw new Error("release validation manifest childRuns is invalid");
@@ -2169,6 +2175,7 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           ".github/workflows/full-release-receipt-recovery.yml",
           ".github/workflows/openclaw-performance.yml",
           ".github/workflows/plugin-prerelease.yml",
+          RELEASE_VALIDATION_WAIVERS_PATH,
           ".github/workflows/openclaw-release-checks.yml",
         ].includes(sourceWorkflowPath)
       ) {
@@ -2348,13 +2355,12 @@ async function loadValidatedParentEvidence({
       `successful parent run is missing its release validation manifest: ${runId}`,
     );
   }
-  // Acquisition checks the carrier only; the recovery owner authenticates the
-  // aggregate before any consumer can treat it as qualification evidence.
   const manifest = recovery
     ? manifestEvidence.manifest
     : validateParentManifest(manifestEvidence.manifest, {
         runAttempt: parentRun.run_attempt,
         runId,
+        deferWaiverPolicy: true,
         workflowRef: parentRun.head_branch,
         workflowSha: parentRun.head_sha,
       });
@@ -2372,7 +2378,9 @@ async function loadValidatedParentEvidence({
 function normalizedParentTuple(evidence, identity) {
   const { manifest, parentRun } = evidence;
   return {
-    artifact: normalizedManifestArtifact(evidence.artifact, manifest.runAttempt),
+    artifact: evidence.artifact
+      ? normalizedManifestArtifact(evidence.artifact, manifest.runAttempt)
+      : null,
     conclusion: parentRun.conclusion,
     manifest: evidence.manifestJson,
     manifestVersion: manifest.version,
@@ -2400,6 +2408,7 @@ async function validateStrictChildRun({
   repository,
   runId,
   expectedRunAttempts,
+  waiverPolicy,
 }) {
   const reused = childReuse
     ? await client.validateChildReuse(childReuse, {
@@ -2536,11 +2545,16 @@ async function validateStrictChildRun({
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
   const targetSha = parentEvidence.manifest.targetSha;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion, targetSha });
+  const policy = evaluateReleaseChildPolicy({
+    child: policyChild,
+    targetVersion,
+    targetSha,
+    waiverPolicy,
+  });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion, targetSha)
+    !terminalPolicyPass(policyChild, targetVersion, targetSha, waiverPolicy)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -3201,6 +3215,12 @@ export async function validateReleaseRunEvidence(
   });
   // The fixed child set bounds concurrent reads (at most seven). Each child
   // walks its attempts/pages serially; drain all reads before returning or failing.
+  const waiverPolicy = await readReleaseValidationWaiversAsync((sourcePath) =>
+    evidenceClient.getWorkflowSource(
+      qualificationReuse?.qualificationSha ?? currentEvidence.manifest.workflowSha,
+      sourcePath,
+    ),
+  );
   const childResults = await Promise.allSettled(
     childEntries.map(({ child, runId: childRunId }) =>
       validateStrictChildRun({
@@ -3216,6 +3236,7 @@ export async function validateReleaseRunEvidence(
         repository: normalizedRepository,
         runId: childRunId,
         expectedRunAttempts: remainingExpectedRunAttempts,
+        waiverPolicy,
       }),
     ),
   );
@@ -3609,6 +3630,21 @@ function readSummaryParentRun(runId, repository) {
   return parent;
 }
 
+function validateSummaryManifest(rawManifest, parent, runId, repository) {
+  // Summary/watch must use this parent's immutable Q, not the verifier's local P ledger.
+  const client = createReleaseEvidenceClient(repository);
+  const waiverPolicy = readReleaseValidationWaivers((sourcePath) =>
+    client.getWorkflowSource(parent.headSha, sourcePath),
+  );
+  return validateParentManifest(rawManifest, {
+    runAttempt: parent.attempt,
+    runId,
+    waiverPolicy,
+    workflowRef: parent.headBranch,
+    workflowSha: parent.headSha,
+  });
+}
+
 function readSummaryEvidence(runId, repository, label) {
   const parent = readSummaryParentRun(runId, repository);
   if (parent.status !== "completed" || parent.conclusion !== "success") {
@@ -3620,12 +3656,7 @@ function readSummaryEvidence(runId, repository, label) {
   }
   return {
     parent,
-    manifest: validateParentManifest(rawManifest, {
-      runAttempt: parent.attempt,
-      runId,
-      workflowRef: parent.headBranch,
-      workflowSha: parent.headSha,
-    }),
+    manifest: validateSummaryManifest(rawManifest, parent, runId, repository),
   };
 }
 
@@ -3708,12 +3739,7 @@ async function main() {
   const currentManifestRaw = tryDownloadParentManifest(runId, parent.attempt, repository);
   let children;
   if (currentManifestRaw) {
-    const currentManifest = validateParentManifest(currentManifestRaw, {
-      runAttempt: parent.attempt,
-      runId,
-      workflowRef: parent.headBranch,
-      workflowSha: parent.headSha,
-    });
+    const currentManifest = validateSummaryManifest(currentManifestRaw, parent, runId, repository);
     console.log(`candidate-sha: ${currentManifest.targetSha}`);
     console.log(`manifest-run: ${currentManifest.runId}/${currentManifest.runAttempt}`);
 

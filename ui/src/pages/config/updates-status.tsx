@@ -1,5 +1,5 @@
 import { createMemo } from "solid-js";
-import { resolveUpdateRunServingChange } from "../../../../src/infra/update-run-history-projection.ts";
+import { projectUpdateRunHistory } from "../../../../src/infra/update-run-history-projection.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
@@ -18,7 +18,7 @@ export function UpdatesStatus(props: UpdatesViewProps & { checking: boolean }) {
     const historical =
       run &&
       props.connected &&
-      resolveUpdateRunServingChange(run, {
+      projectUpdateRunHistory(run, {
         version: props.gatewayVersion,
         buildId: props.gatewayBuildId,
       });
