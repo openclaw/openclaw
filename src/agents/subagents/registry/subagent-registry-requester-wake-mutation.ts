@@ -3,14 +3,12 @@ import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-requ
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import {
-  mutateRequesterCompletionBatch,
-  settleConsumedRequesterDelivery,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import type {
   RequesterWakeCommittedWrite,
   RequesterWakeMutation,
 } from "../completion/subagent-completion-mutation.types.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import { captureSubagentControllerInputRetirement } from "./subagent-controller-inputs.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";

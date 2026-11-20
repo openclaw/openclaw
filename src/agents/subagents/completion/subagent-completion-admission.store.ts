@@ -16,10 +16,7 @@ import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-r
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { readSubagentRunAnnounceResult } from "../announce/subagent-announce-output.js";
 import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
-import {
-  ensureDeliveryState,
-  resolveRequesterDeliveryOutcome,
-} from "../registry/subagent-delivery-state.js";
+import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
@@ -59,24 +56,6 @@ class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSource
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
-
-/** Transcript custody prevents replay, but cannot substitute for a visible outcome. */
-export async function settleConsumedRequesterDelivery(
-  entries: readonly SubagentRunRecord[],
-  outcome: SubagentAnnounceDeliveryResult,
-): Promise<SubagentAnnounceDeliveryResult> {
-  const settled = resolveRequesterDeliveryOutcome(entries, outcome)!;
-  const required = entries.filter((entry) => entry.expectsCompletionMessage === true);
-  if (settled !== outcome && required[0]) {
-    await recordRequiredCompletionNotice(
-      required[0],
-      outcome.error ?? outcome.reason ?? "Requester did not produce a visible reply",
-      required,
-      "result",
-    );
-  }
-  return settled;
-}
 
 export async function recordRequiredCompletionNotice(
   entry: SubagentRunRecord,

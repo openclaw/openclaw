@@ -7,7 +7,7 @@ import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
-import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-admission.store.js";
+import { settleConsumedRequesterDelivery } from "../completion/subagent-completion-settlement.js";
 import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
@@ -220,12 +220,7 @@ export const startSubagentAnnounceCleanupFlow = (
       ...options,
     });
   if (!checkDescendants && alreadyDelivered()) {
-    runCleanup(async () => {
-      if (entry.delivery?.status !== "delivered" && !entry.delivery?.announcedAt) {
-        await settleConsumedRequesterDelivery([entry], { delivered: false, path: "none" });
-      }
-      await finalizeDelivered();
-    });
+    runCleanup(() => finalizeDelivered());
     return true;
   }
   const suppressChildSessionEffects = async () => {

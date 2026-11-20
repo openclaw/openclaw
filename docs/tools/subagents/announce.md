@@ -48,8 +48,10 @@ itself still owes its result; this quiet settlement applies to the parent review
 
 A requester completion turn commits the child results to the requester transcript
 before it calls the model. A committed result is never dispatched again. If the turn
-then fails before it answers (for example the provider is unavailable), OpenClaw
-appends the saved child result as a visible fallback before settling delivery.
+owes a visible reply and fails before answering (for example the provider is
+unavailable), OpenClaw appends the saved child result as a visible fallback before
+settling delivery. Private handoffs without an outstanding visible final settle
+on committed input alone and do not expose the child result.
 This also covers an announcing turn that ends in `sessions_yield` without a visible
 reply. If the fallback cannot be recorded, the result stays owed across restart;
 the already committed model input is not replayed. The next turn reads that input

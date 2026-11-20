@@ -78,6 +78,7 @@ export function registerRequesterRestartDeliveryTests<Response>({
           attemptCount: 1,
           requesterYieldBatch: true,
           requesterRunId: "shared-requester",
+          yieldedFinalDeliverable: true,
           batchRunIds,
           rearmGeneration: 1,
         },

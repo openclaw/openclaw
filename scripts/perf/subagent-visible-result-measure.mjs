@@ -46,7 +46,7 @@ registerHooks({
 });
 const stores = await Promise.all([...sources.keys()].map((url) => import(url)));
 const { settleConsumedRequesterDelivery } =
-  await import("../../src/agents/subagents/completion/subagent-completion-admission.store.ts");
+  await import("../../src/agents/subagents/completion/subagent-completion-settlement.ts");
 const { resolveRequesterDeliveryOutcome } =
   await import("../../src/agents/subagents/registry/subagent-delivery-state.ts");
 const { subagentRuns } =
