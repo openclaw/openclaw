@@ -1478,15 +1478,26 @@ exec "$anchor/scripts/pr" "$@"
     expect(anchors).toHaveLength(1);
     const bootstrap = join(fixture.root, anchors[0]!, ".pr-bootstrap");
     const exporter = join(bootstrap, "scripts/pr-lib/export-tree.py");
-    if (fault === "invalid exporter") expect(readScript(exporter)).toBe("invalid");
-    else if (fault === "symlink exporter") expect(lstatSync(exporter).isSymbolicLink()).toBe(true);
-    else expect(existsSync(exporter)).toBe(false);
+    if (fault === "invalid exporter") {
+      expect(readScript(exporter)).toBe("invalid");
+    } else if (fault === "symlink exporter") {
+      expect(lstatSync(exporter).isSymbolicLink()).toBe(true);
+    } else {
+      expect(existsSync(exporter)).toBe(false);
+    }
     const component = join(bootstrap, "scripts/windows-cmd-helpers.mjs");
-    if (fault === "missing component") expect(existsSync(component)).toBe(false);
-    if (fault === "changed component") expect(readScript(component)).toMatch(/changed$/u);
-    if (fault === "changed provenance")
+    if (fault === "missing component") {
+      expect(existsSync(component)).toBe(false);
+    }
+    if (fault === "changed component") {
+      expect(readScript(component)).toMatch(/changed$/u);
+    }
+    if (fault === "changed provenance") {
       expect(readScript(join(bootstrap, "source.json"))).toBe("{}");
-    if (fault === "unexpected entry") expect(readScript(join(bootstrap, "extra"))).toBe("extra");
+    }
+    if (fault === "unexpected entry") {
+      expect(readScript(join(bootstrap, "extra"))).toBe("extra");
+    }
   });
 
   itPosix.each([
