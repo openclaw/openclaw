@@ -1,8 +1,9 @@
 /**
  * Agent Profiles: named, built-in harness behavior selected per agent, per
  * model, or as the default (openclaw/rfcs, "Agent Profiles").
- * Phase one ships two profiles and no prompt text: `openclaw/small` carries the
- * lean tool surface that `experimental.localModelLean` used to switch on.
+ * No prompt text. `openclaw/lean` is the compatibility profile: exactly the lean
+ * tool surface that `experimental.localModelLean` switched on. `openclaw/small`
+ * is the recommended small-window profile: it trims the prompt and keeps every tool.
  */
 import type { AgentProfileId, AgentProfileSelectionSource } from "../config/agent-profile-ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -15,16 +16,34 @@ type AgentProfile = {
   id: AgentProfileId;
   spec: {
     common: Record<string, never>;
-    "openclaw.ai"?: { toolProfile?: "lean" };
+    "openclaw.ai"?: {
+      toolProfile?: "lean";
+      /** Full prompts drop reference sections; reply, channel and owner guidance stay. */
+      promptMode?: "compact";
+      /** Ceiling on skills listed in the prompt catalog; 0 lists none. */
+      skillsCatalog?: { maxSkills?: number };
+      /** Ceiling on injected workspace file characters, across all files. */
+      workspaceFiles?: { maxTotalChars?: number };
+    };
   };
 };
 
 const BUILT_IN_AGENT_PROFILES: Readonly<Record<AgentProfileId, AgentProfile>> = {
   "openclaw/base": { id: "openclaw/base", spec: { common: {} } },
-  // Resolved snapshot of openclaw/base plus the lean tool profile.
+  "openclaw/lean": {
+    id: "openclaw/lean",
+    spec: { common: {}, "openclaw.ai": { toolProfile: "lean" } },
+  },
   "openclaw/small": {
     id: "openclaw/small",
-    spec: { common: {}, "openclaw.ai": { toolProfile: "lean" } },
+    spec: {
+      common: {},
+      "openclaw.ai": {
+        promptMode: "compact",
+        skillsCatalog: { maxSkills: 0 },
+        workspaceFiles: { maxTotalChars: 12_000 },
+      },
+    },
   },
 };
 
@@ -102,4 +121,31 @@ export function resolveAgentProfile(params: AgentProfileScope): ResolvedAgentPro
     }
   }
   return { profile: BUILT_IN_AGENT_PROFILES["openclaw/base"], selectionSource: "fallback" };
+}
+
+export type AgentProfilePromptLimits = NonNullable<AgentProfile["spec"]["openclaw.ai"]>;
+
+/** Prompt-size settings of the selected profile; each one only ever narrows the prompt. */
+export function resolveAgentProfilePromptLimits(
+  params: AgentProfileScope,
+): AgentProfilePromptLimits {
+  return resolveAgentProfile(params).profile.spec["openclaw.ai"] ?? {};
+}
+
+/** System-prompt inputs for a profile; empty for profiles that leave the prompt alone. */
+export function agentProfilePromptParams(profile: AgentProfile): {
+  agentProfilePrompt?: { compact?: boolean; maxListedSkills?: number };
+} {
+  const spec = profile.spec["openclaw.ai"];
+  const compact = spec?.promptMode === "compact";
+  const maxListedSkills = spec?.skillsCatalog?.maxSkills;
+  if (!compact && maxListedSkills === undefined) {
+    return {};
+  }
+  return {
+    agentProfilePrompt: {
+      ...(compact ? { compact } : {}),
+      ...(maxListedSkills === undefined ? {} : { maxListedSkills }),
+    },
+  };
 }

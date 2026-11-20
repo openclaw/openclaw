@@ -42,6 +42,12 @@ const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const CLI_IMAGE_SWEEP_RECURRENCE_MS = 24 * 60 * 60 * 1_000;
 const lastCliImageRootSweepMs = new Map<string, number>();
 
+/** Agent Profile scope of a CLI run; `modelDisplay` is the run's `provider/model`. */
+export function cliAgentProfileScope(agentId: string | undefined, modelDisplay: string) {
+  const modelProvider = modelDisplay.split("/", 1)[0];
+  return { agentId, modelProvider, modelId: modelDisplay.slice(modelDisplay.indexOf("/") + 1) };
+}
+
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
@@ -147,9 +153,9 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    ...cliAgentProfileScope(params.agentId, params.modelDisplay),
     preparedModelRuntime: params.preparedModelRuntime,
     preparedTtsPreferences: params.preparedTtsPreferences,
-    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
     extraSystemPrompt: params.extraSystemPrompt,

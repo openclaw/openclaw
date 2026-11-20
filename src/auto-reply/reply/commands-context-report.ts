@@ -10,7 +10,7 @@ import { createRealConversationClassifier } from "../../agents/compaction-real-c
 import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import {
   resolveBootstrapMaxChars,
-  resolveBootstrapTotalMaxChars,
+  resolveRunBootstrapTotalMaxChars,
 } from "../../agents/embedded-agent-helpers/bootstrap.js";
 import { estimateMessageChars } from "../../agents/embedded-agent-runner/tool-result-char-estimator.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
@@ -53,6 +53,16 @@ function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPro
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const existing = targetSessionEntry?.systemPromptReport;
   return existing?.source === "run" ? existing : null;
+}
+
+/** Effective workspace-file budget: the configured total, narrowed by the Agent Profile. */
+function resolveContextReportTotalMaxChars(params: HandleCommandsParams, agentId: string): number {
+  return resolveRunBootstrapTotalMaxChars({
+    config: params.cfg,
+    agentId,
+    modelProvider: params.provider,
+    modelId: params.model,
+  });
 }
 
 function resolveContextReportAgentId(params: HandleCommandsParams): string {
@@ -128,7 +138,7 @@ async function resolveContextReport(
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const sessionAgentId = resolveContextReportAgentId(params);
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg, sessionAgentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+  const bootstrapTotalMaxChars = resolveContextReportTotalMaxChars(params, sessionAgentId);
   const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
   const { systemPrompt, tools, skillsPrompt, bootstrapFiles, injectedFiles, sandboxRuntime } =
     await resolveCommandsSystemPromptBundle(params);
@@ -356,7 +366,7 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     resolveBootstrapMaxChars(params.cfg, sessionAgentId);
   const bootstrapTotalMaxChars =
     asPositiveFiniteNumber(report.bootstrapTotalMaxChars) ??
-    resolveBootstrapTotalMaxChars(params.cfg, sessionAgentId);
+    resolveContextReportTotalMaxChars(params, sessionAgentId);
   const bootstrapMaxLabel = `${formatInt(bootstrapMaxChars)} chars`;
   const bootstrapTotalLabel = `${formatInt(bootstrapTotalMaxChars)} chars`;
   const bootstrapAnalysis = analyzeBootstrapBudget({

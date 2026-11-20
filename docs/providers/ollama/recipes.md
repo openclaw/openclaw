@@ -219,7 +219,7 @@ Replace model IDs with exact names from `ollama list` or
     Explicit `tools.toolSearch` settings take precedence, including `false`.
     Tool Search does not change Ollama's context or thinking mode. Ollama thinking
     defaults to off; an explicit thinking setting can change that independently.
-    If you previously selected the `openclaw/small` Agent Profile, select `openclaw/base` to restore
+    If you previously selected the `openclaw/lean` Agent Profile, select `openclaw/base` to restore
     optional tools while retaining automatic Tool Search.
 
     Use `compat.supportsTools: false` only when the model or server reliably

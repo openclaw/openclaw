@@ -185,7 +185,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "agents.defaults.experimental.usageRankedToolIndex":
     "Opt in to usage-ranked Code Mode, Tool Search, and MCP tool directory prompt indexes in the embedded OpenClaw runtime (default: false). Stores only tool IDs, decayed scores, and timestamps in operator-owned agent storage for 90 days; excludes incognito sessions. Rankings stay frozen until a prompt-prefix boundary. Does not change tool permissions or Codex. Inspect, import past usage, or reset with openclaw tools usage.",
   "agents.defaults.agentProfileId":
-    'Default Agent Profile. "openclaw/small" restricts optional tools such as browser, automations, and message (formerly experimental.localModelLean); "openclaw/base" keeps the full tool surface. "auto" or omitted uses agents.defaults.models.<provider/model>.agentProfileId when set. Explicit tool allows and required delivery tools are preserved.',
+    'Default Agent Profile. "openclaw/small" drops reference prompt sections, lists no skills while skill search is available, and caps workspace files for small context windows, while keeping every tool. "openclaw/lean" restricts optional tools such as browser, automations, and message (formerly experimental.localModelLean). "openclaw/base" is the default. "auto" or omitted uses agents.defaults.models.<provider/model>.agentProfileId when set.',
   "agents.defaults.models.*.agentProfileId":
     "Agent Profile for this exact provider/model, for example openclaw/small for one local model. Agent and default agentProfileId values take precedence.",
   "agents.defaults.startupContext":

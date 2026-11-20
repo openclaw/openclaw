@@ -79,7 +79,7 @@ describe("lean Tool Search directory", () => {
   it("does not spend removed tools' prompt savings on longer descriptions", () => {
     const tools = localCatalog();
     const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      agents: { defaults: { agentProfileId: "openclaw/lean" } },
       tools: { toolSearch: { mode: "tools" } },
     };
     const leanTools = filterLocalModelLeanTools({ tools, config });
@@ -105,7 +105,7 @@ describe("lean Tool Search directory", () => {
     const ref = catalogRef(localCatalog().slice(0, 1));
     const config: OpenClawConfig = {
       agents: {
-        defaults: { agentProfileId: "openclaw/small" },
+        defaults: { agentProfileId: "openclaw/lean" },
         entries: { lean: {}, full: { agentProfileId: "openclaw/base" } },
       },
     };

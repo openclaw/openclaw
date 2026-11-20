@@ -50,6 +50,18 @@ export function resolveSilentReplyPromptMode(params: {
     : (params.silentReplyPromptMode ?? "generic");
 }
 
+/** Generic silent-reply guidance for sessions that reply on an external channel. */
+export function buildSilentRepliesSection(mode: SilentReplyPromptMode): string[] | false {
+  return (
+    mode !== "none" && [
+      "## Silent Replies",
+      `Nothing to say: entire reply exactly uppercase ${SILENT_REPLY_TOKEN}, without Markdown, punctuation, quotes, or other text.`,
+      `Only that whole reply is silent. A literal leading ${SILENT_REPLY_TOKEN} followed by a newline removes just that line; all remaining text is visible. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
+      "",
+    ]
+  );
+}
+
 export function buildMessagingSection(params: {
   isMinimal: boolean;
   availableTools: Set<string>;

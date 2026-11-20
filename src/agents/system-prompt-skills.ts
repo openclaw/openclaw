@@ -1,4 +1,5 @@
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
+import { limitSkillsPromptCatalog } from "../skills/loading/skill-contract.js";
 import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog.js";
 import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 
@@ -10,6 +11,8 @@ export function buildSkillsSection(params: {
   availableTools: ReadonlySet<string>;
   visibleTools: ReadonlyMap<string, string>;
   deferredToolsDirectlyCallable?: boolean;
+  /** Listed-entry ceiling; ignored unless skills_search keeps the rest findable. */
+  maxListedSkills?: number;
 }) {
   const { availableTools, visibleTools } = params;
   const installedSkillRead = availableTools.has("skills_read");
@@ -19,10 +22,13 @@ export function buildSkillsSection(params: {
     : visibleTools.has("read") || installedSkillRead || params.promptSurface === "cli_backend";
   const installedSkillSearch = availableTools.has("skills_search");
   // Code Mode searches the admitted skill catalog; listing it again only consumes context.
-  const skillsPrompt =
+  const accessibleSkillsPrompt =
     canAccess && !(params.codeModeActive && installedSkillSearch)
       ? (params.skillsPrompt?.trim() ?? "")
       : "";
+  const skillsPrompt = installedSkillSearch
+    ? limitSkillsPromptCatalog(accessibleSkillsPrompt, params.maxListedSkills)
+    : accessibleSkillsPrompt;
   const hasListedSkills = parseSkillsPromptCatalog(skillsPrompt).length > 0;
   if (!canAccess || (!hasListedSkills && !installedSkillSearch)) {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };

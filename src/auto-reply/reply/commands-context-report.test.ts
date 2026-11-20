@@ -351,6 +351,18 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 96,000 chars");
   });
 
+  it("reports the Agent Profile workspace ceiling as the effective total budget", async () => {
+    const scout = { bootstrapTotalMaxChars: 96_000, agentProfileId: "openclaw/small" as const };
+    const result = await buildContextReply(
+      makeParams("/context list", false, {
+        omitBootstrapLimits: true,
+        sessionKey: "agent:scout:main",
+        cfg: { agents: { entries: { scout } } },
+      }),
+    );
+    expect(result.text).toContain("Bootstrap max/total: 12,000 chars");
+  });
+
   it.each([true, false])("counts compactable anchors (paged/incognito=%s)", async (paged) => {
     const messages = paged
       ? [

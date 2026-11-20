@@ -235,6 +235,9 @@ type BootstrapFileResolutionParams = {
   sessionId?: string;
   chatType?: ChatType;
   agentId?: string;
+  /** Selected model; an Agent Profile bound to it can narrow the workspace budget. */
+  modelProvider?: string;
+  modelId?: string;
   warn?: (message: string) => void;
   contextMode?: BootstrapContextMode;
   runKind?: BootstrapContextRunKind;

@@ -12,8 +12,8 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
-const lean = (localModelLean: boolean): { agentProfileId: "openclaw/small" | "openclaw/base" } => ({
-  agentProfileId: localModelLean ? "openclaw/small" : "openclaw/base",
+const lean = (localModelLean: boolean): { agentProfileId: "openclaw/lean" | "openclaw/base" } => ({
+  agentProfileId: localModelLean ? "openclaw/lean" : "openclaw/base",
 });
 function defaultLeanConfig(
   entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
@@ -95,7 +95,7 @@ describe("local model lean tool filtering", () => {
   it("enables lean mode for an exact model binding only", () => {
     const config: OpenClawConfig = {
       agents: {
-        defaults: { models: { "ollama/qwen3:8b": { agentProfileId: "openclaw/small" } } },
+        defaults: { models: { "ollama/qwen3:8b": { agentProfileId: "openclaw/lean" } } },
         entries: { main: {}, full: { agentProfileId: "openclaw/base" } },
       },
     };

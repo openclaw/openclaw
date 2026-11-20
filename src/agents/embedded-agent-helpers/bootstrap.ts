@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
+import { resolveAgentProfilePromptLimits } from "../agent-profiles.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import { DEFAULT_BOOTSTRAP_MAX_CHARS } from "./bootstrap-limits.js";
@@ -383,18 +384,37 @@ export function buildBootstrapContextFiles(
   return result;
 }
 
+/** Total workspace-file budget for a run: the configured budget, narrowed by the Agent Profile. */
+export function resolveRunBootstrapTotalMaxChars(params: {
+  config?: OpenClawConfig;
+  agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
+}): number {
+  const configured = resolveBootstrapTotalMaxChars(params.config, params.agentId);
+  const ceiling = resolveAgentProfilePromptLimits({
+    config: params.config,
+    agentId: params.agentId ?? undefined,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  }).workspaceFiles?.maxTotalChars;
+  return ceiling === undefined ? configured : Math.min(configured, ceiling);
+}
+
 /** Builds bounded context files from already-resolved bootstrap file metadata. */
 export function buildBootstrapContextForFiles(
   bootstrapFiles: WorkspaceBootstrapFile[],
   params: {
     config?: OpenClawConfig;
     agentId?: string | null;
+    modelProvider?: string;
+    modelId?: string;
     warn?: (message: string) => void;
   },
 ): EmbeddedContextFile[] {
   return buildBootstrapContextFiles(bootstrapFiles, {
     maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveRunBootstrapTotalMaxChars(params),
     warn: params.warn,
   });
 }

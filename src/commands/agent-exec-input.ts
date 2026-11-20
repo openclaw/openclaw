@@ -197,7 +197,7 @@ export function buildExecRunConfig(params: {
       defaults: {
         workspace: params.cwd,
         skipBootstrap: true,
-        ...(opts.localModelLean ? { agentProfileId: "openclaw/small" as const } : {}),
+        ...(opts.localModelLean ? { agentProfileId: "openclaw/lean" as const } : {}),
       },
     },
     // A one-shot process cannot observe invalidation; a watcher would retain it after the turn.

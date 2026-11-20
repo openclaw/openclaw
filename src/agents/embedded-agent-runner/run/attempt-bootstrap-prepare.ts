@@ -26,7 +26,8 @@ import type { EmbeddedRunAttemptBase, EmbeddedRunAttemptParams } from "./types.j
 
 export async function prepareEmbeddedAttemptBootstrap(params: {
   attempt: Omit<EmbeddedRunAttemptBase, "workspaceDir" | "prompt" | "timeoutMs" | "runId"> &
-    Pick<EmbeddedRunAttemptParams, "operation">;
+    Pick<EmbeddedRunAttemptParams, "operation"> &
+    Partial<Pick<EmbeddedRunAttemptParams, "provider" | "modelId">>;
   setup: Pick<
     EmbeddedAttemptSetup,
     "effectiveWorkspace" | "resolvedWorkspace" | "sessionAgentId"
@@ -126,6 +127,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     resolvedContextFiles = buildBootstrapContextForFiles(hookAdjustedBootstrapFiles, {
       config: attempt.config,
       agentId: params.setup.sessionAgentId,
+      modelProvider: attempt.provider,
+      modelId: attempt.modelId,
       warn: bootstrapWarn,
     });
   }
@@ -161,6 +164,8 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
   const bootstrapBudget = buildBootstrapBudgetState({
     config: attempt.config,
     agentId: params.setup.sessionAgentId,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
     files: bootstrapBudgetFiles,
     seenSignatures: attempt.bootstrapPromptWarningSignaturesSeen,
     previousSignature: attempt.bootstrapPromptWarningSignature,

@@ -261,6 +261,13 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     chatType: runtimePrompt.runtimeInfo.chatType,
     channel: runtimePrompt.runtimeInfo.channel,
   };
+  const agentProfile = resolveAgentProfile({
+    config: attempt.config,
+    agentId: params.setup.sessionAgentId,
+    sessionKey: attempt.sessionKey,
+    modelProvider: attempt.provider,
+    modelId: attempt.modelId,
+  });
   const promptMode =
     attempt.promptMode ??
     (params.isRawModelRun ? "none" : resolvePromptModeForSession(attempt.sessionKey));
@@ -441,6 +448,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reasoningTagHint,
       // Finite caps can still read skills; the renderer gates on the callable tools.
       skillsPrompt: params.skillsPrompt,
+      modelProvider: attempt.provider,
+      modelId: attempt.modelId,
       codeModeActive: params.codeModeActive,
       webSearchUnconfigured: params.webSearchUnconfigured?.(),
       docsPath: openClawReferences.docsPath ?? undefined,
@@ -485,13 +494,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const attemptSystemPrompt = await buildAttemptSystemPrompt(promptInputs);
   assertPreparationCurrent();
   phases.mark("attempt.system-prompt.report");
-  const agentProfile = resolveAgentProfile({
-    config: attempt.config,
-    agentId: params.setup.sessionAgentId,
-    sessionKey: attempt.sessionKey,
-    modelProvider: attempt.provider,
-    modelId: attempt.modelId,
-  });
   const reportInputs: Parameters<typeof buildSystemPromptReport>[0] = {
     source: "run",
     generatedAt: Date.now(),

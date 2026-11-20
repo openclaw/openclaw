@@ -32,7 +32,7 @@ function createExplicitMediaToolConstructionOptions() {
   return {
     config: {
       agents: {
-        defaults: { agentProfileId: "openclaw/small" as const },
+        defaults: { agentProfileId: "openclaw/lean" as const },
         entries: {
           artist: {
             tools: {

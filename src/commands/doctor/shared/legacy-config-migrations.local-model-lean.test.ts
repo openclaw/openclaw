@@ -14,8 +14,8 @@ function applyRetiredMigrations(raw: Record<string, unknown>) {
 describe("automatic local-model lean migration", () => {
   it.each([
     { model: "ollama/local", localModelLean: true, expected: undefined },
-    { model: { primary: "openai/selected" }, localModelLean: true, expected: "openclaw/small" },
-    { model: "ollama/local", localModelLean: false, expected: "openclaw/base" },
+    { model: { primary: "openai/selected" }, localModelLean: true, expected: "openclaw/lean" },
+    { model: "ollama/local", localModelLean: false, expected: undefined },
   ])("retires only proven automatic lean ownership: %j", ({ model, localModelLean, expected }) => {
     const raw = {
       wizard: { localModelLeanAutoModel: "ollama/local", lastRunVersion: "2026.9.1" },
@@ -37,9 +37,9 @@ describe("automatic local-model lean migration", () => {
     expect(raw.wizard).toEqual({ lastRunVersion: "2026.9.1" });
     expect(raw.agents.defaults.experimental).toEqual({ other: "preserved" });
     expect(raw.agents.defaults.agentProfileId).toBe(expected);
-    expect(raw.agents.entries).toEqual({ work: { agentProfileId: "openclaw/small" } });
-    if (expected === "openclaw/small") {
-      expect(changes).toContainEqual(expect.stringContaining('set it to "openclaw/base"'));
+    expect(raw.agents.entries).toEqual({ work: { agentProfileId: "openclaw/lean" } });
+    if (expected === "openclaw/lean") {
+      expect(changes).toContainEqual(expect.stringContaining("remove it to restore"));
     }
     expect(findLegacyConfigIssues(raw)).toEqual([]);
     const migrated = structuredClone(raw);
@@ -50,12 +50,13 @@ describe("automatic local-model lean migration", () => {
 describe("local-model lean to Agent Profile migration", () => {
   it.each([
     // [defaults flag, agent flag, expected defaults profile, expected agent profile]
-    [true, undefined, "openclaw/small", undefined],
-    [false, undefined, "openclaw/base", undefined],
-    [undefined, true, undefined, "openclaw/small"],
-    [undefined, false, undefined, "openclaw/base"],
-    [true, false, "openclaw/small", "openclaw/base"],
-    [false, true, "openclaw/base", "openclaw/small"],
+    // false is the default and is dropped, unless it opts an agent out of a lean default.
+    [true, undefined, "openclaw/lean", undefined],
+    [false, undefined, undefined, undefined],
+    [undefined, true, undefined, "openclaw/lean"],
+    [undefined, false, undefined, undefined],
+    [true, false, "openclaw/lean", "openclaw/base"],
+    [false, true, undefined, "openclaw/lean"],
   ] as const)(
     "maps defaults=%s agent=%s at the same scope",
     (defaultsLean, agentLean, defaultsProfile, agentProfile) => {
@@ -84,6 +85,21 @@ describe("local-model lean to Agent Profile migration", () => {
       expect(validateConfigObject(raw).ok).toBe(true);
     },
   );
+
+  it("drops a leftover agent experimental block and keeps other default flags", () => {
+    const raw: Record<string, unknown> = {
+      agents: {
+        defaults: { experimental: { decisionAssistance: true } },
+        entries: { work: { experimental: {} } },
+      },
+    };
+    expect(findLegacyConfigIssues(raw)).not.toEqual([]);
+    applyRetiredMigrations(raw);
+    expect(raw).toEqual({
+      agents: { defaults: { experimental: { decisionAssistance: true } }, entries: { work: {} } },
+    });
+    expect(validateConfigObject(raw).ok).toBe(true);
+  });
 
   it("keeps an explicit agentProfileId at the same scope and reports the conflict", () => {
     const raw: Record<string, unknown> = {

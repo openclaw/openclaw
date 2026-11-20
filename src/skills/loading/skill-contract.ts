@@ -56,6 +56,23 @@ function truncateSkillDescription(description: string, maxChars: number): string
   return `${truncateUtf16Safe(normalized, maxChars - 3).trimEnd()}...`;
 }
 
+/** Keep at most `maxSkills` catalog entries; a catalog left with none renders no prompt. */
+export function limitSkillsPromptCatalog(prompt: string, maxSkills: number | undefined): string {
+  if (maxSkills === undefined) {
+    return prompt;
+  }
+  const entries = [...prompt.matchAll(/^ {2}<skill>\n[\s\S]*?\n {2}<\/skill>$/gmu)];
+  if (entries.length <= maxSkills) {
+    return prompt;
+  }
+  const last = maxSkills > 0 ? entries[maxSkills - 1] : undefined;
+  const close = prompt.indexOf("\n</available_skills>");
+  if (!last || close < 0) {
+    return "";
+  }
+  return prompt.slice(0, last.index + last[0].length) + prompt.slice(close);
+}
+
 /** Project descriptions for a model without changing admitted identities or loading instructions. */
 export function compactSkillsPromptForContext(prompt: string, contextTokenBudget?: number): string {
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {

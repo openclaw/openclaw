@@ -34,6 +34,8 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     sessionId: targetSessionEntry?.sessionId,
     chatType: targetSessionEntry?.chatType,
     agentId: sessionAgentId,
+    modelProvider: params.provider,
+    modelId: params.model,
     warn: makeBootstrapWarn({
       sessionLabel: params.sessionKey,
       workspaceDir,
@@ -188,6 +190,8 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   const systemPrompt = await buildConfiguredAgentSystemPrompt({
     preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
+    modelProvider: params.provider,
+    modelId: params.model,
     preparedModelRuntime,
     agentId: sessionAgentId,
     workspaceDir,

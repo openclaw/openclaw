@@ -5,6 +5,7 @@ import { makeSkill } from "../test-support/test-helpers.js";
 import {
   compactSkillsPromptForContext,
   formatSkillsForPromptCore,
+  limitSkillsPromptCatalog,
   type Skill,
   formatSkillsCompactForPrompt as formatSkillsCompact,
 } from "./skill-contract.js";
@@ -29,6 +30,26 @@ describe("compactSkillsPromptForContext", () => {
   it.each([-1])("keeps prompt bytes when the context budget is %s", (budget) => {
     const prompt = `<available_skills><description>  ${"long description ".repeat(30)}</description></available_skills>`;
     expect(compactSkillsPromptForContext(prompt, budget)).toBe(prompt);
+  });
+});
+
+describe("limitSkillsPromptCatalog", () => {
+  const prompt = formatSkillsForPromptCore(
+    ["alpha", "beta", "gamma"].map((name) => makeSkill(name, `${name} skill`)),
+  );
+
+  it("keeps the first entries and the catalog frame", () => {
+    const limited = limitSkillsPromptCatalog(prompt, 2);
+    expect(limited).toContain("<name>alpha</name>");
+    expect(limited).toContain("<name>beta</name>");
+    expect(limited).not.toContain("<name>gamma</name>");
+    expect(limited.trimEnd().endsWith("</available_skills>")).toBe(true);
+  });
+
+  it("renders no catalog for zero and leaves unlimited prompts unchanged", () => {
+    expect(limitSkillsPromptCatalog(prompt, 0)).toBe("");
+    expect(limitSkillsPromptCatalog(prompt, undefined)).toBe(prompt);
+    expect(limitSkillsPromptCatalog(prompt, 3)).toBe(prompt);
   });
 });
 

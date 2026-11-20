@@ -13,6 +13,7 @@ import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { describeSystemAgentConfigConflict } from "../system-agent/setup-config-snapshot.js";
 import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHintAsync } from "../tts/tts-settings.js";
+import { agentProfilePromptParams, resolveAgentProfile } from "./agent-profiles.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -24,6 +25,9 @@ type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPromp
   preparedTtsPreferences?: PreparedTtsPreferences;
   tools?: { name: string; parameters: unknown }[];
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases">;
+  /** Selected model; an Agent Profile bound to it can narrow the prompt. */
+  modelProvider?: string;
+  modelId?: string;
 };
 
 function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["preparedModelRuntime"]) {
@@ -43,9 +47,24 @@ export async function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSy
     agentId: explicitAgentId,
     preparedModelRuntime,
     preparedTtsPreferences,
+    modelProvider,
+    modelId,
     ...renderParams
   } = params;
   const agentId = explicitAgentId ?? (tools ? params.runtimeInfo?.agentId : undefined);
+  // One owner for every prompt path: embedded turns, compaction, CLI backends, inspection.
+  Object.assign(
+    renderParams,
+    agentProfilePromptParams(
+      resolveAgentProfile({
+        config,
+        agentId: agentId ?? params.runtimeInfo?.agentId,
+        sessionKey: params.runtimeInfo?.sessionKey,
+        modelProvider,
+        modelId,
+      }).profile,
+    ),
+  );
   if (tools) {
     renderParams.toolNames = tools.map((tool) => tool.name);
     renderParams.messageTool = tools.find((tool) => tool.name.trim().toLowerCase() === "message");

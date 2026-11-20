@@ -424,7 +424,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
 
   it("filters raw SDK tools but does not refilter prepared constructor output", () => {
     const config: OpenClawConfig = {
-      agents: { defaults: { agentProfileId: "openclaw/small" } },
+      agents: { defaults: { agentProfileId: "openclaw/lean" } },
       tools: { alsoAllow: ["image_generate"], toolSearch: { enabled: false } },
     };
     const runtime = createRuntime(config);
@@ -446,10 +446,10 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     ({ lean, scope }) => {
       const config: OpenClawConfig = {
         agents: {
-          defaults: { agentProfileId: !lean ? "openclaw/small" : "openclaw/base" },
+          defaults: { agentProfileId: !lean ? "openclaw/lean" : "openclaw/base" },
           entries: {
             main: {},
-            scoped: { agentProfileId: lean ? "openclaw/small" : "openclaw/base" },
+            scoped: { agentProfileId: lean ? "openclaw/lean" : "openclaw/base" },
           },
         },
         tools: { codeMode: false, toolSearch: { mode: "tools" } },

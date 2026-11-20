@@ -152,7 +152,7 @@ describe("Agent-specific tool filtering", () => {
 
   it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
     expectConfiguredTools(
-      agentConfig({ local: { agentProfileId: "openclaw/small" } }),
+      agentConfig({ local: { agentProfileId: "openclaw/lean" } }),
       ["read"],
       ["browser", "automations", "message"],
       {

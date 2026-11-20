@@ -19,7 +19,6 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
@@ -62,6 +61,7 @@ import { buildDocumentationSection } from "./system-prompt-documentation.js";
 import {
   buildAssistantOutputDirectivesSection,
   buildMessagingSection,
+  buildSilentRepliesSection,
   resolveSilentReplyPromptMode,
 } from "./system-prompt-messaging.js";
 import {
@@ -295,6 +295,12 @@ export function buildAgentSystemPrompt(params: {
   ttsHint?: string;
   /** Controls which hardcoded sections to include. Defaults to "full". */
   promptMode?: PromptMode;
+  /**
+   * Agent Profile prompt narrowing. `compact` drops reference sections from a full prompt
+   * (reply, channel and owner guidance stay); `maxListedSkills` caps listed skills while
+   * skills stay searchable.
+   */
+  agentProfilePrompt?: { compact?: boolean; maxListedSkills?: number };
   /** Controls generic silent-reply guidance for external message channels. */
   silentReplyPromptMode?: SilentReplyPromptMode;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -413,6 +419,8 @@ export function buildAgentSystemPrompt(params: {
       .filter(([, value]) => Boolean(value)),
   ) as Partial<Record<ProviderSystemPromptSectionId, string>>;
   const isMinimal = promptMode === "minimal";
+  // Reference sections only; behavior the session depends on is never dropped here.
+  const omitReference = isMinimal || params.agentProfilePrompt?.compact === true;
   const includeToolGuidance =
     !isMinimal || availableTools.size > 0 || promptSurface === "cli_backend";
   const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
@@ -496,6 +504,7 @@ export function buildAgentSystemPrompt(params: {
     visibleTools,
     availableTools,
     deferredToolsDirectlyCallable: params.deferredToolsDirectlyCallable,
+    maxListedSkills: params.agentProfilePrompt?.maxListedSkills,
   });
   params.onRenderedSkillsPrompt?.(renderedSkillsPrompt);
   const toolGuidanceSection = listToolPromptGuidance(availableTools).flatMap((section) => [
@@ -516,7 +525,7 @@ export function buildAgentSystemPrompt(params: {
           },
           params.preparedMemoryPrompt,
         );
-  const docsSection = isMinimal
+  const docsSection = omitReference
     ? []
     : buildDocumentationSection({
         docsPath: params.docsPath,
@@ -552,6 +561,8 @@ export function buildAgentSystemPrompt(params: {
   const stablePrefixCacheKey = sha256Hex(
     JSON.stringify({
       promptMode,
+      // Compact profiles drop Execution Bias from this prefix; keep their cache entries apart.
+      omitReference,
       interactionStyle: providerSectionOverrides.interaction_style,
       executionBias: providerSectionOverrides.execution_bias,
       providerStablePrefix,
@@ -568,7 +579,7 @@ export function buildAgentSystemPrompt(params: {
       "You are a personal assistant running inside OpenClaw.",
       "",
       providerSectionOverrides.interaction_style,
-      providerSectionOverrides.execution_bias || (!isMinimal && buildExecutionBiasSection()),
+      providerSectionOverrides.execution_bias || (!omitReference && buildExecutionBiasSection()),
       ...buildPromisedWorkPromptSection(),
       providerStablePrefix,
       ...buildRuntimeContextSection(),
@@ -667,7 +678,7 @@ export function buildAgentSystemPrompt(params: {
     ...memorySection,
     params.modelAliasLines &&
       params.modelAliasLines.length > 0 &&
-      !isMinimal && [
+      !omitReference && [
         "## Model Aliases",
         "Model override: aliases are shortcuts for unqualified model requests. Use explicit provider/model references verbatim; do not substitute an alias or another provider.",
         params.modelAliasLines.join("\n"),
@@ -744,13 +755,7 @@ export function buildAgentSystemPrompt(params: {
         messageToolAvailable,
         runtimeChannel,
       }),
-    !isMinimal &&
-      silentReplyPromptMode !== "none" && [
-        "## Silent Replies",
-        `Nothing to say: entire reply exactly uppercase ${SILENT_REPLY_TOKEN}, without Markdown, punctuation, quotes, or other text.`,
-        `Only that whole reply is silent. A literal leading ${SILENT_REPLY_TOKEN} followed by a newline removes just that line; all remaining text is visible. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
-        "",
-      ],
+    !isMinimal && buildSilentRepliesSection(silentReplyPromptMode),
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
     // A tool_call_style override owns the complete section and suppresses default guidance.
     !providerSectionOverrides.tool_call_style &&
@@ -761,7 +766,7 @@ export function buildAgentSystemPrompt(params: {
         runtimeCapabilities,
       }),
     ownerLine && ["## Authorized Senders", ownerLine, ""],
-    !isMinimal &&
+    !omitReference &&
       buildUiPresentationPrompt({
         screenToolName: availableTools.has("screen") ? resolveToolName("screen") : undefined,
         messageTool: messageToolAvailable ? params.messageTool : undefined,

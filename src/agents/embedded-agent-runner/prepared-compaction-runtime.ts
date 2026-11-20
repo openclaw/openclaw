@@ -160,6 +160,8 @@ export async function buildPreparedCompactionRuntime(
             sessionId: params.sessionId,
             chatType: params.chatType,
             agentId: sessionAgentId,
+            modelProvider: provider,
+            modelId,
             warn: makeBootstrapWarn({
               sessionLabel,
               warn: (message) => log.warn(message),
@@ -176,6 +178,8 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapBudget = buildBootstrapBudgetState({
       config: params.config,
       agentId: sessionAgentId,
+      modelProvider: provider,
+      modelId,
       files: bootstrapInjectionStats,
     });
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
@@ -533,6 +537,8 @@ export async function buildPreparedCompactionRuntime(
         ownerNumbers: params.ownerNumbers,
         reasoningTagHint,
         skillsPrompt: promptPolicyRestricted ? undefined : skillsPrompt,
+        modelProvider: provider,
+        modelId,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
         promptMode,

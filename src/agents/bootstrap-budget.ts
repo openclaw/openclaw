@@ -10,7 +10,7 @@ import type {
 } from "./bootstrap-budget.types.js";
 import {
   resolveBootstrapMaxChars,
-  resolveBootstrapTotalMaxChars,
+  resolveRunBootstrapTotalMaxChars,
   USER_BOOTSTRAP_MAX_CHARS,
 } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
@@ -224,12 +224,14 @@ export function analyzeBootstrapBudget(params: {
 export function buildBootstrapBudgetState(params: {
   config?: OpenClawConfig;
   agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
   files: BootstrapInjectionStat[];
   previousSignature?: string;
   seenSignatures?: string[];
 }) {
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config, params.agentId);
-  const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config, params.agentId);
+  const bootstrapTotalMaxChars = resolveRunBootstrapTotalMaxChars(params);
   const bootstrapAnalysis = analyzeBootstrapBudget({
     files: params.files,
     bootstrapMaxChars,

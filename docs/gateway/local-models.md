@@ -402,13 +402,13 @@ smaller output, then start a new turn.
 
 ### Local model lean mode
 
-Lean mode is the `openclaw/small` Agent Profile. Select it with `agentProfileId` in **Settings → Agent Defaults → Agents** with advanced settings shown, or use the config examples below. `openclaw/base` is the full tool surface and the default.
+Lean mode is the `openclaw/lean` Agent Profile, kept for compatibility with the former lean flag. For a small context window, first try `openclaw/small`: it drops reference sections from the system prompt (documentation, execution style, model aliases, UI presentation), lists no skills while skill search is available, and caps injected workspace files at 12,000 characters, while keeping every tool and all reply and channel guidance. Select either profile with `agentProfileId` in **Settings → Agent Defaults → Agents** with advanced settings shown, or use the config examples below. `openclaw/base` is the default.
 
 Lean mode is an advanced troubleshooting override that explicitly restricts capabilities. Local inference normally uses [Tool Search](/tools/tool-search) to defer schemas while preserving capabilities, so leave lean mode off unless you deliberately want a smaller tool set.
 
-`agents.defaults.agentProfileId: "openclaw/small"` removes optional tools before catalog construction: `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. These removed tools cannot be found through Tool Search. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults catalogs to structured Tool Search (`tool_search`, `tool_describe`, `dispatch_action`) when `tools.toolSearch` is not already set. Use `agents.entries.*.agentProfileId` to scope this to one agent, or `agents.defaults.models.<provider/model>.agentProfileId` to scope it to one model. The agent selector wins over the default selector, which wins over model bindings.
+`agents.defaults.agentProfileId: "openclaw/lean"` removes optional tools before catalog construction: `browser`, `automations`, `message`, `image_generate`, `music_generate`, `video_generate`, `tts`, and `pdf`. These removed tools cannot be found through Tool Search. Explicitly allowed or delivery-required tools remain available, though Tool Search may catalog them instead of exposing them directly. Lean mode also defaults catalogs to structured Tool Search (`tool_search`, `tool_describe`, `dispatch_action`) when `tools.toolSearch` is not already set. Use `agents.entries.*.agentProfileId` to scope this to one agent, or `agents.defaults.models.<provider/model>.agentProfileId` to scope it to one model. The agent selector wins over the default selector, which wins over model bindings.
 
-The former `experimental.localModelLean` flag is retired. `openclaw doctor --fix` moves it at the same scope: `true` becomes `"openclaw/small"` and `false` becomes `"openclaw/base"`, so an explicit opt-out still wins over an inherited or model-bound profile. For older installations, doctor first removes an onboarding-owned `true` when its ownership marker still matches the default model. Select `"openclaw/base"` to restore optional capabilities; automatic Tool Search still applies to local routes.
+The former `experimental.localModelLean` flag is retired. `openclaw doctor --fix` moves it at the same scope: `true` becomes `"openclaw/lean"`. `false` was the default and is removed, except on an agent that opted out of a lean default, where it becomes `"openclaw/base"`. For older installations, doctor first removes an onboarding-owned `true` when its ownership marker still matches the default model. Select `"openclaw/base"` to restore optional capabilities; automatic Tool Search still applies to local routes.
 
 If you already tune Tool Search globally, OpenClaw leaves that config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
 
@@ -432,7 +432,7 @@ Enable lean mode once you have proved the model can talk to the Gateway but full
 
 1. `openclaw infer model run --gateway --model <ref> --prompt "Reply with exactly: pong"` succeeds.
 2. A normal agent turn fails with malformed tool calls, oversized prompts, or the model ignoring its tools.
-3. Selecting `agentProfileId: "openclaw/small"` clears the failure.
+3. Selecting `agentProfileId: "openclaw/lean"` clears the failure.
 
 #### When to leave it off
 
@@ -446,13 +446,13 @@ Lean mode does not replace `tools.profile`, `tools.allow`/`tools.deny`, or the m
 {
   agents: {
     defaults: {
-      agentProfileId: "openclaw/small",
+      agentProfileId: "openclaw/lean",
     },
   },
 }
 ```
 
-For one model only:
+For one model only, with the small-window profile:
 
 ```json5
 {
@@ -474,7 +474,7 @@ For one agent only:
     entries: {
       local: {
         model: "lmstudio/gemma-4-e4b-it",
-        agentProfileId: "openclaw/small",
+        agentProfileId: "openclaw/lean",
       },
     },
   },

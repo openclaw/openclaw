@@ -122,7 +122,7 @@ import {
   retainCliPluginExecutionConsumer,
   unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
-import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
+import { cliAgentProfileScope, isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { replayableTarget, prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
 import { prepareCliLoopbackBundleMcp } from "./loopback-bundle-mcp.js";
@@ -628,7 +628,7 @@ async function prepareCliRunContextWithinReadFence(
         sessionId: params.sessionId,
         bootstrapUserProfileId: params.bootstrapUserProfileId,
         chatType: runtimeChatType,
-        agentId: sessionAgentId,
+        ...cliAgentProfileScope(sessionAgentId, modelDisplay),
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
         warn: makeBootstrapWarnImpl({
@@ -829,7 +829,7 @@ async function prepareCliRunContextWithinReadFence(
   const { bootstrapAnalysis, bootstrapMaxChars, bootstrapPromptWarning, bootstrapTotalMaxChars } =
     buildBootstrapBudgetState({
       config: params.config,
-      agentId: sessionAgentId,
+      ...cliAgentProfileScope(sessionAgentId, modelDisplay),
       files: bootstrapInjectionStats,
       seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
       previousSignature: params.bootstrapPromptWarningSignature,
