@@ -76,6 +76,8 @@ async function createPluginToolPermissionHandler(params: {
   });
   const grants = new Set<string>();
 
+  // Native tool requests belong to this already-admitted turn: authority was checked when the
+  // turn started, and a revocation applies to the next turn. Only Stop ends the turn early.
   return async (request) => {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
