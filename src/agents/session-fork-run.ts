@@ -1,5 +1,6 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
 import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
@@ -105,7 +106,7 @@ type SessionForkTurn = {
 
 /**
  * Facts of the turn a fork reads through: the requester its initiating user message recorded and
- * the model its last assistant message ran on. The search stops at that turn's initiating input,
+ * the model its last provider response ran on. The search stops at that turn's initiating input,
  * within a bounded window. Returns undefined when that window no longer holds the input
  * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
  */
@@ -124,13 +125,16 @@ export async function readSessionForkTurn(
       continue;
     }
     const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    // Delivery mirrors and other OpenClaw-authored rows are assistant messages no provider
+    // answered; taking their marker as the model sends the fork to a model that does not exist.
     if (
       !model &&
       message.role === "assistant" &&
       typeof message.provider === "string" &&
       typeof message.model === "string" &&
       message.provider &&
-      message.model
+      message.model &&
+      !isTranscriptArtifactProvider(message.provider)
     ) {
       model = { provider: message.provider, model: message.model };
     }
