@@ -1,4 +1,4 @@
-import { createSignal, Errored, For, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
@@ -7,7 +7,10 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { renderPluginDetailShell as PluginDetailShell } from "../plugins/detail-shell.tsx";
+import {
+  renderPluginDetailShell as PluginDetailShell,
+  PluginReadmeWell,
+} from "../plugins/detail-shell.tsx";
 import { PluginInstallAction } from "../plugins/install-action.tsx";
 import {
   renderPackageMetadata,
@@ -20,7 +23,6 @@ import { TemplatePluginIcon } from "./template-plugin-icon.tsx";
 import type { TemplateCatalogDetail, TemplateCatalogEntry } from "./templates-catalog-client.ts";
 import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
-import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
 type ClawHubAudit = {
   release: string;
@@ -97,14 +99,33 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
   const [automation, setAutomation] = createSignal<
     TemplateCatalogDetail["contents"]["automations"][number] | null
   >(null);
+  // SOUL.md reads as the Template's personality; the page lists no other workspace files.
+  const soul = createMemo(() =>
+    contents().instructions.find((file) => file.name === "SOUL.md" && file.excerpt),
+  );
   return (
     <>
-      <TemplateWorkspaceFiles
-        files={contents().instructions}
-        onOpen={(name) =>
-          props.view.onOpenPreview("instruction", name ?? contents().instructions[0]!.name)
-        }
-      />
+      <Show when={soul()}>
+        {(file) => (
+          <section class="plugin-catalog-detail__readme-section templates-personality">
+            <div class="templates-personality__label">
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("templatesCatalog.personality")}
+              </h2>
+              <button
+                type="button"
+                class="templates-personality__file"
+                onClick={() => props.view.onOpenPreview("instruction", file().name)}
+              >
+                {file().name}
+              </button>
+            </div>
+            <PluginReadmeWell>
+              <p class="templates-personality__text">{file().excerpt}</p>
+            </PluginReadmeWell>
+          </section>
+        )}
+      </Show>
       {renderPluginCapabilitySection(
         t("templatesCatalog.skillsSection"),
         contents().skills.map((item) => ({
@@ -199,6 +220,7 @@ function TemplateMetadata(props: {
         createdAt: props.detail?.createdAtMs,
         downloads: props.entry.downloads,
         categories: props.detail?.categories,
+        rail: { links: undefined },
       })}
     </>
   );
@@ -224,9 +246,10 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 backLabel={t("tabs.templates")}
                 onBack={view().onBack}
                 icon={<TemplateArtwork src={detail() ? detail()?.iconUrl : selected().iconUrl} />}
+                rail
                 identity={renderPublisherIdentity({
-                  name:
-                    publisher().ownerHandle === "openclaw" ? "OpenClaw" : publisher().ownerHandle,
+                  // The handle names the publisher; a display name only when it says more.
+                  name: publisher().ownerHandle === "openclaw" ? "OpenClaw" : undefined,
                   handle: `@${publisher().ownerHandle}`,
                   official: publisher().official,
                 })}
@@ -256,6 +279,7 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                 }
                 panel={
                   <>
+                    <TemplateAddFeedback view={view()} />
                     <For each={[view().detailRequest]}>
                       {() => (
                         <Errored
@@ -291,7 +315,6 @@ export function TemplatesDetailView(props: { view: TemplatesCatalogViewProps }) 
                         </Errored>
                       )}
                     </For>
-                    <TemplateAddFeedback view={view()} />
                   </>
                 }
               />

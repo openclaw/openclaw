@@ -1,6 +1,6 @@
 import type { SkillsLibraryListResult } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { Show, createSignal, flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusReport } from "../../api/types.ts";
@@ -15,6 +15,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { SkillsPage } from "./skills-page.tsx";
 import type { SkillsRouteData } from "./view-types.ts";
+import { skillsListFor } from "./view.solid.test-support.tsx";
 
 export const personalLibrary = {
   entries: [],
@@ -137,9 +138,11 @@ export function mountSkills(
   const [currentSurface, setCurrentSurface] = createSignal(surface);
   const mounted = mountSolid(() => (
     <ApplicationProvider value={context}>
-      <Show when={Boolean(routeData())}>
-        <SkillsPage routeData={routeData()} surface={currentSurface()} />
-      </Show>
+      <SkillsPage
+        routeData={routeData()}
+        surface={currentSurface()}
+        List={skillsListFor(currentSurface())}
+      />
     </ApplicationProvider>
   ));
   flush();

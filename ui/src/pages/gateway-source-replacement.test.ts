@@ -27,6 +27,7 @@ import {
   unmountPage as unmountModelProvidersPage,
 } from "./model-providers/model-providers-page.test-support.tsx";
 import { pages as skillsPages } from "./skills/route.ts";
+import { SkillsSettings } from "./skills/settings-view.tsx";
 import { SkillsPage } from "./skills/skills-page.tsx";
 import type { SkillsRouteData } from "./skills/view-types.ts";
 import { createReport, createSkill } from "./skills/view.test-support.ts";
@@ -242,7 +243,7 @@ function mountSkillsPage(
     ...loadedRouteData,
   };
   const mounted = mountSolid(
-    () => createComponent(SkillsPage, { routeData, surface: "settings" }),
+    () => createComponent(SkillsPage, { routeData, surface: "settings", List: SkillsSettings }),
     { wrapper: provider.wrapper },
   );
   let currentContext = context;
@@ -466,10 +467,12 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
     expect(mounted.find(".plugins-item")?.textContent).toContain("Refreshing"),
   );
   mounted.find('[aria-label="Open Repo Skill details"]')!.click();
-  await waitForSolid(() => expect(mounted.find("#skill-detail-tab-card")).not.toBeNull());
-  mounted
-    .find("#skill-detail-tab-card")!
-    .dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+  const findCardButton = () =>
+    Array.from(mounted.find("openclaw-modal-dialog")?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.trim() === "Skill card",
+    );
+  await waitForSolid(() => expect(findCardButton()).toBeDefined());
+  findCardButton()!.click();
   await waitForSolid(() => expect(mounted.text()).toContain("Previous provider card"));
   const row = mounted.find(".plugins-item");
   harness.emitConnected(false);
@@ -490,7 +493,7 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
   expect(mounted.text()).not.toContain("Repo Skill");
   expect(mounted.text()).not.toContain("Clean");
   expect(mounted.text()).not.toContain("Previous provider card");
-  expect(mounted.find("#skill-detail-panel")).toBeNull();
+  expect(mounted.find("openclaw-modal-dialog")).toBeNull();
 });
 
 it.each([

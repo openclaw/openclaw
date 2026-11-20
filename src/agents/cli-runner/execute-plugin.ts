@@ -537,9 +537,7 @@ export async function executePluginOwnedProcess(params: {
     } else {
       params.mcpCapture?.beginCapture(params.mcpCapture.captureKey, assertCaptureCurrent);
     }
-    const historyWriter = params.context.cliHistoryWriter;
     const { prepareCredentialUse } = params.context.preparedBackend;
-    await historyWriter?.assertReadable();
     // Warm transports retain their first turn's async context. Bind every host
     // callback here so reused transports enter the current turn's source scope.
     const execution = params.execute({
@@ -560,16 +558,6 @@ export async function executePluginOwnedProcess(params: {
       abortSignal: signal,
       ...(prepareCredentialUse
         ? { prepareCredentialUse: AsyncLocalStorage.bind(prepareCredentialUse) }
-        : {}),
-      // Host-internal, not in the plugin SDK type, like the forwarded auth credential: a
-      // native login can change after the check above, so the bundled Claude runtime
-      // repeats it where saved turn context leaves, at prompt send and the prompt hook answer.
-      ...(historyWriter?.bindsNativeLogin
-        ? {
-            assertPrivateInputCurrent: AsyncLocalStorage.bind(() =>
-              historyWriter.checkNativeLoginBoundary(historyWriter.replaysHistory),
-            ),
-          }
         : {}),
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),

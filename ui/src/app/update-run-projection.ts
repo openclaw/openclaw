@@ -6,6 +6,7 @@ import {
 } from "../../../src/infra/update-run-history-projection.ts";
 import {
   isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "../../../src/infra/update-run-record.ts";
@@ -29,6 +30,7 @@ export function projectUpdateRun(
   serving?: UpdateRunServingIdentity,
 ) {
   const terminal = run.status !== "running";
+  const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
   const historical = connected ? projectUpdateRunHistory(run, serving) : null;
   const report = historical
@@ -37,7 +39,11 @@ export function projectUpdateRun(
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
-    if (phase === "repairing" && !recorded && phase !== run.phase) {
+    if (
+      !recorded &&
+      phase !== run.phase &&
+      (phase === "repairing" || (repairRun && phase !== "finished"))
+    ) {
       return [];
     }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";

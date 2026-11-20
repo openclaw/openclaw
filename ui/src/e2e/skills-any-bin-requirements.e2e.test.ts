@@ -51,6 +51,10 @@ async function openSkill(page: Page, missing: string[], install = false) {
     },
   });
   expect((await page.goto(`${suite.server.baseUrl}skills`))?.status()).toBe(200);
+  await page
+    .locator(".skill-discovery")
+    .getByRole("button", { name: "Installed", exact: true })
+    .click();
   await page.getByRole("button", { name: "Open Coding Agent details" }).click();
   const dialog = page.locator("openclaw-modal-dialog", { hasText: "Coding Agent" });
   await expect.poll(() => dialog.count()).toBe(1);
@@ -66,8 +70,8 @@ suite.define(() => {
         missing,
       );
       const installer = dialog.getByRole("button", { name: "Install Codex CLI (npm)" });
+      await dialog.getByText("claude / codex / opencode", { exact: false }).waitFor();
       if (missing) {
-        expect(await dialog.textContent()).toContain("bin:any of (claude, codex, opencode)");
         await installer.click();
         expect((await gateway.waitForRequest("skills.install")).params).toMatchObject({
           name: "Coding Agent",
@@ -75,8 +79,8 @@ suite.define(() => {
           dangerouslyForceUnsafeInstall: false,
         });
       } else {
-        expect(await dialog.getByText("bin:any of", { exact: false }).count()).toBe(0);
         expect(await installer.count()).toBe(0);
+        expect(await gateway.getRequests("skills.install")).toHaveLength(0);
       }
     }),
   );

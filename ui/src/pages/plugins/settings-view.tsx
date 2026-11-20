@@ -11,6 +11,8 @@ import {
   SettingsSection,
   SettingsUnavailable,
 } from "../../components/solid/settings-ui.tsx";
+import type { WizardLoginState } from "../../components/wizard-login-controller.tsx";
+import { WizardLogin } from "../../components/wizard-login-view.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
@@ -86,6 +88,7 @@ export type DetailProps = SharedProps &
     onSelectPrompt?: (prompt: string) => void;
     promptBusy?: boolean;
     promptBlockedReason?: string | null;
+    mcpLogin?: WizardLoginState;
     mcpLoginBusy?: boolean;
     canMcpLogin?: boolean;
     onMcpLogin?: (serverName: string) => void;
@@ -268,6 +271,23 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
       ) : (
         <PluginOverview {...props} />
       )}
+      <Show when={props.mcpLogin}>
+        {(dialog) => (
+          <WizardLogin
+            controller={dialog()}
+            signInIcon={
+              <PluginArtTile
+                registerIcon={props.registerIcon}
+                slug={props.pluginId}
+                name={dialog().state().authLabel ?? props.pluginId}
+                iconUrl={props.iconUrls[props.pluginId]}
+                loading={props.iconLoading?.(props.pluginId)}
+                onIconError={() => props.onIconError(props.pluginId)}
+              />
+            }
+          />
+        )}
+      </Show>
     </>
   );
 }
@@ -335,6 +355,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
       <PluginDetailShell
         registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
+        rail
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}
@@ -342,6 +363,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
         onBack={props.onBack}
         icon={
           <PluginArtTile
+            neutralFallback
             registerIcon={props.registerIcon}
             slug={plugin().id}
             name={plugin().name}
@@ -389,13 +411,13 @@ function PluginOverview(props: DetailProps): JSX.Element {
               />
             }
           >
+            {renderPluginAskAction(props.onAskPlugin, false)}
             <PluginInstallAction
               registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
             />
-            {renderPluginAskAction(props.onAskPlugin, false)}
           </Show>
         }
         sidebar={
@@ -408,9 +430,9 @@ function PluginOverview(props: DetailProps): JSX.Element {
               )
             : undefined
         }
+        notices={<PluginNotices {...props} />}
         panel={
           <>
-            <PluginNotices {...props} />
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({

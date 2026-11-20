@@ -1984,11 +1984,7 @@ describe("release validation no-push transport", () => {
     const fullText = readFileSync(FULL_RELEASE, "utf8");
     const performance = readWorkflow(PERFORMANCE);
     const publisher = job(performance, "publish");
-    const dangerousSteps = [
-      "Prepare clawgrit report commit",
-      "Create clawgrit reports app token",
-      "Publish to clawgrit reports",
-    ];
+    const dangerousSteps = ["Prepare clawgrit report commit", "Publish to clawgrit reports"];
 
     expect(performance.on?.workflow_dispatch?.inputs?.publish_reports).toMatchObject({
       default: true,

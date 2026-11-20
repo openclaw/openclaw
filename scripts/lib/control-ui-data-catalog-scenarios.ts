@@ -13,10 +13,7 @@ import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import {
-  openNavigationDrawer,
-  prepareInteractionNavigation,
-} from "./control-ui-interaction-navigation.ts";
+import { openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
   InteractionScenario,
@@ -37,10 +34,10 @@ function suffix(index: number) {
   return String(index).padStart(4, "0");
 }
 
-function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
+function createDataCatalogInventory(revision = 1) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
-    catalogId: `data-catalog-${suffix(index)}`,
+    catalogId: `installed-catalog-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
     packageName: `@synthetic/data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
@@ -51,11 +48,12 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
     state: "enabled",
     removable: true,
   }));
-  const entries: PluginDiscoveryEntry[] = plugins.map((plugin, index) => ({
+  // The Tools catalog offers entries to install; Settings has its own full installed inventory.
+  const entries: PluginDiscoveryEntry[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-catalog-${suffix(index)}`,
     catalog: {
-      name: plugin.name,
-      summary: plugin.description,
+      name: `Data plugin ${suffix(index)}`,
+      summary: `Discoverable tool ${index} from the synthetic catalog.`,
       author: "synthetic-publisher",
       official: index % 3 === 0,
       categories: ["tools"],
@@ -63,21 +61,14 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
       latestVersion: "1.0.0",
     },
     local: {
-      pluginId: index === uninstalledIndex ? undefined : plugin.id,
-      present: index !== uninstalledIndex,
-      installed: index !== uninstalledIndex,
-      enabled: index !== uninstalledIndex,
-      state: index === uninstalledIndex ? "not-installed" : "enabled",
-      action: index === uninstalledIndex ? "install" : "manage",
+      present: false,
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      action: "install",
     },
   }));
-  return {
-    plugins:
-      uninstalledIndex === undefined
-        ? plugins
-        : plugins.filter((_plugin, index) => index !== uninstalledIndex),
-    entries,
-  };
+  return { plugins, entries };
 }
 
 function catalogPage(
@@ -96,11 +87,8 @@ function catalogPage(
   };
 }
 
-function createDataCatalogFixture(
-  revision = 1,
-  uninstalledIndex?: number,
-): InteractionFixtureOverrides {
-  const { plugins, entries } = createDataCatalogInventory(revision, uninstalledIndex);
+function createDataCatalogFixture(revision = 1): InteractionFixtureOverrides {
+  const { plugins, entries } = createDataCatalogInventory(revision);
   const groups: ToolsCatalogResult["groups"] = Array.from(
     { length: toolGroupCount },
     (_, groupIndex) => ({
@@ -772,6 +760,8 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
 }
 
 function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
+  const catalogLink = (page: Page) =>
+    page.locator(`.sidebar-rail a[href="${pathForRoute("plugins")}"]`);
   return {
     ...fixture,
     id: `data-catalog-first-render${roundTripMs ? "-100ms" : ""}`,
@@ -801,19 +791,22 @@ function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
       };
     },
     prepare: async (page, gateway) => {
-      await prepareInteractionNavigation(page);
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
+      await catalogLink(page).waitFor({ state: "visible" });
       if ((await gateway.getRequests("plugins.catalog.browse")).length !== 0) {
         throw new Error("The catalog was fetched before first navigation");
       }
     },
     run: async (page, gateway) => {
-      await page.locator(`.sidebar-pages a[href="${pathForRoute("plugins")}"]`).click();
+      await catalogLink(page).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
         match: { intent: "all", pageSize: catalogPageSize },
         exactParams: true,
       });
       const shelf = page.locator('[data-catalog-section="tools"]');
-      await shelf.locator("h2").getByText("Tools", { exact: true }).waitFor();
+      await shelf.getByRole("heading", { level: 2, name: "Tools", exact: true }).waitFor();
       await page.waitForFunction(() => {
         const cards = Array.from(document.querySelectorAll(".plugin-catalog-card"));
         return (
@@ -979,7 +972,6 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
     explicitOnly: true,
     route: pathForRoute("plugins"),
     expected: "Catalog search works before installed inventory permits installation.",
-    fixtureOverrides: () => createDataCatalogFixture(1, 900),
     prepare: async (page) => countRows(page, ".plugin-catalog-card", 8),
     run: async (page) => {
       const search = page.getByRole("searchbox", { name: "Search plugins" });
@@ -1014,7 +1006,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
         inventoryLoadingVisible,
         inventoryReadyAtMs: await page.evaluate(() => performance.now()),
         matchingPlugins: 100,
-        installedPlugins: inventorySize - 1,
+        installedPlugins: inventorySize,
       };
     },
   },
