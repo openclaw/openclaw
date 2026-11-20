@@ -322,20 +322,23 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}custodian`);
-      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
-      const historyToggle = page.getByRole("button", { name: "History", exact: true });
-      await historyToggle.click();
+      await page.goto(`${suite.server.baseUrl}settings/system-history`);
+      await waitForControlUiRoute(page, {
+        pathname: "/settings/system-history",
+        routeId: "system-history",
+      });
+      const historyToggle = page
+        .locator(".system-history__history")
+        .getByRole("button", { name: "Refresh", exact: true });
       await gateway.waitForRequest("openclaw.changes.list");
-      await page.locator(".custodian__change-card").waitFor();
+      await page.locator(".system-history__change-card").waitFor();
       const requestCount = (await gateway.getRequests("openclaw.changes.list")).length;
       await gateway.deferNext("openclaw.changes.list");
       await historyToggle.click();
-      await historyToggle.click();
       await gateway.waitForRequest("openclaw.changes.list", { after: requestCount });
 
-      const history = page.locator(".custodian__history");
-      const spinner = history.locator(".custodian__history-spinner");
+      const history = page.locator(".system-history__history");
+      const spinner = history.locator(".system-history__history-spinner");
       await spinner.waitFor({ state: "visible" });
       expect(await history.locator(".settings-loading-skeleton").count()).toBe(0);
     });

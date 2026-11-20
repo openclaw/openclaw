@@ -482,7 +482,16 @@ suite.define(() => {
       await settingsSearch.fill("system");
       await expect
         .poll(() => trimmedTextContents(settingsLinks))
-        .toEqual(["Infrastructure", "Labs", "Advanced", "Debug", "Logs", "Updates", "About"]);
+        .toEqual([
+          "System history",
+          "Infrastructure",
+          "Labs",
+          "Advanced",
+          "Debug",
+          "Logs",
+          "Updates",
+          "About",
+        ]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {
@@ -574,8 +583,8 @@ suite.define(() => {
       await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
-      await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      await settingsSidebar.getByRole("link", { name: "System history" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/system-history");
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");

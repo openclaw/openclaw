@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import "../test-helpers/load-styles.ts";
 import "./approval.css";
-import "./custodian.css";
+import "./system-history.css";
 import "./device-pair-setup.css";
 import "./panel-loading-skeleton.css";
 import "./sidebar-agent-roster.css";
@@ -38,7 +38,7 @@ const fixture = `
     <span id="worker-stop" data-art="--spinner-mask" class="session-worker-stop__spinner"></span>
   </span>
   <div id="approval" data-art="--spinner-mask-large" class="approval-page__spinner"></div>
-  <span id="custodian" data-art="--spinner-mask" class="custodian__history-spinner"></span>
+  <span id="system-history" data-art="--spinner-mask" class="system-history__history-spinner"></span>
   <div class="device-pair-setup__loading"><span id="device-pair" data-art="--spinner-mask" class="device-pair-setup__spinner"></span></div>
   <openclaw-panel-loading-skeleton>
     <div class="desktop-loading"><span id="panel" data-art="--spinner-mask-large" class="desktop-spinner"></span></div>

@@ -371,37 +371,6 @@ suite.define(() => {
         pathname: "/settings/appearance",
         routeId: "appearance",
       });
-      await page.locator(".topbar-nav-toggle").click();
-      await expect
-        .poll(() => page.locator(".shell").getAttribute("class"))
-        .toContain("shell--nav-drawer-open");
-      const settingsSidebar = page.locator(".settings-sidebar");
-      await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
-      await waitForControlUiRoute(page, { pathname: "/custodian", routeId: "custodian" });
-      const custodianInsets = await page.evaluate(() => {
-        const content = document.querySelector<HTMLElement>("main.content");
-        const column = document.querySelector<HTMLElement>(".custodian__column");
-        const topbar = document.querySelector<HTMLElement>(".topbar");
-        if (!content || !column || !topbar) {
-          throw new Error("Custodian settings route did not render");
-        }
-        const columnBox = column.getBoundingClientRect();
-        return {
-          columnLeft: Math.round(columnBox.left),
-          columnRightInset: Math.round(document.documentElement.clientWidth - columnBox.right),
-          contentPaddingInline: Math.round(
-            Number.parseFloat(getComputedStyle(content).paddingLeft),
-          ),
-          topbarPaddingInline: Math.round(Number.parseFloat(getComputedStyle(topbar).paddingLeft)),
-        };
-      });
-      expect(custodianInsets).toEqual({
-        columnLeft: 12,
-        columnRightInset: 12,
-        contentPaddingInline: 0,
-        topbarPaddingInline: 12,
-      });
-
       await page.setViewportSize({ height: 900, width: 1440 });
       await navigate("appearance");
       await waitForControlUiRoute(page, {

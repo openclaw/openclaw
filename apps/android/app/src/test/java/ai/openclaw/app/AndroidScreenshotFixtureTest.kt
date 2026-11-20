@@ -137,40 +137,6 @@ class AndroidScreenshotFixtureTest {
   }
 
   @Test
-  fun providesDeterministicSystemAgentConversation() {
-    val greeting =
-      json
-        .parseToJsonElement(
-          request(
-            "openclaw.chat",
-            """{"sessionId":"android-settings-openclaw-test"}""",
-          ),
-        ).jsonObject
-    val response =
-      json
-        .parseToJsonElement(
-          request(
-            "openclaw.chat",
-            """{"sessionId":"android-settings-openclaw-test","message":"Check status"}""",
-          ),
-        ).jsonObject
-
-    assertEquals("android-screenshot-openclaw", greeting["sessionId"]?.jsonPrimitive?.content)
-    assertEquals(
-      "What should we look at first?",
-      greeting["question"]
-        ?.jsonObject
-        ?.get("question")
-        ?.jsonPrimitive
-        ?.content,
-    )
-    assertEquals(
-      "I’ll keep this conversation separate from ordinary agent chat.",
-      response["reply"]?.jsonPrimitive?.content,
-    )
-  }
-
-  @Test
   fun rejectsUnexpectedGatewayCalls() {
     val error =
       assertThrows(IllegalStateException::class.java) {

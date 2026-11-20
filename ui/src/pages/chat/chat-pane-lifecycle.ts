@@ -401,6 +401,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
     restorePaneStagedAttachments(this.context, this.paneId, pageState, mountGatewayOwner);
     chatState.composerPersistence.start();
+    chatState.addCleanup(startupSubscriptions.subscribeChatPaneHomeHelp(this));
     if (sessionHandoff) {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
     }
@@ -638,6 +639,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override afterRender(focusComposerChanged: boolean) {
+    startupSubscriptions.receiveHomeHelpDraft(this);
     this.panelActions?.syncLaunch();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
     const textarea = getChatComposerState(this.presentationId).composerTextarea;

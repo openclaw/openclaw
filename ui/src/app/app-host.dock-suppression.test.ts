@@ -173,13 +173,8 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   await Promise.resolve();
   expect(panel("assistant")).toMatchObject({
     pageRouteId: "appearance",
-    custodianSuppressed: false,
   });
   expect(panel("terminal")).toMatchObject({ agentId: "research", suppressed: true });
-
-  shell.routeState = { routeId: "custodian" };
-  refreshShellView(shell);
-  expect(panel("assistant")).toMatchObject({ custodianSuppressed: true });
 
   shell.routeState = { routeId: "systems" };
   refreshShellView(shell);

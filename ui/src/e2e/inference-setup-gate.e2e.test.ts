@@ -79,52 +79,17 @@ suite.define(() => {
     });
   });
 
-  it.each(["new", "custodian"])("blocks %s until a model is connected", async (surface) => {
-    const custodian = surface === "custodian";
+  it("blocks new work until a model is connected", async () => {
     await withSetupPage(
-      async (page, gateway) => {
-        await page.goto(`${suite.server.baseUrl}${custodian ? "custodian" : "new?agent=main"}`);
+      async (page) => {
+        await page.goto(suite.server.baseUrl + "new?agent=main");
         await page.getByRole("heading", { name: "No model set up" }).waitFor();
-        const composer = custodian ? ".agent-chat__composer-shell" : ".new-session-page__composer";
-        await expect.poll(() => page.locator(composer).count()).toBe(0);
-        await expect.poll(() => page.locator("textarea").count()).toBe(0);
-        if (custodian) {
-          expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
-          await expect.poll(() => page.locator(".custodian__error").count()).toBe(0);
-          await expect
-            .poll(async () => (await page.locator(".custodian__header").boundingBox())?.width ?? 0)
-            .toBeGreaterThan(1_000);
-
-          await page.setViewportSize({ height: 520, width: 900 });
-          await expect
-            .poll(() => page.getByRole("button", { name: "Set up a model" }).isVisible())
-            .toBe(true);
-          await expect
-            .poll(() =>
-              page.evaluate(
-                () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
-              ),
-            )
-            .toBe(true);
-
-          await page.setViewportSize({ height: 900, width: 1660 });
-        }
+        expect(await page.locator("textarea").count()).toBe(0);
         await page.getByRole("button", { name: "Set up a model" }).click();
         await expectSetupRoute(page);
-        if (custodian) {
-          const modelsLink = page.locator(
-            '.settings-sidebar__item[href="/settings/model-providers"]',
-          );
-          await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
-        }
       },
-      {
-        agentModel: null,
-        ...(custodian
-          ? { featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"] }
-          : {}),
-      },
-      custodian ? 1660 : 1440,
+      { agentModel: null },
+      1440,
     );
   });
 });

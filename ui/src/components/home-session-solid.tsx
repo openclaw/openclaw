@@ -22,7 +22,7 @@ import { LoadingState } from "./solid/loading-state.tsx";
 
 registerEnglishCatalog(registerAssistantContextEnglish);
 
-type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext };
+type Props = { sessionKey: string; agentId: string; workContext: ChatWorkContext; active: boolean };
 
 /** The real Home conversation; its surrounding dock owns placement and focus. */
 export function HomeSession(input: Partial<Props>) {
@@ -158,7 +158,7 @@ export function HomeSession(input: Partial<Props>) {
                 prop:sessionKey={sessionKey()}
                 prop:agentId={agentId()}
                 prop:inputRegion="dock"
-                prop:active={true}
+                prop:active={input.active ?? true}
                 prop:compact={true}
                 prop:narrow={true}
                 prop:workContext={includeContext() ? context() : undefined}

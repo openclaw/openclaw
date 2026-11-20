@@ -34,8 +34,8 @@ Select **Talk to your Home agent** in the sidebar footer (or press
 `Cmd/Ctrl+Shift+H`) to open Home beside your current page. The assistant
 sidebar can dock on the right or bottom.
 It follows the agent selected in the sidebar's agent switcher, so there is one
-place to change agents. **Ask OpenClaw** remains a separate system-care
-conversation in the same sidebar.
+place to change agents. Setup and integration questions use this same ordinary
+conversation, with its existing permissions.
 
 The dock uses your real Home conversation, including its history, tools,
 approvals, and message queue. **Open Home full page** opens that conversation

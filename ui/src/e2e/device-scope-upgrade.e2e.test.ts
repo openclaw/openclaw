@@ -490,32 +490,6 @@ suite.define(() => {
     },
   );
 
-  it("keeps Request admin in the onboarding header Inbox", async () => {
-    const context = await createContext();
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat", ...SCOPE_UPGRADE_METHODS],
-      operatorScopes: LIMITED_SCOPES,
-    });
-    await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
-
-    expect(
-      await page.getByText("Update the Gateway to continue setup with OpenClaw.").count(),
-    ).toBe(0);
-    const onboardingInbox = page.locator(
-      ".custodian__header-actions > openclaw-sidebar-attention:not(.sidebar-attention--floating)",
-    );
-    await onboardingInbox.locator(".sidebar-issues-button").waitFor();
-    expect(await page.locator(".sidebar-attention--floating").count()).toBe(0);
-    const item = await openLimitedAccessItem(await openInbox(page));
-    await item.getByRole("button", { name: "Request admin" }).waitFor();
-    await captureProof(
-      page,
-      "onboarding-header-inbox-limited-access.png",
-      page.locator("#sidebar-issues-panel"),
-    );
-  });
-
   it("offers the admin upgrade without crypto.subtle", async () => {
     const context = await createContext();
     const page = await context.newPage();

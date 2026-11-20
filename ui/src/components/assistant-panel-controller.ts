@@ -1,23 +1,16 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { isSettingsTakeover } from "../app-navigation.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { AssistantDockOwner } from "../app/assistant-dock.ts";
 import { chatInputOwnerForContext } from "../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { listSelectableAgents } from "../lib/agents/display.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { selectedHomeTarget } from "../lib/sessions/home-session.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
 } from "../lib/sessions/navigation-handoff.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
-import {
-  buildAgentMainSessionKey,
-  normalizeAgentId,
-  resolveUiConfiguredMainKey,
-  resolveUiConversationIdentity,
-  resolveUiDefaultAgentId,
-} from "../lib/sessions/session-key.ts";
+import { normalizeAgentId, resolveUiConversationIdentity } from "../lib/sessions/session-key.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
@@ -25,17 +18,14 @@ import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
-import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
-import { subscribePluginHelp } from "../pages/custodian/plugin-help-state.ts";
 import { createDockLayout } from "./dock-layout.ts";
 import { assistantPanelLayout } from "./dock-panel-layout.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
 type AssistantDestination =
   | "home"
-  | "custodian"
   | {
       params: Parameters<AssistantDockOwner["openSession"]>[0];
       activation: object;
@@ -43,16 +33,12 @@ type AssistantDestination =
 
 export type AssistantPanelProps = {
   context?: ApplicationContext;
-  custodianAvailable: boolean;
   homeAvailable: boolean;
-  custodianSuppressed: boolean;
   pageSessionKey: string;
   getPrimaryChatPane?: (sessionKey: string) => ChatPaneElement | undefined;
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
-  minimizeRequestId: number;
-  store?: CustodianSessionStore;
 };
 export function createAssistantPanel(
   element: SolidBridgeElement<AssistantPanelProps>,
@@ -65,13 +51,10 @@ export function createAssistantPanel(
   let pendingRefresh: (() => void) | undefined;
   let stops: (() => void)[] = [];
   let sourceStops: ((() => void) | undefined)[] = [];
-  let sources:
-    | { context: ApplicationContext | undefined; store: CustodianSessionStore | undefined }
-    | undefined;
+  let sources: { context: ApplicationContext | undefined } | undefined;
   // Navigation and plugin actions read their own writes before Solid commits.
   let homeStarted = false;
-  let destination: AssistantDestination = "custodian";
-  let builtInDestination: "home" | "custodian" = "custodian";
+  let destination: AssistantDestination = "home";
   let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
   let targetScope = "";
@@ -110,13 +93,12 @@ export function createAssistantPanel(
         } catch {
           // Invalid presentation preferences use the default destination.
         }
-        destination = saved?.destination === "home" ? "home" : "custodian";
+        destination = "home";
         // Ask is explicit help, not a second conversation restored after onboarding.
         // Home and activation-owned plugin docks retain their normal behavior.
-        if (destination === "custodian") {
+        if (saved?.destination !== "home") {
           dockLayout.setOpen(false);
         }
-        builtInDestination = destination;
       }
       const context = getContext();
       if (sources?.context !== context) {
@@ -152,17 +134,15 @@ export function createAssistantPanel(
 
   function subscribeSources(): void {
     const context = getContext();
-    const store = props.store;
-    if (sources && sources.context === context && sources.store === store) {
+    if (sources && sources.context === context) {
       return;
     }
     sourceStops.forEach((stop) => stop?.());
-    sources = { context, store };
+    sources = { context };
     // Source receipts synchronously retire target scopes and reconcile dock reservations.
     sourceStops = [
       context?.assistantDock?.attach(owner),
-      context ? subscribePluginHelp(context, refresh) : undefined,
-      ...[store, context?.agentSelection, context?.agents, context?.theme, context?.gateway].map(
+      ...[context?.agentSelection, context?.agents, context?.theme, context?.gateway].map(
         (source) => source?.subscribe(refresh),
       ),
     ];
@@ -196,7 +176,6 @@ export function createAssistantPanel(
       stops = [
         listen(document, CHAT_ROUTE_READY_EVENT, refresh),
         listen(document, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, refresh),
-        listen(window, CUSTODIAN_PANEL_TOGGLE_EVENT, handleToggleRequest),
         listen(window, HOME_PANEL_TOGGLE_EVENT, handleToggleRequest),
       ];
       refresh();
@@ -276,35 +255,13 @@ export function createAssistantPanel(
   }
 
   function homeTarget() {
-    const defaults = homeDefaults;
-    const agents = listSelectableAgents(defaults.agentsList?.agents ?? []);
-    const defaultId = resolveUiDefaultAgentId(defaults);
-    // The sidebar switcher (agentSelection) is the only agent chooser; the dock
-    // shows the selected agent's Home and never grows a second switcher.
-    const rawSelectedId = getContext()?.agentSelection.state.selectedId;
-    const selectedId = rawSelectedId ? normalizeAgentId(rawSelectedId) : "";
-    const agentId =
-      agents.find((agent) => agent.id === selectedId)?.id ??
-      agents.find((agent) => agent.id === defaultId)?.id ??
-      agents[0]?.id ??
-      defaultId;
-    return {
-      ...resolveUiConversationIdentity(
-        defaults,
-        buildAgentMainSessionKey({ agentId, mainKey: resolveUiConfiguredMainKey(defaults) }),
-        agentId,
-      ),
-      agentId,
-    };
+    return selectedHomeTarget(getContext(), homeDefaults);
   }
 
   function availableFor(target: AssistantDestination): boolean {
     // The chat pane owns access errors and read-only composition. Always show
     // explicitly requested sessions so a denied read has its normal visible outcome.
-    return (
-      typeof target !== "string" ||
-      (target === "home" ? props.homeAvailable : props.custodianAvailable)
-    );
+    return typeof target !== "string" || props.homeAvailable;
   }
 
   function available(): boolean {
@@ -312,9 +269,6 @@ export function createAssistantPanel(
   }
 
   function suppressed(): boolean {
-    if (destination === "custodian") {
-      return props.custodianSuppressed;
-    }
     const context = getContext();
     const sessionPage =
       destination === "home" ? props.pageRouteId === "chat" : isSessionRouteId(props.pageRouteId);
@@ -348,26 +302,13 @@ export function createAssistantPanel(
   }
 
   function restoreSuppressed(): boolean {
-    // Home follows the visible Settings context; automatic diagnostic restores yield to it.
-    return (
-      suppressed() ||
-      (destination === "custodian" &&
-        isSettingsTakeover(
-          props.pageRouteId,
-          props.context?.gateway.snapshot.hello?.controlUiTabs,
-          props.context?.router.getState().location,
-          props.context?.basePath,
-        ))
-    );
+    return suppressed();
   }
 
   function openSession(
     params: Parameters<AssistantDockOwner["openSession"]>[0],
     activation: object,
   ): void {
-    if (typeof destination === "string") {
-      builtInDestination = destination;
-    }
     openDestination({ params: structuredClone(params), activation });
   }
 
@@ -459,7 +400,7 @@ export function createAssistantPanel(
     if (!open && typeof destination !== "string") {
       // Closing discards the activation-owned target without reopening a dock; the
       // operator's built-in Home/Ask choice and its persisted value stay untouched.
-      destination = builtInDestination;
+      destination = "home";
     }
     publishSessionKey();
     refresh();
@@ -479,7 +420,7 @@ export function createAssistantPanel(
   }
 
   function handleToggleRequest(event: Event): void {
-    const requestedDestination = event.type === HOME_PANEL_TOGGLE_EVENT ? "home" : "custodian";
+    const requestedDestination = "home";
     if (!availableFor(requestedDestination)) {
       return;
     }
@@ -521,9 +462,6 @@ export function createAssistantPanel(
     setOpen,
     toggle,
     handleToggleRequest,
-    acceptStore(store: CustodianSessionStore) {
-      element.store = store;
-    },
     refresh,
     notify,
     attach,

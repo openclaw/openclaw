@@ -7,7 +7,6 @@ import {
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome-classification.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import type { CustodianTurnAdmission } from "../components/custodian-alert-contract.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
 import { resolveHeldUpdateCampaignId } from "./update-schedule-projection.ts";
@@ -40,7 +39,7 @@ export type UpdateFailureTriage = {
 
 type UpdateOutcomeRecord = { id: string | null; timestampMs: number | null };
 
-export type UpdateTriageAdmission = CustodianTurnAdmission;
+export type UpdateTriageAdmission = { isCurrent: () => boolean; admit: () => boolean };
 
 const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   dirty: "updates.failureReasons.dirty",

@@ -8,7 +8,6 @@ import "../components/assistant-panel-solid.tsx";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
 import "../components/resizable-divider.ts";
 import type { CommandPaletteTargetDetail } from "../components/command-palette-contract.ts";
-import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import { subscribeI18n } from "../lib/reactive/i18n.ts";
@@ -105,7 +104,6 @@ export class ShellOwner
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
-  custodianMinimizeRequestId = 0;
   lastConcreteRouteId: RouteId | undefined;
   lastLocalePrefSignature: string | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
@@ -462,12 +460,9 @@ export class ShellOwner
       return;
     }
     const outboxScopeHost = this.storedOutboxScopeHost(context);
-    let primaryContext =
-      routeId === "custodian"
-        ? askBrandLabel()
-        : pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot, () =>
-            pluginPageLabel(context, this.routeState.location),
-          );
+    let primaryContext = pageTitleForRoute(routeId, context.nativeDeviceSettings?.snapshot, () =>
+      pluginPageLabel(context, this.routeState.location),
+    );
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }

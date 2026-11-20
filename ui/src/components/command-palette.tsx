@@ -90,7 +90,6 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
       onSelectSession: { default: undefined, attribute: false },
       onSlashCommand: { default: undefined, attribute: false },
       desktopAvailable: { default: false, attribute: false },
-      custodianAvailable: { default: false, attribute: false },
     },
     methods: {
       openPalette: (host, input) => {

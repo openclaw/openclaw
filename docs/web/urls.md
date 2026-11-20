@@ -579,7 +579,8 @@ no route-specific URL parameters.
 | Dashboard           | `/dashboard`                                   | -                         | Key-backed session forms above; `?draft=<text>`                                   |
 | Beam transcript     | `/beam/<title>-<beam-id>`                      | `/beam/<beam-id>`         | Optional title slug and 12-32 lowercase hexadecimal id characters                 |
 | Dashboards          | `/dashboards`                                  | -                         | -                                                                                 |
-| Ask OpenClaw        | `/custodian`                                   | -                         | `?intent=new-agent`, `?onboarding=1`                                              |
+| Legacy setup link   | `/custodian`                                   | -                         | Redirects to Connect AI or Home; never creates an agent on load                   |
+| System history      | `/settings/system-history`                     | -                         | Administrator-only, read-only config and setup history                            |
 | New session         | `/new`                                         | -                         | `?agent=<agentId>`, `?catalog=<catalogId>`                                        |
 | Activity            | `/activity`                                    | -                         | `?view=run&run=<run-id>`, `?view=run&execution=<execution-id>`                    |
 | Person activity     | `/activity/<name>-<profile-id>`                | -                         | Optional name slug and 8-32 lowercase hexadecimal id characters                   |

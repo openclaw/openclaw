@@ -62,7 +62,6 @@ ui/src/pages/chat/components/chat-read-aloud.tsx	1
 ui/src/pages/chat/solid-render-lifecycle.ts	1
 ui/src/pages/config/config-page-state.ts	1
 ui/src/pages/cron/cron-page.tsx	1
-ui/src/pages/custodian/custodian-surface.tsx	1
 ui/src/pages/devices/devices-page.tsx	1
 ui/src/pages/meetings/meetings-page.tsx	1
 ui/src/pages/model-providers/model-providers-controller.ts	2

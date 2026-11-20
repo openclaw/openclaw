@@ -50,7 +50,10 @@ export const localSetupFeatures = [
 
 export const activated = (
   modelRef: string,
-  options: { gatewayRestartRequired?: boolean } = {},
+  options: {
+    gatewayRestartRequired?: boolean;
+    firstAgent?: { agentId: string; sessionKey: string; bootstrapPending: boolean };
+  } = {},
 ) => ({ done: true, status: "done", modelActivation: { modelRef, ...options } });
 
 export function activationFailure(error: string, status?: "auth" | "timeout" | "unavailable") {

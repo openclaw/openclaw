@@ -12,7 +12,6 @@ import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { renderSessionOwnerAvatar } from "./solid/session-presentation.tsx";
-import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 // Solid escapes every rendered text segment.
 function highlightMatch(text: string, query: string) {
@@ -124,14 +123,7 @@ export function CommandPaletteResult(props: {
       <Switch
         fallback={
           <span class="nav-item__icon" aria-hidden="true">
-            <Show
-              when={props.item.id === "panel-custodian"}
-              fallback={<Icon name={props.item.icon} />}
-            >
-              <span class="lit-content" style={{ display: "contents" }}>
-                <ThemeBrandingIcon />
-              </span>
-            </Show>
+            <Icon name={props.item.icon} />
           </span>
         }
       >

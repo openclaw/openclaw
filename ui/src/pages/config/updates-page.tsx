@@ -50,7 +50,7 @@ export function UpdatesPage(props: {
       canCheckStatus={canCallGatewayMethod(snapshot(), "update.status", "operator.admin")}
       canHoldUpdate={canCallGatewayMethod(snapshot(), "update.hold", "operator.admin")}
       canReport={canReportUpdateFailure(snapshot())}
-      canDiagnose={canCallGatewayMethod(snapshot(), "openclaw.chat", "operator.admin")}
+      canDiagnose={canCallGatewayMethod(snapshot(), "chat.send", "operator.write")}
       updateBusy={props.updateBusy}
       nowMs={props.nowMs}
       onChannelChange={(channel) =>

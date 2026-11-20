@@ -18,22 +18,24 @@ const CHANGE_SOURCE_LABELS = {
 
 function HistoryCard(props: { entry: SystemChangeEntry }) {
   return (
-    <article class={["custodian__change-card", { "is-invalid": props.entry.invalid }]}>
-      <div class="custodian__change-meta">
-        <span class="custodian__change-source">{t(CHANGE_SOURCE_LABELS[props.entry.source])}</span>
+    <article class={["system-history__change-card", { "is-invalid": props.entry.invalid }]}>
+      <div class="system-history__change-meta">
+        <span class="system-history__change-source">
+          {t(CHANGE_SOURCE_LABELS[props.entry.source])}
+        </span>
         <time datetime={new Date(props.entry.at).toISOString()}>
           {formatRelativeTimestamp(props.entry.at)}
         </time>
       </div>
-      <div class="custodian__change-summary">{props.entry.summary}</div>
+      <div class="system-history__change-summary">{props.entry.summary}</div>
       <Show when={props.entry.invalid}>
-        <div class="custodian__change-warning">{t("custodian.history.invalidEdit")}</div>
+        <div class="system-history__change-warning">{t("custodian.history.invalidEdit")}</div>
       </Show>
       <Show when={props.entry.opaqueChange}>
-        <div class="custodian__change-note">{t("custodian.history.opaqueChange")}</div>
+        <div class="system-history__change-note">{t("custodian.history.opaqueChange")}</div>
       </Show>
       <Show when={props.entry.changedPaths?.length}>
-        <details class="custodian__change-paths">
+        <details class="system-history__change-paths">
           <summary>
             {t("custodian.history.changedPaths", {
               count: String(props.entry.changedPaths?.length),
@@ -74,7 +76,10 @@ function HistoryContent(
       <Show when={emptyLoading()}>
         <SettingsLoadingSkeleton label={t("custodian.history.loading")} />
       </Show>
-      <div class="custodian__change-list" style={{ display: emptyLoading() ? "none" : undefined }}>
+      <div
+        class="system-history__change-list"
+        style={{ display: emptyLoading() ? "none" : undefined }}
+      >
         <For each={props.entries} keyed={(entry) => entry.id}>
           {(entry) => <HistoryCard entry={entry()} />}
         </For>
@@ -82,24 +87,24 @@ function HistoryContent(
           when={props.loading}
           fallback={
             <Show when={props.loaded && props.entries.length === 0 && !props.error}>
-              <div class="custodian__history-state" role="status">
+              <div class="system-history__history-state" role="status">
                 {t("custodian.history.empty")}
               </div>
             </Show>
           }
         >
           <div
-            class="custodian__history-state"
+            class="system-history__history-state"
             role="status"
             aria-label={t("custodian.history.loading")}
           >
-            <span class="custodian__history-spinner" aria-hidden="true" />
+            <span class="system-history__history-spinner" aria-hidden="true" />
           </div>
         </Show>
       </div>
       <Show when={props.nextCursor}>
         <button
-          class="btn btn--ghost custodian__history-more"
+          class="btn btn--ghost system-history__history-more"
           type="button"
           disabled={props.loadingMore}
           onClick={() => props.onLoad(false)}
@@ -111,7 +116,7 @@ function HistoryContent(
   );
 }
 
-export function CustodianChangeHistory(props: {
+export function SystemChangeHistory(props: {
   request: { reset: boolean; result: Promise<HistorySnapshot> } | null;
   previous: HistorySnapshot;
   onLoad: (reset: boolean) => void;
@@ -125,16 +130,19 @@ export function CustodianChangeHistory(props: {
     return null;
   };
   return (
-    <section class="custodian__history" aria-label={t("custodian.history.title")}>
-      <div class="custodian__history-heading">
+    <section class="system-history__history" aria-label={t("custodian.history.title")}>
+      <div class="system-history__history-heading">
         <strong>{t("custodian.history.title")}</strong>
         <span>{t("custodian.history.description")}</span>
+        <button class="btn btn--sm" type="button" onClick={() => props.onLoad(true)}>
+          {t("common.refresh")}
+        </button>
       </div>
       {/* Failed reads replace feedback while expanded cards retain their DOM. */}
       <Show when={props.request} keyed>
         <Errored
           fallback={(error, reset) => (
-            <div class="custodian__history-error" role="alert">
+            <div class="system-history__history-error" role="alert">
               <span>{formatUiError(error())}</span>
               <RetryAction
                 type="button"

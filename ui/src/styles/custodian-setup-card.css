@@ -95,3 +95,11 @@ openclaw-custodian-setup-card {
   color: var(--muted);
   font-size: 12px;
 }
+
+/* Shared dismiss control retained when the old conversation stylesheet retires. */
+.custodian-setup .custodian__nudge-dismiss {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}

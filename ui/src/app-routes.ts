@@ -67,6 +67,7 @@ import { page as secretsPage } from "./pages/secrets/route.ts";
 import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
+import { page as systemHistoryPage } from "./pages/system-history/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
 import { page as clawsPage } from "./pages/templates/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.tsx";
@@ -93,6 +94,7 @@ type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 const APP_ROUTE_TREE = [
   ...chatPages,
   custodianPage,
+  systemHistoryPage,
   newSessionPage,
   terminalPage,
   activityPage,

@@ -20,7 +20,7 @@ import { expectAbsent } from "./workspace-terminal.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI native embed settings E2E" });
 const routes = [
-  "custodian",
+  "system-history",
   "profile",
   "appearance",
   "notifications",

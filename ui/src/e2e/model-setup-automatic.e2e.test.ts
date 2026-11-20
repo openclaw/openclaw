@@ -130,25 +130,6 @@ async function capture(page: Page, name: string, surface: Locator, content: Loca
 }
 
 suite.define(() => {
-  it("keeps the existing greeting when automatic setup is not advertised", async () => {
-    await suite.withPage(options, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"],
-        methodResponses: {
-          "openclaw.chat": { sessionId: "before", reply: "Welcome to OpenClaw.", action: "none" },
-        },
-      });
-      await page.goto(`${suite.server.baseUrl}custodian?onboarding=1`);
-      const greeting = page.getByText("Welcome to OpenClaw.", { exact: true });
-      await greeting.waitFor();
-      expect(await page.locator(".custodian-setup").count()).toBe(0);
-      expect(await gateway.getRequests("openclaw.setup.auto")).toHaveLength(0);
-      await capture(page, "before-automatic-setup", page.locator("openclaw-custodian-page"), [
-        greeting,
-      ]);
-    });
-  });
-
   it("shows pending, preserves a failed choice, activates an alternative, and retains dismissal", async () => {
     await suite.withPage(options, async ({ page }) => {
       await nativeSetup(page);

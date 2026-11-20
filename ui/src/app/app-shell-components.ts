@@ -4,7 +4,6 @@ import {
 } from "../components/command-palette-contract.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
@@ -60,7 +59,6 @@ export function shellComponentForAction(event: LazyShellEvent): ShellComponent |
       return "shortcuts";
     case SHELL_APPROVALS_OPEN_EVENT:
       return "approvals";
-    case CUSTODIAN_PANEL_TOGGLE_EVENT:
     case HOME_PANEL_TOGGLE_EVENT:
       return undefined;
   }

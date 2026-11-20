@@ -135,10 +135,11 @@ Templates surface enabled, the equivalent source path from a source
 checkout is `openclaw templates add docs/reference/templates/roles/<role>`; follow
 the [Template preview and consent flow](/cli/templates#inspect-and-preview).
 
-You can also create the chief of staff or the full team from the Control UI:
-choose **New agent** in the sidebar or Agents home, then select the role or
-small-team recommendation in the custodian chat. Creation uses the same role
-templates and waits for your approval.
+In the Control UI, **New agent** creates a regular agent and opens its conversation.
+For specialist roles, coordinated teams, or a custom purpose, choose **Settings →
+Agents → Plan a role or team**. This prepares an unsent question for your Home
+agent; review and send it before any planning or creation begins. Template Add
+continues to use its existing preview and consent flow.
 
 The relevant per-agent delegation fragment is:
 

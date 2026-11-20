@@ -156,7 +156,7 @@ with `--retry`; do not overwrite the existing skill.
 
 When the applicable beats are complete, delete this file. Then say one line:
 
-> Ask me anything; for system things I'll ask OpenClaw.
+> Ask me anything — your work, setup, and integrations all start here.
 
 Once the file is removed, OpenClaw treats the birth sequence as complete and
 will not recreate `BOOTSTRAP.md`. If you leave the file behind, OpenClaw removes

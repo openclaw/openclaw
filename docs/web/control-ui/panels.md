@@ -1,9 +1,9 @@
 ---
 doc-schema-version: 1
-summary: "Ask OpenClaw, the Home dock, the operator terminal, and the browser panel"
+summary: "The Home conversation dock, the operator terminal, and the browser panel"
 read_when:
   - Opening a terminal or browser beside a conversation
-  - Using Ask OpenClaw for setup and repair
+  - Using your regular agent for setup and repair
   - Using the Home dock
 title: "Panels and docks"
 sidebarTitle: "Panels and docks"
@@ -26,29 +26,21 @@ disclosure. Task progress remains independently collapsible. If the connection
 drops, progress shows **Disconnected · Activity may be outdated** while keeping
 the saved steps visible. A failed refresh keeps the last update and offers a retry.
 
-## OpenClaw system care
+<a id="openclaw-system-care" />
 
-Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. To open it alongside your current page, click **Home** in the sidebar footer and select the **Ask OpenClaw** tab, or use the **Ask OpenClaw** command-palette action. The full page and dockable panel share one machine-wide conversation whose durable history lives on the Gateway. Closing the UI never cancels a turn; reopening Ask OpenClaw shows the completed conversation. The panel docks on the right or bottom, remembers its placement and size in the browser profile, and hides itself while the full page is open.
+## Setup and system care
 
-If no AI provider is configured, Ask OpenClaw offers **Connect an AI provider**. If a configured runtime fails to start or verify, the conversation stays visible with the actual error and **Retry**. Sending stays disabled until verification succeeds. Retry checks the runtime without resending your earlier message or clearing your draft.
+Connect an AI provider, then continue in your regular agent’s **Home** conversation. Identity, tools, integrations, setup questions, and real work use that same agent and its normal permissions. Naming and avatar setup never take priority over your work.
 
-Ask OpenClaw has its own identity. Greetings and command planning use the configured owner's model and runtime policy without loading that owner's workspace persona files, such as `SOUL.md` and `IDENTITY.md`.
+**Ask your agent** on a plugin or setting prepares an editable question in Home, with a bounded reference and sensitive value previews withheld. It preserves your existing draft and never sends automatically. Embedded native Settings opens the regular chat page because it has no Home dock. Protected sign-in and configuration controls remain in Settings; do not paste credentials into chat.
 
-Onboarding suggestions can focus the recommended answer when nothing else has focus. If you have already focused the composer or another control, arriving suggestions leave your keyboard focus there.
+Use **Settings → Models** to reconnect an account and **Settings → Updates** to inspect failed or unknown update outcomes and use the existing recovery controls. These paths do not require a working model. An optional update explanation prepares an unsent Home question; it does not retry the update.
 
-Each chat message carries the Control UI page you are currently viewing as an untrusted ambient hint, so requests like "configure this channel" or "why is this page empty?" resolve against the page you are looking at.
-
-Guided channel setup, workspace skills setup, web-search provider setup, and local Gateway setup run as hosted wizards inside the chat. Wizard questions stay in the conversation, secret steps mask input in the browser, and successful config-backed flows are audited and re-validated. If a chosen web-search provider needs a plugin install and that install fails, setup stops and reports the failure instead of pretending the provider is configured.
-
-For Gateway setup, say `configure gateway` to choose the port, bind address, token or password auth, and Tailscale exposure. Before the first question, the web surface warns that applying the saved settings requires a restart that may disconnect the chat or require a new Control UI sign-in. The wizard changes config only; say `restart gateway` when you are ready to apply it. It manages only a local Gateway, so remote mode changes stay in `openclaw onboard` or `openclaw configure`.
-
-Say `import memory` to copy detected local memory into the existing default agent workspace. This flow does not change config or import credentials or skills, needs no Gateway restart, and distinguishes confirmed imports, nothing to import, provider failures, and failures where some files may already have been copied. Finish onboarding first if the default workspace does not exist. See [Import agent memory](/web/control-ui/settings#import-assistant-memory) for the broader page that can target another agent or replace existing imports, and [`openclaw setup`](/cli/openclaw) for the operation and approval contract.
-
-Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel check, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Administrators can read recorded configuration changes and earlier setup conversations in **Settings → System history**. That machine-wide history stays read-only and separate from ordinary agent chat. Existing stored transcripts are not deleted or imported. Old `/custodian` links redirect to Connect AI when setup is needed, otherwise Home; a `?intent=new-agent` bookmark never creates an agent.
 
 ## Home dock
 
-Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. Select the **Ask OpenClaw** tab in the same dock for system setup and repair. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
+Use the **Home** button in the sidebar footer, or in the toolbar when the sidebar is collapsed, to open the selected agent's main conversation alongside your current page. When the same Home conversation is already open as the page, the dock stays hidden rather than showing it twice.
 
 The Home dock uses the same session read permissions as the full page. If you can read the selected Home conversation but cannot write to it, you can open it in view-only mode; sending and session actions remain unavailable. Opening Home does not change its sharing permissions or create a missing conversation for a reader.
 
@@ -62,8 +54,7 @@ Sent messages show **Context attached** below your words instead of displaying t
 
 A plugin page can offer an action to open its conversation beside the page.
 It uses the same chat pane, drafts, attachments, right-or-bottom placement,
-resizing, and close controls as Home. Opening it replaces Home, Ask OpenClaw,
-or another conversation dock. It stays open across page navigation and hides
+resizing, and close controls as Home. Opening it replaces Home or another conversation dock. It stays open across page navigation and hides
 while the same conversation is open as the Chat or Dashboard page. Closing
 leaves no dock open. Read-only access and session errors follow the normal
 chat rules. A plugin can include a bounded page reference, shown as

@@ -95,8 +95,6 @@ import ai.openclaw.app.node.resolveGatewayAccentArgb
 import ai.openclaw.app.node.resolveGatewayThemeFamily
 import ai.openclaw.app.node.resolveGatewayThemeMode
 import ai.openclaw.app.node.resolveProfileAccentArgb
-import ai.openclaw.app.systemagent.SystemAgentChatController
-import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
 import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
 import ai.openclaw.app.voice.MicCaptureManager
@@ -1258,7 +1256,6 @@ class NodeRuntime internal constructor(
   private val sessionCatalogProgressOwner = AtomicReference<SessionCatalogProgressOwner?>(null)
   private val _clawHubSkillMethodsAvailable = MutableStateFlow(false)
   val clawHubSkillMethodsAvailable: StateFlow<Boolean> = _clawHubSkillMethodsAvailable.asStateFlow()
-  private val systemAgentChatSupported = MutableStateFlow<Boolean?>(null)
   private val _skillMutationKeys = MutableStateFlow<Set<String>>(emptySet())
   val skillMutationKeys: StateFlow<Set<String>> = _skillMutationKeys.asStateFlow()
   private val _clawHubSkillSearchState = MutableStateFlow(GatewayClawHubSkillSearchState())
@@ -1476,7 +1473,6 @@ class NodeRuntime internal constructor(
     status: String,
     failure: () -> WearConnectionFailure? = { null },
   ) {
-    systemAgentChatController.refresh(startIfNeeded = false)
     micCapture.onGatewayConnectionChanged(connected)
     wearProxyBridge()?.publishConnection(connected = connected, status = status, failure = failure())
   }
@@ -1520,39 +1516,6 @@ class NodeRuntime internal constructor(
       isVisible = { _isForeground.value },
       captureLease = { operatorSession.captureRequestLease() },
     )
-
-  internal val systemAgentChatController by lazy {
-    SystemAgentChatController(
-      scope = scope,
-      access = {
-        SystemAgentGatewayAccess(
-          connected = operatorConnected,
-          hasAdminScope = _operatorScopes.value.any { it == OperatorAdminScope },
-          supportsMethod = systemAgentChatSupported.value,
-          gatewayId =
-            when (mode) {
-              NodeRuntimeMode.Live -> operatorSession.currentEndpointStableId()
-              NodeRuntimeMode.ScreenshotFixture -> AndroidScreenshotFixture.gatewayId
-            },
-        )
-      },
-      captureLease = { gatewayId ->
-        when (mode) {
-          NodeRuntimeMode.Live -> {
-            operatorSession.captureRequestLease(gatewayId)
-          }
-
-          NodeRuntimeMode.ScreenshotFixture -> {
-            GatewaySession.RequestLease(endpointStableId = AndroidScreenshotFixture.gatewayId) { method, paramsJson, _, withEnqueue ->
-              withEnqueue {}
-              screenshotRequester(method, paramsJson)
-            }
-          }
-        }
-      },
-      json = json,
-    )
-  }
 
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint?,
@@ -2929,7 +2892,6 @@ class NodeRuntime internal constructor(
     chat.setReactionAccess(
       ChatReactionAccess(role = "operator", scopes = setOf(OperatorAdminScope), sessionCap = "write", viewerId = "screenshot-viewer"),
     )
-    systemAgentChatSupported.value = true
     _nodesDevicesSummary.value = AndroidScreenshotFixture.nodes
     channelsSummary.update { it.copy(summary = AndroidScreenshotFixture.channels) }
     _nodeCapabilityApproval.value = GatewayNodeCapabilityApproval.Approved
@@ -2943,7 +2905,6 @@ class NodeRuntime internal constructor(
       operatorConnectionProblem = null
       nodeConnectionProblem = null
     }
-    systemAgentChatController.refresh(startIfNeeded = false)
     chat.refreshSessions(limit = 20)
     if (AndroidScreenshotFixture.attentionEnabled) {
       connectedEndpoint = GatewayEndpoint(AndroidScreenshotFixture.gatewayId, "Screenshot fixture", "127.0.0.1", 18789)
@@ -8135,7 +8096,6 @@ class NodeRuntime internal constructor(
       _sessionCatalogAvailable.value = sessionCatalogAvailableFor(advertisedMethods, _operatorScopes.value)
       _sessionDiffAvailable.value = GatewayMethod.SessionsDiff.rawValue in advertisedMethods
       _desktopObserveAvailable.value = GatewayMethod.DesktopObserve.rawValue in advertisedMethods
-      systemAgentChatSupported.value = GatewayMethod.OpenclawChat.rawValue in advertisedMethods
       gatewayMethodsEpoch.update { it + 1 }
     }
   }

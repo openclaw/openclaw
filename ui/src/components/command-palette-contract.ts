@@ -103,7 +103,6 @@ export function applyCommandPaletteTargetEvent(
 }
 
 export type CommandPaletteElement = HTMLElement & {
-  custodianAvailable: boolean;
   desktopAvailable: boolean;
   /** The native getter is installed by the first committed palette setup. */
   isOpen?: boolean;

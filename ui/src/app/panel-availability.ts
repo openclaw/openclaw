@@ -52,13 +52,6 @@ export function isDesktopPanelAvailable(snapshot: GatewaySnapshot): boolean {
   return panelUnavailableReason(snapshot, "desktop.observe") === null;
 }
 
-/** Admin-only, never advertisement alone; the Custodian session store authorizes each turn. */
-export function isCustodianPanelAvailable(
-  gateway: ApplicationContext["gateway"] | undefined,
-): boolean {
-  return canPresentGatewayMethod(gateway?.snapshot, "openclaw.chat", "operator.admin");
-}
-
 /** Presentation access survives reconnect; the chat send/outbox owner still authorizes delivery. */
 export function isHomePanelAvailable(gateway: ApplicationContext["gateway"] | undefined): boolean {
   return canPresentGatewayMethod(gateway?.snapshot, "chat.history", "operator.read");

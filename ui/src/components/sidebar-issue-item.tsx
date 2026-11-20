@@ -335,13 +335,11 @@ export function SidebarIssueItem(props: {
   });
   const visibleFacts = createMemo(() => {
     const action = props.item.action;
-    return action.kind === "askCustodian"
-      ? action.alert.facts.filter((fact) => fact !== props.item.label)
-      : action.kind === "openClawIdBrowserApproval"
-        ? props.item.detail.split("\n")
-        : action.kind === "openClawIdRecovery"
-          ? [props.item.detail]
-          : [];
+    return action.kind === "openClawIdBrowserApproval"
+      ? props.item.detail.split("\n")
+      : action.kind === "openClawIdRecovery"
+        ? [props.item.detail]
+        : [];
   });
   return (
     <Show

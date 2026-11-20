@@ -1,26 +1,38 @@
-import type { RouteLocation } from "@openclaw/uirouter";
-import { definePage } from "@openclaw/uirouter";
-import { routePageSpec } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { definePage, redirect } from "@openclaw/uirouter";
+import { pathForRoute, routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveOnboardingMode } from "../../app/onboarding-mode.ts";
+import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
+import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { selectedHomeTarget } from "../../lib/sessions/home-session.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 
-export type CustodianRouteData = {
-  onboarding: boolean;
-  intent: "new-agent" | null;
-};
-
+/** Shipped bookmarks/native URLs only. Visiting a URL never creates an agent. */
 export const page = definePage({
   ...routePageSpec("custodian"),
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
-  loader: (_context: ApplicationContext, { location }): CustodianRouteData => ({
-    onboarding: resolveOnboardingMode(location.search),
-    intent: new URLSearchParams(location.search).get("intent") === "new-agent" ? "new-agent" : null,
-  }),
-  component: () =>
-    import("./custodian-page.tsx").then((module) => ({
-      renderSolid: (props: SolidRouteProps<CustodianRouteData>) => (
-        <module.CustodianRoute data={props.data} />
-      ),
-    })),
+  loader: async (context: ApplicationContext, { signal }) => {
+    await waitForGatewayClient(context.gateway, signal);
+    await context.agents.ensureList();
+    signal.throwIfAborted();
+    const target = selectedHomeTarget(context);
+    const roster = context.agents.state.agentsList;
+    const agent = roster?.agents.find((candidate) => candidate.id === target.agentId);
+    if (
+      context.gateway.snapshot.phase === "connected" &&
+      roster &&
+      !agent?.model?.primary?.trim() &&
+      hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
+    ) {
+      return redirect({
+        pathname: pathForRoute("model-setup", context.basePath),
+        search: "?firstRun=1",
+        hash: "",
+      });
+    }
+    return redirect({
+      ...sessionNavigationTarget({ context, face: "chat", ...target, focusComposer: true }).options,
+      search: "",
+      hash: "",
+    });
+  },
+  component: async () => ({ renderSolid: () => null }),
 });

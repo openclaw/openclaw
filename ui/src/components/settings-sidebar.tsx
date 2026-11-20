@@ -50,7 +50,6 @@ import "../styles/settings.css";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
-import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
 
 registerRouteSubtitlesEnglish();
 
@@ -170,9 +169,7 @@ function SettingsNavigationItem(props: {
       onClick={(event) => handleNavigationClick(event, navigate)}
     >
       <span class="settings-sidebar__item-icon" aria-hidden="true">
-        <Show when={props.routeId === "custodian"} fallback={<Icon name={icon()} />}>
-          <ThemeBrandingIcon branding={props.branding} />
-        </Show>
+        <Icon name={icon()} />
       </span>
       <span class="settings-sidebar__item-label">
         {

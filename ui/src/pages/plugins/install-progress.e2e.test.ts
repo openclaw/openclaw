@@ -323,7 +323,7 @@ describeControlUiE2e("plugin install button progress", () => {
         await gateway.deferNext("config.get");
         // Final success changes actions before the unrelated config refresh can finish.
         await resolveInstall();
-        await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask OpenClaw");
+        await expectText(page.locator(".plugin-catalog-detail__actions"), "Ask your agent");
         expect(await page.locator(".plugin-install-action__button").count()).toBe(0);
         if (captureUiProof) {
           await page.screenshot({ path: `${evidence}/after.png` });

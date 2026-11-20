@@ -134,21 +134,18 @@ describe("OpenClaw shell document title", () => {
     expect(document.title).toBe("Chat — OpenClaw");
   });
 
-  it.each(["OpenClaw", "Northstar"])(
-    "uses %s and the environment in route and custodian titles",
-    (brandName) => {
-      const shell = createShell(
-        createContext({ brandName, environment: { label: "edge", color: "amber" } }),
-      );
-      shell.routeState = { routeId: "usage" };
-      shell.syncDocumentTitle();
-      expect(document.title).toBe(`Usage — ${brandName} · edge`);
+  it.each(["OpenClaw", "Northstar"])("uses %s and the environment in route titles", (brandName) => {
+    const shell = createShell(
+      createContext({ brandName, environment: { label: "edge", color: "amber" } }),
+    );
+    shell.routeState = { routeId: "usage" };
+    shell.syncDocumentTitle();
+    expect(document.title).toBe(`Usage — ${brandName} · edge`);
 
-      shell.routeState = { routeId: "custodian" };
-      shell.syncDocumentTitle();
-      expect(document.title).toBe(`Ask ${brandName} · edge`);
-    },
-  );
+    shell.routeState = { routeId: "custodian" };
+    shell.syncDocumentTitle();
+    expect(document.title).toBe(`Chat — ${brandName} · edge`);
+  });
 
   it("uses the active session's derived title for a non-main chat", () => {
     const session: GatewaySessionRow = {
