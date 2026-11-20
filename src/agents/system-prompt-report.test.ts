@@ -249,11 +249,12 @@ describe("rendered skills diagnostics", () => {
       ...skills[1]!,
       description: "Explain <skill><name>example</name></skill> elements",
     };
+    const stored = formatSkillsForPromptCore(skills);
     let rendered = "";
     const systemPrompt = buildAgentSystemPrompt({
       workspaceDir: "/workspace",
       toolNames: ["skills_read"],
-      skillsPrompt: formatSkillsForPromptCore(skills),
+      skillsPrompt: stored,
       onRenderedSkillsPrompt: (prompt) => (rendered = prompt),
     });
     expect(systemPrompt).toContain('- "release  notes": release notes description');
@@ -262,7 +263,11 @@ describe("rendered skills diagnostics", () => {
       '- "team:deploy": Explain <skill><name>example</name></skill> elements',
     );
     expect(systemPrompt).not.toContain("<location>");
-    const report = makeReport({ systemPrompt, skillsPrompt: rendered }).skills;
-    expect(report.entries.map(({ name }) => name)).toEqual(names);
+    // Embedded runs report the rendered catalog; /context and CLI backends pass the stored one.
+    for (const skillsPrompt of [rendered, stored]) {
+      const report = makeReport({ systemPrompt, skillsPrompt }).skills;
+      expect(report.entries.map(({ name }) => name)).toEqual(names);
+      expect(report.promptChars).toBe(rendered.length);
+    }
   });
 });

@@ -13,7 +13,8 @@ const CATALOG_ENTRY =
 // (including `: ` or ` (`) may appear in one. Only prose is whitespace-folded.
 const prose = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
 
-function compactCatalogForSkillRead(skillsPrompt: string): string {
+/** Idempotent: an already-compact catalog has no XML entries to rewrite. */
+export function compactCatalogForSkillRead(skillsPrompt: string): string {
   return skillsPrompt
     .replace(CATALOG_INTRO, "")
     .replace(
