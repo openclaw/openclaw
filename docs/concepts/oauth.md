@@ -194,8 +194,14 @@ The login command uses the standard OpenAI provider id:
 openclaw models auth login --provider openai
 ```
 
-Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
-one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+ChatGPT workspaces under the same email can coexist in one agent. Sign in once
+for each workspace and choose that workspace on OpenAI's sign-in page. When both
+tokens identify different workspaces, OpenClaw saves the second workspace in a
+separate auth profile instead of replacing the first. Signing in again reuses the
+matching workspace profile; existing profile IDs do not change.
+
+You can also choose an explicit profile ID with `--profile-id openai:<name>`
+when running the local login flow. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
 that older prefix to a collision-free `openai:*` profile id; run
 `openclaw models auth list --provider openai` after repair before copying
 profile ids into `auth.order` or `/model ...@<profileId>`.

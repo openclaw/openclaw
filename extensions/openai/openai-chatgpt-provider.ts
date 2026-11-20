@@ -380,12 +380,13 @@ type OpenAICodexOAuthContext = ProviderAuthContext & {
 function buildOpenAICodexAuthResult(
   buildResult: typeof import("openclaw/plugin-sdk/provider-auth-result").buildOauthProviderAuthResult,
   creds: { access: string; refresh: string; expires: number; email?: unknown },
+  existingProfiles: ProviderAuthContext["existingProfiles"],
 ) {
   const identity = resolveOpenAICodexAuthIdentity({
     access: creds.access,
     email: readStringValue(creds.email),
   });
-  return buildResult({
+  const result = buildResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     configPatch: { agents: { defaults: { models: { [OPENAI_CODEX_DEFAULT_MODEL]: {} } } } },
@@ -396,6 +397,27 @@ function buildOpenAICodexAuthResult(
     profileName: identity.profileName,
     credentialExtra: buildCodexCredentialExtra(identity),
   });
+  // One ChatGPT login can own several workspaces (personal and Business share
+  // an email). A second workspace gets its own slot instead of replacing the
+  // profile that already holds the email-named one.
+  const profile = result.profiles[0];
+  const occupant = existingProfiles?.find(
+    (existing) => existing.profileId === profile?.profileId,
+  )?.credential;
+  const occupantAccountId =
+    occupant?.type === "oauth"
+      ? resolveOpenAICodexAuthIdentity({ access: occupant.access }).accountId
+      : undefined;
+  // Without both account claims, keep the existing profile naming behavior.
+  if (
+    profile &&
+    identity.accountId &&
+    occupantAccountId &&
+    occupantAccountId !== identity.accountId
+  ) {
+    profile.profileId = `${profile.profileId}:${identity.accountId}`;
+  }
+  return result;
 }
 
 async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
@@ -418,7 +440,7 @@ async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
     return { profiles: [] };
   }
 
-  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
+  return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
 }
 
 async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
@@ -478,7 +500,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     });
     spin.stop("OpenAI device code complete");
 
-    return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds);
+    return buildOpenAICodexAuthResult(buildOauthProviderAuthResult, creds, ctx.existingProfiles);
   } catch (error) {
     spin.stop("OpenAI device code failed");
     ctx.runtime.error(formatErrorMessage(error));

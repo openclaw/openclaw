@@ -9,6 +9,7 @@ import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-mode
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
+const loginOpenAICodexOAuthMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./openai-chatgpt-provider.runtime.js", () => ({
   refreshOpenAICodexToken: refreshOpenAICodexTokenMock,
@@ -18,15 +19,20 @@ vi.mock("./openai-chatgpt-device-code.js", () => ({
   loginOpenAICodexDeviceCode: loginOpenAICodexDeviceCodeMock,
 }));
 
+vi.mock("./openai-chatgpt-oauth.runtime.js", () => ({
+  loginOpenAICodexOAuth: loginOpenAICodexOAuthMock,
+}));
+
 let buildOpenAIProvider: typeof import("./openai-provider.js").buildOpenAIProvider;
 const CODEX_PROVIDER_CONFIG = {
   api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api/codex",
 } as const;
 const tokens = { access: "access-token", refresh: "refresh-token", expires: 1_700_000_000_000 };
-function runDeviceCode(
+function runLogin(
   overrides: Partial<Omit<ProviderAuthContext, "prompter">> = {},
   prompter: Partial<ProviderAuthContext["prompter"]> = {},
+  methodId: "oauth" | "device-code" = "device-code",
 ) {
   const context = {
     isRemote: false,
@@ -42,7 +48,7 @@ function runDeviceCode(
     ...overrides,
   } as never;
   return buildOpenAIProvider()
-    .auth?.find((method) => method.id === "device-code")
+    .auth?.find((method) => method.id === methodId)
     ?.run(context);
 }
 function catalogModel(
@@ -85,6 +91,7 @@ describe("OpenAI provider Codex transport hooks", () => {
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
     loginOpenAICodexDeviceCodeMock.mockReset();
+    loginOpenAICodexOAuthMock.mockReset();
   });
 
   it("exposes ChatGPT OAuth on the canonical OpenAI provider", () => {
@@ -112,7 +119,7 @@ describe("OpenAI provider Codex transport hooks", () => {
     const controller = new AbortController();
     loginOpenAICodexDeviceCodeMock.mockResolvedValueOnce(tokens);
 
-    const result = await runDeviceCode({ signal: controller.signal });
+    const result = await runLogin({ signal: controller.signal });
 
     expect(loginOpenAICodexDeviceCodeMock).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
@@ -129,6 +136,56 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
     expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
   });
+
+  it.each(["oauth", "device-code"] as const)(
+    "keeps same-email workspaces separate across %s logins",
+    async (methodId) => {
+      const access = (accountId: string) =>
+        `header.${Buffer.from(
+          JSON.stringify({
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: accountId,
+              chatgpt_user_id: "user-one",
+            },
+            "https://api.openai.com/profile": { email: "dev@example.com" },
+          }),
+        ).toString("base64url")}.signature`;
+      const login = async (
+        accountId: string,
+        existingProfiles?: ProviderAuthContext["existingProfiles"],
+      ) => {
+        const loginMock =
+          methodId === "oauth" ? loginOpenAICodexOAuthMock : loginOpenAICodexDeviceCodeMock;
+        loginMock.mockResolvedValueOnce({ ...tokens, access: access(accountId) });
+        const result = await runLogin({ existingProfiles }, {}, methodId);
+        return result!.profiles;
+      };
+
+      const personal = await login("acct-personal");
+      const business = await login("acct-business", personal);
+      const existing = [...personal, ...business];
+      const personalAgain = await login("acct-personal", existing);
+      const businessAgain = await login("acct-business", existing);
+
+      expect(personal[0]?.profileId).toBe("openai:dev@example.com");
+      expect(business[0]).toMatchObject({
+        profileId: "openai:dev@example.com:acct-business",
+        credential: { email: "dev@example.com", accountId: "acct-business" },
+      });
+      expect(personalAgain[0]?.profileId).toBe("openai:dev@example.com");
+      expect(businessAgain[0]?.profileId).toBe("openai:dev@example.com:acct-business");
+      const matcher = buildOpenAIProvider().auth.find(
+        (method) => method.id === methodId,
+      )!.matchesPersonalAccount!;
+      for (const [incoming] of [personalAgain, businessAgain]) {
+        expect(
+          existing
+            .filter((profile) => matcher(incoming!.credential, profile.credential))
+            .map((profile) => profile.profileId),
+        ).toEqual([incoming!.profileId]);
+      }
+    },
+  );
 
   it.each(["structured", "note"])(
     "presents a bounded device-code link through %s UI",
@@ -150,7 +207,7 @@ describe("OpenAI provider Codex transport hooks", () => {
         },
       );
 
-      await runDeviceCode(
+      await runLogin(
         { isRemote: true, openUrl },
         { ...(surface === "structured" ? { deviceCode } : {}), note },
       );
