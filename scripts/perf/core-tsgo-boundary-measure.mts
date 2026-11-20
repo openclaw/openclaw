@@ -11,13 +11,14 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveRepoToolBinPath } from "../lib/local-check-runtime.mts";
-import { createNativeTypeScriptConfigReader } from "../lib/native-typescript-config.mts";
 import { resolveRepoRoot } from "../lib/repo-root.mjs";
 import { TSGO_CORE_TEST_SHARDS } from "../lib/tsgo-core-test-shards.mts";
 
 const root = resolveRepoRoot(import.meta.url);
 const revision = process.argv[2] ?? "-";
 if (revision === "--config-parity") {
+  const { createNativeTypeScriptConfigReader } =
+    await import("../lib/native-typescript-config.mts");
   const configs = [
     "test/tsconfig/tsconfig.core.test.json",
     ...TSGO_CORE_TEST_SHARDS.map((shard) => shard.config),
