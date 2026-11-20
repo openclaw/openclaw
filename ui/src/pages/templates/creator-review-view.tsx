@@ -4,6 +4,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SourceProjection } from "../../lib/reactive/projection.ts";
 import type { TemplateCreator } from "./creator-publication.ts";
+import { TemplateCreatorSignInCard } from "./creator-sign-in-card.tsx";
 import { TemplateReviewCard } from "./template-review-card.tsx";
 import "../../components/tooltip.ts";
 
@@ -167,6 +168,14 @@ function TemplateCreatorCard(props: { flow: TemplateCreator; view: CreatorView }
 }
 
 export function TemplateCreatorReviewView(props: { flow: TemplateCreator; view: CreatorView }) {
+  return (
+    <Show when={props.view.read().signIn} fallback={<TemplateCreatorReviewContent {...props} />}>
+      {(state) => <TemplateCreatorSignInCard state={state()} flow={props.flow} />}
+    </Show>
+  );
+}
+
+function TemplateCreatorReviewContent(props: { flow: TemplateCreator; view: CreatorView }) {
   return (
     <Show
       when={props.view.read().review}
