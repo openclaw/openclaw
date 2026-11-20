@@ -168,7 +168,12 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list", { after, match: previewQuery });
       await captureUiProof(suite, page, "people-card", "pending.png");
       await expectCount(aliceCard.getByText(noRecentSessions, { exact: true }), 0);
-      await expectText(aliceCard.getByRole("status"), "Loading…");
+      const pending = aliceCard.getByRole("status");
+      await expectText(pending, "Loading…");
+      expect(await pending.locator('[aria-hidden="true"].skeleton').isVisible()).toBe(true);
+      expect(
+        await computedStyleProperty(pending.getByText("Loading…", { exact: true }), "clip-path"),
+      ).toBe("inset(50%)");
 
       await onlinePerson(page, "bob").hover();
       const bobCard = activityCard(page, bob.name);
@@ -179,10 +184,12 @@ suite.define(() => {
         match: previewQuery,
       });
       await bobCard.getByText(noRecentSessions, { exact: true }).waitFor();
+      await expectCount(bobCard.locator(".skeleton"), 0);
       await expectCount(link(bobCard, recentLabel), 0);
 
       await onlinePerson(page, "alice").hover();
       await link(aliceCard, new RegExp(recentLabel)).waitFor();
+      await expectCount(aliceCard.locator(".skeleton"), 0);
       await expectCount(aliceCard.getByText(noRecentSessions, { exact: true }), 0);
       await captureUiProof(suite, page, "people-card", "loaded.png");
     }));

@@ -121,6 +121,14 @@
   line-height: 1.42;
 }
 
+.person-activity-card__skeleton {
+  --skeleton-animation: none;
+
+  display: block;
+  block-size: 0.75em;
+  margin-block: calc((1lh - 0.75em) / 2);
+}
+
 .person-activity-card__sessions {
   display: grid;
   gap: 3px;

@@ -161,13 +161,20 @@ function Sessions(props: {
           when={props.sessions.length > 0}
           fallback={
             <p class="person-activity-card__muted" role="status">
-              {t(
-                recentStatus() === "ready"
-                  ? "presence.card.noRecentSessions"
-                  : recentStatus() === "loading"
-                    ? "common.loading"
+              <Show
+                when={recentStatus() === "loading"}
+                fallback={t(
+                  recentStatus() === "ready"
+                    ? "presence.card.noRecentSessions"
                     : "presence.card.recentSessionsUnavailable",
-              )}
+                )}
+              >
+                <span class="sr-only">{t("common.loading")}</span>
+                <span
+                  class="skeleton skeleton-line--medium person-activity-card__skeleton"
+                  aria-hidden="true"
+                />
+              </Show>
             </p>
           }
         >
