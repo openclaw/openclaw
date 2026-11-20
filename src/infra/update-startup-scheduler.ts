@@ -10,7 +10,7 @@ import {
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
-import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { isTruthyEnvValue } from "./env.js";
 import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import { isGatewayExternallySupervised } from "./gateway-supervision.js";
@@ -129,23 +129,20 @@ export function createGatewayUpdateCheck(params: {
       // Jobs keep their registrant's async context, and a notification runs inside the
       // publishing reload, whose plugin inventory retires when it ends. Re-arm as this owner.
       const asOwner = AsyncLocalStorage.snapshot();
-      stopConfigListener = sessionChanges.subscribe((change) => asOwner(onConfigChange, change));
-      function onConfigChange(change: SessionRowChange) {
+      stopConfigListener = sessionChanges.subscribe((change) => {
         if (
           !("all" in change) ||
           typeof change.scope !== "string" ||
-          !change.scope.startsWith("config")
+          !change.scope.startsWith("config") ||
+          lifecycle.signal.aborted
         ) {
-          return;
-        }
-        if (lifecycle.signal.aborted) {
           return;
         }
         // A new catalog source applies now, not at the next 6-hour check.
         const nextSource = catalogSource();
         if (source !== nextSource) {
           source = nextSource;
-          lifecycle.schedule("update.remote-model-catalog", checkRemoteCatalog);
+          asOwner(() => lifecycle.schedule("update.remote-model-catalog", checkRemoteCatalog));
         }
         const nextPolicy = updatePolicy();
         if (policy === nextPolicy) {
@@ -155,8 +152,8 @@ export function createGatewayUpdateCheck(params: {
         if (lifecycle.campaign?.getState()?.state !== "applying") {
           lifecycle.campaign?.clear();
         }
-        lifecycle.schedule("update.check", check);
-      }
+        asOwner(() => lifecycle.schedule("update.check", check));
+      });
       lifecycle.signal.addEventListener("abort", () => stopConfigListener?.(), { once: true });
       lifecycle.schedule("update.check", check);
       lifecycle.schedule("update.remote-model-catalog", checkRemoteCatalog);
