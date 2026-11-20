@@ -182,11 +182,11 @@ function isFinalReplyGroup(item: TurnRenderItem): item is MessageGroup {
 }
 
 // The saved response, not the current picker or the (possibly OpenAI-compatible) API,
-// identifies which model answered. The imported history placeholder is not a model ID.
+// identifies which model answered. Imported native history names only its provider.
 function isRecordedOpenAIModel(record: Record<string, unknown>): boolean {
   const model = normalizeLowercaseStringOrEmpty(record.model);
   const provider = normalizeLowercaseStringOrEmpty(record.provider);
-  if (!provider || !model || model === "native-history") {
+  if (!provider || !model) {
     return false;
   }
   const served = normalizeLowercaseStringOrEmpty(record.responseModel);

@@ -87,6 +87,7 @@ it("folds only recorded OpenAI work as consecutive turns and the selected model 
   const claude = { provider: "clawrouter", model: "anthropic/claude-opus-5-5" };
   const gpt = { provider: "clawrouter", model: "openai/gpt-5.5" };
   const imported = { provider: "openai", model: "native-history" };
+  const claudeImported = { provider: "claude-cli", model: "native-history" };
   const turns = [
     { progress: claude, response: claude, fold: false },
     { progress: gpt, response: { ...gpt, responseModel: "gpt-5.5" }, fold: true },
@@ -96,7 +97,8 @@ it("folds only recorded OpenAI work as consecutive turns and the selected model 
     { progress: gpt, response: { ...gpt, responseModel: "unidentified-upstream" }, fold: false },
     { progress: gpt, response: { ...claude, responseModel: gpt.model }, fold: true },
     { progress: claude, response: openAIModel, fold: false },
-    { progress: imported, response: imported, fold: false },
+    { progress: imported, response: imported, fold: true },
+    { progress: claudeImported, response: claudeImported, fold: false },
     { progress: {}, response: {}, fold: false },
   ].map(({ progress, response, fold }, i) => {
     const start = 1_000 * (i + 1);
