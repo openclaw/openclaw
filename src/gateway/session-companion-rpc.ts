@@ -14,7 +14,10 @@ import {
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
-import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import {
+  resolveOperatorRolePolicy,
+  resolveGatewayOperatorRoleActor,
+} from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
@@ -90,7 +93,10 @@ function companionTargetIsVisible(
   const cfg = context.getRuntimeConfig();
   const sharingTarget = prepared.target;
   if (!sharingTarget) {
-    return !isNamedOperatorRoleEnforcementEnabled(cfg);
+    return !(
+      isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      resolveOperatorRolePolicy(client, cfg) !== undefined
+    );
   }
   const sharing = prepareProjectedSessionSharing({
     client,
@@ -179,6 +185,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       try {
         const profiles = await prepareSessionSharingProfiles(client);
         let readSharingFacts: () => PreparedSessionMutationFacts;
+        let followRegistration: Parameters<typeof companion.ask>[0]["followRegistration"];
         if (actorFacts) {
           readSharingFacts = actorFacts.readCurrent;
         } else {
@@ -188,6 +195,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
             allowMissing: true,
           });
           releaseSharing = preparedFacts.release;
+          followRegistration = preparedFacts.followRegistration;
           readSharingFacts = () => preparedFacts.readCurrent(context.getRuntimeConfig());
         }
         const initialSharingFacts = readSharingFacts();
@@ -312,6 +320,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           connId,
           ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
+          followRegistration,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),

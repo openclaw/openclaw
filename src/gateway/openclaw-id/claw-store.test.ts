@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { MAX_PLUGIN_STATE_VALUE_BYTES } from "../../plugin-state/plugin-state-store.kernel.js";
 import { serializePluginStoreJson } from "../../plugin-state/plugin-store-validation.js";
-import { clawStoreRows, readStoredClaw, type StoredClaw } from "./claw-store.js";
+import { clawStoreRows, readStoredClaw, writeStoredClaw, type StoredClaw } from "./claw-store.js";
 import { fullClaw, NOW, id } from "./claw-store.test-support.js";
 
 // The claw namespace's rows, held in memory in place of the plugin-state store.
@@ -58,6 +58,25 @@ describe("claw record rows", () => {
     const base = { v: 1 as const, claw_id: id(1), hostname: null, authority: null, binding: null };
     return { ...base, discovery: { ...discovery, published_snapshot_seq: 0 } };
   };
+
+  it("retains recovery-use evidence in individually bounded rows outside membership", async () => {
+    storedRows.clear();
+    const use = {
+      seq: 12,
+      accountId: "bob",
+      memberName: "Bob",
+      deviceLabel: "Chrome",
+      peerKey: "iroh:browser",
+      peerFp: "fp:browser",
+      usedAt: NOW,
+    };
+    await writeStoredClaw({ ...claw(), member_recovery_uses: [use] });
+    expect(storedRows.get("current")).not.toHaveProperty("member_recovery_uses");
+    expect(storedBytes(storedRows.get("member-recovery-use:12"))).toBeLessThan(
+      MAX_PLUGIN_STATE_VALUE_BYTES,
+    );
+    expect((await readStoredClaw())?.member_recovery_uses).toEqual([use]);
+  });
 
   it("keeps bindings saved inside an older record until the next write moves them out", async () => {
     storedRows.clear();

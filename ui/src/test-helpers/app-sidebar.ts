@@ -505,14 +505,18 @@ export function createContext(
   };
   const lifecycle = createSidebarContextLifecycle(gateway, agents, selectedAgentId);
   sidebarSessionGatewayBindings.get(sessions)?.(gateway, lifecycle.agentSelection);
+  const router = createApplicationRouter();
+  onTestFinished(() => router.stop());
   return {
+    basePath: "",
+    resourceBasePath: "",
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
     chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
     navigate: vi.fn(),
-    router: createApplicationRouter(),
+    router,
     sessions,
     plugins: {
       registrations: () => [],

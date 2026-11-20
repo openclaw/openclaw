@@ -3,7 +3,6 @@
 import { execFileSync } from "node:child_process";
 import fs, { mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -16,6 +15,14 @@ import { finishFailedGatewayHttpResponse } from "./http-common.js";
 import { APNG_BYTES } from "./http-image.test-support.js";
 import { bindHttpResponseAuthority } from "./http-request-authority.js";
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { closeSync: vi.fn(actual.closeSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const mocks = vi.hoisted(() => ({
   authorize: vi.fn(),
@@ -692,16 +699,15 @@ describe("Control UI plugin and catalog icon routes", () => {
       }
       return receipt;
     });
-    const closeSync = fs.closeSync;
-    const closed = vi.spyOn(fs, "closeSync").mockImplementation((fd) => {
+    const { closeSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
+    const closed = vi.mocked(fs.closeSync).mockImplementation((fd) => {
       closeSync(fd);
       if (tracked?.fd === fd) {
         tracked.closed = true;
       }
     });
     try {
-      // The owner imports Node's named binding; observe release before the fd number can be reused.
-      syncBuiltinESMExports();
+      // Observe release before the fd number can be reused.
       const response = await request("/__openclaw__/plugin-icon/empty-package");
       expect(response.status).toBe(404);
       expect(tracked?.closed).toBe(true);
@@ -712,8 +718,7 @@ describe("Control UI plugin and catalog icon routes", () => {
         }
       } finally {
         opened.mockRestore();
-        closed.mockRestore();
-        syncBuiltinESMExports();
+        closed.mockReset();
       }
     }
   });

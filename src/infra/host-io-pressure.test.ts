@@ -70,6 +70,10 @@ it("uses fresh and in-progress btrfs commits without retaining historical pressu
   expect(await fixture.probe()).toBe(true);
   await fixture.stats(103, 24002, 2);
   expect(await fixture.probe()).toBe(false);
+  // One 9,251 ms commit followed by nine 2 ms commits must not average away.
+  await fixture.stats(113, 33271, 2);
+  expect(await fixture.probe()).toBe(true);
+  expect(await fixture.probe()).toBe(false);
   await fixture.stats(103, 24002, 2, 1500);
   expect(await fixture.probe()).toBe(true);
   await fixture.stats(1, 2, 2);

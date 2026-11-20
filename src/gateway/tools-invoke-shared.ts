@@ -47,7 +47,11 @@ import {
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
-import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveOperatorRolePolicy,
+  resolveOperatorRolePolicyForProfile,
+} from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
@@ -311,9 +315,12 @@ async function invokeGatewayToolWithSignal(
     return failure(400, "invalid_request", sessionTarget.error.message);
   }
   const { agentId: selectedAgentId, sessionKey } = sessionTarget;
-  const authenticatedUserProfile = isNamedOperatorRoleEnforcementEnabled(params.cfg)
-    ? params.authenticatedUserProfile
-    : undefined;
+  const profile = params.authenticatedUserProfile;
+  const authenticatedUserProfile =
+    isNamedOperatorRoleEnforcementEnabled(params.cfg) ||
+    (profile && resolveOperatorRolePolicyForProfile(profile.profileId, params.cfg))
+      ? profile
+      : undefined;
   // HTTP and RPC auth boundaries supply authority independently of profile attribution.
   const client = createSyntheticPluginRuntimeClient({
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
@@ -332,7 +339,9 @@ async function invokeGatewayToolWithSignal(
         })
       ).entry;
   const profiles =
-    isGatewayAdmin(client) && !isNamedOperatorRoleEnforcementEnabled(params.cfg)
+    isGatewayAdmin(client) &&
+    !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+    resolveOperatorRolePolicy(client, params.cfg) === undefined
       ? undefined
       : await prepareSessionSharingProfiles(client);
   const prepareAuthorization = async (
@@ -345,7 +354,10 @@ async function invokeGatewayToolWithSignal(
   ) => {
     if (!profiles) {
       sessionChecks.push(() => {
-        if (isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig())) {
+        if (
+          isNamedOperatorRoleEnforcementEnabled(getRuntimeConfig()) ||
+          resolveOperatorRolePolicy(client, getRuntimeConfig()) !== undefined
+        ) {
           throw sessionMutationForbiddenError("Session role policy changed; retry the request");
         }
       });

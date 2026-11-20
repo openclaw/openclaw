@@ -435,7 +435,11 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     const previous = managedRecord(stateDir, "voice-call", "1");
     const next = managedRecord(stateDir, "voice-call", "2");
 
+    const exists = vi.spyOn(fs, "existsSync");
     await commitRecords({ "voice-call": previous }, { "@openclaw/voice-call": next }, stateDir);
+    expect(exists.mock.calls).not.toContainEqual([
+      resolveRetainedManagedNpmInstallMarkerPath(previous.installPath),
+    ]);
 
     expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(true);
   });

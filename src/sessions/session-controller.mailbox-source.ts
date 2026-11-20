@@ -184,10 +184,6 @@ export function beginSessionControllerSourceInjection(
         });
         return true;
       } catch (error) {
-        // A failed live-authority assertion cannot return a queued-ready source
-        // to selection. Retire before releasing the injection receipt: finish
-        // can synchronously wake the mailbox and enter a backend.
-        retireSessionControllerInput(input);
         finish(false);
         if (input.abortSignal.aborted) {
           return false;

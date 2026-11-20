@@ -17,7 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   linkedClaw,
   nowSeconds,
@@ -205,11 +205,16 @@ describe("OpenClaw ID tunnel API", () => {
       "binding_seq",
       "claw_id",
       "devices",
+      "hostname",
+      "recovery_kit",
       "role",
+      "root_fp",
       "seq",
     ]);
     expect(view).toMatchObject({
       account_id: "bob",
+      root_fp: await fingerprint(formatEd25519PublicKey(claw.root.publicKey)),
+      recovery_kit: null,
       binding_seq: 1,
       role: "operator",
       devices: [
@@ -285,7 +290,7 @@ describe("OpenClaw ID tunnel API", () => {
     await service.stop();
   });
 
-  it("refuses unknown-role and unlisted peers on every route before disclosing or mutating", async () => {
+  it("admits members independently of membership role and refuses unlisted peers on every route", async () => {
     const claw = await linkedClaw();
     const peer = formatIrohEndpointKey(randomBytes(32));
     expect(
@@ -293,7 +298,7 @@ describe("OpenClaw ID tunnel API", () => {
         await claw.sign({
           op: "add",
           account_id: "acct-guest",
-          role: "guest",
+          role: "unconfigured-role",
           peer_keys: [peer],
           invite_id: null,
         }),
@@ -306,7 +311,17 @@ describe("OpenClaw ID tunnel API", () => {
     const inviteBody = { cap: invite.cap, proof_key: bytesToBase64url(invite.proofKey) };
     const before = await claw.authority.ownerView(claw.w1);
     try {
-      for (const caller of [peer, formatIrohEndpointKey(randomBytes(32))]) {
+      expect(await call(peer, "GET", "membership")).toMatchObject({
+        status: 200,
+        body: { account_id: "acct-guest", role: "unconfigured-role" },
+      });
+      for (const route of ["invites", "node-invites"]) {
+        expect(await call(peer, "POST", route, inviteBody)).toMatchObject({
+          status: 403,
+          body: { error: { code: "not_owner_device" } },
+        });
+      }
+      for (const caller of [formatIrohEndpointKey(randomBytes(32))]) {
         for (const [method, route, body] of [
           ["GET", "membership", undefined],
           ["POST", "statements", { statement: change }],

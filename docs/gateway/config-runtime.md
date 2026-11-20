@@ -53,7 +53,7 @@ Optional positive integer limiting live [managed worktrees](/concepts/managed-wo
 }
 ```
 
-The cap is enforced: cleanup purges merged or squashed branches first, then idle worktrees by last-used age, including manual checkouts and unsaved data. Snapshot capture is best effort during cap eviction; a failed snapshot does not prevent purge. Lowering the cap can therefore remove existing checkouts. Live runs remain protected; if no other checkout can be evicted, creation fails with the cap and live owners in the error. Raise `worktreeMaxCount` or let those runs finish before retrying.
+The cap is enforced: cleanup purges merged or squashed branches first, then idle worktrees by last-used age, including manual checkouts and unsaved data. Cap eviction requires a successful recovery snapshot; a failed snapshot preserves the checkout, and recorded retry or terminal preservation receipts protect it from automatic eviction. Lowering the cap can therefore remove existing checkouts. Live runs remain protected; if no other checkout can be evicted, creation fails with the cap and live owners in the error. Raise `worktreeMaxCount` or let those runs finish before retrying.
 
 Background maintenance and creation use the same eviction owner. Concurrent creates cannot each claim the final slot. Disk-space admission remains a separate guard even when the configured count leaves room.
 
@@ -90,8 +90,10 @@ The `models` root also owns global model-catalog behavior.
   `https://catalog.openclaw.ai/models/v3/catalog.json`. Mirrors can serve v1, v2, or v3.
   After an upgrade, a catalog downloaded from the earlier v1 or v2 default keeps
   serving, including offline, until the first v3 download succeeds.
-  The Gateway checks in the background at startup and every six hours. A compatible download
-  is prepared and published as one model-and-pricing generation without a
+  The Gateway checks in the background at startup and every six hours. On constrained
+  hosts, automatic checks wait for more than 20% available process memory and retry
+  once per minute; manual `openclaw models refresh` remains immediate. A compatible
+  download is prepared and published as one model-and-pricing generation without a
   Gateway restart. Readers retain the current generation until preparation
   succeeds; a release whose bundled catalog is newer always wins.
 

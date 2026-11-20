@@ -4,11 +4,12 @@ import {
 } from "../../agents/cron-creator-authority-context.js";
 import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAgentRunDirectAbortReason } from "../../agents/run-termination.js";
+import { isChannelRunAuthorizationError } from "../../channels/message-access/run-authorization-error.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain-state.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
-import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
+import { resolveTurnPersonalProfiles } from "../../sessions/session-participant-input.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
@@ -318,7 +319,10 @@ export async function executeFollowupTurn(params: {
     return pendingWorkDrain;
   };
   const sessionCtx = buildFollowupTemplateContext(turn);
-  if (turn.preflightError && !turn.preflightFailurePayload) {
+  // Canonical execution settles this memoized failure through the existing refusal owner.
+  const channelAdmissionFailure =
+    turn.preflightError !== undefined && isChannelRunAuthorizationError(turn.preflightError);
+  if (turn.preflightError && !turn.preflightFailurePayload && !channelAdmissionFailure) {
     throw turn.preflightError instanceof Error
       ? turn.preflightError
       : new Error(formatErrorMessage(turn.preflightError));
@@ -339,6 +343,7 @@ export async function executeFollowupTurn(params: {
   const inputAdmission = createReplyInputAdmission({
     followupRun: turn.queued,
     replyOperation: turn.operation,
+    runId: turn.runId,
     sourceTurnId,
     sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
     setEntry: (entry) => turn.session.publish(entry),
@@ -356,16 +361,21 @@ export async function executeFollowupTurn(params: {
     await admitFollowupRunLifecycle(turn.queued);
     turn.operation.abortSignal.throwIfAborted();
     setChannelSourceTurnId(sessionCtx, sourceTurnId);
-    if (turn.preflightFailurePayload) {
+    if (turn.preflightFailurePayload && !channelAdmissionFailure) {
       turn.operation.fail("run_failed", turn.preflightError);
       execution = {
         runId: turn.runId,
         outcome: { kind: "rejected", payload: turn.preflightFailurePayload },
       };
     } else {
-      turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
-        ? sessionPersonalProfileId(turn.session.current())
-        : undefined;
+      Object.assign(
+        turn.queued.run,
+        resolveTurnPersonalProfiles(
+          turn.queued.run.sessionKey,
+          turn.session.current(),
+          turn.queued.personalBootstrapEligible === true,
+        ),
+      );
       await turn.operation.bindToolAuthoritySnapshotAsync(
         prepareReplyRunToolAuthority(
           turn.queued,

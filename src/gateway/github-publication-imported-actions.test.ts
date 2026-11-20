@@ -609,6 +609,47 @@ describe("actions on the imported original PR", () => {
     });
   });
 
+  it("lets a full-write maintainer land an explicit PR from an unbound session", async () => {
+    const f = await fixture(false, false, false);
+    f.state.user = { id: 999, login: "other-contributor" };
+    const worktree = structuredClone(loadSessionEntryReadOnly(f.scope)?.worktree);
+    await expect(
+      f.invoke("guest", { action: "inspect", pullRequestUrl: url }, undefined, { raw: true }),
+    ).rejects.toThrow(/scope|permission/iu);
+    await expect(
+      f.invoke("admin", {
+        action: "merge",
+        pullRequestUrl: url,
+        publishingSessionKey: SESSION_KEY,
+        mergeMethod: "squash",
+        expectedHeadCommit: headCommit,
+      }),
+    ).rejects.toThrow(/not both/);
+    const observed = await f.invoke("admin", { action: "inspect", pullRequestUrl: url });
+    expect(observed.details).toMatchObject({
+      pullRequest: { url, repository: "example/repository", branch: "topic" },
+      headCommit,
+      state: "draft",
+    });
+    await f.invoke("admin", {
+      action: "ready",
+      pullRequestUrl: url,
+      expectedHeadCommit: headCommit,
+    });
+    const merged = await f.invoke("admin", {
+      action: "merge",
+      pullRequestUrl: url,
+      mergeMethod: "squash",
+      expectedHeadCommit: headCommit,
+    });
+    expect(merged.details).toMatchObject({ state: "merged", mergeCommit: "e".repeat(40) });
+    expect(f.writes.map((write) => write.endpoint)).toEqual([
+      "graphql",
+      "repos/example/repository/pulls/7/merge",
+    ]);
+    expect(loadSessionEntryReadOnly(f.scope)?.worktree).toEqual(worktree);
+  });
+
   type Fixture = Awaited<ReturnType<typeof fixture>>;
   const changes: Record<string, (f: Fixture) => void> = {
     author: (f) => {

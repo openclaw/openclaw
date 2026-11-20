@@ -456,6 +456,20 @@ suite.define(() => {
           );
           return thread && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 200;
         });
+        // Rows the wheel brings in join the flow once measured; read the reader from that frame.
+        await scroller.evaluate((element) => {
+          const view = element.getBoundingClientRect();
+          return new Promise<void>((resolve) => {
+            const settled = () =>
+              [...element.querySelectorAll(".chat-virtual-row[data-prepared-row]")].every((row) => {
+                const rect = row.getBoundingClientRect();
+                return !rect.height || rect.bottom <= view.top || rect.top >= view.bottom;
+              })
+                ? resolve()
+                : requestAnimationFrame(settled);
+            settled();
+          });
+        });
         const reader = await captureTopVisibleVirtualRow(scroller);
         const previousThread = await scroller.evaluateHandle((element) => element);
         for (let index = 0; index < 3; index++) {

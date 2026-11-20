@@ -22,6 +22,11 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
+const deferCacheCollection = process.env.OPENCLAW_PR_DEFER_CACHE_COLLECTION;
+if (deferCacheCollection !== undefined && deferCacheCollection !== "1") {
+  throw new Error("OPENCLAW_PR_DEFER_CACHE_COLLECTION must be 1 or unset.");
+}
+
 // Older frozen collectors recognize neither namespace. Their PID-only policy
 // cannot safely collect an operation whose supervisor exited before its children.
 export const ANCHOR_PREFIX = "openclaw-pr-anchor-v3.";
@@ -146,7 +151,9 @@ function processLifetime(command, payload, mutexFd) {
     "python3",
     ["-I", "-B", "-c", lifetimeProcessSource, ...(Array.isArray(command) ? command : [command])],
     {
-      input: JSON.stringify(payload),
+      // Shared-lock acquisition reads only its inherited FD. Writing "null"
+      // can race that short-lived helper's exit and turn success into EPIPE.
+      input: payload === null ? undefined : JSON.stringify(payload),
       encoding: "utf8",
       stdio,
       timeout: 60_000,
@@ -1158,6 +1165,10 @@ export function privateDependencyDonor(root, destination) {
 
 export function collectUnusedDependencyCaches(lock, current = "") {
   const context = ledger(lock);
+  // Retained workflow versions call this export directly, without the wrapper sweep.
+  if (deferCacheCollection === "1") {
+    return [];
+  }
   let budget = 4;
   const pending = context.db
     .prepare("SELECT * FROM pending_lifetimes")
@@ -1716,6 +1727,9 @@ export function retireAnchorDependencies(anchor, retire) {
 }
 
 export function sweepDependencyCaches() {
+  if (deferCacheCollection === "1") {
+    return;
+  }
   const cache = dependencyCacheRoot();
   if (!lstatSync(cache, { throwIfNoEntry: false })) {
     return;

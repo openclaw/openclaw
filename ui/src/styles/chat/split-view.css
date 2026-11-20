@@ -241,17 +241,6 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   stroke-linejoin: round;
 }
 
-/* Project icons are arbitrary artwork, so they keep their own pixels: matched to
-   the glyph box, contained rather than stretched, and deliberately unstyled —
-   no shadow, plate, or filter. Accepted tradeoff: a favicon that is one flat
-   dark color on transparency loses contrast against a dark chip. Rescuing it
-   unconditionally would cost every normal full-color icon, so if it ever
-   matters in practice the escape hatch is a plate applied conditionally, not a
-   blanket effect here. */
-.chat-pane__workspace-chip .workspace-icon-fallback {
-  display: contents;
-}
-
 .chat-pane__workspace-menu,
 .chat-pane__placement-menu {
   display: flex;

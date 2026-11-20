@@ -32,7 +32,7 @@ import {
   type GatewayMethodDescriptor,
 } from "./methods/descriptor.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
-import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createIdRelayMember } from "./remote-control-ui-id-member.test-support.js";
 import {
@@ -358,7 +358,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
               ...params.openOptions,
               audienceId: "independent-person-consent",
               principal: { kind: "person", profileId: member.profileId },
-              operatorScopeCeiling: ["operator.admin"],
+              operatorScopeCeiling: ["operator.read", "operator.write"],
             });
             try {
               await usePeer(await params.openRemote(independentUi), async (independentPeer) => {
@@ -368,7 +368,7 @@ export async function expectMcpRelayPrincipalAuthority(params: {
                 expectHello(
                   await connect(independentPeer, { identity: independentIdentity, profileId }),
                   "remote-ingress",
-                  ["operator.admin"],
+                  ["operator.read", "operator.write"],
                 );
                 const independentCaller = [...params.clients].find(
                   (client) => client.connect.device?.id === independentIdentity.deviceId,

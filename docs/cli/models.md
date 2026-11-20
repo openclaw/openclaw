@@ -132,6 +132,7 @@ Check detail/reason codes to expect when a check never reaches a model call:
 
 - `excluded_by_auth_order`: a stored profile exists, but explicit `auth.order.<provider>` omitted it, so the check reports the exclusion instead of trying it.
 - `missing_credential`, `invalid_expires`, `expired`, `unresolved_ref`: profile is present but not eligible or resolvable.
+- `refresh_failed`: an OAuth refresh failed in a way OpenClaw cannot safely retry. Sign in again (Control UI **Models** → **Sign in again** on the account, or `openclaw models auth login --provider <id>`).
 - `ineligible_profile`: profile is incompatible with provider config for another reason.
 - `no_model`: provider auth exists, but OpenClaw could not resolve a model candidate that can be tested for that provider.
 
@@ -184,10 +185,13 @@ use `models list --refresh` to inspect a local refresh instead.
 
 A provider that rejects catalog authentication produces a separate CLI diagnostic
 with its provider and, when available, profile ID. Open **Models** in the Control
-UI to check sign-in and catalog access, then retry with `--refresh`. Catalog
+UI to check sign-in and catalog access, then run `openclaw models list --refresh`. Catalog
 rejection alone does not cause the generic refresh warning or prove that model
 requests will fail. Timeouts and other discovery failures still produce the
 refresh warning, even when another provider needs sign-in.
+`models status` reports the same rejected or unavailable discovery from the prepared
+Gateway catalog on stderr; Doctor's `core/doctor/model-references` check reports
+rejected discovery as a warning and unavailable discovery as info.
 
 Discovery diagnostics go to stderr in every output mode. JSON output also includes
 `providerOutcomes` when the Gateway or local catalog publishes them: each entry
@@ -493,7 +497,7 @@ Use either `openclaw models auth --agent <id> <subcommand>` or `openclaw models 
 For OpenAI models, `--provider openai` defaults to ChatGPT/Codex account login. Use `--method api-key` only when you want to add an OpenAI API-key profile, usually as a backup for Codex subscription limits. Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix auth/profile state to `openai`.
 
 See [OpenAI authentication](/providers/openai/authentication) to compare Codex
-OAuth, device code, API keys, and Sign in with ChatGPT (Beta) (`--method siwc`),
+OAuth, device code, API keys, and Sign in with ChatGPT (`--method siwc`),
 including model access, hosted plugins, and shared versus personal setup.
 
 Examples:

@@ -10,7 +10,6 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import {
   cronJobMatchesCallerScope,
   cronTrustedJobOwnedByCaller,
@@ -96,8 +95,7 @@ export function cronUpdateNarrowsTrustedJob(
   return (
     job.scheduledToolPolicy?.mode === "trusted" &&
     callerScope !== undefined &&
-    // Management grants cannot supply the missing requester workspace owner.
-    (!callerScope.manageAll || !job.owner?.sessionKey) &&
+    !callerScope.manageAll &&
     Object.keys(patch).some((key) => !TRUSTED_LIFECYCLE_PATCH_KEYS.has(key))
   );
 }
@@ -127,16 +125,12 @@ export function respondRefusedCronAgent(agentId: string | undefined, respond: Re
 }
 
 export function assertCronReadCurrent(
-  options: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "signal" | "hasCurrentClientAuthority"
-  >,
+  options: Pick<GatewayRequestHandlerOptions, "signal" | "hasCurrentClientAuthority">,
 ) {
   options.signal?.throwIfAborted();
   if (options.hasCurrentClientAuthority?.() === false) {
     throw new Error("Cron history authority closed");
   }
-  assertActiveAgentRuntimeAuthority(options.client, options.context);
 }
 
 export function resolveCronJobId(params: CronJobIdParams): string | undefined {

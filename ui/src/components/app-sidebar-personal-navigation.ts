@@ -7,10 +7,7 @@ import { t } from "../i18n/index.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { PersonalSessionGroup } from "../lib/sessions/personal-groups.ts";
-import type {
-  SessionConnectionScope,
-  SessionListSnapshot,
-} from "../lib/sessions/session-capability.ts";
+import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
 import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
@@ -37,13 +34,14 @@ type PersonalNavigationHost = Parameters<typeof projectSidebarSessionReference>[
   readonly sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null;
   readonly sidebarEntries: readonly string[];
   readonly sessionOwnerFilterId: string | null;
+  readonly sidebarAgentsMode: "chip" | "roster";
+  expandedAgentId(): string;
   readonly sessionDataContext:
     | Pick<
         ApplicationContext,
         "sessions" | "gateway" | "plugins" | "connectionBootstrap" | "navigation"
       >
     | undefined;
-  readonly navigationCatalog: { readonly dashboards: SessionListSnapshot | null };
   readonly resolveSessionAttention: Parameters<
     typeof projectSidebarSessionReference
   >[0]["resolveAttention"];
@@ -109,7 +107,6 @@ export function createSidebarPinnedSessions(
     PersonalNavigationHost,
     | "sessionDataContext"
     | "findSidebarSessionByKey"
-    | "navigationCatalog"
     | "sidebarEntries"
     | "sessionNavigationAgentId"
     | "getSessionNavigationState"
@@ -238,11 +235,7 @@ export function createSidebarPinnedSessions(
         if (!current()) {
           return;
         }
-        if (
-          !host.isConnected ||
-          host.findSidebarSessionByKey(key) ||
-          host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
-        ) {
+        if (!host.isConnected || host.findSidebarSessionByKey(key)) {
           if (refresh) {
             reads.set(key, "invalidated");
           } else {
@@ -314,12 +307,11 @@ function readPersonalSidebarSession(
   key: string,
   navigationState: SidebarSessionNavigationState,
 ) {
-  const live =
-    findSidebarSessionRow({
-      sessionKey: key,
-      navigationState,
-      sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-    }) ?? host.navigationCatalog.dashboards?.result?.sessions.find((row) => row.key === key);
+  const live = findSidebarSessionRow({
+    sessionKey: key,
+    navigationState,
+    sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
+  });
   return live ?? host.pinnedSessions.getRow(key);
 }
 
@@ -356,6 +348,13 @@ function resolvePersonalSidebarSession(
         resolveAttention: host.resolveSessionAttention,
       }).session
     : host.pinnedSessions.get(key);
+}
+
+function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {
+  return (
+    host.sidebarAgentsMode === "roster" ||
+    host.sessionNavigationAgentId({ key }) === host.expandedAgentId()
+  );
 }
 
 export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
@@ -395,7 +394,7 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
     // Visible references bridge query replacement until their owner observations settle.
     host.pinnedSessions.seed(pins);
   }
-  return buildReconciledSidebarZone({
+  const zone = buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
     rows: [...pins, ...rows],
     pluginNavigation: host.pluginNavigation(),
@@ -405,6 +404,12 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
         ? host.sidebarPluginSnapshot
         : null,
   });
+  // Scope sidebar pins without removing saved references or global rail shortcuts.
+  zone.entries = zone.entries.filter(
+    (entry) =>
+      entry.type !== "session" || entry.rail || personalSessionMatchesAgent(host, entry.key),
+  );
+  return zone;
 }
 
 /** Group occurrences share the canonical tree and its child observation metadata. */
@@ -421,6 +426,7 @@ export function personalSidebarGroupRows(
   const members = group.sessionKeys.flatMap((key) => {
     const row = rows.get(key);
     return row?.pinnable &&
+      personalSessionMatchesAgent(host, key) &&
       !row.archived &&
       !host.sessionDataContext?.sessions.archiveVisibility(key)
       ? [{ ...row, selectionKey: `personal:${JSON.stringify([group.id, key])}` }]
@@ -470,9 +476,7 @@ export function projectUnpinnedSessionRows(
 
 export function personalSidebarOwnerFilterId(
   host: PersonalNavigationHost & {
-    readonly sidebarAgentsMode: "chip" | "roster";
     readonly sessionOwnerFilter: SessionOwnerFilter;
-    expandedAgentId(): string;
   },
 ): string | null {
   if (host.sidebarSnapshot) {

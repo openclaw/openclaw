@@ -1,7 +1,7 @@
 import { recordSqliteDatabaseIntegrity } from "./sqlite-database-admission.js";
 import { assertSqliteIntegrityInWorker } from "./sqlite-integrity-worker.js";
 import type { SqliteIntegrityCheck, SqliteIntegrityOperation } from "./sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 
 /** Keep the caller's connection and authority until every native reader closes. */
 export async function runSqliteIntegrityOperationInWorker<T>(

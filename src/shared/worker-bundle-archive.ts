@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { sha256File } from "../infra/directory-durability.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import {
@@ -103,7 +103,10 @@ export async function readWorkerBundleArchiveManifest(
   });
   try {
     // Match tar.list(file): compressed read grouping affects its prefix ratio check.
-    await pipeline(createReadStream(tarballPath, { highWaterMark: 16 * 1024 * 1024 }), parser);
+    await pipeline(
+      fsSync.createReadStream(tarballPath, { highWaterMark: 16 * 1024 * 1024 }),
+      parser,
+    );
   } catch (error) {
     // Parser has no destroy method; release its decompressor on parser and input failures too.
     parser.abort(error instanceof Error ? error : new Error(String(error)));

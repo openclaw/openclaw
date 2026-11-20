@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { supportsOpenAIReasoningEffort } from "../providers/openai-reasoning-effort.js";
 import { OPENAI_RESPONSES_APIS } from "./openai-responses-contracts.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { parsePositiveInteger } from "./positive-integer.js";
 
 type OpenAIResponsesPayloadModel = {
@@ -87,6 +88,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 function readCompatPayloadBoolean(
   compat: unknown,
   key:
+    | "cachesInstructions"
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
@@ -323,6 +325,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
     storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
     enablePromptCacheStripping?: boolean;
     enableServerCompaction?: boolean;
+    nativeCompactEndpoint?: boolean;
   } = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
@@ -361,8 +364,19 @@ export function resolveOpenAIResponsesPayloadPolicy(
   // Verified native OpenAI/xAI routes default instructions on; compat overrides.
   // Other endpoints could silently drop this field and the system prompt.
   // Stored-continuation support does not prove instructions support.
+  // The catalog row is shared with subscription runtimes; the cache workaround
+  // applies only to native API-key turns, not to ChatGPT or /responses/compact.
   const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
-  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
+  const embedForNativeCache =
+    options.nativeCompactEndpoint !== true &&
+    readCompatPayloadBoolean(model.compat, "cachesInstructions") === false &&
+    supportsNativeOpenAIResponsesEndpoint({
+      provider: readStringValue(model.provider) ?? "",
+      api: readStringValue(model.api) ?? "",
+      baseUrl: readStringValue(model.baseUrl),
+    });
+  const usesInstructionsField =
+    (instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint) && !embedForNativeCache;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -390,25 +404,42 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Enforce replay storage on the final input, including items introduced by payload hooks. */
+export function enforceOpenAIResponsesCompactionReplayStorage(
+  payloadObj: Record<string, unknown>,
+  policy: Pick<
+    OpenAIResponsesPayloadPolicy,
+    "requiresStatelessCompactionReplay" | "shouldStripStore"
+  >,
+): void {
+  if (
+    policy.requiresStatelessCompactionReplay &&
+    Array.isArray(payloadObj.input) &&
+    payloadObj.input.some((item) => isRecord(item) && item.type === "compaction")
+  ) {
+    // Storing a replayed checkpoint can fail after output has streamed. Prevent
+    // the conflict instead of replaying a request that may already have done work.
+    if (policy.shouldStripStore) {
+      delete payloadObj.store;
+    } else {
+      payloadObj.store = false;
+    }
+    delete payloadObj.previous_response_id;
+  }
+}
+
 /** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
   policy: OpenAIResponsesPayloadPolicy,
 ): void {
   if (policy.explicitStore !== undefined) {
-    // Storing a replayed checkpoint makes its next replay fail with item_conflict,
-    // even without item IDs. Stateless replay also recovers already-stored checkpoints.
-    payloadObj.store =
-      policy.explicitStore &&
-      !(
-        policy.requiresStatelessCompactionReplay &&
-        Array.isArray(payloadObj.input) &&
-        payloadObj.input.some((item) => isRecord(item) && item.type === "compaction")
-      );
+    payloadObj.store = policy.explicitStore;
   }
   if (policy.shouldStripStore) {
     delete payloadObj.store;
   }
+  enforceOpenAIResponsesCompactionReplayStorage(payloadObj, policy);
   if (policy.shouldStripPromptCache) {
     delete payloadObj.prompt_cache_key;
     delete payloadObj.prompt_cache_retention;

@@ -1,9 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { addSession } from "../agents/bash-process-registry.js";
-import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
-import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -14,6 +11,7 @@ import {
   persistRunningSessionsForRestart,
   resumeMarkedSessions,
 } from "../gateway/session-restart-resume.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -76,7 +74,8 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
         sessionId: "ready-restart-admission",
       };
       const targets = [scope, readyScope];
-      const marker = { queuedInputIds: [], hadBackgroundExec: true };
+      const marker = {};
+      const claims: Array<[string, string | undefined]> = [];
       try {
         for (const target of targets) {
           replaceSessionEntrySync(target, {
@@ -84,18 +83,17 @@ export function registerRestartRecoveryAdmissionTests({ makeEnv }: NativeIntegri
             updatedAt: 1,
             createdActor: { type: "human", source: "profile", id: profile.id },
           });
-          const processSession = createProcessSessionFixture({
-            id: `${target.agentId}-restart-work`,
-            backgrounded: true,
-          });
-          processSession.agentId = target.agentId;
-          processSession.sessionKey = target.sessionKey;
-          processSession.scopeKey = target.sessionKey;
-          addSession(processSession);
+          const runId = `${target.agentId}-restart-work`;
+          claims.push([
+            runId,
+            claimAgentRunContext(runId, target, { trackOwner: true, ownsContext: true }),
+          ]);
         }
         await persistRunningSessionsForRestart({ cfg: config });
       } finally {
-        resetProcessRegistryForTests();
+        for (const [runId, claim] of claims) {
+          releaseAgentRunContext(runId, claim);
+        }
       }
       for (const target of targets) {
         expect((await readSessionEntryReadOnlyInWorker(target))?.resumeAfterRestart).toEqual(

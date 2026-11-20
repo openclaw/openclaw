@@ -124,7 +124,7 @@ async function prepareSetupInferenceOptions(agentId?: string) {
   let utilityModel: string | undefined;
   if (utilitySetting.kind === "explicit") {
     const { resolveSimpleCompletionSelectionForAgent } =
-      await import("../agents/simple-completion-runtime.js");
+      await import("../agents/simple-completion-selection.js");
     const selection = resolveSimpleCompletionSelectionForAgent({
       cfg,
       agentId: targetAgentId,

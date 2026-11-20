@@ -2,6 +2,7 @@
 
 import { flush, createSignal, onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Icon } from "../../components/solid/icon.tsx";
 import { i18n } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
@@ -128,6 +129,27 @@ describe("renderPluginCatalogResults", () => {
     });
   });
 
+  it("does not report no matches when remote discovery failed", async () => {
+    const props = baseProps({
+      query: "matrix",
+      result: { items: [] },
+      remoteError: "ClawHub unavailable",
+    });
+    const { container, ui } = await mount(props);
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
+    ui.node("openclaw-panel-empty-state").toBeNull();
+    container.querySelector<HTMLButtonElement>(".callout.warn button")!.click();
+    expect(props.onRetry).toHaveBeenCalledOnce();
+
+    update(container, { ...props, result: { items: [plugin("local-match")] } });
+    await waitForSolid(() => ui.node('[data-plugin-id="local-match"]').not.toBeNull());
+    ui.content(".callout.warn").toContain("ClawHub unavailable");
+
+    update(container, { ...props, remoteError: null });
+    await waitForSolid(() => ui.node("openclaw-panel-empty-state").not.toBeNull());
+    ui.node(".callout.warn").toBeNull();
+  });
+
   it("retains grouped overview cards when a refresh fails", async () => {
     const props = baseProps();
     const { container, ui } = await mount(props);
@@ -246,23 +268,11 @@ describe("renderPluginCatalogResults", () => {
     ui.node("input").toBe(search);
   });
 
-  it.each([
-    { phone: false, focused: true },
-    { phone: true, focused: false },
-  ])("focuses the search on arrival unless at phone width: %o", async ({ phone, focused }) => {
-    vi.stubGlobal("matchMedia", () => ({
-      matches: phone,
-      addEventListener: () => {},
-      removeEventListener: () => {},
-    }));
-    try {
-      const { container } = await mount(baseProps());
-      const search = container.querySelector<HTMLInputElement>("input")!;
-      expect(search.hasAttribute("autofocus")).toBe(focused);
-      expect(document.activeElement === search).toBe(focused);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+  it("leaves focus where it was when the catalog opens", async () => {
+    const { container } = await mount(baseProps());
+    const search = container.querySelector<HTMLInputElement>("input")!;
+    expect(search.hasAttribute("autofocus")).toBe(false);
+    expect(document.activeElement === search).toBe(false);
   });
 
   it("does not rescan the large catalog for unrelated feedback updates", async () => {
@@ -349,6 +359,37 @@ describe("renderPluginCatalogResults", () => {
       }
     },
   );
+
+  it("prefers Template glyphs for matching category slugs, not similar labels", async () => {
+    const { container } = await mount(
+      baseProps({
+        categories: (
+          [
+            ["productivity", "Productivity", "package"],
+            ["research", "Research", "globe"],
+            ["web", "Research", "globe"],
+            ["household", "Household", "package"],
+            ["entertainment", "Entertainment", "package"],
+          ] as const
+        ).map(([slug, label, icon], order) => ({ slug, label, icon, description: label, order })),
+      }),
+    );
+    const expected = mountSolid(() => (
+      <>
+        <Icon name="listTodo" />
+        <Icon name="search" />
+        <Icon name="globe" />
+        <Icon name="home" />
+      </>
+    ));
+    const shapes = (nodes: Iterable<SVGElement>) => Array.from(nodes, (svg) => svg.innerHTML);
+    const icons = Array.from(
+      container.querySelectorAll<SVGElement>(".plugin-catalog-chip svg"),
+    ).slice(3);
+    expect(shapes(icons.slice(0, -1))).toEqual(shapes(expected.container.querySelectorAll("svg")));
+    // Entertainment keeps the popcorn artwork rather than the plugin-supplied box.
+    expect(icons.at(-1)?.querySelector('path[d="M10 22 9 8"]')).toBeTruthy();
+  });
 
   it("uses the package fallback for unknown and inherited category icon names", async () => {
     const { container } = await mount(

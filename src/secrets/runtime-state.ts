@@ -783,8 +783,9 @@ export function activateSecretsRuntimeSnapshotState(params: {
     );
   }
   const next = cloneSecretsRuntimeSnapshot(params.snapshot, authStores);
-  // This owner replaces source revisions; immutable copies reuse snapshot-comparison facts.
+  // This owner replaces config revisions; immutable copies reuse snapshot-comparison facts.
   freezeJsonSnapshot(next.sourceConfig);
+  freezeJsonSnapshot(next.config);
   if (params.mergeLiveAuthBookkeeping !== false) {
     next.authStores = mergeLiveAuthStoreBookkeeping(
       next.authStores,
@@ -813,11 +814,10 @@ export function activateSecretsRuntimeSnapshotState(params: {
   replaceOwnedRuntimeAuthProfileStoreSnapshots(next.authStores);
   next.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   next.authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
-  const previousLineageStartRevision = activeSnapshotLineageStartRevision;
   activeSnapshot = next;
   activeSnapshotRevision += 1;
   activeSnapshotLineageStartRevision = params.preserveActivationLineage
-    ? previousLineageStartRevision
+    ? activeSnapshotLineageStartRevision
     : activeSnapshotRevision;
   activeSnapshotLineageAuthStores = params.preserveActivationLineage
     ? previousLineageAuthStores

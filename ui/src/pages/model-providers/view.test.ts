@@ -217,10 +217,9 @@ describe("renderModelProviders", () => {
   });
 
   it("surfaces a provider-usage failure on the provider list", () => {
-    const container = document.createElement("div");
-    mount(props({ providerUsageFailed: true }), container);
-
+    const container = mount(props({ cards: [], providerUsageFailed: true }));
     expect(container.textContent).toContain("Couldn’t load provider usage. Refresh to try again.");
+    expect(container.textContent).toContain(t("modelProviders.emptyTitle"));
   });
 
   it.each([
@@ -244,9 +243,7 @@ describe("renderModelProviders", () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="status"]'),
-    ).not.toBeNull();
+    expect(container.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await waitForFast(() =>
       expect(
         container.querySelector('.model-providers__catalog-progress[role="alert"] span')
@@ -472,7 +469,7 @@ describe("renderModelProviders", () => {
     ).toBe(true);
     // The open form stands in for the button that opened it.
     expect(button(provider!, "Replace")).toBeUndefined();
-    expect(button(provider!, "Remove provider")?.disabled).toBe(true);
+    expect(button(provider!, "Remove saved access")?.disabled).toBe(true);
     expect(
       provider?.querySelector<HTMLButtonElement>(".model-providers__profile-logout")?.disabled,
     ).toBe(true);
@@ -987,7 +984,7 @@ describe("renderModelProviders", () => {
         onRequestLogout,
       }),
     );
-    button(expand(container), "Remove provider")!.click();
+    button(expand(container), "Remove saved access")!.click();
     expect(onRequestLogout).toHaveBeenCalledWith(
       expect.objectContaining({
         cardId: "openai",

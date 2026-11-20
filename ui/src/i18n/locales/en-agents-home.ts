@@ -9,7 +9,7 @@ const enAgentsHome = {
     viewSessions: "Sessions",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
-      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
+      "Its workspace, agent state, and chat history move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
     working: "Working now",
   },

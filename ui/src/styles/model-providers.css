@@ -44,12 +44,6 @@
   min-block-size: 2.75rem;
 }
 
-.model-providers__checking {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 .model-providers__icon {
   width: 26px;
   height: 26px;

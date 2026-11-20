@@ -454,7 +454,7 @@ describe("approved OpenClaw ID account menu", () => {
     ["operator", "Operator"],
     ["guest", "guest"],
   ] as const)(
-    "remote %s shows own email, role and known inviter with no owner items",
+    "remote %s shows own identity and member device actions without owner controls",
     (role, label) => {
       const current = status({
         channel: "tunnel",
@@ -473,11 +473,9 @@ describe("approved OpenClaw ID account menu", () => {
         name: "member@example.test",
         detail: `${label} on studio`,
       });
-      expect(menu(current).labels).toEqual([]);
+      expect(menu(current).labels).toEqual(["Approve a new device", "Your devices"]);
       expect(menu(current).text).toContain("Invited by Owner");
-      expect(menu(current).text).not.toMatch(
-        /People|\bAccess\b|Your devices|Regenerate|Remote access|Sign in/,
-      );
+      expect(menu(current).text).not.toMatch(/People|\bAccess\b|Regenerate|Remote access|Sign in/);
     },
   );
 

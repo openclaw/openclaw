@@ -69,18 +69,23 @@ apt_options=(-o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acqui
 timeout --signal=TERM --kill-after=5s 120s "${install_command[@]}" \
   apt-get "${apt_options[@]}" update
 # Fresh processes tolerate transient mirrors without enabling the native APT
-# retries affected by CVE-2026-109518. All attempts share the existing deadline.
+# retries affected by CVE-2026-109518. A partial index refresh can exit zero and
+# leave only an older Git available, so refresh again if installation succeeds
+# without the required capability. All attempts share the existing deadline.
 timeout --signal=TERM --kill-after=5s 120s bash -c '
   for attempt in 1 2 3; do
-    if "$@"; then exit 0; else status=$?; fi
+    if "$@" install -y --no-install-recommends git; then
+      if git --no-lazy-fetch --version >/dev/null 2>&1; then exit 0; fi
+      echo "Git upgrade did not provide --no-lazy-fetch support (Git 2.45 or newer required)." >&2
+      status=1
+      if (( attempt < 3 )); then "$@" update || exit $?; fi
+    else
+      status=$?
+    fi
     if (( attempt == 3 )); then exit "$status"; fi
-    echo "Git package install failed ($status); retrying after 2s." >&2
+    echo "Git setup failed ($status); retrying after 2s." >&2
     sleep 2
   done
-' -- "${install_command[@]}" apt-get "${apt_options[@]}" install -y --no-install-recommends git
+' -- "${install_command[@]}" apt-get "${apt_options[@]}"
 
 git --version
-if ! git --no-lazy-fetch --version >/dev/null 2>&1; then
-  echo "::error::Git upgrade did not provide --no-lazy-fetch support (Git 2.45 or newer required)." >&2
-  exit 1
-fi

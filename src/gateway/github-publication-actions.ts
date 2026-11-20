@@ -58,12 +58,12 @@ export async function performSessionGitHubAction(options: Options): Promise<void
     throw new Error("GitHub action session does not match the current conversation.");
   }
   const edit = params.action === "edit" ? params : undefined;
-  const explicitPullRequestUrl =
-    params.action === "edit" || params.action === "request_review"
-      ? params.pullRequestUrl
-      : undefined;
+  const explicitPullRequestUrl = "pullRequestUrl" in params ? params.pullRequestUrl : undefined;
   if (explicitPullRequestUrl && params.requestId) {
     throw new Error("An explicit PR URL accepts no publication requestId; read that PR with edit.");
+  }
+  if (explicitPullRequestUrl && "publishingSessionKey" in params && params.publishingSessionKey) {
+    throw new Error("Select a PR by pullRequestUrl or publishingSessionKey, not both.");
   }
   const evidenceUpload = params.action === "upload_evidence" ? params : undefined;
   const requestReview = params.action === "request_review";
@@ -272,11 +272,11 @@ export async function performSessionGitHubAction(options: Options): Promise<void
   assertHead(before);
   const prepareImportedEffect = async () => {
     if (explicitPullRequestUrl) {
-      // Metadata does not require permission to push source or an unprotected head branch.
+      // Metadata and lifecycle actions do not require permission to push source or an unprotected head branch.
       const current = await read();
       assertHead(current);
       if (current.state === "closed" || current.state === "merged") {
-        throw new Error("The PR is closed; no metadata action was performed.");
+        throw new Error("The PR is closed; no action was performed.");
       }
       return current;
     }

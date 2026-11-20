@@ -359,7 +359,7 @@ it("launches recovery from the captured target without fresh Doctor or export en
     result: {
       recovery: { serviceRestartSafe: false },
       steps: [
-        { name: "latest-failure", exitCode: 1 },
+        { name: "older-failure", exitCode: 1 },
         {
           name: "doctor",
           exitCode: 1,

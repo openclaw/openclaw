@@ -252,8 +252,8 @@ it("commits model-only role changes without retiring permitted models or origina
       await clock.wake();
       await expect(accepted).resolves.toBe("applied");
       expect(getCommittedRuntimeConfig()).toEqual(candidate);
-      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([true, false]);
-      expect(modelA.assertCurrent).toThrow("operator role cannot use this model");
+      expect([modelA.signal.aborted, modelB.signal.aborted]).toEqual([false, false]);
+      expect(modelA.assertCurrent).not.toThrow();
       expect(modelB.assertCurrent).not.toThrow();
       expect(original.authority.signal?.aborted).toBe(false);
       expect(original.authority.assertCurrent).not.toThrow();
@@ -372,13 +372,13 @@ it.each(["scopes", "access policy"] as const)(
         expect(accepted[0]!.authority.assertCurrent).not.toThrow();
         expect(accepted[0]!.authority.signal?.aborted).toBe(false);
         expect(clients[1]!.connectionSignal.aborted).toBe(true);
-        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
-        expect(accepted[1]!.authority.assertCurrent).toThrow();
+        expect(accepted[1]!.authority.signal?.aborted).toBe(false);
+        expect(accepted[1]!.authority.assertCurrent).not.toThrow();
         await dispatchers[1]!.wake("revoked");
         expect(accepted).toHaveLength(2);
         await writeScopes(["operator.write", "operator.approvals"], 3);
-        expect(accepted[1]!.authority.signal?.aborted).toBe(true);
-        expect(accepted[1]!.authority.assertCurrent).toThrow();
+        expect(accepted[1]!.authority.signal?.aborted).toBe(false);
+        expect(accepted[1]!.authority.assertCurrent).not.toThrow();
       } finally {
         await reloader.stop();
         for (const source of accepted) {

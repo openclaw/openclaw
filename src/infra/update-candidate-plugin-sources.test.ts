@@ -41,11 +41,16 @@ async function expectOutput(
 async function fixture(
   locatorKind: "directory" | "file" | "alias" | "install-record" = "directory",
   surface: "runtime" | "doctor" = "runtime",
+  layout: "package" | "stage" = "package",
 ) {
   const root = dirs.make("candidate-plugin-repair-");
   const sourceState = path.join(root, "serving-state");
   const stateDir = path.join(root, "rehearsal");
-  const candidateRoot = path.join(root, "candidate");
+  const stageRoot = path.join(root, "stage");
+  const candidateRoot =
+    layout === "stage"
+      ? path.join(stageRoot, "node_modules", "openclaw")
+      : path.join(root, "candidate");
   const plugin = path.join(root, "plugins", "demo");
   const shared = path.join(root, "plugins", "shared");
   const siblingImport = 'import value from "../shared/value.js"; console.log(value);';
@@ -84,7 +89,7 @@ async function fixture(
         ? { installs: { demo: { source: "path", sourcePath: locator, installPath: locator } } }
         : { load: { paths: [locator] } },
   };
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...buildUpdateRehearsalPathEnv(stateDir),
     ...buildUpdateDoctorEnv({
       allowGatewayServiceRepair: false,
@@ -104,6 +109,7 @@ async function fixture(
   const candidate = { config, env, candidateRoot };
   return {
     ...candidate,
+    stageRoot,
     root,
     plugin,
     shared,
@@ -377,6 +383,88 @@ it.each(["relative", "package", "absolute", "file URL"])(
     expect(await fs.readFile(path.join(f.shared, "value.js"))).toEqual(original);
   },
 );
+
+it.each([
+  { layout: "pnpm store", entry: "private junction", location: "stage" },
+  { layout: "npm hoisted", entry: "private junction", location: "stage" },
+  { layout: "nested junction", entry: "private junction", location: "stage" },
+  { layout: "pnpm store", entry: "explicit candidate URL", location: "stage" },
+  { layout: "npm hoisted", entry: "explicit candidate URL", location: "stage" },
+  { layout: "nested junction", entry: "explicit candidate URL", location: "stage" },
+  { layout: "pnpm store", entry: "private junction", location: "serving-install" },
+  { layout: "npm hoisted", entry: "private junction", location: "user-files" },
+])(
+  "validates candidate dependency layout $layout via $entry ($location)",
+  async ({ layout, entry, location }) => {
+    const f = await fixture("directory", "runtime", "stage");
+    const modulesRoot = path.join(
+      location === "stage" ? f.stageRoot : path.join(f.root, location),
+      "node_modules",
+    );
+    const dependency =
+      location === "stage"
+        ? path.join(f.candidateRoot, "node_modules", "typebox")
+        : path.join(modulesRoot, "typebox");
+    const vendor =
+      layout === "pnpm store"
+        ? path.join(modulesRoot, ".pnpm", "vendor@1", "node_modules", "vendor")
+        : layout === "npm hoisted"
+          ? path.join(modulesRoot, "vendor")
+          : path.join(dependency, "node_modules", "vendor");
+    await writeTree(dependency, {
+      "package.json": {
+        name: "typebox",
+        type: "module",
+        exports: "./build/index.mjs",
+        dependencies: { vendor: "1.0.0" },
+      },
+      "build/index.mjs": 'export { default } from "vendor";',
+    });
+    await writeTree(vendor, {
+      "package.json": { name: "vendor", type: "module", exports: "./index.mjs" },
+      "index.mjs": 'export default "candidate-layout-ready";',
+    });
+    if (layout === "pnpm store") {
+      await fs.symlink(vendor, path.join(path.dirname(dependency), "vendor"), "junction");
+    }
+    const modules = path.join(f.copiedPlugin, "node_modules");
+    await fs.mkdir(modules);
+    await fs.symlink(dependency, path.join(modules, "typebox"), "junction");
+    const specifier =
+      entry === "private junction"
+        ? "typebox"
+        : pathToFileURL(path.join(dependency, "build/index.mjs")).href;
+    await fs.writeFile(
+      f.copiedEntry,
+      `import value from ${JSON.stringify(specifier)}; console.log(value);`,
+    );
+
+    if (location !== "stage") {
+      await expect(f.repair()).rejects.toThrow("outside the temporary update copy");
+      return;
+    }
+    expect(await f.repair()).toEqual({ copiedFiles: 0, warnings: [] });
+    await expectOutput(f.run, "candidate-layout-ready");
+  },
+);
+
+it("rejects a private dependency whose candidate-package junction targets the serving installation", async () => {
+  const f = await fixture();
+  const external = path.join(f.root, "serving-install", "node_modules", "typebox");
+  await writeTree(external, {
+    "package.json": { name: "typebox", type: "module", exports: "./index.mjs" },
+    "index.mjs": 'export default "serving-install";',
+  });
+  const dependency = path.join(f.candidateRoot, "node_modules", "typebox");
+  await fs.mkdir(path.dirname(dependency), { recursive: true });
+  await fs.symlink(external, dependency, "junction");
+  const modules = path.join(f.copiedPlugin, "node_modules");
+  await fs.mkdir(modules);
+  await fs.symlink(dependency, path.join(modules, "typebox"), "junction");
+  await fs.writeFile(f.copiedEntry, 'import "typebox";');
+
+  await expect(f.repair()).rejects.toThrow("outside the temporary update copy");
+});
 
 it.each([
   { syntax: "import", fileLocator: false },

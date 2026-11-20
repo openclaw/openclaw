@@ -490,7 +490,12 @@ export function configureSqliteWalMaintenance(
     runInDetachedAsyncContext(() =>
       scope.schedule({
         id: `${maintenanceId}:${phase}`,
-        delayMs: intervalMs,
+        // Spread the default first maintenance wave across 30–60 minutes after open.
+        // Checkpoint ticks and explicitly selected maintenance intervals keep their deadlines.
+        delayMs:
+          phase === "periodic" && options.checkpointIntervalMs === undefined
+            ? intervalMs + Math.floor(Math.random() * intervalMs)
+            : intervalMs,
         everyMs: intervalMs,
         run,
       }),
