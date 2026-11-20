@@ -924,7 +924,7 @@ signal persists, even when PSI is low. Background deletion has a separate
 30-minute timeout, including pressure waits. Pacing bounds unlink bursts, but does not
 guarantee the latency of a filesystem transaction shared with other writers.
 
-Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
+Orphan cleanup shares the serialized, paced deletion worker and leaves queued or active background deletions with their owner. Interrupted deletion can be reclaimed by a later orphan sweep. Orphan cleanup retries permission-denied deletion once after restoring owner write permission on directories owned by the Gateway user. It never changes file permissions or follows symlink targets. If deletion still fails, cleanup reports the orphan and warns once while continuing with other orphans. Automatic passes skip that directory until the Gateway restarts, the directory is replaced, or you run `openclaw worktrees gc --retry-deferred` after repairing access.
 
 Idle artifact sweeps skip the allocation lease when all observed checkout directories are already registered and no pending creation or expired snapshot needs work. Unknown paths still take the lease and receive the full cleanup checks. A checkout that becomes unregistered during this read-only inspection is reconsidered on a later sweep.
 

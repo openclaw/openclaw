@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as pause } from "node:timers/promises";
 import { createHostIoPressureProbe } from "../../infra/host-io-pressure.js";
+import { isWorktreePermissionError } from "./removal-errors.js";
 
 const directory = process.argv[2];
 if (!directory) {
@@ -53,4 +54,12 @@ async function remove(target: string): Promise<void> {
 while (await hasIoPressure()) {
   await pause(5_000);
 }
-await remove(directory);
+try {
+  await remove(directory);
+} catch (error) {
+  // Preserve the parent's existing permission-repair classification across exec.
+  if (isWorktreePermissionError(error)) {
+    throw new Error("Retired checkout permission denied", { cause: error });
+  }
+  throw error;
+}
