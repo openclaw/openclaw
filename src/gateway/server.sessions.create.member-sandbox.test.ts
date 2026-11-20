@@ -5,10 +5,12 @@ import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -37,6 +39,7 @@ test.each([false, true])(
         },
       },
       gateway: {
+        openclawId: { enabled: true },
         roles: {
           ...(enforced ? { default: "host" } : {}),
           definitions: {
@@ -59,8 +62,16 @@ test.each([false, true])(
       accountId: "guest",
       role: "host",
     };
+    linkOpenClawIdUserProfile(
+      { profileId: profile.id, accountId: principal.accountId, email: null },
+      {},
+    );
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === "guest");
     setOpenClawIdTunnelPrincipalLookup(() => principal);
-    onTestFinished(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+    onTestFinished(() => {
+      setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
+    });
     const client: GatewayClient = {
       connect: gatewayConnect(["operator.sessions.write"]),
       authenticatedUserProfile: gatewayProfile(profile.id),

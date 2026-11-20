@@ -1,6 +1,7 @@
 import { runtimeConfigPublication } from "../../config/runtime-config-publication.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { linkCanonicalOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import {
   invalidateOperatorRolePolicy,
   resolveOperatorRoleSelection,
@@ -23,7 +24,12 @@ export type OpenClawIdMemberProfiles = {
     name?: string | null;
     email?: string | null;
   }) => Promise<unknown>;
-  setRole: (accountId: string, role: string, onlyIfUnassigned: boolean) => Promise<void>;
+  setRole: (
+    accountId: string,
+    role: string,
+    onlyIfUnassigned: boolean,
+    isCurrent?: () => boolean,
+  ) => Promise<void>;
   read: (accountIds: readonly string[]) => Promise<Record<string, MemberProfileDisplay>>;
   inviteProfiles: () => Promise<Array<{ id: string; displayName: string | null }>>;
   link: (
@@ -48,7 +54,8 @@ export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
       await import("../../state/user-profile-openclaw-id.js");
     return ensureCanonicalUserProfileForOpenClawIdIdentity(input);
   },
-  async setRole(accountId, role, onlyIfUnassigned) {
+  async setRole(accountId, role, onlyIfUnassigned, isCurrent = () => true) {
+    const publication = runtimeConfigPublication.current;
     const { ensureCanonicalUserProfileForOpenClawIdIdentity, setCanonicalUserProfileRole } =
       await import("../../state/user-profile-writes.js");
     const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId });
@@ -58,13 +65,16 @@ export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
     if (!target) {
       throw new Error("Member profile is unavailable; retry the role assignment.");
     }
+    if (!isCurrent()) {
+      return;
+    }
     if (!onlyIfUnassigned || !target.role) {
-      const publication = runtimeConfigPublication.current;
       const config = getRuntimeConfigSnapshot() ?? {};
       const policy = config.gateway?.roles?.definitions[role];
       const importingSources = onlyIfUnassigned && !target.role && policy !== undefined;
       const assertCurrent = () => {
         if (
+          !isCurrent() ||
           !target.isCurrent() ||
           (importingSources && runtimeConfigPublication.current !== publication)
         ) {
@@ -105,6 +115,7 @@ export const canonicalMemberProfiles: OpenClawIdMemberProfiles = {
             authority?.role ?? null,
             config,
             authority?.githubLogin ?? null,
+            operatorRoleSubject(authority),
           );
           return [
             id,
@@ -121,15 +132,28 @@ export async function retainMemberProfiles(
   previous: StoredClaw | undefined,
   next: StoredClaw,
   profiles: OpenClawIdMemberProfiles,
-): Promise<StoredClaw> {
+  memberRolesEnabled: () => boolean,
+): Promise<{ record: StoredClaw; assertCurrent: () => void }> {
+  const publication = runtimeConfigPublication.current;
+  const rolesCurrent = () =>
+    memberRolesEnabled() && runtimeConfigPublication.current === publication;
+  let hasRoleInitialization = false;
+  // The claw marker shares the import's feature and config lifetime through its durable commit.
+  const assertCurrent = () => {
+    if (hasRoleInitialization && !rolesCurrent()) {
+      throw new Error("OpenClaw ID member role import changed; retry the role assignment.");
+    }
+  };
   const members = next.authority?.members ?? {};
   const accountIds = Object.keys(members);
   const approval = (record: StoredClaw | undefined, id: string) =>
     record?.member_approved_at && Object.hasOwn(record.member_approved_at, id)
       ? record.member_approved_at[id]
       : undefined;
-  const rolesInitialized = next.member_profile_roles ?? {};
-  const needsRoles = accountIds.some((id) => !rolesInitialized[id]);
+  const rolesInitialized = Object.fromEntries(
+    accountIds.filter((id) => next.member_profile_roles?.[id]).map((id) => [id, true]),
+  );
+  const needsRoles = rolesCurrent() && accountIds.some((id) => !rolesInitialized[id]);
   const reports = Object.entries(next.invite_reports ?? {});
   const hasInvite = (id: string) =>
     Object.hasOwn(next.authority?.invites ?? {}, id) ||
@@ -148,7 +172,7 @@ export async function retainMemberProfiles(
     accountIds.length === Object.keys(next.member_approved_at ?? {}).length &&
     accountIds.every((id) => approval(next, id) !== undefined)
   ) {
-    return next;
+    return { record: next, assertCurrent };
   }
   const approvedAt = new Map<string, number | null>();
   // Include reports about to be swept, so pre-partition records retain their display details too.
@@ -208,7 +232,7 @@ export async function retainMemberProfiles(
     }
     const freshApproval =
       approved && previous?.invite_reports?.[approved[0]]?.resolution !== "approved";
-    if (!rolesInitialized[accountId] || freshApproval) {
+    if (rolesCurrent() && (!rolesInitialized[accountId] || freshApproval)) {
       // Upgrade imports the label once, preserving explicit profile assignments. New
       // admission and owner-signed role changes assign the requested profile role.
       await profiles.setRole(
@@ -217,7 +241,12 @@ export async function retainMemberProfiles(
         !freshApproval &&
           existingMember &&
           previous?.authority?.members[accountId]?.role === members[accountId]!.role,
+        rolesCurrent,
       );
+      if (rolesCurrent()) {
+        rolesInitialized[accountId] = true;
+        hasRoleInitialization = true;
+      }
     }
     // Old direct additions have no recorded approval time; do not invent one during migration.
     const createdAt = Object.hasOwn(previous?.authority?.members ?? {}, accountId)
@@ -234,9 +263,12 @@ export async function retainMemberProfiles(
       ]),
   );
   return {
-    ...next,
-    member_approved_at: Object.fromEntries(approvedAt),
-    member_profile_roles: Object.fromEntries(accountIds.map((id) => [id, true])),
-    ...(next.invite_reports ? { invite_reports: inviteReports } : {}),
+    record: {
+      ...next,
+      member_approved_at: Object.fromEntries(approvedAt),
+      ...(rolesCurrent() ? { member_profile_roles: rolesInitialized } : {}),
+      ...(next.invite_reports ? { invite_reports: inviteReports } : {}),
+    },
+    assertCurrent,
   };
 }

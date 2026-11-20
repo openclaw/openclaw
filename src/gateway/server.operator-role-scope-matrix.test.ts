@@ -32,6 +32,7 @@ import { checkAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
 import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import type { OperatorScope } from "./operator-scopes.js";
 import { startGatewayServerCore } from "./server-start.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
@@ -41,7 +42,7 @@ import { listCurrentWebPushTargets } from "./web-push-authority.js";
 // Nonmember expectations are pinned to 3a93a8d232859796d5ad4146258d392512091561,
 // not computed by a policy helper in the implementation under test. Member rows
 // assert the corrected profile-scoped contract, including alternate ingress.
-const ALL = [
+const ALL: OperatorScope[] = [
   "operator.admin",
   "operator.read",
   "operator.write",
@@ -49,7 +50,7 @@ const ALL = [
   "operator.questions",
   "operator.talk",
 ];
-const RW = ["operator.read", "operator.write"];
+const RW: OperatorScope[] = ["operator.read", "operator.write"];
 const PRESET = ALL.slice(1);
 const COLUMNS = ["absent", "catalog", "default", "assignment"] as const;
 const ROWS = ["local", "token", "proxy", "cloudflare", "member", "member-proxy"] as const;
@@ -86,7 +87,7 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
   let server: Awaited<ReturnType<typeof startGatewayServerCore>> | undefined;
   const requests: string[] = [];
   const accessRequests: string[] = [];
-  let access: ReturnType<typeof vi.spyOn<typeof globalThis, "fetch">> | undefined;
+  let access: { mockRestore: () => void } | undefined;
   // external-io-fixture: captured local Responses provider; auth, profiles,
   // membership signatures/store, session router, and turn execution remain real.
   const provider = createServer((req, res) => {
@@ -112,12 +113,13 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
     if (event === "upgrade" || event === "request") {
       const req = args[0] as IncomingMessage;
       const peerKey = peers.get(req.headers.origin ?? "");
-      if (peerKey)
+      if (peerKey) {
         markGatewayIngressTransport(req, {
           kind: "openclaw-id-tunnel",
           peerKey,
           clientIp: "fd7a:115c:a1e0::9",
         });
+      }
     }
     return emit.call(this, event, ...args);
   });
@@ -125,7 +127,9 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
     .spyOn(https.Server.prototype, "emit")
     .mockImplementation(transport.getMockImplementation()!);
   const close = async () => {
-    for (const client of clients) await client.stopAndWait();
+    for (const client of clients) {
+      await client.stopAndWait();
+    }
     await server?.close();
     transport.mockRestore();
     tlsTransport.mockRestore();
@@ -253,7 +257,7 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
             ) {
               const cookie = new Headers(init?.headers).get("Cookie")!;
               const claims = JSON.parse(
-                Buffer.from(cookie.split(".")[1], "base64url").toString(),
+                Buffer.from(cookie.split(".")[1]!, "base64url").toString(),
               ) as { email: string };
               accessRequests.push(claims.email);
               return Response.json({ email: claims.email, idp: { type: "onetimepin" } });
@@ -261,10 +265,11 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
             return fetch(input, init);
           })
         : undefined;
-    if (member)
+    if (member) {
       await expect
         .poll(() => getRuntimeConfig().gateway?.roles?.definitions.operator)
         .toBeDefined();
+    }
     const headers = (email: string, ceiling?: string) => ({
       "x-forwarded-for": "203.0.113.51",
       "x-forwarded-proto": "https",
@@ -333,7 +338,7 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
     for (const [sessionKey, id] of [
       [ownKey, ownProfileId],
       [foreignKey, admin.id],
-    ]) {
+    ] as const) {
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {
@@ -394,7 +399,9 @@ async function fixture(row: Row, column: Column, signal: AbortSignal, password =
 }
 
 function expected(row: Row, column: Column) {
-  if (row === "local" && column === "default") return { connected: false };
+  if (row === "local" && column === "default") {
+    return { connected: false };
+  }
   const member = row.startsWith("member");
   const restricted = member || ((row === "proxy" || row === "cloudflare") && column === "default");
   const scopes =
@@ -419,6 +426,7 @@ function expected(row: Row, column: Column) {
 
 it.for(ROWS.flatMap((row) => COLUMNS.map((column) => ({ row, column }))))(
   "scope matrix $row / $column",
+  { timeout: 60_000 },
   async ({ row, column }, { signal }) => {
     const f = await fixture(row, column, signal);
     try {
@@ -431,10 +439,11 @@ it.for(ROWS.flatMap((row) => COLUMNS.map((column) => ({ row, column }))))(
         expect
           .soft(assignment.ok, `${row}: catalog-only users.setRole`)
           .toBe(row.startsWith("member"));
-        if (!row.startsWith("member") && row !== "local" && row !== "token")
+        if (!row.startsWith("member") && row !== "local" && row !== "token") {
           expect
             .soft(assignment.ok ? "accepted" : assignment.error)
             .toContain("gateway.roles.default");
+        }
       }
       const connection = await settled(f.connect());
       const report = connection.ok
@@ -450,7 +459,9 @@ it.for(ROWS.flatMap((row) => COLUMNS.map((column) => ({ row, column }))))(
           report,
         }),
       );
-      if (row === "cloudflare") expect(f.accessRequests).toContain("scope-person@example.test");
+      if (row === "cloudflare") {
+        expect(f.accessRequests).toContain("scope-person@example.test");
+      }
       if (row === "local" && column === "default") {
         expect(connection.ok ? "connected" : connection.error).toContain(
           "operator role policies require a verified user identity",
@@ -466,7 +477,6 @@ it.for(ROWS.flatMap((row) => COLUMNS.map((column) => ({ row, column }))))(
       await f.close();
     }
   },
-  60_000,
 );
 
 it.for(COLUMNS)("owner HTTP and Web Push base contract / %s", async (column) => {
@@ -502,6 +512,7 @@ it.for(COLUMNS)("owner HTTP and Web Push base contract / %s", async (column) => 
             subscriptionId: "scope-sub",
             deviceId: "scope-device",
             userProfileId: "gateway-owner",
+            devicePreferences: { enabled: true, label: "Scope device" },
             endpoint: "https://push.example.test/scope",
             keys: { p256dh: "fixture", auth: "fixture" },
             createdAtMs: 1,

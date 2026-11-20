@@ -977,17 +977,8 @@ test("keeps equivalent identity grants within both proxy scope ceilings", async 
         { device: null },
         { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": identity, "x-openclaw-scopes": cap },
       );
-      if (expected.length === 0) {
-        expect(connected).toMatchObject({
-          ok: false,
-          error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
-        });
-        expect(responseAuth(connected)).toBeUndefined();
-        expect(await waitForWsClose(ws, 1_000)).toBe(true);
-        continue;
-      }
       expectScopes(connected, expected);
-      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(true);
+      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(expected.length > 0);
       await expectWriteDenied(ws, "agent:main:scope-cap");
       ws.close();
     }
@@ -1016,7 +1007,7 @@ test.each<[string, GatewayAuthConfig, ConnectOptions, string[]]>([
   });
 });
 
-test("refuses unassigned Tailscale identities when a role catalog has no default", async () => {
+test("keeps Tailscale identity scopes without a named-role cap when only definitions exist", async () => {
   const login = "peter@example.test";
   testTailscaleWhois.value = { login, name: "Peter" };
   await configureTailscale(
@@ -1026,12 +1017,9 @@ test("refuses unassigned Tailscale identities when a role catalog has no default
     },
   );
   await withIdentityServer(async ({ tailscale }) => {
-    const { ws, connected } = await tailscale(login, { scopes: ["operator.read"] });
-    expect(connected).toMatchObject({
-      ok: false,
-      error: { code: "FORBIDDEN", details: { code: "OPERATOR_ACCESS_DENIED" } },
-    });
-    expect(responseAuth(connected)).toBeUndefined();
-    expect(await waitForWsClose(ws, 1_000)).toBe(true);
+    const { connected } = await tailscale(login, { scopes: ["operator.read"] });
+    expectScopes(connected, READ_WRITE);
+    expect(responseAuth(connected)?.sessionCap).toBeUndefined();
+    expect(responseAuth(connected)?.deviceToken).toBeTruthy();
   });
 });

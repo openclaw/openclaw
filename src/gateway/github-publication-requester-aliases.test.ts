@@ -4,7 +4,7 @@ import {
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
 } from "./github-publication.test-support.js";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   loadSessionEntryReadOnly,
@@ -99,6 +99,9 @@ installGitHubPublicationTestHarness({
   creatorEmail: email,
   sandbox: "required",
   realWorktree: true,
+});
+beforeEach(async () => {
+  onTestFinished((await userProfileList.prepareUserProfileCatalog()).release);
 });
 
 it.each(["alias interruption", "role revocation"] as const)(

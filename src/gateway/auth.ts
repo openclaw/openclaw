@@ -35,7 +35,11 @@ import {
   resolveOpenClawIdTunnelPrincipal,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  type OperatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 import {
@@ -229,11 +233,15 @@ export function gatewayPersonPrincipalAuthError(
   auth: ResolvedGatewayAuth,
   cfg: OpenClawConfig,
   emails?: readonly string[],
+  subject?: OperatorRoleSubject,
 ): string | undefined {
   const proxy = auth.trustedProxy;
   if (
     auth.mode !== "trusted-proxy" ||
-    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    !(subject
+      ? isOperatorRoleEnforcedFor(cfg, subject)
+      : isNamedOperatorRoleEnforcementEnabled(cfg) ||
+        Boolean(cfg.gateway?.openclawId?.enabled && cfg.gateway.roles)) ||
     proxy?.userHeader.trim().toLowerCase() !== "cf-access-authenticated-user-email" ||
     !proxy.requiredHeaders?.some(
       (header) => header.trim().toLowerCase() === "cf-access-jwt-assertion",

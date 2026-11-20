@@ -15,6 +15,7 @@ import {
   openclawIdSubjectRolePolicy,
   prepareOpenClawIdTunnelPrincipalLookup,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { APPROVALS_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import {
@@ -105,6 +106,7 @@ export async function prepareIosApprovalPushAuthority(record: ExecApprovalRecord
                         profile?.role ?? null,
                         getRuntimeConfig(),
                         profile?.githubLogin ?? null,
+                        operatorRoleSubject(profile),
                       )
                     : undefined,
                 );

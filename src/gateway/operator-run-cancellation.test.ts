@@ -27,12 +27,14 @@ import {
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -247,7 +249,9 @@ describe("operator access cancellation", () => {
       const config: OpenClawConfig = {
         ...f.context.getRuntimeConfig(),
         gateway: {
+          openclawId: { enabled: kind !== "profile" },
           roles: {
+            ...(kind === "member" ? {} : { default: "worker" }),
             definitions: {
               worker: { sessions: { others: "none" }, agents: "*", scopes: ["operator.write"] },
               reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
@@ -263,6 +267,13 @@ describe("operator access cancellation", () => {
               peerKey: `iroh:${"dc".repeat(32)}`,
               authority: { clawId: "run-claw", rootPub: "root", listedSeq: 1 },
             };
+      if (principal?.kind === "member") {
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+      }
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
         const origin = await recoveryFixture(f.stateDir, profile.id, {
@@ -306,6 +317,7 @@ describe("operator access cancellation", () => {
         }
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     }),
   );
@@ -317,6 +329,7 @@ describe("operator access cancellation", () => {
       const config: OpenClawConfig = {
         gateway: {
           roles: {
+            default: "worker",
             definitions: {
               worker: { sessions: { others: "none" }, agents: "*", scopes: ["operator.write"] },
               reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },

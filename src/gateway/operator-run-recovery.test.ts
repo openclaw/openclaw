@@ -25,7 +25,7 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
 import { fenceUserProfileMutationAuthority } from "../state/user-profile-events.js";
 import * as profileReader from "../state/user-profile-list.js";
-import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
+import * as profileWrites from "../state/user-profile-writes.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -37,6 +37,7 @@ import {
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -172,8 +173,13 @@ describe("scheduled authenticated operator source", () => {
         agents: ["main"],
         sessions: { others: "view" },
       };
-      fixture.setConfig({ gateway: { roles: { definitions: { worker: role } } } });
-      setUserProfileRole(profile.id, "worker");
+      fixture.setConfig({
+        gateway: { openclawId: { enabled: true }, roles: { definitions: { worker: role } } },
+      });
+      const link = { profileId: profile.id, accountId: principal.accountId, email: null };
+      await profileWrites.linkCanonicalOpenClawIdUserProfile(link);
+      await profileWrites.setCanonicalUserProfileRole(profile.id, "worker");
+      setOpenClawIdMemberAccountLookup((candidate) => candidate === principal.accountId);
       setOpenClawIdTunnelPrincipalLookup(() => principal);
       try {
         fixture.client.internal!.openclawIdPrincipal = principal;
@@ -216,6 +222,7 @@ describe("scheduled authenticated operator source", () => {
         restored.authority.assertCurrent();
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
+        setOpenClawIdMemberAccountLookup(undefined);
       }
     }));
 
@@ -269,7 +276,7 @@ describe("scheduled authenticated operator source", () => {
         expectCurrent(restored.authority);
         expect(reads).not.toHaveBeenCalled();
 
-        await setCanonicalUserProfileDisplayName(profile.id, "Updated display");
+        await profileWrites.setCanonicalUserProfileDisplayName(profile.id, "Updated display");
         expectCurrent(restored.authority);
         expect(reads).not.toHaveBeenCalled();
         reads.mockClear();

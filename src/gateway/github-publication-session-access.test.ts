@@ -11,7 +11,7 @@ import {
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { createHostWorkspaceEditTool } from "../agents/agent-tools.read.js";
 import * as sessionSlugs from "../agents/session-slug.js";
@@ -28,6 +28,7 @@ import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entr
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
 import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readPublicationCommit } from "./github-publication-git.test-support.js";
@@ -72,6 +73,9 @@ describe("local checkout publication", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
   it("publishes an owned checkout outside the default workspace without admin", async () => {
     const f = await createLocalPublicationFixture();
@@ -783,6 +787,9 @@ describe("registered session GitHub publication access", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
 
   it.each([

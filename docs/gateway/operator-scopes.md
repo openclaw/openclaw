@@ -330,13 +330,20 @@ with `role: null` exposes the configured mapping or default again.
 `users.list` keeps `role` as the explicit assignment and reports `effectiveRole`
 with `roleSource` (`"assigned"`, `"githubLogin"`, or `"default"`).
 `gateway.roles.default` is optional and must name an existing definition when set.
-With a role catalog configured, explicit profile assignments apply even without a
-default. An identified non-owner with no resolvable role, or no operator scopes
-after the role ceiling, cannot connect. The Control UI explains the
-`OPERATOR_ACCESS_DENIED` detail. Clearing an assignment exposes any configured
-GitHub mapping or default; it suspends access only when no such fallback grants it.
-Owner devices retain owner authority. Device pairing still authenticates the device;
-it does not override the person's role ceiling.
+A default enables role enforcement for all identified profiles. Without a default,
+the catalog governs only current OpenClaw ID members through their canonical linked
+profile, including that same person's ordinary trusted-proxy, HTTP, channel, and
+background access. A stored identity link alone is not membership. Other people keep
+the same authentication, scopes, attribution, and session access as a Gateway without
+`roles`; named `users.setRole` assignments for them require a default, while clearing
+an assignment remains allowed.
+An enforced person with no resolvable role, or a role that grants no scopes, cannot
+connect. An otherwise permitted connection with an empty device or header scope
+ceiling may still connect for health and scope-upgrade recovery. The Control UI
+explains the `OPERATOR_ACCESS_DENIED` detail. Clearing an assignment exposes any
+configured GitHub mapping or default; it suspends access only when no such fallback
+grants it. Owner devices retain owner authority. Device pairing still authenticates
+the device; it does not override the person's role ceiling.
 
 Set a role's optional `accessPolicyPlugin` to the exact plugin ID when that plugin
 must confirm the person's current access. For example, the Visitor Access plugin

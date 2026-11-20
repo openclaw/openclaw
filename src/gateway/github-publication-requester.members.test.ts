@@ -1,12 +1,13 @@
 // Install transport fixtures before publication owners enter the module cache.
 // oxfmt-ignore
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   decodeGitHubPublicationRequester,
   encodeGitHubPublicationRequester,
 } from "../state/github-publication-requester.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForOpenClawIdIdentity,
   mergeCanonicalUserProfiles,
@@ -86,6 +87,9 @@ describe("member publication authority", () => {
     creatorEmail: "publication-guest@example.test",
     sandbox: "required",
     realWorktree: true,
+  });
+  beforeEach(async () => {
+    onTestFinished((await prepareUserProfileCatalog()).release);
   });
 
   it.each(

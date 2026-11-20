@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -26,9 +26,15 @@ import { restoreGatewayQueuedOperatorRecovery } from "../operator-run-recovery.j
 import { createContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { canonicalMemberProfiles } from "./member-profiles.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
+
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
+});
 
 it("imports null-assigned saved member work without widening its captured policy", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
@@ -38,7 +44,9 @@ it("imports null-assigned saved member work without widening its captured policy
       scopes: ["operator.write"],
       sessions: { others: "none" as const },
     };
-    const config: OpenClawConfig = { gateway: { roles: { definitions: { operator: policy } } } };
+    const config: OpenClawConfig = {
+      gateway: { openclawId: { enabled: true }, roles: { definitions: { operator: policy } } },
+    };
     setRuntimeConfigSnapshot(config);
     const principal = {
       kind: "member",
@@ -47,6 +55,7 @@ it("imports null-assigned saved member work without widening its captured policy
       peerKey: `iroh:${"ac".repeat(32)}`,
       authority: { clawId: "legacy-claw", rootPub: "legacy-root", listedSeq: 1 },
     } satisfies OpenClawIdTunnelPrincipal;
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     // Shipped membership authority recorded a null profile assignment alongside this policy.
     const snapshot: OperatorRunRecoverySnapshot = {
@@ -223,7 +232,6 @@ it("imports null-assigned saved member work without widening its captured policy
       ).toEqual(jobs[1]!.operatorSource);
     } finally {
       cron?.stop();
-      setOpenClawIdTunnelPrincipalLookup(undefined);
     }
   });
 });

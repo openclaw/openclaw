@@ -9,9 +9,11 @@ import * as sessionMembers from "../config/sessions/session-sharing-store.native
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -198,6 +200,7 @@ test.each(
       session: { ...getRuntimeConfig().session, store: storePath },
       gateway: {
         ...getRuntimeConfig().gateway,
+        openclawId: { enabled: true },
         roles: {
           default: defaultRole,
           definitions: {
@@ -218,6 +221,11 @@ test.each(
       accountId: "linked-member",
       role: "admin",
     };
+    linkOpenClawIdUserProfile(
+      { profileId: profile.id, accountId: principal.accountId, email: null },
+      {},
+    );
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     const localClient = {
       connect: gatewayConnect(["operator.read", "operator.write"]),
@@ -281,6 +289,7 @@ test.each(
       ).toBeDefined();
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
     }
   },
 );

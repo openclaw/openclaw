@@ -40,7 +40,10 @@ import {
   resolveGatewayOperatorAccessAuthority,
 } from "./operator-access-policy.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { resolveBrowserOriginPolicy } from "./origin-check.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
@@ -306,6 +309,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       params.authResult.delegation ||
       openclawIdPrincipal?.kind === "member" ||
       rolesConfigured ||
+      Boolean(params.cfg.gateway?.openclawId?.enabled) ||
       accessPoliciesConfigured
     ) {
       throw error;
@@ -332,6 +336,9 @@ async function prepareHttpProfile(
     throw new Error("HTTP profile authority changed during acquisition");
   }
   const display = authority.display;
+  const member = operatorRoleSubject(authority).openclawIdMember;
+  const hasCurrentProfileAuthority = () =>
+    authority.isCurrent() && member === operatorRoleSubject(authority).openclawIdMember;
   const operatorRolePolicy = cfg
     ? openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
         resolveOperatorRolePolicyForAssignment(
@@ -339,6 +346,7 @@ async function prepareHttpProfile(
           authority.role,
           cfg,
           authority.githubLogin ?? null,
+          operatorRoleSubject(authority),
         ),
       )
     : undefined;
@@ -353,7 +361,7 @@ async function prepareHttpProfile(
     ...projectHttpProfile(display, updatedAt, operatorRolePolicy, operatorAccessAuthority),
     // Identity-derived HTTP authority must not outlive the profile binding that admitted it.
     // Shared-secret authority remains independent of owner-profile attribution.
-    ...(cfg ? { hasCurrentProfileAuthority: authority.isCurrent } : {}),
+    ...(cfg ? { hasCurrentProfileAuthority } : {}),
     ...(cfg
       ? {
           preparedSessionProfile: {
@@ -361,6 +369,7 @@ async function prepareHttpProfile(
             aliases: new Set(authority.aliases),
             role: authority.role,
             githubLogin: authority.githubLogin,
+            openclawIdAccountIds: authority.openclawIdAccountIds,
           },
         }
       : {}),
@@ -382,6 +391,7 @@ export function resolveHttpProfile(
           profile.role ?? null,
           cfg,
           profile.githubLogin ?? null,
+          operatorRoleSubject(profile),
         ),
       )
     : undefined;

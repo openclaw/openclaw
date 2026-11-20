@@ -1,6 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { readAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { captureScheduledOperatorSource } from "../../agents/operator-run-recovery-source.js";
@@ -17,9 +17,9 @@ import { createCronScriptRuntime } from "../../cron/trigger-script.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
+  ensureCanonicalUserProfileForOpenClawIdIdentity,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
@@ -34,9 +34,15 @@ import {
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./tunnel-principal.js";
+
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
+});
 
 it.each([
   { kind: "member", target: "isolated", reset: false, direct: false },
@@ -74,14 +80,17 @@ it.each([
     const originalRevoked = "originalRevoked" in scenario && scenario.originalRevoked;
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       const config = {
-        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+        gateway: { openclawId: { enabled: true }, roles: { definitions: MEMBER_ROLE_PRESETS } },
         agents: { defaults: { workspace: path.join(stateDir, "workspace") } },
       };
       setRuntimeConfigSnapshot(config);
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
-          : ensureProfileForEmail("condition-member@example.test");
+          : await ensureCanonicalUserProfileForOpenClawIdIdentity({
+              accountId: "condition-member",
+              email: "condition-member@example.test",
+            });
       if (kind === "member") {
         await setCanonicalUserProfileRole(profile.id, "operator");
       }
@@ -120,6 +129,11 @@ it.each([
           : editingPeer?.peerKey === key
             ? editingPeer
             : undefined;
+      setOpenClawIdMemberAccountLookup((accountId) =>
+        [principal, editingPeer].some(
+          (peer) => peer?.kind === "member" && peer.accountId === accountId,
+        ),
+      );
       setOpenClawIdTunnelPrincipalLookup(lookup);
       const context = createContext([
         [
@@ -235,7 +249,7 @@ it.each([
           setOpenClawIdTunnelPrincipalLookup(lookup);
         }
         if (direct) {
-          await prepareUserProfileCatalog();
+          using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
           const client = createOperatorClient({
             profileId: administrativeProfile?.id ?? profile.id,
             scopes: directAdmin || kind === "owner" ? ["operator.admin"] : ["operator.write"],
@@ -316,12 +330,15 @@ it.each(["member", "owner"] as const)(
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       setRuntimeConfigSnapshot({
-        gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+        gateway: { openclawId: { enabled: true }, roles: { definitions: MEMBER_ROLE_PRESETS } },
       });
       const profile =
         kind === "owner"
           ? await ensureCanonicalGatewayOwnerProfile("Synthetic owner")
-          : ensureProfileForEmail("ocid-member@example.test");
+          : await ensureCanonicalUserProfileForOpenClawIdIdentity({
+              accountId: "acct-recovery",
+              email: "ocid-member@example.test",
+            });
       let current: OpenClawIdTunnelPrincipal | undefined =
         kind === "owner"
           ? { kind, peerKey: `iroh:${"ca".repeat(32)}` }
@@ -340,6 +357,9 @@ it.each(["member", "owner"] as const)(
         listedSeq: 7,
         ...(kind === "owner" ? { ownerDevice: "recovery-owner-device" } : {}),
       };
+      setOpenClawIdMemberAccountLookup(
+        (accountId) => current?.kind === "member" && current.accountId === accountId,
+      );
       setOpenClawIdTunnelPrincipalLookup(() => current);
       try {
         const fixture = await recoveryFixture(stateDir, profile.id, {
@@ -348,6 +368,7 @@ it.each(["member", "owner"] as const)(
             kind === "member"
               ? {
                   gateway: {
+                    openclawId: { enabled: true },
                     roles: {
                       default: "reader",
                       definitions: {

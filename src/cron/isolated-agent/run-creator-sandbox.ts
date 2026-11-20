@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareOpenClawIdTunnelPrincipal } from "../../gateway/openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   resolveCreatorSandbox,
   resolveOperatorRolePolicyForAssignment,
@@ -39,6 +40,7 @@ export async function prepareCronCreatorSandbox(
               profile?.role ?? null,
               cfg,
               profile?.githubLogin ?? null,
+              operatorRoleSubject(profile),
             ),
           ),
           snapshot.scopes,

@@ -481,13 +481,21 @@ not other people's access or owner controls. The plugin currently requires
 open it.
 
 Preset installation never sets or changes `gateway.roles.default` or
-`gateway.roles.assignments`. Explicit assignments apply without a default, on every
-identified route. A profile with no resolvable role, or a zero-scope role, cannot
-connect. Clearing a role with `null` exposes a configured GitHub mapping or default,
-if present. Owner devices and nodes are unchanged.
+`gateway.roles.assignments`. Without a default, explicit assignments govern only
+current members linked to their canonical Gateway profile, on every identified route.
+Nonmembers keep their existing authentication, attribution, scopes, and session access;
+a stored account link without current membership does not activate role enforcement.
+A default enables enforcement for other identified profiles too. An enforced profile
+with no resolvable role, or a zero-scope role, cannot connect. An empty device or header
+scope ceiling alone does not refuse an otherwise permitted connection. Clearing a role
+with `null` exposes a configured GitHub mapping or default, if present. Owner devices
+and nodes are unchanged.
 
-On upgrade, an existing member with no explicit profile assignment receives their
-current membership role once. Existing explicit assignments are preserved. Saved
+On upgrade while OpenClaw ID is enabled, an existing member with no explicit profile
+assignment receives their current membership role once. Disabled startup still loads
+token-origin bindings, but leaves role assignments, saved sources, and migration
+markers unchanged. Re-enabling completes pending imports without another membership
+write. Existing explicit assignments are preserved. Saved
 automation and recovery sources receive the imported assignment only when their
 captured membership policy matches the role definition; their grants and restrictions
 are unchanged. Mismatched sources remain refused. The Gateway persists that migration

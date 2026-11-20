@@ -18,7 +18,11 @@ import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   operatorSessionCap,
@@ -425,6 +429,8 @@ export function prepareProjectedSessionSharing(params: {
   const retainedSnapshot = params.owner ? projectedSharingKeys.get(params.owner) : undefined;
   const publication = runtimeConfigPublication.current;
   const principal = client?.internal?.openclawIdPrincipal;
+  const subject = operatorRoleSubject(roleProfile);
+  const rolesEnforced = isOperatorRoleEnforcedFor(cfg, subject) || subject.openclawIdMember;
   const policy =
     actor?.kind === "system"
       ? undefined
@@ -435,6 +441,7 @@ export function prepareProjectedSessionSharing(params: {
             publication?.config === cfg &&
             retainedSnapshot.facts[0] === cfg &&
             retainedSnapshot.facts[1] === publication.revision &&
+            retainedSnapshot.facts[11] === rolesEnforced &&
             retainedSnapshot.facts[16] === roleProfile &&
             retainedSnapshot.facts[17] === roleProfile?.role &&
             retainedSnapshot.facts[18] === roleProfile?.githubLogin &&
@@ -445,12 +452,11 @@ export function prepareProjectedSessionSharing(params: {
                   roleProfile?.role ?? null,
                   cfg,
                   roleProfile?.githubLogin ?? null,
+                  operatorRoleSubject(roleProfile),
                 ),
           );
   const ownerEquivalent =
-    !identity &&
-    isNamedOperatorRoleEnforcementEnabled(cfg) &&
-    isSessionSharingOwnerEquivalent(client, actor);
+    !identity && rolesEnforced && isSessionSharingOwnerEquivalent(client, actor);
   const scopes = client?.connect?.scopes;
   const readSnapshot = (): ProjectedSharingSnapshot => {
     const viewer = params.owner ?? client ?? cfg;
@@ -470,7 +476,7 @@ export function prepareProjectedSessionSharing(params: {
       facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
       facts[9] === profile &&
       facts[10] === policy &&
-      facts[11] === isNamedOperatorRoleEnforcementEnabled(cfg) &&
+      facts[11] === rolesEnforced &&
       facts[12] === (scopes !== undefined) &&
       facts[13] === ownerEquivalent &&
       facts[14] === policy?.sessions.others &&
@@ -501,7 +507,7 @@ export function prepareProjectedSessionSharing(params: {
       Boolean(client?.authenticatedGitHubIdentitySync),
       profile,
       policy,
-      isNamedOperatorRoleEnforcementEnabled(cfg),
+      rolesEnforced,
       scopes !== undefined,
       ownerEquivalent,
       policy?.sessions.others,
@@ -540,7 +546,7 @@ export function prepareProjectedSessionSharing(params: {
         // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
         profile && [...profile.aliases].sort(),
         policy,
-        isNamedOperatorRoleEnforcementEnabled(cfg),
+        rolesEnforced,
         // Equal effective scopes can retain different source sharing authority.
         ownerEquivalent,
       ]));

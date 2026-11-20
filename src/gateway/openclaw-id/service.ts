@@ -123,6 +123,7 @@ export function createOpenClawIdService(params: {
   let lifecycle = new AbortController();
   // A full stop ends this Gateway's OpenClaw ID lifetime; late loads must not resume it.
   let closed = false;
+  const enabled = () => !closed && isOpenClawIdEnabled(params.getConfig());
   let stopAuthorityChanges: (() => void) | undefined;
   const peopleListeners = new Set<() => void>();
   const peopleChanged = () => {
@@ -132,7 +133,7 @@ export function createOpenClawIdService(params: {
   // Reuse the single-deadline scheduler; expiry is derived from the committed record.
   const peopleExpiry = createPeopleExpiry({
     next: () => authority?.nextPeopleExpiry(),
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     changed: peopleChanged,
   });
   // Serializes start/stop so overlapping config reloads apply in order.
@@ -154,10 +155,7 @@ export function createOpenClawIdService(params: {
   });
 
   const stopRoleChanges = publishMemberProfileRoleChanges({
-    enabled: () =>
-      !closed &&
-      isOpenClawIdEnabled(params.getConfig()) &&
-      Boolean(authority?.current()?.authority),
+    enabled: () => enabled() && Boolean(authority?.current()?.authority),
     changed: peopleChanged,
     publish: () => publicationRetry.request(),
     warn: params.log.warn,
@@ -173,7 +171,7 @@ export function createOpenClawIdService(params: {
       loadingAuthority ??= params.createAuthority
         ? params.createAuthority()
         : import("./authority.js").then(({ createOpenClawIdAuthority }) =>
-            createOpenClawIdAuthority(),
+            createOpenClawIdAuthority(undefined, enabled),
           );
       authority = await loadingAuthority;
     }
@@ -258,10 +256,10 @@ export function createOpenClawIdService(params: {
       status = { state: "off" };
       return;
     }
+    const owner = await getAuthority();
+    await owner.initializeMemberProfileRoles();
     localPrincipals.publish();
-    if (authority) {
-      await armOwnerExpiry(await getAuthority());
-    }
+    await armOwnerExpiry(owner);
     const settings = resolveSettings(config, params.getStateDir());
     if ("missing" in settings) {
       await stopRuntime();
@@ -513,7 +511,7 @@ export function createOpenClawIdService(params: {
   const localPrincipals = createTunnelPrincipalPublisher({
     authority: getAuthority,
     current: () => authority,
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     warn: (message) => params.log.warn(message),
   });
 
@@ -657,7 +655,7 @@ export function createOpenClawIdService(params: {
     ...params,
     getAuthority,
     gatewayKey,
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     holdCode: rebindPublication.hold,
     restartRemoteAccess: () =>
       (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),

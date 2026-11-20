@@ -9,6 +9,7 @@ import { assertGatewayHttpRequestCurrent } from "./http-request-authority.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
   type OpenClawIdTunnelPrincipal,
@@ -26,12 +27,18 @@ afterEach(() => {
   membership.clear();
   setOpenClawIdTunnelPrincipalResolver(undefined);
   setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
 });
 
 function publishMembership() {
   setRuntimeConfigSnapshot({
-    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+    gateway: { openclawId: { enabled: true }, roles: { definitions: MEMBER_ROLE_PRESETS } },
   });
+  setOpenClawIdMemberAccountLookup((accountId) =>
+    [...membership.values()].some(
+      (principal) => principal.kind === "member" && principal.accountId === accountId,
+    ),
+  );
   setOpenClawIdTunnelPrincipalResolver(async (peerKey) => membership.get(peerKey));
   setOpenClawIdTunnelPrincipalLookup((peerKey) => membership.get(peerKey));
 }
@@ -83,43 +90,46 @@ it("an admitted tunnel request loses authority when its device is removed before
 });
 
 it("a member's request loses authority when the role changes, and when OpenClaw ID turns off", async () => {
-  await withOpenClawTestState({ label: "openclaw-id-http-role" }, async () => {
-    const operator: OpenClawIdTunnelPrincipal = {
-      kind: "member",
-      peerKey: MEMBER_KEY,
-      accountId: "acct_op",
-      role: "operator",
-    };
-    membership.set(MEMBER_KEY, operator);
-    publishMembership();
-    const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
-      accountId: operator.accountId,
-      name: "Member",
-      email: "member@example.test",
-    });
-    await setCanonicalUserProfileRole(profile.id, "operator");
-    const first = await admitTunnelRequest(MEMBER_KEY);
-    try {
-      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
-      expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
-      membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
-      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
-      await setCanonicalUserProfileRole(profile.id, "viewer", {
-        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+  await withOpenClawTestState(
+    { label: "openclaw-id-http-role", prepareProfileCatalog: true },
+    async () => {
+      const operator: OpenClawIdTunnelPrincipal = {
+        kind: "member",
+        peerKey: MEMBER_KEY,
+        accountId: "acct_op",
+        role: "operator",
+      };
+      membership.set(MEMBER_KEY, operator);
+      publishMembership();
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: operator.accountId,
+        name: "Member",
+        email: "member@example.test",
       });
-      expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
-    } finally {
-      first.close();
-    }
-    membership.set(MEMBER_KEY, operator);
-    await setCanonicalUserProfileRole(profile.id, "operator");
-    const second = await admitTunnelRequest(MEMBER_KEY);
-    try {
-      expect(second.requestAuth.hasCurrentClientAuthority()).toBe(true);
-      setOpenClawIdTunnelPrincipalLookup(undefined);
-      expect(second.requestAuth.hasCurrentClientAuthority()).toBe(false);
-    } finally {
-      second.close();
-    }
-  });
+      await setCanonicalUserProfileRole(profile.id, "operator");
+      const first = await admitTunnelRequest(MEMBER_KEY);
+      try {
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        expect(first.requestAuth.authenticatedUserProfile?.profileId).toBe(profile.id);
+        membership.set(MEMBER_KEY, { ...operator, role: "viewer" });
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        await setCanonicalUserProfileRole(profile.id, "viewer", {
+          onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+        });
+        expect(first.requestAuth.hasCurrentClientAuthority()).toBe(false);
+      } finally {
+        first.close();
+      }
+      membership.set(MEMBER_KEY, operator);
+      await setCanonicalUserProfileRole(profile.id, "operator");
+      const second = await admitTunnelRequest(MEMBER_KEY);
+      try {
+        expect(second.requestAuth.hasCurrentClientAuthority()).toBe(true);
+        setOpenClawIdTunnelPrincipalLookup(undefined);
+        expect(second.requestAuth.hasCurrentClientAuthority()).toBe(false);
+      } finally {
+        second.close();
+      }
+    },
+  );
 });

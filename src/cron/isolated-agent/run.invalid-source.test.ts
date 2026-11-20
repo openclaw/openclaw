@@ -1,7 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setOpenClawIdTunnelPrincipalLookup } from "../../gateway/openclaw-id/tunnel-principal.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "../../gateway/openclaw-id/tunnel-principal.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -19,11 +23,35 @@ import { onTimer } from "../service/timer.test-support.js";
 import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { prepareCronCreatorSandbox } from "./run-creator-sandbox.js";
-import { memberSourceCase, memberSourceCases } from "./run.invalid-source.test-support.js";
+import {
+  memberSourceCase as createMemberSourceCase,
+  memberSourceCases,
+} from "./run.invalid-source.test-support.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as h from "./run.test-harness.js";
 
 const runAgent = await h.loadRunCronIsolatedAgentTurn();
+
+function memberSourceCase(name: (typeof memberSourceCases)[number]) {
+  const scenario = createMemberSourceCase(name);
+  const { profileId } = scenario.operatorSource.source.snapshot;
+  const principal = expectDefined(
+    scenario.operatorSource.source.snapshot.openclawIdPrincipal,
+    "scheduled member principal",
+  );
+  if (principal.kind !== "member") {
+    throw new Error("Expected a scheduled member principal");
+  }
+  scenario.cfg.gateway!.openclawId = { enabled: true };
+  linkOpenClawIdUserProfile({ profileId, accountId: principal.accountId, email: null }, {});
+  setOpenClawIdMemberAccountLookup(
+    (accountId) =>
+      name !== "removed member" &&
+      name !== "disabled membership lookup" &&
+      accountId === (name === "changed account" ? "other-account" : principal.accountId),
+  );
+  return { ...scenario, principal };
+}
 
 describe("undecodable scheduled authority", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -32,7 +60,10 @@ describe("undecodable scheduled authority", () => {
     fakeTimers: false,
   });
 
-  afterEach(() => setOpenClawIdTunnelPrincipalLookup(undefined));
+  afterEach(() => {
+    setOpenClawIdTunnelPrincipalLookup(undefined);
+    setOpenClawIdMemberAccountLookup(undefined);
+  });
 
   it.each([undefined, { version: 1 }, { version: 1, snapshot: null }])(
     "refuses preparation before creating an unsandboxed session or running inference: %j",
@@ -66,6 +97,9 @@ describe("undecodable scheduled authority", () => {
   it("hydrates stored membership before deciding that its authority was removed", async () => {
     const scenario = memberSourceCase("removed member");
     let hydrated = false;
+    setOpenClawIdMemberAccountLookup(
+      (accountId) => hydrated && accountId === scenario.principal.accountId,
+    );
     setOpenClawIdTunnelPrincipalLookup(
       () => (hydrated ? scenario.operatorSource.source.snapshot.openclawIdPrincipal : undefined),
       async () => {
@@ -99,6 +133,7 @@ describe("undecodable scheduled authority", () => {
     const scenario = memberSourceCase("removed member");
     const role = expectDefined(scenario.cfg.gateway?.roles?.definitions.guest, "guest role");
     role.scopes = [...role.scopes, "operator.read"];
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === scenario.principal.accountId);
     setOpenClawIdTunnelPrincipalLookup(
       () => scenario.operatorSource.source.snapshot.openclawIdPrincipal,
     );

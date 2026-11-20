@@ -7,8 +7,9 @@ import {
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
@@ -82,6 +83,9 @@ installGitHubPublicationTestHarness({
   creatorEmail: "publication-guest@example.test",
   sandbox: "required",
   realWorktree: true,
+});
+beforeEach(async () => {
+  onTestFinished((await prepareUserProfileCatalog()).release);
 });
 
 it.each(["own", "foreign"] as const)(

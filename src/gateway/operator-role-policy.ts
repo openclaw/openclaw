@@ -24,7 +24,12 @@ import {
   openclawIdTunnelRolePolicy,
   openclawIdSubjectRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import {
+  isNamedOperatorRoleEnforcementEnabled,
+  isOperatorRoleEnforcedFor,
+  operatorRoleSubject,
+  type OperatorRoleSubject,
+} from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
@@ -119,11 +124,12 @@ export function resolveOperatorRoleSelection(
   assignedRole: string | null,
   cfg: OpenClawConfig,
   githubLogin: string | null,
+  subject: OperatorRoleSubject = { profileId, openclawIdMember: false },
 ): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
   const roles = cfg.gateway?.roles;
   if (
     !roles ||
-    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    !isOperatorRoleEnforcedFor(cfg, subject) ||
     !profileId ||
     profileId === GATEWAY_OWNER_PROFILE_ID
   ) {
@@ -155,7 +161,10 @@ export function resolveOperatorRolePolicyForProfile(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
-  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    profileId === GATEWAY_OWNER_PROFILE_ID ||
+    (!isNamedOperatorRoleEnforcementEnabled(cfg) && !cfg.gateway?.openclawId?.enabled)
+  ) {
     return undefined;
   }
   const profile = profileId
@@ -166,6 +175,7 @@ export function resolveOperatorRolePolicyForProfile(
     profile?.role ?? null,
     cfg,
     profile?.githubLogin ?? null,
+    operatorRoleSubject(profile),
   );
 }
 
@@ -175,15 +185,28 @@ export function resolveOperatorRolePolicyForAssignment(
   assignedRole: string | null,
   cfg: OpenClawConfig,
   githubLogin: string | null,
+  subject: OperatorRoleSubject = { profileId, openclawIdMember: false },
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (profileId === GATEWAY_OWNER_PROFILE_ID) {
+    return undefined;
+  }
+  if (subject.openclawIdMember && !roles) {
+    return deniedOperatorRole;
+  }
+  if (!isOperatorRoleEnforcedFor(cfg, subject)) {
     return undefined;
   }
   if (!profileId || !roles) {
     return deniedOperatorRole;
   }
-  const selection = resolveOperatorRoleSelection(profileId, assignedRole, cfg, githubLogin);
+  const selection = resolveOperatorRoleSelection(
+    profileId,
+    assignedRole,
+    cfg,
+    githubLogin,
+    subject,
+  );
   if (assignedRole && selection.roleSource !== "assigned") {
     const reportKey = `${profileId}:${assignedRole}`;
     if (!reportedUnknownAssignments.has(reportKey)) {
@@ -288,7 +311,13 @@ export function resolveOperatorRolePolicy(
       return roleFacts.policy;
     }
     if (
-      (!isNamedOperatorRoleEnforcementEnabled(cfg) && principal?.kind !== "member") ||
+      !isOperatorRoleEnforcedFor(
+        cfg,
+        operatorRoleSubject({
+          profileId: authority.profileId,
+          openclawIdAccountIds: roleFacts?.openclawIdAccountIds,
+        }),
+      ) ||
       authority.profileId === GATEWAY_OWNER_PROFILE_ID
     ) {
       return undefined;
@@ -302,6 +331,7 @@ export function resolveOperatorRolePolicy(
         roleFacts.assignedRole,
         cfg,
         roleFacts.githubLogin ?? null,
+        operatorRoleSubject(roleFacts),
       ),
     );
   }
@@ -313,6 +343,7 @@ export function resolveOperatorRolePolicy(
         prepared.role,
         cfg,
         prepared.githubLogin ?? null,
+        operatorRoleSubject(prepared),
       ),
     );
   }

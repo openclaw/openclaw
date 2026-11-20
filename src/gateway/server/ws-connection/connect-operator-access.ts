@@ -13,7 +13,10 @@ import {
   hasGatewayOperatorAccessPolicies,
   resolveGatewayOperatorAccessAuthority,
 } from "../../operator-access-policy.js";
-import { onOperatorRolePolicyChanged } from "../../operator-role-policy.js";
+import {
+  onOperatorRolePolicyChanged,
+  resolveOperatorRolePolicy,
+} from "../../operator-role-policy.js";
 import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { invalidateGatewayPolicyClient } from "../ws-policy-close.js";
 import type { GatewayWsClient } from "../ws-types.js";
@@ -27,15 +30,15 @@ export function prepareGatewayConnectOperatorAccess(client: GatewayWsClient): vo
     return;
   }
   const profile = client.authenticatedUserProfile;
+  const config = getRuntimeConfig();
   if (
     profile &&
     profile.profileId !== GATEWAY_OWNER_PROFILE_ID &&
     !currentOwnerDevicePrincipal(client) &&
-    !client.connect.scopes?.length
+    resolveOperatorRolePolicy(client, config)?.scopes.length === 0
   ) {
     throw new GatewayOperatorAccessDeniedError("access-record-inactive");
   }
-  const config = getRuntimeConfig();
   const source = { openclawIdPrincipal: client.internal?.openclawIdPrincipal };
   if (hasGatewayOperatorAccessPolicies(config, source) && !profile) {
     throw new GatewayOperatorAccessDeniedError("profile-invalidated");

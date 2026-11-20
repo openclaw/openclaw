@@ -4,7 +4,6 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import { formatIrohEndpointKey } from "../../packages/openclaw-id-protocol/src/index.js";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -34,13 +33,13 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
-import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
 import { setOpenClawIdTunnelPrincipalLookup } from "./openclaw-id/tunnel-principal.js";
 import * as operatorRunAuthority from "./operator-run-authority.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import { defineIdMemberPluginHttpTests } from "./remote-control-ui-ingress-http.test-support.js";
 import {
   connect,
+  prepareIngressMember,
   heldReadBarrier,
   heldMutationBarrier,
   request,
@@ -796,10 +795,10 @@ describe("remote Control UI ingress production composition", () => {
         viewer: { ...MEMBER_ROLE_PRESETS.viewer, scopes: ["operator.read"] },
       },
     });
-    const claw = await linkedClaw();
-    const profile = await ensureCanonicalUserProfileForEmail("id-member@ingress.example.test");
-    const peerKey = formatIrohEndpointKey(new Uint8Array(32).fill(172));
-    const accountId = "ingress-id-member";
+    const { claw, profile, peerKey, accountId, release } = await prepareIngressMember(
+      config,
+      (next) => configure(next, TOKEN_AUTH),
+    );
     try {
       for (const role of ["operator", "viewer"] as const) {
         await setIngressRole(profile.id, role);
@@ -933,6 +932,7 @@ describe("remote Control UI ingress production composition", () => {
       }
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      await release();
     }
   });
 
