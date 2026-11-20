@@ -148,8 +148,9 @@ record history without closing an open keyed input; ordinary final replies still
 close the turn. Mirrors remain best-effort bookkeeping after a successful send.
 
 Completion failures retain the concrete delivery error in the run's delivery state.
-A required completion that expires or permanently fails also records a visible failure
-notice in the original requester conversation, without starting another agent turn.
+When automatic delivery expires, a visible delay notice explains that the saved result
+may still arrive through requester settlement. Failed settlement, permanent failure, or
+final discard records a failure notice, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
 callback fails; cleanup must not replay an already consumed result. A completion

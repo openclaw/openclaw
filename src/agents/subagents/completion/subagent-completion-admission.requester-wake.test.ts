@@ -226,9 +226,14 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["parent", "public", "yielded"] as const)(
-    "records expired delivery in the current requester chat (%s)",
-    async (kind) => {
+  it.each([
+    ["parent", true],
+    ["public", true],
+    ["yielded", true],
+    ["public", false],
+  ] as const)(
+    "records delayed delivery before settlement (target=%s, delivered=%s)",
+    async (kind, delivered) => {
       const input = records();
       input.subagent.completionTarget = kind === "parent" ? "parent" : undefined;
       if (kind === "yielded") {
@@ -256,11 +261,27 @@ describe("persisted subagent requester wakes", () => {
       });
       db.value = await reopenOwners();
       expect(currentRun(input).delivery?.status).toBe("suspended");
-      const notices = (await loadTranscriptEvents(scope)).filter((event) =>
-        JSON.stringify(event).includes("The child result couldn't be delivered"),
+      const notices = (await loadTranscriptEvents(scope)).filter(
+        (event) => event.type === "custom_message",
       );
       expect(notices).toHaveLength(1);
-      expect(notices[0]).toMatchObject({ customType: "run-failed-before-reply", display: true });
+      expect(notices[0]).toMatchObject({ customType: "subagent-delivery-delayed", display: true });
+      input.subagent = currentRun(input);
+      await settleOne(input, {
+        delivered,
+        path: "direct",
+        error: delivered ? undefined : "requester failed",
+      });
+      db.value = await reopenOwners();
+      expect(currentRun(input).delivery?.status).toBe(delivered ? "delivered" : "failed");
+      const settled = (await loadTranscriptEvents(scope)).filter(
+        (event) => event.type === "custom_message",
+      );
+      expect(settled).toHaveLength(delivered ? 1 : 2);
+      expect(settled[0]).toEqual(notices[0]);
+      if (!delivered) {
+        expect(settled[1]).toMatchObject({ customType: "run-failed-before-reply", display: true });
+      }
     },
   );
 

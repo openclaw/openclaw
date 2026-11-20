@@ -204,7 +204,10 @@ try {
               sessionId: requester.entry.sessionId,
             });
             const notices = events.filter((event) => event.details?.childRunId === runId);
-            assert.equal(notices.length, arm && !control ? 1 : 0);
+            assert.deepEqual(
+              notices.map((event) => event.customType),
+              arm && !control ? ["subagent-delivery-delayed"] : [],
+            );
           }
           trials.push({
             wallMs,
