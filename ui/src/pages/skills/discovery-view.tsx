@@ -17,7 +17,7 @@ import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import { SkillTile } from "./skill-page-parts.tsx";
-import { SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
+import { installedReference, SkillStateStatus, verdictForSkill } from "./skill-status.tsx";
 import "../../styles/skills-discovery.css";
 import type { SkillsProps } from "./view-types.ts";
 
@@ -34,14 +34,6 @@ type SkillDiscoveryEntry = {
   library?: SkillLibraryEntry;
   remote?: ClawHubSearchResult;
 };
-
-function installedReference(skill: SkillStatusEntry): string | null {
-  const link = skill.clawhub;
-  if (!link?.valid) {
-    return null;
-  }
-  return link.requestedReference ?? (link.ownerHandle ? `@${link.ownerHandle}/${link.slug}` : null);
-}
 
 function linkedOwner(skill: SkillStatusEntry): string | null {
   const link = skill.clawhub;

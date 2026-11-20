@@ -466,13 +466,11 @@ it("loads skills from cloned route scope and retires verdicts across disconnect 
     expect(mounted.find(".plugins-item")?.textContent).toContain("Refreshing"),
   );
   mounted.find('[aria-label="Open Repo Skill details"]')!.click();
-  const findCardButton = () =>
-    Array.from(mounted.find("openclaw-modal-dialog")?.querySelectorAll("button") ?? []).find(
-      (button) => button.textContent?.trim() === "Skill card",
-    );
-  await waitForSolid(() => expect(findCardButton()).toBeDefined());
-  findCardButton()!.click();
-  await waitForSolid(() => expect(mounted.text()).toContain("Previous provider card"));
+  await waitForSolid(() =>
+    expect(mounted.find("openclaw-modal-dialog .sidebar-markdown")?.textContent).toContain(
+      "Previous provider card",
+    ),
+  );
   const row = mounted.find(".plugins-item");
   harness.emitConnected(false);
   pending.resolve(verdicts);

@@ -2,13 +2,15 @@ import "../../styles/skill-reader-dialog.css";
 import "../../styles/sidebar-markdown.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, Loading, Show } from "solid-js";
+import type { SkillStatusEntry } from "../../api/types.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/modal-dialog.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
+import { SettingsToggle } from "../../components/solid/settings-ui.tsx";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDateMs } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -20,6 +22,7 @@ import {
   SkillTile,
   type SkillSecurityTone,
 } from "./skill-page-parts.tsx";
+import { installedReference } from "./skill-status.tsx";
 import type { SkillsProps } from "./view-types.ts";
 
 export function MarkdownContent(props: {
@@ -113,6 +116,27 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
   const adding = () =>
     props.view.state.skillOperation?.kind === "clawhub" &&
     props.view.state.skillOperation.ref === (reference() ?? "");
+  // After Add, the refreshed inventory names the new skill by the same registry and reference.
+  const addedSkill = createMemo(() => {
+    const ref = reference();
+    const registry = props.view.state.clawhubDetail?.registry;
+    if (!ref || !registry) {
+      return null;
+    }
+    return (
+      props.view.mutationSkills.find(
+        (skill) =>
+          skill.clawhub?.valid &&
+          skill.clawhub.registry === registry &&
+          installedReference(skill) === ref,
+      ) ?? null
+    );
+  });
+  const toggleError = () => {
+    const added = installed() && addedSkill();
+    const message = added ? props.view.state.skillMessages[added.skillKey] : undefined;
+    return message?.kind === "error" ? message.message : null;
+  };
   const security = createMemo(() => {
     const value = detail()?.security;
     return value?.status === "available" ? value : null;
@@ -170,32 +194,39 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
             <Loading on={reference()} fallback={null}>
               <Show when={detail()?.skill}>
                 {(skill) => (
-                  <button
-                    class={["btn skill-page__cta", { primary: !installed() }]}
-                    disabled={props.installLocked || installed()}
-                    aria-label={
-                      props.view.showInventory === false || adding() || installed()
-                        ? undefined
-                        : t("skillsPage.addNamed", { name: skill().displayName })
+                  <Show
+                    when={installed() ? addedSkill() : null}
+                    fallback={
+                      <button
+                        class={["btn skill-page__cta", { primary: !installed() }]}
+                        disabled={props.installLocked || installed()}
+                        aria-label={
+                          props.view.showInventory === false || adding() || installed()
+                            ? undefined
+                            : t("skillsPage.addNamed", { name: skill().displayName })
+                        }
+                        onClick={() => {
+                          const ref = reference();
+                          if (ref) {
+                            props.view.onClawHubInstall(ref);
+                          }
+                        }}
+                      >
+                        <Show when={installed()}>
+                          <Icon name="check" />
+                        </Show>
+                        {adding()
+                          ? t("skillsPage.adding")
+                          : installed()
+                            ? t("skillsPage.installed")
+                            : props.view.showInventory === false
+                              ? t("skillLibrary.import")
+                              : t("skillsPage.add")}
+                      </button>
                     }
-                    onClick={() => {
-                      const ref = reference();
-                      if (ref) {
-                        props.view.onClawHubInstall(ref);
-                      }
-                    }}
                   >
-                    <Show when={installed()}>
-                      <Icon name="check" />
-                    </Show>
-                    {adding()
-                      ? t("skillsPage.adding")
-                      : installed()
-                        ? t("skillsPage.installed")
-                        : props.view.showInventory === false
-                          ? t("skillLibrary.import")
-                          : t("skillsPage.add")}
-                  </button>
+                    {(added) => <AddedSkillSwitch skill={added()} view={props.view} />}
+                  </Show>
                 )}
               </Show>
             </Loading>
@@ -251,6 +282,13 @@ export function ClawHubDetailDialog(props: { view: SkillsProps; installLocked: b
                           class="skill-reader-dialog__notice"
                         >
                           {result().text}
+                        </InlineAlert>
+                      )}
+                    </Show>
+                    <Show when={toggleError()}>
+                      {(error) => (
+                        <InlineAlert tone="danger" role="alert" class="skill-reader-dialog__notice">
+                          {formatUiExternalText(error())}
                         </InlineAlert>
                       )}
                     </Show>
@@ -361,4 +399,29 @@ function registrySecurityLabel(status: string): string {
     return t("skillsPage.verdict.blocked");
   }
   return /^(?:pending|not-run)$/iu.test(status) ? t("skillsPage.verdict.pending") : status;
+}
+
+/** The installed skill's own switch, as its installed dialog shows it. */
+function AddedSkillSwitch(props: { skill: SkillStatusEntry; view: SkillsProps }) {
+  const saving = () => props.view.toggleSavingSkillKey === props.skill.skillKey;
+  const locked = () =>
+    props.view.saving || props.view.loading || props.view.state.skillOperation !== null;
+  return (
+    <label class="plugin-catalog-detail__enabled">
+      <span aria-hidden="true">
+        {t(props.skill.disabled ? "skillsPage.disabled" : "skillsPage.enabled")}
+      </span>
+      <SettingsToggle
+        checked={!props.skill.disabled}
+        saving={saving()}
+        disabled={
+          !props.view.canUpdate ||
+          (props.view.toggleDisabled ?? props.view.loading) ||
+          (!saving() && locked())
+        }
+        ariaLabel={props.skill.name}
+        onChange={() => props.view.onToggle(props.skill.skillKey, props.skill.disabled)}
+      />
+    </label>
+  );
 }

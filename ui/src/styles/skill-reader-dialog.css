@@ -247,39 +247,11 @@
   font-weight: 500;
 }
 
-/* An unread skill card is one tonal row that names it, opened in place. */
-.skill-page__card-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  min-height: 52px;
-  padding: 0 18px 0 20px;
-  border: 0;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
-  background: var(--plugin-detail-tone);
-  color: var(--text-strong);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  text-align: start;
-}
-
-.skill-page__card-row:hover {
-  background: color-mix(in srgb, var(--text) 7%, transparent);
-}
-
-.skill-page__card-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.skill-page__card-row svg {
-  flex: none;
-  width: 16px;
-  height: 16px;
-  color: var(--muted);
+/* While the card is read, its block holds the clamped card's height so nothing below moves. */
+.skill-page__card-pending {
+  display: grid;
+  align-content: start;
+  min-height: calc(var(--plugin-readme-clamp) + 64px);
 }
 
 /* Requirements: the page's standard rows; the right slot holds the state or the thing to do. */

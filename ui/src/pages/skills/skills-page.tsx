@@ -255,6 +255,7 @@ export function SkillsPage(props: SkillsPageProps) {
       ensureInitialData();
     }
   };
+  const cardReport = createMemo(() => skills.read().skillsReport);
   // Route receipts admit loader data; changing surface only retargets its selection owner.
   createEffect(
     () => ({
@@ -264,6 +265,8 @@ export function SkillsPage(props: SkillsPageProps) {
       connected: gateway.connected,
       epoch: gateway.epoch,
       query: local.clawhubSearchQuery,
+      cardKey: local.skillsDetailKey,
+      cardReport: cardReport(),
     }),
     (current, previous) => {
       if (!previous || current.route !== previous.route || current.surface !== previous.surface) {
@@ -276,6 +279,10 @@ export function SkillsPage(props: SkillsPageProps) {
           applyRouteData(current.route);
         }
         ensureInitialData();
+      }
+      // An open card follows the report; its loader deduplicates the unchanged revision.
+      if (current.connected && current.cardKey) {
+        void loadSkillCard(data, current.cardKey);
       }
       syncSearch(
         [current.client, current.connected, current.epoch, current.surface],
