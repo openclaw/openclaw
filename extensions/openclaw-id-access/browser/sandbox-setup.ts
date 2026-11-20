@@ -24,7 +24,7 @@ function problem(role: Role): string | undefined {
 }
 
 /** The request the owner sends their agent; plain facts from the Gateway's readiness check. */
-export function sandboxSetupPrompt(roles: readonly Role[]): string {
+function sandboxSetupPrompt(roles: readonly Role[]): string {
   return [
     "Please set up sandboxing on this claw so I can invite people with these roles from the Access page.",
     "",

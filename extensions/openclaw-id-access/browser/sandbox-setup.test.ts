@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { askAgentToSetUpSandbox, sandboxSetupPrompt } from "./sandbox-setup.js";
+import { askAgentToSetUpSandbox } from "./sandbox-setup.js";
 import type { Role } from "./types.js";
 
 const guest: Role = {
@@ -39,11 +39,18 @@ it("starts a docked conversation with the default agent and sends the reported p
   expect(request).toHaveBeenCalledWith("chat.send", {
     sessionKey: "agent:main:dock:sandbox",
     agentId: "main",
-    message: sandboxSetupPrompt([guest]),
+    message: expect.stringContaining(
+      "the sandbox image openclaw-sandbox:trixie-slim is missing from Docker",
+    ),
     idempotencyKey: "access-sandbox-setup:agent:main:dock:sandbox",
   });
-  expect(sandboxSetupPrompt([guest])).toContain(
-    "the sandbox image openclaw-sandbox:trixie-slim is missing from Docker",
+  expect(request).toHaveBeenCalledWith(
+    "chat.send",
+    expect.objectContaining({
+      message: expect.stringContaining(
+        "tell me what you will change on this computer before you change it",
+      ),
+    }),
   );
   expect(openSession).toHaveBeenCalledWith(
     expect.objectContaining({ sessionKey: "agent:main:dock:sandbox", agentId: "main" }),
