@@ -270,6 +270,8 @@ Sandboxed runs receive local references only through their existing mounts, usin
 
 The prompt frames docs as the authority for OpenClaw self-knowledge before the model understands how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), and tells the model to treat `AGENTS.md`, project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory rather than OpenClaw design/implementation knowledge. If docs are silent or stale, the model should say so and inspect source. It also tells the model to run `openclaw status` itself when possible, asking the user only when it lacks access.
 
+The bundled `openclaw-docs` skill carries the page map (generated from `docs/docs.json`) and the lookup workflow. This section keeps the docs location and the docs-first and unverified-answer rules.
+
 For configuration specifically, it points agents to the `gateway` tool action `config.schema.lookup` for exact field-level docs and constraints, then to `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md` for broader guidance.
 
 ## Related

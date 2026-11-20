@@ -170,6 +170,46 @@ describe("buildSkillSnapshot", () => {
     });
   });
 
+  it("discovers and reads the bundled openclaw-docs skill for product questions", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("openclaw-docs-skill");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { load: { watch: false } } },
+    });
+    const installed = prepareInstalledSkillCatalog({ snapshot, workspaceDir });
+
+    expect(snapshot.prompt).toContain("<name>openclaw-docs</name>");
+    for (const query of [
+      "How do I connect Telegram to OpenClaw?",
+      "What are the OpenClaw permission modes?",
+      "Why is my OpenClaw Gateway not starting?",
+    ]) {
+      const found = await searchInstalledSkills(installed, query, 3);
+      expect(
+        found.skills.map((skill) => skill.name),
+        query,
+      ).toContain("openclaw-docs");
+    }
+
+    const location = path.resolve("skills/openclaw-docs/SKILL.md");
+    const content = await fs.readFile(location, "utf8");
+    expect(await readInstalledSkill(installed, "openclaw-docs")).toEqual({
+      name: "openclaw-docs",
+      location,
+      content,
+    });
+
+    const commonQuestions = content.split("Common questions:")[1]?.split("\n3. ")[0] ?? "";
+    const pageIds = [...commonQuestions.matchAll(/`([^`<]+\/[^`<]+)`/g)].map((match) => match[1]);
+    expect(pageIds.length).toBeGreaterThan(0);
+    for (const pageId of pageIds) {
+      await expect(
+        fs.access(path.resolve("docs", `${pageId}.md`)),
+        pageId,
+      ).resolves.toBeUndefined();
+    }
+  });
+
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {
