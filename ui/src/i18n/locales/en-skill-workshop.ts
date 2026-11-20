@@ -54,7 +54,6 @@ const enSkillWorkshop = {
       proposed: "Proposed {time}",
       createsSkill: "Creates a new skill",
       updatesSkill: "Changes the live skill",
-      files: "{count} files",
       apply: "Apply",
       applyNewTitle: "Create this skill. You can archive it later.",
       applyUpdateTitle:
@@ -65,6 +64,9 @@ const enSkillWorkshop = {
       diffDraft: "Draft",
       tooLarge: "This draft differs too much from the live skill to compare line by line.",
       filesLabel: "Files",
+      open: "Open draft",
+      proposedLabel: "Proposed",
+      position: "{current} of {total}",
       chatHint:
         "Want the agent’s judgment first? Send /learn drafts in Chat to review all drafts together, or /learn drafts {skill} for this skill only.",
     },
@@ -113,10 +115,10 @@ const enSkillWorkshop = {
     viewer: {
       pickFile: "Select a file.",
       noFiles: "This skill has no support files. Scripts, templates, and references appear here.",
-      lastUsed: "last used {time}",
+      usesLabel: "Uses",
+      lastUsedLabel: "Last used",
+      versionsLabel: "Saved versions",
       createdBy: "created by {actor}",
-      versions: "{count} saved versions",
-      versionsOne: "1 saved version",
       viewingVersion: "Viewing the version from {time}",
       diffHint: "changes since then",
       diffCurrent: "Today",

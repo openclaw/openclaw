@@ -480,6 +480,7 @@ const enPluginManagement = {
     detailType: "Type",
     detailSecurity: "Security audit",
     detailSecurityAudit: "View security audit",
+    detailSecurityAuditLink: "Audit",
     detailSecurityInfo: "ClawHub checks each release for vulnerabilities and agentic risk.",
     detailNoReadme: "This plugin does not include a README.",
     detailNoSkills: "This plugin does not declare any skills.",
@@ -508,7 +509,7 @@ const enPluginManagement = {
       auth: { oauth: "OAuth", "api-key": "API key", none: "None" },
     },
     detailTabs: {
-      readme: "README",
+      readme: "Readme",
       skills: "Skills",
       configuration: "Configuration",
       mcpServers: "MCP servers",

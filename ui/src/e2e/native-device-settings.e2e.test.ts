@@ -133,6 +133,39 @@ suite.define(() => {
     );
   });
 
+  it("keeps embedded Settings links on their routes when read-only permissions arrive", async () => {
+    await suite.withPage(
+      { locale: "en-US", viewport: { width: 375, height: 812 }, hasTouch: true },
+      async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "phone" });
+        await installDeviceSettingsBridge(page, createIosNativeDeviceSettingsSnapshot());
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read"],
+          awaitInitialRoster: false,
+          methodDelays: { connect: "forever" },
+        });
+        await page.goto(`${suite.server.baseUrl}settings`);
+        const list = page.locator(".settings-embed-list");
+        const custodian = list.locator('a[href="/custodian"]');
+        await custodian.waitFor();
+        // Retain the targets picked before a group and a row within another group disappear.
+        const device = await list
+          .getByRole("link", { name: "This iPhone", exact: true })
+          .elementHandle();
+        const talk = await list.locator('a[href="/settings/talk"]').elementHandle();
+        await gateway.setMethodDelay("connect", null);
+        await custodian.waitFor({ state: "detached" });
+
+        const attachedRoute = (link: Element) =>
+          link.isConnected ? link.getAttribute("href") : null;
+        expect.soft(await device.evaluate(attachedRoute)).toBe("/settings/device");
+        expect.soft(await talk.evaluate(attachedRoute)).toBe("/settings/talk");
+        await device.click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/device");
+      },
+    );
+  });
+
   for (const colorScheme of ["light", "dark"] as const) {
     it(`edits this iPhone in embedded settings in ${colorScheme}`, async () => {
       const artifactDir = captureUiProof

@@ -1233,7 +1233,6 @@
 ["src/agents/cli-runner/cli-native-tool-approval.test.ts","../tools/gateway.js","88f5c83ec236b816d42dcc9f38161e4f25a10f9a557acb8c851434c71f0ef6e0",1]
 ["src/agents/cli-runner/cli-run-settlement.test.ts","../../plugins/hook-runner-global.js","6b5a19ce9e585d99556fecb13058666cfd46f7403113ad3143063149ac461c4c",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/config-env-vars.js","b55309b8bb3c6058c00deea8281c41cd43156faa97c8e896b99f1b344cd230c5",1]
-["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/sessions/cli-history-boundary.js","8dceb36ee404293c77a7b1d28f6e92a315b2cb71ee754f4977a964c1c2bf5945",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/sessions/paths.js","d46ec3b805d8914f370684680d972ba202a56540b061da6d12e82cf1b39b55a3",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/sessions/session-cold-storage.js","71090d74ad1f0e03ee87526a84cedc34371a3d9600c5f14979d67d40989af60c",1]
 ["src/agents/cli-runner/cli-run-transcript.admission.test.ts","../../config/sessions/session-store-owner.js","dd8faaafdf7cf38a3f6852600051a3f2febd4acf93065afb9523b1b1d255f376",1]
