@@ -144,7 +144,9 @@ it.each(["configuration", "role"])(
     expect(f.request).not.toHaveBeenCalled();
     const notice = toast.mock.calls[0]?.[0];
     expect(notice?.message).toContain(
-      reason === "configuration" ? "has turned off Templates" : "administrator",
+      reason === "configuration"
+        ? "Ask your Gateway administrator to enable them"
+        : "administrator",
     );
     expect(notice?.message).toContain("private draft");
     expect(notice?.onAction).toBeUndefined();
