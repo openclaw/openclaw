@@ -554,21 +554,32 @@ export async function consultRealtimeVoiceAgent(params: {
         abortSignal.throwIfAborted();
         if (runsAgentTurn) {
           // The command owner selects runtime, fallbacks and tool policy from the consult session
-          // and the caller's sender, as for a typed message. The answer is spoken, not delivered.
+          // and the caller's sender, as for a typed message. The answer is spoken, not delivered,
+          // but tools still see the resolved account, destination and thread.
           runPromise = params.agentRuntime.runCommandFromIngress(
             {
               message: buildRealtimeVoiceAgentConsultPrompt(params),
               agentId,
               sessionKey: params.sessionKey,
               messageProvider: toolAuthorityOverlay.messageProvider,
-              runContext: { senderId: params.senderId ?? undefined },
+              runContext: {
+                senderId: params.senderId ?? undefined,
+                accountId: toolAuthorityOverlay.agentAccountId,
+                currentChannelId: consultDeliveryContext?.to,
+                currentThreadTs:
+                  consultDeliveryContext?.threadId != null
+                    ? String(consultDeliveryContext.threadId)
+                    : undefined,
+              },
+              workspaceDir,
               senderIsOwner: params.senderIsOwner === true,
               allowModelOverride: Boolean(params.provider || params.model),
               provider: params.provider,
               model: params.model,
               thinkingOnce: params.thinkLevel,
               fastMode: params.fastMode,
-              verbose: "off",
+              // Speech needs no run diagnostics; the session keeps its saved verbose level.
+              verboseOnce: "off",
               timeout: String(Math.max(1, Math.ceil(timeoutMs / 1000))),
               runId,
               lane: params.lane,

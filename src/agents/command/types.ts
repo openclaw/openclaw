@@ -79,6 +79,8 @@ export type AgentCommandOpts = {
   thinking?: string;
   thinkingOnce?: string;
   verbose?: string;
+  /** Verbose level for this run only; unlike `verbose`, never saved to the session. */
+  verboseOnce?: string;
   json?: boolean;
   timeout?: string;
   deliver?: boolean;

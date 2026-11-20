@@ -363,6 +363,9 @@ export async function createVoiceCallRuntime(params: {
               agentId,
               sessionKey,
               messageProvider: "voice",
+              // The remote party's number as the verified provider webhook reports it, the same
+              // identity inbound admission checks, so toolsBySender rules apply to the caller.
+              senderId: (call.direction === "inbound" ? call.from : call.to).trim() || undefined,
               lane: "voice",
               runIdPrefix: `voice-realtime-consult:${callId}`,
               args,

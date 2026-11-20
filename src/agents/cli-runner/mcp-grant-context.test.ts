@@ -42,6 +42,15 @@ describe("buildCliMcpGrantContext", () => {
     expect(buildGrant()).not.toHaveProperty("toolBindings");
   });
 
+  it.each([
+    { run: { messageProvider: "voice" }, expected: "voice" },
+    { run: { messageProvider: "Discord-Voice" }, expected: "discord-voice" },
+    { run: { messageChannel: "discord", messageProvider: "voice" }, expected: "discord" },
+    { run: { messageProvider: "cli" }, expected: undefined },
+  ])("keeps the $expected tool-policy surface for $run", ({ run, expected }) => {
+    expect(buildGrant(run).messageProvider).toBe(expected);
+  });
+
   it("snapshots policy and logical model fields without copying private metadata", () => {
     const elevated = {
       enabled: false,

@@ -13,6 +13,16 @@ const TOOL_ALLOW_BY_MESSAGE_PROVIDER: Readonly<Record<string, readonly string[]>
   node: ["canvas", "pdf", "tts", "view_image", "web_fetch", "web_search"],
 };
 
+/** True when the provider restricts tools, whether or not it is also a delivery channel. */
+export function isToolPolicyMessageProvider(messageProvider: string | undefined): boolean {
+  const normalizedProvider = normalizeOptionalLowercaseString(messageProvider);
+  return (
+    normalizedProvider !== undefined &&
+    (Object.hasOwn(TOOL_DENY_BY_MESSAGE_PROVIDER, normalizedProvider) ||
+      Object.hasOwn(TOOL_ALLOW_BY_MESSAGE_PROVIDER, normalizedProvider))
+  );
+}
+
 /**
  * True when a provider's allowlist removes the tool by design rather than by an
  * operator's policy. Callers that diagnose a missing tool use this to stay quiet about

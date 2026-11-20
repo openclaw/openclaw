@@ -533,6 +533,22 @@ describe("createVoiceCallRuntime lifecycle", () => {
     );
   });
 
+  it.each([
+    { direction: "inbound", senderId: "+15550001234" },
+    { direction: "outbound", senderId: "+15550009999" },
+  ])("runs a $direction consult as the remote party's turn", async ({ direction, senderId }) => {
+    const runAgentTurn = answeringAgent("Answer.");
+    setConsultCall({ direction });
+
+    const handler = await startConsult(createRealtimeConfig(), createConsultRuntime(runAgentTurn));
+
+    await expect(handler({ question: "Who is this?" }, "call-1", {})).resolves.toEqual({
+      text: "Answer.",
+    });
+    // toolsBySender rules (including "*") see the caller, not an anonymous turn.
+    expect(consultParamsFrom(runAgentTurn).runContext).toMatchObject({ senderId });
+  });
+
   it("applies an explicit responseModel as the consult turn's model override", async () => {
     const config = createRealtimeConfig({}, { inboundPolicy: "allowlist" });
     config.numbers["+15550009999"] = { responseModel: "openai/gpt-5.5" };

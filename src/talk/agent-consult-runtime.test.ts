@@ -369,14 +369,20 @@ describe("realtime voice agent consult runtime", () => {
       agentId: "estimator",
       sessionKey: "agent:estimator:voice:15550001234",
       messageProvider: "voice",
-      runContext: { senderId: "+15550001234" },
+      runContext: {
+        senderId: "+15550001234",
+        accountId: undefined,
+        currentChannelId: undefined,
+        currentThreadTs: undefined,
+      },
+      workspaceDir: state.statePath("workspace"),
       senderIsOwner: false,
       allowModelOverride: false,
       provider: undefined,
       model: undefined,
       thinkingOnce: undefined,
       fastMode: true,
-      verbose: "off",
+      verboseOnce: "off",
       timeout: "10",
       runId: expect.stringMatching(/^voice-consult-/u),
       lane: "voice",
@@ -387,6 +393,41 @@ describe("realtime voice agent consult runtime", () => {
       abortSignal: expect.any(AbortSignal),
     });
     expect(commandRuntime.exit).toEqual(expect.any(Function));
+  });
+
+  it("runs an agent-turn consult in its session's workspace and reply target, undelivered", async () => {
+    const { runtime, runCommandFromIngress, sessionStore } = createAgentRuntime();
+    sessionStore["voice:google-meet:meet-1"] = {
+      sessionId: "call-session",
+      spawnedBy: "agent:main:discord:channel:123",
+      spawnedWorkspaceDir: "/work/project-b",
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "work",
+          threadId: "thread-456",
+        },
+      }),
+      updatedAt: 1,
+    };
+
+    await runConsult(runtime, { runner: "agent-turn", sessionKey: "voice:google-meet:meet-1" });
+
+    const [turn] = expectDefined(runCommandFromIngress.mock.calls[0], "agent turn");
+    expect(turn).toMatchObject({
+      messageProvider: "discord",
+      runContext: {
+        accountId: "work",
+        currentChannelId: "channel:123",
+        currentThreadTs: "thread-456",
+      },
+      workspaceDir: "/work/project-b",
+      verboseOnce: "off",
+      deliver: false,
+    });
+    // `verbose` would save the level to the session the consult shares.
+    expect(turn).not.toHaveProperty("verbose");
   });
 
   it("cancels a running agent-turn consult when the caller hangs up", async () => {

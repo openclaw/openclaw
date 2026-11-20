@@ -1,9 +1,13 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
+import { isToolPolicyMessageProvider } from "../agent-tools.message-provider-policy.js";
 import { cloneExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import {
   bindActiveCronAuthorityCurrentness,
@@ -166,9 +170,12 @@ export function buildCliMcpGrantContext(params: {
   const groupChannel = normalizeOptionalString(params.run.groupChannel);
   const groupSpace = normalizeOptionalString(params.run.groupSpace);
   const spawnedBy = normalizeOptionalString(params.run.spawnedBy);
-  const messageProvider = resolveGatewayMessageChannel(
-    params.run.messageChannel ?? params.run.messageProvider,
-  );
+  // A tool-policy surface that is not a delivery channel ("voice") still filters tools, as it
+  // does for an embedded run.
+  const policyProvider = normalizeOptionalLowercaseString(params.run.messageProvider);
+  const messageProvider =
+    resolveGatewayMessageChannel(params.run.messageChannel ?? params.run.messageProvider) ??
+    (isToolPolicyMessageProvider(policyProvider) ? policyProvider : undefined);
   const currentChannelId = normalizeOptionalString(params.run.currentChannelId);
   const grantedToolsAllow = params.run.cliToolAvailability?.openClaw;
   const delegationCapability = readCliMcpDelegationCapability(params.run);
