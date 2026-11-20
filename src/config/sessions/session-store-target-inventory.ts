@@ -4,6 +4,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
+import { readSqlitePageHeader } from "../../infra/sqlite-schema-catalog.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   readDatabasePathIdentitySync,
@@ -577,8 +578,8 @@ export function readSessionStoreTargetInventory(
               }
               return (
                 !isPostgresSqlConnection(opened.db) &&
-                // sqlite-allow-raw -- Empty stores can still need physical page reclamation.
-                Number(opened.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0) > 0
+                // Empty stores can still need physical page reclamation.
+                Number(readSqlitePageHeader(opened.db).free ?? 0) > 0
               );
             }),
           { ...database, env },

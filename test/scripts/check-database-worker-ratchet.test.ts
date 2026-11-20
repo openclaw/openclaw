@@ -121,6 +121,31 @@ it.each([
   ]);
 });
 
+it("keeps target inventory SQL classification scoped to its worker read operation", () => {
+  const rows = inventory(
+    process.cwd(),
+    "",
+    false,
+    new Map([
+      [
+        "src/config/sessions/session-store-target-inventory.ts",
+        `export function readSessionStoreTargetInventory() {
+           const prepareRead = () => withOpenClawAgentDatabaseReadOnly(() =>
+             executeSqliteQueryTakeFirstSync(query));
+           prepareRead();
+         }
+         export function prepareSessionStoreTargetInventory() {
+           executeSqliteQueryTakeFirstSync(query);
+         }`,
+      ],
+    ]),
+  );
+  expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 1],
+    ["W", 2],
+  ]);
+});
+
 function sourceFixture(sources: Record<string, string>) {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const write = (file: string, source: string) => {
