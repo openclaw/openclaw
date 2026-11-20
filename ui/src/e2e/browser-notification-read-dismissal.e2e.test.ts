@@ -3,7 +3,11 @@ import { createServer } from "node:http";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { controlUiSessionUrl, installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  installMockGateway,
+  startControlUiE2eServer,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 let upgradeWorker = () => {};
@@ -13,22 +17,40 @@ const suite = createControlUiE2eSuite({
   name: "Browser completion read dismissal",
   startServer: async () => {
     const upstream = await startControlUiE2eServer();
-    const legacy = await readFile(new URL("./fixtures/service-worker-v2026.11.5.txt", import.meta.url), "utf8");
+    const legacy = await readFile(
+      new URL("./fixtures/service-worker-v2026.11.5.txt", import.meta.url),
+      "utf8",
+    );
     let upgraded = false;
-    upgradeWorker = () => { upgraded = true; };
+    upgradeWorker = () => {
+      upgraded = true;
+    };
     const proxy = createServer((request, response) => {
       const url = new URL(request.url ?? "/", upstream.baseUrl);
       if (url.pathname === "/sw.js" && !upgraded) {
-        response.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-store" });
+        response.writeHead(200, {
+          "Content-Type": "application/javascript",
+          "Cache-Control": "no-store",
+        });
         response.end(legacy);
         return;
       }
-      void fetch(url).then(async (result) => {
-        response.writeHead(result.status, Object.fromEntries(
-          [...result.headers].filter(([name]) => !["content-encoding", "content-length", "transfer-encoding"].includes(name)),
-        ));
-        response.end(Buffer.from(await result.arrayBuffer()));
-      }).catch((error: unknown) => { response.destroy(error instanceof Error ? error : undefined); });
+      void fetch(url)
+        .then(async (result) => {
+          response.writeHead(
+            result.status,
+            Object.fromEntries(
+              [...result.headers].filter(
+                ([name]) =>
+                  !["content-encoding", "content-length", "transfer-encoding"].includes(name),
+              ),
+            ),
+          );
+          response.end(Buffer.from(await result.arrayBuffer()));
+        })
+        .catch((error: unknown) => {
+          response.destroy(error instanceof Error ? error : undefined);
+        });
     });
     try {
       await new Promise<void>((resolve, reject) => {
@@ -36,14 +58,20 @@ const suite = createControlUiE2eSuite({
         proxy.listen(0, "127.0.0.1", resolve);
       });
       const address = proxy.address();
-      if (!address || typeof address === "string") throw new Error("No upgrade proof port");
+      if (!address || typeof address === "string") {
+        throw new Error("No upgrade proof port");
+      }
       return {
         baseUrl: `http://127.0.0.1:${address.port}/`,
         close: async () => {
           try {
             proxy.closeAllConnections();
-            await new Promise<void>((resolve, reject) => proxy.close((error) => error ? reject(error) : resolve()));
-          } finally { await upstream.close(); }
+            await new Promise<void>((resolve, reject) => {
+              proxy.close((error) => (error ? reject(error) : resolve()));
+            });
+          } finally {
+            await upstream.close();
+          }
         },
       };
     } catch (error) {
@@ -98,11 +126,18 @@ suite.define(() => {
           await navigator.serviceWorker.ready;
         });
         await expect.poll(() => registrationId).toBeTruthy();
-        await page.waitForFunction(() => navigator.serviceWorker.controller?.scriptURL.endsWith("v=upgrade-legacy"));
+        await page.waitForFunction(() =>
+          navigator.serviceWorker.controller?.scriptURL.endsWith("v=upgrade-legacy"),
+        );
         await protocol.send("ServiceWorker.deliverPushMessage", {
           origin: new URL(suite.server.baseUrl).origin,
           registrationId: registrationId!,
-          data: JSON.stringify({ title: "Legacy alert", body: "Retained before upgrade", tag: "legacy", url: controlUiSessionUrl(suite.server.baseUrl, sessionKey) }),
+          data: JSON.stringify({
+            title: "Legacy alert",
+            body: "Retained before upgrade",
+            tag: "legacy",
+            url: controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+          }),
         });
         await expect.poll(() => tags(page)).toEqual(["legacy"]);
         // Same registration and storage; no unregister, notification clearing or new context.
@@ -111,14 +146,80 @@ suite.define(() => {
         await page.evaluate(async () => {
           await navigator.serviceWorker.register("/sw.js?v=upgrade-candidate", { scope: "/" });
         });
-        await page.waitForFunction(() => navigator.serviceWorker.controller?.state === "activated" &&
-          navigator.serviceWorker.controller.scriptURL.endsWith("v=upgrade-candidate"));
+        // Running build identity, not a registration URL, owns upgrade completion.
+        const candidateScript = await (
+          await page.request.get(new URL("/sw.js", suite.server.baseUrl).href)
+        ).text();
+        const candidateBuild = candidateScript.match(/const EMBEDDED_CACHE_VERSION = "([^"]+)"/)?.[1];
+        expect(candidateBuild).toBeTruthy();
+        expect(candidateBuild).not.toBe("__OPENCLAW_CONTROL_UI_BUILD_ID__");
+        try {
+          await page.waitForFunction(async (buildId) => {
+            const registration = await navigator.serviceWorker.getRegistration();
+            const worker = registration?.active;
+            if (
+              !worker ||
+              worker.state !== "activated" ||
+              registration.installing ||
+              navigator.serviceWorker.controller !== worker
+            ) {
+              return false;
+            }
+            const channel = new MessageChannel();
+            let timeout: ReturnType<typeof setTimeout> | undefined;
+            try {
+              const result = await new Promise<{ type?: string; version?: string } | null>(
+                (resolve) => {
+                  timeout = setTimeout(() => resolve(null), 1_000);
+                  channel.port1.onmessage = (event) => resolve(event.data);
+                  worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+                },
+              );
+              return (
+                registration.active === worker &&
+                navigator.serviceWorker.controller === worker &&
+                !registration.installing &&
+                result?.type === "sw-updated" &&
+                result.version === buildId
+              );
+            } finally {
+              clearTimeout(timeout);
+              channel.port1.close();
+              channel.port2.close();
+            }
+          }, candidateBuild);
+        } catch (error) {
+          console.error(
+            "Upgrade worker state",
+            await page.evaluate(async () => {
+              const registration = await navigator.serviceWorker.getRegistration();
+              const describe = (worker: ServiceWorker | null | undefined) =>
+                worker ? { url: worker.scriptURL, state: worker.state } : null;
+              return {
+                controller: describe(navigator.serviceWorker.controller),
+                active: describe(registration?.active),
+                installing: describe(registration?.installing),
+                waiting: describe(registration?.waiting),
+              };
+            }),
+          );
+          throw error;
+        }
         expect(registrationId).toBe(previousRegistration);
-        expect(await page.evaluate(async () => {
-          const [notification] = await (await navigator.serviceWorker.ready).getNotifications();
-          return { tag: notification.tag, title: notification.title, body: notification.body, data: notification.data };
-        })).toEqual({
-          tag: "legacy", title: "Legacy alert", body: "Retained before upgrade",
+        expect(
+          await page.evaluate(async () => {
+            const [notification] = await (await navigator.serviceWorker.ready).getNotifications();
+            return {
+              tag: notification.tag,
+              title: notification.title,
+              body: notification.body,
+              data: notification.data,
+            };
+          }),
+        ).toEqual({
+          tag: "legacy",
+          title: "Legacy alert",
+          body: "Retained before upgrade",
           data: { url: controlUiSessionUrl(suite.server.baseUrl, sessionKey), explicitUrl: true },
         });
         const profileId = await evaluateControlUiContext(page, (app) => {

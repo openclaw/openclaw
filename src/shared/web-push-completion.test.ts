@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  readWebPushCompletion,
-  webPushCompletionMessageId,
-} from "./web-push-completion.js";
+import { readWebPushCompletion, webPushCompletionMessageId } from "./web-push-completion.js";
 
 const completion = {
   version: 1 as const,
