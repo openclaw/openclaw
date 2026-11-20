@@ -689,3 +689,16 @@ describe("registered harness input attachment preparation", () => {
     }
   });
 });
+
+it("refuses a participating native turn even with remembered unrestricted consent", async () => {
+  const { attempt, nativeStart } = await prepareRememberedOwnerConsent();
+  attempt.participationCeiling = {
+    kind: "send",
+    profileId: "guest",
+    sessionKey: attempt.sessionKey!,
+  };
+  await expect(runAgentHarnessAttempt(attempt)).rejects.toThrow(
+    "Participating inputs require the OpenClaw runtime",
+  );
+  expect(nativeStart).not.toHaveBeenCalled();
+});

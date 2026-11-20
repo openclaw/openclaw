@@ -16,6 +16,7 @@ import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import { resolveEffectiveToolPolicy, resolveTrustedGroupId } from "./agent-tools.policy.js";
 import type { DelegatedToolDenyFloor } from "./delegated-tool-policy.js";
 import { normalizeInheritedToolDenylist } from "./inherited-tool-deny.js";
+import type { ParticipationCeiling } from "./participation-ceiling.js";
 import { captureRequesterOrigin, type RequesterOrigin } from "./requester-origin.js";
 import { isInternalOwnerRequester, resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
@@ -58,6 +59,7 @@ function resolveManifestToolProfileNames(
 }
 
 export type ConversationCapabilityProfileParams = {
+  participationCeiling?: ParticipationCeiling;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   /** Captured policy owner; null excludes ambient request authority. */
@@ -223,6 +225,7 @@ export function resolveConversationCapabilityPolicy(params: ConversationCapabili
 
   return {
     ...effective,
+    participationCeiling: params.participationCeiling,
     sessionKey: params.sessionKey,
     subagentSessionKey,
     trustedGroup,

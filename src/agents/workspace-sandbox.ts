@@ -27,6 +27,7 @@ export type WorkspaceSandboxParams = Pick<
   | "cwd"
   | "execOverrides"
   | "permissionMode"
+  | "participationCeiling"
   | "sandboxSessionKey"
   | "sandboxAgentId"
   | "sessionId"
@@ -232,6 +233,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
             ? effectiveWorkspace
             : (requestedCwd ?? effectiveWorkspace),
           effectiveFsWorkspaceOnly:
+            params.participationCeiling !== undefined ||
             params.requireWorkspaceOnly === true ||
             resolveEffectiveToolFsWorkspaceOnly({
               cfg: params.config,

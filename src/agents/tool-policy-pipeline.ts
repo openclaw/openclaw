@@ -47,6 +47,8 @@ export type ToolPolicyPipelineStep = {
   label: string;
   source?: ToolPolicySource;
   stripPluginOnlyAllowlist?: boolean;
+  /** Mandatory host policy excludes plugin/MCP implementations even on name collisions. */
+  coreOnly?: boolean;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
   unavailableCoreToolReason?: string;
@@ -215,6 +217,9 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
     const before = filtered;
     filtered = filterToolsByPolicy(before, expanded);
+    if (step.coreOnly) {
+      filtered = filtered.filter((tool) => !params.toolMeta(tool));
+    }
     params.onFilter?.({ step, policy: expanded, before, after: filtered });
     auditToolPolicyFilter({
       stepLabel: step.label,

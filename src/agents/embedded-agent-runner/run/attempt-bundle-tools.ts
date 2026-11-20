@@ -84,6 +84,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   phases.mark("attempt.bundle-tools.mcp-config");
   const auxiliaryToolsEnabled =
     toolsEnabled &&
+    !params.attempt.participationCeiling &&
     params.attempt.trigger !== "memory" &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&

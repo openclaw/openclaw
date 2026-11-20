@@ -12,6 +12,7 @@ type CoreToolPolicyOptions = Pick<
   | "config"
   | "agentId"
   | "sessionPermissionPolicy"
+  | "participationCeiling"
   | "requireWorkspaceOnly"
   | "trigger"
   | "memoryFlushWritePath"
@@ -30,6 +31,7 @@ export function prepareCoreToolPolicy(
     ? resolveSessionPermissionCoreToolPolicy(options.sessionPermissionPolicy)
     : undefined;
   const workspaceOnly =
+    options.participationCeiling !== undefined ||
     options.requireWorkspaceOnly === true ||
     options.trigger === "memory" ||
     (sessionPolicy?.workspaceOnly ??

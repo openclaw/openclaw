@@ -3,6 +3,7 @@ import type { AgentToolSurfacePresentation } from "../../packages/gateway-protoc
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
+import type { ParticipationCeiling } from "./participation-ceiling.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import type {
@@ -47,6 +48,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  participationCeiling?: ParticipationCeiling;
   modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;

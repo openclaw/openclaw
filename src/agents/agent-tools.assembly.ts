@@ -71,6 +71,7 @@ import {
   filterToolsByClientCaps,
   resolveSessionToolListingClientCaps,
 } from "./openclaw-tools.client-caps.js";
+import { PARTICIPATION_TOOL_ALLOWLIST } from "./participation-ceiling.js";
 import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
 import { resolveSandboxFileIdentity } from "./sandbox/file-mutation-identity.js";
 import { createEmbeddedMessageInvocationPolicy } from "./scheduled-message-invocation.js";
@@ -305,7 +306,9 @@ export function* assembleOpenClawCodingTools(
               currentThreadTs: options?.currentThreadTs,
               channelContext: options?.channelContext,
               accountId: options?.agentAccountId,
-              approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+              approvalReviewerDeviceId: options?.participationCeiling
+                ? undefined
+                : options?.approvalReviewerDeviceId,
               // A hidden fork has nobody to ask; a command that needs approval is denied.
               nonInteractiveApproval:
                 options?.swarmCollector ||
@@ -314,11 +317,18 @@ export function* assembleOpenClawCodingTools(
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
-              notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
+              // Participation has no authority to create an uncapped completion turn.
+              notifyOnExit: options?.participationCeiling
+                ? false
+                : (options?.exec?.notifyOnExit ?? execConfig.notifyOnExit),
+              approvalFollowupMode: options?.participationCeiling
+                ? undefined
+                : options?.exec?.approvalFollowupMode,
               notifyOnExitEmptySuccess:
                 options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
             },
             processDefaults: {
+              readOnly: Boolean(options?.participationCeiling),
               scopeKey,
               sessionKey: executionSessionKey,
               agentId: executionAgentId,
@@ -481,9 +491,10 @@ export function* assembleOpenClawCodingTools(
               ask: effectiveExecPolicy.ask,
               node: options?.exec?.node ?? execConfig.node,
             },
-            approvalReviewerDeviceIds: options?.approvalReviewerDeviceId
-              ? [options.approvalReviewerDeviceId]
-              : undefined,
+            approvalReviewerDeviceIds:
+              !options?.participationCeiling && options?.approvalReviewerDeviceId
+                ? [options.approvalReviewerDeviceId]
+                : undefined,
             gatewayCallerAccountId: gatewayCaller.accountId,
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
@@ -613,9 +624,20 @@ export function* assembleOpenClawCodingTools(
   } = resolveTurnToolSurface({
     turnTools: completeTurnTools(
       messageInvocationPolicy.filter(capabilityProfile, onPolicyFilter),
-    ).filter((tool) => tool.name !== "message" || options?.disableMessageTool !== true),
-    sessionTools:
-      handoff || fixedListing
+    ).filter(
+      (tool) =>
+        (tool.name !== "message" || options?.disableMessageTool !== true) &&
+        (!options?.participationCeiling ||
+          (PARTICIPATION_TOOL_ALLOWLIST.includes(tool.name) && !getPluginToolMeta(tool))),
+    ),
+    sessionTools: options?.participationCeiling
+      ? completeTurnTools(
+          messageInvocationPolicy.filter({
+            ...capabilityProfile,
+            policy: { ...capabilityProfile.policy, participationCeiling: undefined },
+          }),
+        )
+      : handoff || fixedListing
         ? completeTurnTools(
             messageInvocationPolicy.filter(
               capabilityProfile,
@@ -677,7 +699,9 @@ export function* assembleOpenClawCodingTools(
     sessionId: options?.sessionId,
     runId: options?.runId,
     trigger: options?.trigger,
-    approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
+    approvalReviewerDeviceId: options?.participationCeiling
+      ? undefined
+      : options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(Object.keys(requester).length > 0 ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),

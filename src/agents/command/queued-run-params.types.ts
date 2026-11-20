@@ -14,6 +14,7 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
 import type { SkillSnapshot } from "../../skills/types.js";
+import type { ParticipationCeiling } from "../participation-ceiling.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
@@ -87,6 +88,8 @@ export type QueuedAgentRunParams = {
   conversationToolPolicy?: GroupToolPolicyConfig;
   /** Trusted provider role ids for the requester in this group turn. */
   memberRoleIds?: string[];
+  /** Host-owned per-input ceiling, retained by every retry and queued run. */
+  participationCeiling?: ParticipationCeiling;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
   /** Spawn-time blind child: the rendered prompt omits its model, identity and workspace path. */
