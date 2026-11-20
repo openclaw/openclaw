@@ -33,7 +33,7 @@ it("collects released resource payloads only after the admitted close queue sett
     ]);
     expect(await started).toEqual(["closing"]);
     const collected = once(worker, "message");
-    worker.postMessage("release");
+    worker.postMessage("release", []);
     expect(await Promise.all([firstReply, secondReply, collected])).toEqual([
       [{ ok: true }],
       [{ ok: true }],
