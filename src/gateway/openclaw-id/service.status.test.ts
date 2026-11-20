@@ -216,7 +216,7 @@ it("checks each agent's own sandbox image and leaves roles without a sandbox unp
     ...config,
     agents: {
       entries: {
-        main: { default: true },
+        main: {},
         research: { sandbox: { docker: { image: "custom/sandbox:1" } } },
       },
     },
@@ -256,7 +256,7 @@ it("names Doctor only for the image Doctor builds", async () => {
     agents: {
       defaults: { sandbox: { docker: { image: "custom/sandbox:1" } } },
       entries: {
-        main: { default: true, sandbox: { docker: { image: "openclaw-sandbox:trixie-slim" } } },
+        main: { sandbox: { docker: { image: "openclaw-sandbox:trixie-slim" } } },
       },
     },
   });
