@@ -357,10 +357,11 @@ Ollama receives it as `num_predict`; an explicit request `maxTokens` or authored
 `params.num_predict` takes precedence. Set realistic `maxTokens` and context
 limits for custom model entries. Discovered local Ollama models default to half
 of the 32,768-token local context cap (16,384 output tokens), or less for smaller
-windows. Ollama Cloud models use their documented output limit, or their
-context window when a separate output limit is unavailable. Set
-`params: { num_predict: -1 }` to restore Ollama's unlimited default; an explicit
-request output cap still wins.
+windows. Curated Ollama Cloud models use their documented output limit;
+uncurated cloud models fall back to the shared conservative default (16,384
+output tokens when discovered, or up to 32,768 for configured entries without
+an explicit cap). Set `params: { num_predict: -1 }` to restore Ollama's
+unlimited default; an explicit request output cap still wins.
 
 Embedded agent runs also watch long text and reasoning from models with a known
 total parameter count in the **32B class or smaller** (less than 34 billion, to
