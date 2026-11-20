@@ -10,7 +10,7 @@ if [ "$(id -u)" = 0 ]; then
       exit 1
     fi
     chown node:node "$state_dir"
-    for name in control workspace agents credentials sessions; do
+    for name in control workspace agents credentials sessions tmp; do
       dir="$state_dir/$name"
       if [ -d "$dir" ] && [ ! -L "$dir" ]; then
         chown node:node "$dir"
