@@ -4,7 +4,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createSidebarTestRouter } from "../test-helpers/app-sidebar-router.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGateway,
+  createGatewayHarness,
+  createSessions,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { getAppSidebarOwner } from "./app-sidebar.tsx";
 
@@ -12,6 +19,39 @@ setupSidebarTest();
 
 const mountEmptySidebar = () =>
   mountSidebar(createGateway({} as GatewayBrowserClient), createSessions("main", []));
+
+it("falls back from restored Users only after an explicitly solo hello", async () => {
+  const gateway = createGatewayHarness({} as GatewayBrowserClient);
+  const { sidebar } = await mountSidebar(
+    gateway.gateway,
+    createSessions("main", []),
+    "panel",
+    TWO_AGENTS,
+  );
+  const users = '[data-navigation-view="online"]';
+  const sessions = '[data-navigation-view="sessions"]';
+  sidebar.connected = true;
+  const snapshot = sidebarBootSnapshot(null);
+  sidebar.sidebarAgentsMode = snapshot.mode;
+  sidebar.restoreSidebarSnapshot({ ...snapshot, navigationView: "online" });
+  await sidebar.updateComplete;
+  const usersButton = sidebar.querySelector<HTMLButtonElement>(users)!;
+  expect(usersButton.getAttribute("aria-pressed")).toBe("true");
+  usersButton.focus();
+
+  for (const multiple of [false, true]) {
+    gateway.publish({
+      hello: {
+        ...gateway.gateway.snapshot.hello!,
+        policy: { hasMultipleSessionSharingIdentities: multiple },
+      },
+    });
+    await sidebar.updateComplete;
+    expect(Boolean(sidebar.querySelector(users))).toBe(multiple);
+    expect(sidebar.querySelector(sessions)?.getAttribute("aria-pressed")).toBe("true");
+    expect(document.activeElement).toBe(sidebar.querySelector(sessions));
+  }
+});
 
 it("restores destination offsets and updates fades after content commits", async () => {
   const { sidebar } = await mountEmptySidebar();

@@ -227,8 +227,10 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     const pluginPage = host.activePluginTabId;
     const menuRoute = route && isPluginsHubRoute(route) ? "plugins" : route;
     const inMenu = pluginPage
-      ? !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
-      : menuRoute !== "sessions" && SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
+      ? !host.usersNavigationVisible || !USERS_SECTION_PLUGIN_PAGES.has(pluginPage)
+      : menuRoute === "activity"
+        ? !host.usersNavigationVisible && host.sidebarMenus.isRouteEnabled(menuRoute)
+        : menuRoute !== "sessions" && SIDEBAR_NAV_ROUTES.some((entry) => entry === menuRoute);
     if (!inMenu) {
       return false;
     }
@@ -312,32 +314,34 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             <Icon name="sessions" filled={sessionsPressed()} />
           </button>
         </openclaw-tooltip>
-        <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
-          <button
-            ref={registerView("online")}
-            type="button"
-            class="sidebar-rail__button"
-            data-navigation-view="online"
-            aria-label={t("presence.peopleTitle")}
-            aria-pressed={peoplePressed() ? "true" : "false"}
-            onClick={() => {
-              // People is the Users section: Activity in the content, people in the sidebar.
-              host.navigationView = "online";
-              if (host.onExitSettings) {
-                host.onExitSettings();
-              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
-                host.onToggleSidebar?.();
-              }
-              // The mobile drawer closes on navigation, so there People only opens the list.
-              if (!isMobileNavLayout()) {
-                host.onNavigate?.("activity");
-              }
-              host.invalidate();
-            }}
-          >
-            <Icon name="users" filled={peoplePressed()} />
-          </button>
-        </openclaw-tooltip>
+        <Show when={host.usersNavigationVisible}>
+          <openclaw-tooltip prop:content={t("presence.peopleTitle")}>
+            <button
+              ref={registerView("online")}
+              type="button"
+              class="sidebar-rail__button"
+              data-navigation-view="online"
+              aria-label={t("presence.peopleTitle")}
+              aria-pressed={peoplePressed() ? "true" : "false"}
+              onClick={() => {
+                // People is the Users section: Activity in the content, people in the sidebar.
+                host.navigationView = "online";
+                if (host.onExitSettings) {
+                  host.onExitSettings();
+                } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
+                  host.onToggleSidebar?.();
+                }
+                // The mobile drawer closes on navigation, so there People only opens the list.
+                if (!isMobileNavLayout()) {
+                  host.onNavigate?.("activity");
+                }
+                host.invalidate();
+              }}
+            >
+              <Icon name="users" filled={peoplePressed()} />
+            </button>
+          </openclaw-tooltip>
+        </Show>
       </div>
       <div
         class={[

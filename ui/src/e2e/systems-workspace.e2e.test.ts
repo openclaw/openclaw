@@ -190,12 +190,6 @@ suite.define(() => {
         };
         const navigate = async (path: "activity" | "systems") => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          if (path === "activity") {
-            // Activity heads the Users section; on a phone People only opens its list.
-            await page.locator('[data-navigation-view="online"]').click();
-            await page.locator(".sidebar-online__overview a").click();
-            return;
-          }
           await page.locator("[data-rail-more]").click();
           await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
           await waitForControlUiRoute(page, { routeId: path });

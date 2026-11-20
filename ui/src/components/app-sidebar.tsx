@@ -117,12 +117,12 @@ function AppSidebarContent(
       const navigationInFlight =
         destination?.cause === "navigation" &&
         (destination.isFetching !== false || destination.preload);
-      const selection = `${destination?.id}\n${state.pendingMatches.length > 0}\n${navigationInFlight}\n${route}\n${pluginKey}\n${section}`;
+      const view = sidebarViewForPage(route, pluginKey, section, owner.usersNavigationVisible);
+      const selection = `${destination?.id}\n${state.pendingMatches.length > 0}\n${navigationInFlight}\n${route}\n${pluginKey}\n${view}`;
       if (selection === previousSelection) {
         return;
       }
       previousSelection = selection;
-      const view = sidebarViewForPage(route, pluginKey, section);
       if (view && owner.navigationView !== view) {
         owner.navigationView = view;
         owner.invalidate();

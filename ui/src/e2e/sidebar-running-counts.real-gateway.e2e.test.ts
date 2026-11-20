@@ -55,6 +55,7 @@ suite.define(() => {
     try {
       const email = "count-proof@example.test";
       const profile = ensureProfileForEmail(email);
+      ensureProfileForEmail("count-proof-colleague@example.test");
       setDisplayName(profile.id, "Test Person");
       const workspace = state.path("workspace-work");
       await mkdir(workspace, { recursive: true });

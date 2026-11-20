@@ -106,6 +106,7 @@ const suite = createControlUiE2eSuite({
       instance = owner;
       viewerId = ensureGatewayOwnerProfile("Roster viewer", { env: owner.env }).id;
       otherOwnerId = ensureProfileForEmail("roster-other@example.test", { env: owner.env }).id;
+      ensureProfileForEmail("roster-colleague@example.test", { env: owner.env });
       await owner.startGateway();
       return { baseUrl: `http://127.0.0.1:${owner.port}/`, close };
     } catch (error) {

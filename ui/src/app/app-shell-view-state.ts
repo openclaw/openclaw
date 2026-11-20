@@ -1,4 +1,9 @@
-import { isSettingsTakeover, pageTitleForRoute, sidebarViewForPage } from "../app-navigation.ts";
+import {
+  isSettingsTakeover,
+  isUsersSidebarVisible,
+  pageTitleForRoute,
+  sidebarViewForPage,
+} from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginTabForLocation,
@@ -209,6 +214,7 @@ export function readShellView(host: ShellViewHost) {
     activeRoute,
     activePluginKey,
     Boolean(navigationSectionForPage(context.plugins.registrations("navigation"), activePluginKey)),
+    isUsersSidebarVisible(gatewaySnapshot.hello),
   );
   const navPageHidden =
     !nativeEmbed &&

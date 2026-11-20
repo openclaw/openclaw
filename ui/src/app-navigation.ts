@@ -1,5 +1,6 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
+import type { GatewayHelloOk } from "./api/gateway.ts";
 import {
   pluginTabForLocation,
   type PluginTab,
@@ -22,8 +23,8 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // pins reference the catalog without changing its availability. Chat has the
 // Sessions view; Settings/Docs remain in the profile menu.
 // Skills, Skill Workshop and Templates are reached from the Customize sidebar, not sidebar items.
-// Apps is reached from the profile menu and the command palette; Activity is the
-// rail's People section.
+// Apps is reached from the profile menu and the command palette. Activity is
+// the rail's People section or a non-pinnable Pages link on solo gateways.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
@@ -49,8 +50,8 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 /**
- * Plugin pages the Users section lists under Activity instead of the "more" menu: OpenClaw
- * ID remote access manages who can reach this claw.
+ * Plugin pages listed under Activity whenever Users is visible. OpenClaw ID
+ * Remote access manages who can reach this claw.
  */
 export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
   "openclaw-id-access/access",
@@ -66,6 +67,10 @@ export const SIDEBAR_NAVIGATION_VIEWS = [
   "plugin",
 ] as const;
 export type SidebarNavigationView = (typeof SIDEBAR_NAVIGATION_VIEWS)[number];
+
+export function isUsersSidebarVisible(hello: GatewayHelloOk | null | undefined): boolean {
+  return hello?.policy?.hasMultipleSessionSharingIdentities !== false;
+}
 
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
@@ -90,13 +95,14 @@ export function sidebarViewForPage(
   route: NavigationRouteId,
   pluginKey?: string,
   pluginSection = false,
+  usersVisible = true,
 ): ReturnType<typeof sidebarSectionForRoute> | "sessions" | "plugin" {
   const section =
     sidebarSectionForRoute(route) ??
     (route === "plugin" && pluginKey && USERS_SECTION_PLUGIN_PAGES.has(pluginKey)
       ? "online"
       : undefined);
-  if (section) {
+  if (section && (usersVisible || section !== "online")) {
     return section;
   }
   if (pluginSection) {

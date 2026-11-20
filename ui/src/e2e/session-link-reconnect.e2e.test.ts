@@ -23,6 +23,7 @@ suite.define(() => {
     async (navigateAway) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          hasMultipleSessionSharingIdentities: true,
           sessionKey: sourceKey,
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {

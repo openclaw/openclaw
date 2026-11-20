@@ -10,7 +10,7 @@ title: "Sessions and sidebar"
 sidebarTitle: "Sessions and sidebar"
 ---
 
-The sidebar separates navigation into **Pages**, **Sessions**, and **Users**.
+The sidebar separates navigation into **Pages**, **Sessions**, and, on multi-user gateways, **Users**.
 The New session page starts new conversations.
 
 Session-list failures appear in the sidebar while that list is active and clear
@@ -42,7 +42,11 @@ on the device rather than being copied to or reconciled with the Gateway. See
 
 The icon rail stays separate from the selected navigation list. **Pages** opens
 available built-in pages, dashboards, and plugin destinations, **Sessions** opens conversations,
-and **Users** opens the people list. Its header selects **Online** (the default)
+and **Users** opens the people list on multi-user gateways. Single-user gateways
+hide **Users** and restore a saved Users view to **Sessions**. Open **Activity**
+and, when available, **Remote access** from **Pages** on those gateways.
+
+The Users header selects **Online** (the default)
 or **All users**, including offline profiles from the authorized user directory.
 The header is a filter, not a collapse control. Right-click a person, or focus their
 row and press Shift+F10, to open their actions. The **⋯** button appears beside
@@ -57,14 +61,14 @@ from any page and with the list open or collapsed; in team mode it opens the wor
 menu. **Sessions** sits directly below the avatar and opens the session list; its icon
 fills while that list is open. **New session** (**+**) sits in the Sessions list header,
 beside **Filter & sort**, and opens New session for the selected agent; in team mode,
-choose an agent from its menu first. Command-palette search sits below the three view buttons.
+choose an agent from its menu first. Command-palette search sits near the bottom of the rail.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
 Middle-click a search result, or use Cmd+click on Mac or Ctrl+click on Windows and Linux, to open its destination in a new browser tab without closing the palette.
 Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
-also keep clicks immediate. While the list is hidden, none of the three view
+also keep clicks immediate. While the list is hidden, none of the view
 buttons is selected; click any view to open its list. Selecting a different view
 while the list is open switches directly to that view. Clicking Sessions or Users again
 keeps its list open.

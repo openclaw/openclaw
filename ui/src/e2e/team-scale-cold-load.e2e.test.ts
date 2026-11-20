@@ -194,6 +194,7 @@ suite.define(() => {
         {
           ...fixture.scenario,
           deferredMethods: ["connect"],
+          hasMultipleSessionSharingIdentities: true,
           featureMethods: [...fixture.scenario.featureMethods!, "progressCard.refresh"],
         },
         {

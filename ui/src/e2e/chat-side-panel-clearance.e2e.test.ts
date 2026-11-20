@@ -320,7 +320,7 @@ suite.define(() => {
   it("keeps stacked page tabs clear of the collapsed navigation rail", async () => {
     await withPage(
       async ({ page }) => {
-        await installMockGateway(page);
+        await installMockGateway(page, { hasMultipleSessionSharingIdentities: true });
         await page.goto(`${suite.server.baseUrl}sessions`);
 
         const shell = page.locator(".shell");

@@ -26,6 +26,7 @@ async function drag(page: Page, x: number, y: number) {
 
 function installChat(page: Page, content: string) {
   return installMockGateway(page, {
+    hasMultipleSessionSharingIdentities: true,
     featureMethods: [
       "chat.metadata",
       "chat.startup",

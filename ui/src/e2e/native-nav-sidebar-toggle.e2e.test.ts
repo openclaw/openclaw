@@ -369,7 +369,11 @@ suite.define(() => {
   );
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
-    const page = await openPage({ hasTouch: true, nativeNav: false });
+    const page = await openPage({
+      hasTouch: true,
+      nativeNav: false,
+      scenario: { hasMultipleSessionSharingIdentities: true },
+    });
     // People is a view button with a tooltip; the panel's own button collapses it.
     const toggle = page.locator('[data-navigation-view="online"]');
     const sidebarPanel = page.locator(".sidebar-shell");
@@ -438,6 +442,7 @@ suite.define(() => {
     const page = await openPage({
       colorScheme: "dark",
       scenario: {
+        hasMultipleSessionSharingIdentities: true,
         featureMethods: ["chat.metadata", "chat.startup", "sessions.create", "update.run"],
         operatorScopes: ["operator.admin", "operator.read"],
         updateAvailable: UPDATE_AVAILABLE,

@@ -43,10 +43,7 @@ function PinToggle(props: { host: AppSidebarRenderHost; entry: string }) {
   );
 }
 
-/**
- * The rail's "more" menu: every native page, a separator, then every plugin page,
- * each with its pin toggle. Sessions, people and agents have their own sections.
- */
+/** The rail's Pages menu lists built-in and plugin destinations, with pin toggles where supported. */
 export function SidebarPagesMenu(props: {
   host: AppSidebarRenderHost;
   onNavigate: (entry: SidebarZoneEntry | null) => void;
@@ -71,8 +68,8 @@ export function SidebarPagesMenu(props: {
           .map((entry) => entry.key),
       ]),
     ]
-      // The Users section lists its plugin pages itself.
-      .filter((key) => !USERS_SECTION_PLUGIN_PAGES.has(key))
+      // The Users section lists its plugin pages when it is available.
+      .filter((key) => !props.host.usersNavigationVisible || !USERS_SECTION_PLUGIN_PAGES.has(key))
       .map((key) => serializeSidebarEntry({ type: "plugin", key })),
   );
   const Entry = (entry: { key: string }) => {
@@ -118,6 +115,15 @@ export function SidebarPagesMenu(props: {
         true,
       )}
     >
+      <Show
+        when={
+          !props.host.usersNavigationVisible && props.host.sidebarMenus.isRouteEnabled("activity")
+        }
+      >
+        <div class="sidebar-pages__entry">
+          {props.host.sidebarMenus.renderRoute("activity", props.host)}
+        </div>
+      </Show>
       <For each={routes()}>{(key) => <Entry key={key} />}</For>
       <Show when={plugins().length > 0}>
         <span class="sidebar-pages-menu__separator" aria-hidden="true" />

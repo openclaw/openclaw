@@ -18,7 +18,7 @@ suite.define(() => {
         await page.addInitScript((value) => {
           Object.defineProperty(navigator, "platform", { get: () => value });
         }, platform);
-        await installMockGateway(page);
+        await installMockGateway(page, { hasMultipleSessionSharingIdentities: true });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
         await page.locator(".agent-chat__composer-combobox > textarea").waitFor();
         // Cover both lazy-loaded and already-loaded shortcut/draft surfaces.

@@ -1,6 +1,7 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
+  isUsersSidebarVisible,
   type NavigationRouteId,
   type SidebarNavigationView,
 } from "../app-navigation.ts";
@@ -238,9 +239,23 @@ export abstract class AppSidebarBase {
   get updateComplete(): Promise<boolean> {
     return this.complete;
   }
+  get usersNavigationVisible(): boolean {
+    return isUsersSidebarVisible(this.context.gateway.snapshot.hello);
+  }
   prepareRender(): void {
     if (!this.isConnected) {
       return;
+    }
+    if (!this.usersNavigationVisible) {
+      // Move focus before rendering removes the Users button.
+      const users = this.navigationViewElements.get("online");
+      if (users && users.ownerDocument.activeElement === users) {
+        this.navigationViewElements.get("sessions")?.focus({ preventScroll: true });
+      }
+      // The boot snapshot can select Users before the Gateway answers hello.
+      if (this.navigationView === "online") {
+        this.navigationView = "sessions";
+      }
     }
     this.willUpdate();
   }

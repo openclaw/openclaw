@@ -12,6 +12,7 @@ suite.define(() => {
       async ({ page }) => {
         await installMockGateway(page, {
           assistantName: "Atlas",
+          hasMultipleSessionSharingIdentities: true,
           sessionKey: "agent:main:current",
           sessions: [
             sidebarSession("agent:main:current", "Launch planning", { updatedAt: 1791871200000 }),

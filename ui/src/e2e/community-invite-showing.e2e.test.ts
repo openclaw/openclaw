@@ -40,7 +40,11 @@ suite.define(() => {
             sidebarAgentsMode: "chip",
             navWidth: 320,
           });
-          await installMockGateway(page, { communityInvite: true, sessions });
+          await installMockGateway(page, {
+            communityInvite: true,
+            hasMultipleSessionSharingIdentities: true,
+            sessions,
+          });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
           if (mobile) {
             await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();

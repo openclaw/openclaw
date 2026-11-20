@@ -75,7 +75,10 @@ async function openPeople(
   options: Parameters<typeof installMockGateway>[1] = scenario(),
   touch?: "tap" | "click",
 ) {
-  const gateway = await installMockGateway(page, options);
+  const gateway = await installMockGateway(page, {
+    ...options,
+    hasMultipleSessionSharingIdentities: true,
+  });
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, selected));
   if (touch) {
     const toggle = navigationDrawerToggle(page);
