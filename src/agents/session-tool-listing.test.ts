@@ -19,6 +19,7 @@ import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-searc
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { applyAgentToolSurfaceCatalog } from "./tool-surface-plan.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { buildInventoryContinuationToolOpts } from "./tools/continuation-inventory-opts.js";
 
 vi.mock("./openclaw-plugin-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-plugin-tools.js")>()),
@@ -251,4 +252,28 @@ it("lets a later user turn send with message in a series a cron turn started", a
   const refused = await cronMessage!.execute("cron-send", { action: "send", message: "hi" });
   expect(refused.details).toMatchObject({ gated: true });
   expect(JSON.stringify(refused.content)).toContain("message cannot send on this turn");
+});
+
+// Continuation (karmaterminal): cron-runner, memory and compaction turns may not continue.
+it("keeps the continuation tools in a series a cron-runner turn started", async () => {
+  const continuation: OpenClawConfig = {
+    ...config,
+    agents: { ...config.agents, defaults: { continuation: { enabled: true } } },
+    tools: { ...config.tools, alsoAllow: ["computer", "continue_work", "continue_delegate"] },
+  };
+  setRuntimeConfigSnapshot(continuation);
+  const turn = (options: ToolOptions) => ({
+    ...options,
+    config: continuation,
+    ...buildInventoryContinuationToolOpts(continuation),
+  });
+  using chat = retainEmbeddedSessionPromptState(sessionId);
+  const cron = send(chat.state, turn(turns.cron!));
+  const user = send(chat.state, turn(turns.user!));
+  expect(definitions(cron.built)).toEqual(definitions(user.built));
+  const work = (tools: AnyAgentTool[]) => tools.find((tool) => tool.name === "continue_work")!;
+  expect(isAgentToolExecutionAvailable(work(user))).toBe(true);
+  expect(isAgentToolExecutionAvailable(work(cron))).toBe(false);
+  const refused = await work(cron).execute("cron-continue", { reason: "more" });
+  expect(JSON.stringify(refused.content)).toContain("continue_work is not available in this turn");
 });

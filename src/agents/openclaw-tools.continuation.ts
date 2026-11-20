@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { gateAgentToolExecution } from "./agent-tool-availability.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { buildInventoryContinuationToolOpts } from "./tools/continuation-inventory-opts.js";
 import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
 import { createContinueWorkTool } from "./tools/continue-work-tool.js";
 import { createRequestCompactionTool } from "./tools/request-compaction-tool.js";
@@ -13,6 +15,7 @@ type OpenClawContinuationToolOptions = Pick<
   OpenClawToolsOptions,
   | "drainsContinuationDelegateQueue"
   | "disableContinuationTools"
+  | "fixedToolListing"
   | "continueWorkOpts"
   | "requestCompactionOpts"
 >;
@@ -26,11 +29,25 @@ export function createOpenClawContinuationTools(
     runId?: string;
   },
 ): AnyAgentTool[] {
-  const enabled =
-    options.disableContinuationTools !== true &&
-    options.config?.agents?.defaults?.continuation?.enabled === true;
-  if (!enabled) {
+  if (options.config?.agents?.defaults?.continuation?.enabled !== true) {
     return [];
+  }
+  if (options.disableContinuationTools === true) {
+    // A fixed listing sends one tool list per prompt series, pinned at its first request
+    // (#201710). A turn that may not continue lists the same tools, built with the inventory
+    // callbacks, and refuses their calls.
+    return options.fixedToolListing
+      ? createOpenClawContinuationTools({
+          ...options,
+          ...buildInventoryContinuationToolOpts(options.config),
+          disableContinuationTools: false,
+        }).map((tool) =>
+          gateAgentToolExecution(
+            tool,
+            `${tool.name} is not available in this turn. Do not retry ${tool.name}.`,
+          ),
+        )
+      : [];
   }
 
   const liveSessionKey = options.runSessionKey ?? options.agentSessionKey;

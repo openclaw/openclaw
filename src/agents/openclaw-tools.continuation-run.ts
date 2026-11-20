@@ -22,6 +22,7 @@ export function resolveOpenClawContinuationToolParamsForRun(params: {
     runId: options?.runId,
     drainsContinuationDelegateQueue: options?.drainsContinuationDelegateQueue,
     disableContinuationTools: options?.disableContinuationTools,
+    fixedToolListing: options?.fixedToolListing,
     continueWorkOpts: options?.continueWorkOpts ?? inventoryContinuationOpts.continueWorkOpts,
     requestCompactionOpts:
       options?.requestCompactionOpts ?? inventoryContinuationOpts.requestCompactionOpts,
