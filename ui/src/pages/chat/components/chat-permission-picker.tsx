@@ -120,7 +120,15 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       return;
     }
     const active = menu.overlay.surface.ownerDocument.activeElement;
-    if (active !== openingFocus && active !== menu.overlay.surface) {
+    if (
+      active !== openingFocus &&
+      active !== menu.overlay.surface &&
+      !(
+        active === menu.overlay.surface.ownerDocument.body &&
+        openingFocus &&
+        !openingFocus.isConnected
+      )
+    ) {
       return;
     }
     const last = focusLast ? menu.itemElements().at(-1) : undefined;

@@ -1,3 +1,4 @@
+import { mergeCatalog } from "../lib/merge-catalog.ts";
 import type { TranslationMap } from "../lib/types.ts";
 import { en } from "./en.ts";
 
@@ -140,31 +141,21 @@ const enModelControls = {
       label: "Permissions",
       help: "Choose what the agent can read, edit, and run in this session.",
       default: "Default",
-      agentDefault: "Agent default",
-      agentDefaultWithMode: "Agent default ({mode})",
-      defaultDescription: "Uses this agent’s settings.",
       defaultWithMode: "Default ({mode})",
-      fullRequiresAdmin: "Only admins can turn on Full access.",
-      requiresAdmin: "Requires admin access.",
       updateFailed: "Couldn’t change permissions. Try again.",
       refreshFailed: "Couldn’t refresh this session. Reload to see the saved permissions.",
       modes: {
         "read-only": {
           label: "Read only",
-          description:
-            "Can read files in this session’s workspace. Can’t edit files or run commands.",
         },
         guarded: {
           label: "Ask me",
-          description: "Asks you before doing anything outside the workspace.",
         },
         workspace: {
           label: "Auto-review",
-          description: "An AI reviewer approves actions outside the workspace.",
         },
         full: {
           label: "Full access",
-          description: "Edits files and runs commands anywhere, without review.",
         },
       },
     },
@@ -173,7 +164,7 @@ const enModelControls = {
 
 export const registerModelControlsEnglish = Object.assign(
   () => {
-    en.chat = Object.assign({}, en.chat, enModelControls.chat);
+    mergeCatalog(en, enModelControls);
   },
   { catalog: enModelControls },
 );
