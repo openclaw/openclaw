@@ -30,7 +30,7 @@ import {
   isPublicationTransportEnabled,
   isPublicationTransportMethod,
   isPublicationTransportScope,
-} from "../publication-transport.js";
+} from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";

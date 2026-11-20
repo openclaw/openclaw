@@ -35,7 +35,7 @@ import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js"
 import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
-import { preparePublicationTransportAdmission } from "../../publication-transport.js";
+import { preparePublicationTransportAdmission } from "../../publication-reader.js";
 import { formatForLog } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import {

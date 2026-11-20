@@ -4,7 +4,7 @@ import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
 import {
   isPublicationTransportMethod,
   isPublicationTransportCurrent,
-} from "../../publication-transport.js";
+} from "../../publication-reader.js";
 import { MAX_BUFFERED_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveGatewayConnectPolicyFailure } from "./connect-admission.js";

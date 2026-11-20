@@ -17,7 +17,7 @@ import {
   TALK_SCOPE,
   WRITE_SCOPE,
 } from "./operator-scopes.js";
-import { isPublicationTransportScope } from "./publication-transport.js";
+import { isPublicationTransportScope } from "./publication-reader.js";
 import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
