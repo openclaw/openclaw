@@ -8,6 +8,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { cleanScratch, closeScratchCleanupCursor } from "../../infra/scratch-cleanup.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -15,7 +16,7 @@ import {
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { requireGit, requireGitBuffer } from "./git.js";
-import { insertRegistryWorktree } from "./registry.js";
+import { insertRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -161,6 +162,32 @@ it("preserves shared packs across local clones and stops rewriting private packs
       input: `${objects.join("\n")}\n`,
     }),
   ).toBe(objects.map(() => "blob").join("\n"));
+
+  // Expiry releases the other inode names; the unchanged consolidation owner can
+  // then fold the formerly shared base packs without duplicating pinned storage.
+  const scratch = path.join(root, ".openclaw/tmp");
+  await fs.mkdir(scratch, { recursive: true });
+  for (const [index, clone] of clones.entries()) {
+    await fs.rename(clone, path.join(scratch, `landing-${index}`));
+    await updateRegistryWorktree(env, `hardlinks-${index}`, { removedAt: Date.now() });
+  }
+  const cursor = {};
+  try {
+    const expired = await cleanScratch({
+      targets: [{ root, kind: "checkout", isLive: () => false }],
+      now: Date.now() + 25 * 60 * 60_000,
+      cursor,
+      assertCurrent() {},
+      pause: async () => {},
+    });
+    expect(expired).toMatchObject({ entriesRemoved: 3, errors: [] });
+  } finally {
+    await closeScratchCleanupCursor(cursor);
+  }
+  expect((await inventory(source)).every((pack) => pack.nlink === 1)).toBe(true);
+  await insertRegistryWorktree(env, makeWorktreeRecord(source, "released-base"));
+  await createWorktreeGitMaintenance(env)({ progress: new WorktreeGcProgress() });
+  expect(await inventory(source)).toHaveLength(1);
 });
 
 it.each([false, true])(
