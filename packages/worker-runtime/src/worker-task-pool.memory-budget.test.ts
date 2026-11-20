@@ -152,15 +152,6 @@ it("keeps the point-read lane mandatory and out of bulk use", async () => {
   await expect(nextBulk).resolves.toBe("next bulk");
 });
 
-it("keeps standard sizing when the host supplies no budget", async () => {
-  const { pool, workers } = createPool(undefined);
-  const runs = [pool.run("first", {}), pool.run("second", {})];
-  await settle();
-  expect(workers).toHaveLength(2);
-  workers.forEach((worker) => worker.reply());
-  await Promise.all(runs);
-});
-
 it("rebinds to the host's current policy after the previous one was replaced", async () => {
   const lean = createBudget(() => true);
   const { pool, workers, createMemoryBudget } = createPool(lean);

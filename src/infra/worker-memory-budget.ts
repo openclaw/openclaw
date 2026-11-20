@@ -92,12 +92,12 @@ export type WorkerMemoryBudgetSnapshot = {
 
 const events = channel("openclaw.worker.budget");
 const log = createSubsystemLogger("gateway/resources");
-const state = resolveGlobalSingleton(
+const state = resolveGlobalSingleton<{
+  budget?: ReturnType<typeof createWorkerMemoryBudget>;
+  hosted: HostedSlotPredicate;
+}>(
   Symbol.for("openclaw.workerMemoryBudget"),
-  () => ({
-    budget: undefined as ReturnType<typeof createWorkerMemoryBudget> | undefined,
-    hosted: (() => false) as HostedSlotPredicate,
-  }),
+  () => ({ hosted: () => false }),
   (current) => {
     current.budget?.retire();
     current.budget = undefined;
