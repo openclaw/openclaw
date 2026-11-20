@@ -199,6 +199,17 @@ if (trial?.pending && counts) {
   if (linked(fs.readlinkSync(slot)) === linked(trial.previous)) {
     switchLink(trial.target);
   }
+  // A deferred conversion left the 7db69bedeab6-era link on the old release; it now follows.
+  const legacySlot = path.join(prefix, "lib", "node_modules", "openclaw");
+  if (fs.lstatSync(legacySlot, { throwIfNoEntry: false })?.isSymbolicLink()) {
+    const temporary = legacySlot + ".follow-" + process.pid;
+    const followText = process.platform === "win32" ? slot : path.relative(path.dirname(legacySlot), slot);
+    fs.symlinkSync(followText, temporary, "junction");
+    if (process.platform === "win32") {
+      fs.rmSync(legacySlot, { force: true });
+    }
+    fs.renameSync(temporary, legacySlot);
+  }
   fs.rmSync(trialFile, { force: true });
   trial = undefined;
 }

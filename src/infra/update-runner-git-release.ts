@@ -17,6 +17,7 @@ import {
 } from "./git-release.js";
 import { readPackageVersion } from "./package-json.js";
 import {
+  packageReleaseGlobalRoot,
   packageReleasePrefixOfRoot,
   readPackageReleaseSlotSync,
 } from "./package-release-slot-path.js";
@@ -522,16 +523,20 @@ export async function updateGitRelease(params: {
       pending: opts.deferReleaseActivation,
     });
   }
-  if (serving !== slot && !opts.deferReleaseActivation) {
-    // The 7db69bedeab6-era launcher and CLI enter through lib/node_modules: keep that path, but
-    // make it follow the new link, so there is one selection. A --no-restart update leaves it:
-    // the running Gateway reads its build through it, and a changed build would restart it.
-    const legacy = await capturePackageReleaseSlot(serving);
-    if (legacy.kind === "link") {
+  // The 7db69bedeab6-era launcher and CLI enter through lib/node_modules: keep that path, but
+  // make it follow the new link, so there is one selection. A --no-restart update leaves it (the
+  // running Gateway reads its build through it, and a changed build would restart it); the
+  // launcher redirects it when that deferred release starts, and any later update repairs it.
+  const legacySlot = path.join(packageReleaseGlobalRoot(prefix), "openclaw");
+  const legacyTarget = packageReleaseLinkTarget(legacySlot, slot);
+  const legacyEntry = await fs.lstat(legacySlot).catch(() => null);
+  if (!opts.deferReleaseActivation && legacyEntry?.isSymbolicLink()) {
+    const legacy = await capturePackageReleaseSlot(legacySlot);
+    if (legacy.kind === "link" && legacy.target !== legacyTarget) {
       await switchPackageReleaseLink({
-        slot: serving,
+        slot: legacySlot,
         expected: { identity: legacy.identity, target: legacy.target },
-        target: packageReleaseLinkTarget(serving, slot),
+        target: legacyTarget,
         assertCurrent: () => {},
       });
     }

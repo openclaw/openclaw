@@ -723,7 +723,14 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         await fs.readFile(path.join(prefix, PACKAGE_RELEASES_DIR, GIT_RELEASE_TRIAL), "utf8"),
       ) as Trial & { pending: boolean };
       expect(trial.pending).toBe(true);
-      expect(path.resolve(prefix, trial.target)).not.toBe(served);
+      const candidate = path.resolve(prefix, trial.target);
+      expect(candidate).not.toBe(served);
+      // The deferred start selects the target and the legacy link follows it.
+      spawnSync(process.execPath, [path.join(prefix, GIT_RELEASE_LAUNCHER), "gateway"], {
+        encoding: "utf8",
+      });
+      expect(await fs.realpath(gitReleaseSlot(prefix))).toBe(await fs.realpath(candidate));
+      expect(await fs.realpath(legacy)).toBe(await fs.realpath(candidate));
     },
   );
 
