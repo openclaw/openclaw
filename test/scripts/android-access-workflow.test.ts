@@ -35,7 +35,7 @@ it.skipIf(process.platform === "win32").each([4096, 16384])(
     mkdirSync(bin);
     const commands: Record<string, string> = {
       sdkmanager: "exit 0",
-      avdmanager: "exit 0",
+      avdmanager: 'read -r answer; test "$answer" = no',
       timeout: 'shift 3; exec "$@"',
       node: 'printf "%s\\n" "$@" > "$RUNNER_TEMP/build-args"',
       emulator: `if [ "$1" = -accel-check ]; then
