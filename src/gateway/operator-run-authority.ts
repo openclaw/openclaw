@@ -46,6 +46,7 @@ import {
   openclawIdTunnelRolePolicy,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
@@ -199,6 +200,7 @@ function prepareRunModelPolicy(params: {
 /** Bridge a prepared linked principal while retaining its exact channel admission capability. */
 export function captureChannelOperatorRunAuthority(input: {
   profileId: string;
+  openclawIdAccountIds?: readonly string[];
   recoveryReference?: UserChannelAuthorizationReference;
   openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
   assignedRole: string | null;
@@ -221,6 +223,7 @@ export function captureChannelOperatorRunAuthority(input: {
         params.assignedRole,
         cfg,
         params.githubLogin ?? null,
+        operatorRoleSubject(params),
       ),
     );
   const role = resolveRole(initialConfig);
@@ -246,6 +249,7 @@ export function captureChannelOperatorRunAuthority(input: {
     retain: revocation.retain,
     readCurrentRoleFacts: () => ({
       assignedRole: params.assignedRole,
+      openclawIdAccountIds: params.openclawIdAccountIds,
       githubLogin: params.githubLogin ?? null,
       ...(membershipPolicy ? { policy: resolveRole(params.getRuntimeConfig()) } : {}),
     }),
@@ -434,7 +438,13 @@ export async function captureGatewayOperatorRunAuthority(input: {
     cfg: OpenClawConfig,
   ) =>
     openclawIdSubjectRolePolicy(openclawIdPrincipal, () =>
-      resolveOperatorRolePolicyForAssignment(profileId, assignedRole, cfg, githubLogin),
+      resolveOperatorRolePolicyForAssignment(
+        profileId,
+        assignedRole,
+        cfg,
+        githubLogin,
+        operatorRoleSubject(assertProfileCurrent()),
+      ),
     );
   const revoke = (reason: unknown) => {
     if (references > 0) {

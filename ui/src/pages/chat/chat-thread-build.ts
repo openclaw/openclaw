@@ -2,17 +2,14 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readNodePermissionRequest } from "../../../../packages/gateway-protocol/src/node-permissions.js";
 import { readModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
-import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  type ChatGuardianNotice,
   type ChatItem,
   type MessageGroup,
   accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   trimAccumulatedStreamPrefix,
-  type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { stripHeartbeatTokenForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
@@ -23,6 +20,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { hasAutomationActivity } from "./chat-automation-projection-loader.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -40,26 +38,19 @@ import {
   createSubmittedModelNoticeProjector,
   projectChatSystemNotice,
 } from "./chat-system-notice.ts";
+import type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
 import {
   canvasAssistantItemKey,
   collectCanvasTurns,
   reconcileLiveCanvasPreviews,
 } from "./chat-thread-canvas.ts";
-import {
-  groupChatDisplayItems,
-  prepareChatStreamOnset,
-  type ChatThreadDisplayProps,
-} from "./chat-thread-display.ts";
+import { groupChatDisplayItems, prepareChatStreamOnset } from "./chat-thread-display.ts";
 import {
   displayChatHistory,
   isHiddenChatCommentary,
   type ChatItemsFacts,
 } from "./chat-thread-facts.ts";
-import {
-  placeChatInputs,
-  type ChatInputOrderState,
-  type ChatInputPlacementProps,
-} from "./chat-thread-inputs.ts";
+import { placeChatInputs, type ChatInputOrderState } from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   appendActiveRunItem,
@@ -94,31 +85,8 @@ import {
   createStreamSegmentProjector,
 } from "./chat-thread-stream-projection.ts";
 import { readProjectedContinuation, safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import type { CompactionStatus } from "./tool-stream-contract.ts";
 
-export type BuildChatItemsProps = ChatInputPlacementProps &
-  ChatThreadDisplayProps & {
-    paneId: string;
-    sessionKey: string;
-    archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
-    compactionStatus?: CompactionStatus | null;
-    /** Invalidates cached display copy when the active UI language changes. */
-    locale?: string;
-    messages: unknown[];
-    toolMessages: unknown[];
-    guardianNotices?: ChatGuardianNotice[];
-    streamSegments: ChatStreamSegment[];
-    persistCommentary?: boolean;
-    /** The answer is visible or the runtime only owns background settlement. */
-    runFinalizing?: boolean;
-    /** True while the current session has an abortable live run. */
-    runActive?: boolean;
-    /** Set while a run that handed off is idle and its subagents are still running. */
-    subagentWait?: { startedAt: number; runId: string };
-    questionPrompts?: readonly QuestionPrompt[];
-    /** True while chat history is loading (initial load or background reload). */
-    loading?: boolean;
-  };
+export type { BuildChatItemsProps } from "./chat-thread-build.types.ts";
 
 export function buildChatItems(
   props: BuildChatItemsProps,
@@ -203,6 +171,12 @@ export function buildChatItems(
     extractToolCardsCached(message).some((card) =>
       readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
     );
+  const automationTools = mode === "history" ? [] : tools;
+  const automation =
+    props.projectAutomations &&
+    (history.some(hasAutomationActivity) || automationTools.some(hasAutomationActivity))
+      ? props.projectAutomations(history, automationTools, facts?.firsts)
+      : undefined;
   const historyItems = buildMessageItems(history);
   const canvasTurns = collectCanvasTurns(historyItems, normalizedHistory, matchesSearch);
   const compaction = props.compactionStatus;
@@ -214,6 +188,13 @@ export function buildChatItems(
   for (const [i, item] of historyItems.entries()) {
     const msg = item.message;
     const itemKey = item.key;
+    for (const card of automation?.cards.get(msg) ?? []) {
+      hideSearchMiss(card);
+      items.push(card);
+    }
+    if (automation?.consumed.has(msg)) {
+      continue;
+    }
     if (isHiddenChatCommentary(props, msg, activeCommentaryRunId)) {
       items.push({
         kind: "notice",
@@ -641,7 +622,10 @@ export function buildChatItems(
     toolItems.map((tool) => tool.projection),
   );
   for (const tool of toolItems) {
-    for (const item of pluginInlineViewItems(tool.projection.item, inlineInvocations)) {
+    for (const item of [
+      ...(automation?.cards.get(tool.projection.item.message) ?? []),
+      ...pluginInlineViewItems(tool.projection.item, inlineInvocations),
+    ]) {
       hideSearchMiss(item);
       projections.push({
         ...tool.projection,

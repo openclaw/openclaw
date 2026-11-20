@@ -44,31 +44,42 @@ export function usesGitReleases(
 }
 
 /**
- * A Git checkout install runs from releases on #198835's linked-root layout:
- * `<stateDir>/git-install/lib/node_modules/openclaw -> releases/<id>/lib/node_modules/openclaw`,
- * where each release is a detached worktree of the checkout. The checkout itself
- * is never the service path and an update never changes it.
+ * A Git checkout install runs from releases behind a link:
+ * `<stateDir>/git-install/openclaw -> releases/<id>/openclaw`, where each release is a
+ * detached worktree of the checkout, built where it stays. The checkout itself is never the
+ * service path and an update never changes it.
  */
 export function resolveGitReleasePrefix(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "git-install");
 }
 
 export function gitReleaseSlot(prefix: string): string {
-  return path.join(packageReleaseGlobalRoot(prefix), "openclaw");
+  return path.join(prefix, "openclaw");
+}
+
+/**
+ * The link that serves now. Main builds from #199706 until this fix (which report version
+ * 2026.11.5) kept the link and its releases at `lib/node_modules/openclaw`, where Node refuses to
+ * strip the types of a release's plugin sources (#201874). That link serves until the next update
+ * rebuilds the serving release outside it.
+ */
+export function servingGitReleaseSlot(prefix: string): string {
+  const slot = gitReleaseSlot(prefix);
+  const legacy = path.join(packageReleaseGlobalRoot(prefix), "openclaw");
+  return !readPackageReleaseSlotSync(slot) && readPackageReleaseSlotSync(legacy) ? legacy : slot;
 }
 
 /** The release link's prefix when `entrypoint` starts through it, for the launcher. */
 export function resolveGitReleaseLauncherForEntrypoint(entrypoint: string): string | null {
-  const slot = path.dirname(path.dirname(path.resolve(entrypoint)));
-  const prefix = path.dirname(path.dirname(path.dirname(slot)));
-  return gitReleaseSlot(prefix) === slot && readPackageReleaseSlotSync(slot)
-    ? path.join(prefix, GIT_RELEASE_LAUNCHER)
-    : null;
+  const packagePath = path.dirname(path.dirname(path.resolve(entrypoint)));
+  const slot =
+    path.basename(packagePath) === "openclaw" ? readPackageReleaseSlotSync(packagePath) : null;
+  return slot ? path.join(slot.prefix, GIT_RELEASE_LAUNCHER) : null;
 }
 
 /** The launcher's release entry, so service ownership reads the release it starts. */
 export function resolveGitReleaseEntrypointForLauncher(entrypoint: string): string | null {
   return path.basename(entrypoint) === GIT_RELEASE_LAUNCHER
-    ? path.join(gitReleaseSlot(path.dirname(entrypoint)), "dist", "index.js")
+    ? path.join(servingGitReleaseSlot(path.dirname(entrypoint)), "dist", "index.js")
     : null;
 }

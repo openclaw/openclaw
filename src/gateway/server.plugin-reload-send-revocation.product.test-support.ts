@@ -62,9 +62,8 @@ const DONE = "BOB-TARGET-COMPLETED-7d2e";
 const WAKE =
   "Continue the original task in this conversation. Do not repeat a completed operation.";
 const UNDELIVERED = "could not continue this conversation automatically";
-// The admitted continuation survives; the next start checks Bob's revoked source.
-const CONTINUATION_REVOKED =
-  "operator source authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.";
+// Observed refusal: the replay's start re-admits Bob's origin, which revocation ended.
+const CONTINUATION_REVOKED = "Operator access was revoked; start a new user turn.";
 const ORIGIN = "https://control.revocation.example.test";
 const ADMIN = "admin@revocation.example.test";
 const ALICE = "alice@revocation.example.test";
@@ -585,25 +584,21 @@ it.for(["allowed", "revoked"] as const)(
       ).toEqual([result.runId, result.runId]);
       expect(gatewayCalls).toHaveBeenCalled();
       if (targetEntry?.sessionId) {
+        // History keeps terminal refusals; a refused replay is cancelled, never left queued.
         expect(
           await listSessionPendingInputs({
             agentId: "main",
             sessionKey: targetKey,
             sessionId: targetEntry.sessionId,
           }),
-        ).toEqual({
-          // Refused input remains a terminal receipt, never a queued replay.
-          items: revoked
-            ? [
-                expect.objectContaining({
-                  runId: result.runId,
-                  state: "cancelled",
-                  endCause: "revoked",
-                }),
-              ]
-            : [],
-          total: revoked ? 1 : 0,
-        });
+        ).toMatchObject(
+          revoked
+            ? {
+                items: [{ runId: result.runId, state: "cancelled", endCause: "revoked" }],
+                total: 1,
+              }
+            : { items: [], total: 0 },
+        );
       }
       if (revoked) {
         expect(revocation).toEqual({ method: revokeMethod, bobRefused: true });
@@ -614,12 +609,9 @@ it.for(["allowed", "revoked"] as const)(
         expect(durableWakes).toHaveLength(0);
         expect(durableNotices).toHaveLength(1);
         expect(notices).toHaveLength(1);
-        // The resume failure has public copy; the result preserves the replay refusal.
+        // The host notice carries the refused replay's own settled outcome.
         const noticeText = messageText(durableNotices[0]);
-        expect(noticeText).toContain(
-          UNDELIVERED +
-            ": ⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.",
-        );
+        expect(noticeText).toContain(UNDELIVERED + ": " + CONTINUATION_REVOKED);
         settledOutcome = between(noticeText, "Its result: ", ". Send a message");
         expect(settledOutcome).toEqual({
           outcomes: [

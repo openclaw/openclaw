@@ -84,7 +84,7 @@ function transcriptContent(messages: unknown[] | undefined) {
 
 // Fixed provider decisions; real identified operators, tools, authority and persisted effects.
 it(
-  "finishes admitted Goal returns, refuses revoked successors, and cancels on Stop",
+  "completes authorized Goal returns and cancels retained work on role loss or Stop",
   { timeout: 120_000 },
   async ({ signal }) => {
     const state = await createOpenClawTestState({
@@ -183,8 +183,8 @@ it(
         } else if (scenario.parentCalls === 4) {
           expect(text).toContain(scenario.childResult);
           expect(text).toContain("Active goal:");
-          // Hold actual provider I/O only after the committed child return admitted
-          // requester completion. Only explicit Stop cancels this admitted turn.
+          // Hold actual provider I/O after the committed child return. The retained
+          // turn still ends when its profile authority is revoked or Stop is requested.
           response.once("close", () => {
             if (!response.writableFinished) {
               scenario.providerCancelled.resolve();
@@ -201,7 +201,7 @@ it(
             });
           }
         } else if (scenario.parentCalls === 5) {
-          expect(scenario.stop).toBe(false);
+          expect(scenario.stop || scenario.revoke).toBe(false);
           expect(typeof output === "string" ? JSON.parse(output) : output).toMatchObject({
             status: "forbidden",
           });
@@ -384,7 +384,13 @@ it(
           ).toBe(true);
           await admin.request("users.setRole", { profileId: scenario.profile.id, role: "revoked" });
           revokedEventBoundary = events.length;
-          // Release the admitted response; the next Goal turn checks current policy.
+          await wait(
+            awaitGateBeforeSettlement(
+              scenario.providerCancelled.promise,
+              waitForGatewayActiveWork(30_000),
+              "Role revocation settled without cancelling the retained Goal provider request",
+            ),
+          );
           scenario.releaseSettlement.resolve();
         } else if (scenario.stop) {
           expect(await admin.request("sessions.abort", { key: scenario.sessionKey })).toMatchObject(
@@ -411,11 +417,9 @@ it(
         expect(
           loadSessionEntry({ agentId: "main", sessionKey: scenario.sessionKey })?.goal,
         ).toMatchObject(
-          scenario.stop
+          scenario.stop || scenario.revoke
             ? { status: "paused", continuationTurns: 0 }
-            : scenario.revoke
-              ? { status: "active", continuationTurns: 0 }
-              : { status: "complete", continuationTurns: 1 },
+            : { status: "complete", continuationTurns: 1 },
         );
         if (!scenario.revoke && !scenario.stop) {
           await wait(scenario.finalReceived.promise);
@@ -447,7 +451,7 @@ it(
             history.messages.some((message) =>
               assistantText(message)?.includes(scenario.settledText),
             ),
-          ).toBe(true);
+          ).toBe(false);
           expect(
             events.slice(beforeRevocation.events).filter((event) => {
               const payload = asOptionalRecord(event.payload);
@@ -502,7 +506,7 @@ it(
               );
             }),
           ).toEqual([]);
-          expect(scenario.parentCalls).toBe(beforeRevocation.parent + 1);
+          expect(scenario.parentCalls).toBe(beforeRevocation.parent);
           expect(scenario.childCalls).toBe(beforeRevocation.child);
         } else if (scenario.stop) {
           expect(scenario.parentCalls).toBe(beforeRevocation.parent);

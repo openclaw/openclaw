@@ -46,12 +46,15 @@ const STABLE_116_CI_FAILURES = new Map([
 
 const FRV16_TARGET_SHA = "995f9059b6e6fe3ba0865a3354924fd2bcbfceea";
 const FRV16_CI_FAILURES = new Map([
-  ...[15, 23, 3, 32, 11, 41, 18, 30].map((shard) => [
+  ...[15, 23, 3, 32, 11, 41, 18, 30, 17, 21, 43, 20, 19].map((shard) => [
     "checks-node-compact-large-" + shard + " (node)",
     "checks-node-core-test-nondist-shard",
   ]),
   ["checks-node-compact-small-38 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-small-12 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-large-39 (bun)", "checks-node-core-test-nondist-shard"],
   ["checks-ui-e2e (2/13)", "checks-ui-e2e"],
+  ["checks-ui-e2e (4/13)", "checks-ui-e2e"],
 ]);
 const FRV16_QA_JOB = "Run QA Lab runtime-pair lane (core)";
 
@@ -77,10 +80,45 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
   ["android-access-native (16384, google_apis_ps16k)", "android-access-native"],
 ]);
 
+const NOV19_CI_FAILURES = new Map([
+  ["checks-ui-e2e-real-gateway (1/2)", "checks-ui-e2e-real-gateway"],
+  ["checks-node-compact-large-36 (node)", "checks-node-core-test-nondist-shard"],
+  ["checks-node-compact-large-41 (node)", "checks-node-core-test-nondist-shard"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[...NOV19_CI_FAILURES.keys()].map((jobName) => ({
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney authorized whole-shard acceptance on 2026-11-19 at 11:58 UTC. " +
+      "FRV 44493699274 observed desktop APT setup timeout, Node36 shutdown persistence " +
+      "deadline failure, and Node41 missing command output. These are accepted risks, " +
+      "not proven flakes or passing coverage. Preserve raw failures and required execution; " +
+      "other jobs, candidates, cancelled/missing evidence, and integrity gates remain blocking.",
+  })),
+  {
+    targetVersion: "2026.11.6",
+    targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
+    childRole: "releaseChecksIndependent",
+    jobName:
+      "Run repo/live E2E validation / Native live suites (Native live gateway profiles OpenCode Go smoke)",
+    reason:
+      "Dallin Romney authorized this exact external availability gap on 2026-11-19 at 11:04 UTC. " +
+      "FRV 44493699274/1, child 44494417449/1, job 135459584818 failed before inference because " +
+      "opencode-go/glm-5.2 was missing (170 passed, 1 failed, 1 skipped). An authenticated " +
+      "read-only account model listing returned HTTP 200 with glm-5.3 and flash present but " +
+      "glm-5.2 absent; no inference was performed. This does not establish CI account entitlement, " +
+      "global retirement, deprecation, or a runtime fix; official docs still list glm-5.2. " +
+      "Accept only this named failed job on this candidate across runs and attempts. Preserve raw " +
+      "failure and required execution. Other jobs, candidates, missing/cancelled/incomplete " +
+      "evidence, integrity, install/update and publication gates remain blocking.",
+  },
   {
     targetVersion: "2026.11.6",
     targetSha: "06afb10d3272cc9deaf38ca6a3b7b839d5935638",
@@ -88,6 +126,15 @@ const RELEASE_VALIDATION_WAIVERS = [
     jobName: "checks-node-compact-large-23 (node)",
     testFailures: {
       stepName: "Run Node test shard",
+      alternativeSignatures: [
+        [
+          {
+            kind: "vitest",
+            file: "src/gateway/worker-environments/live-events-settlement.test.ts",
+            test: "worker live event settlement joins writes before RPC acknowledgment (revoked) :: Error: ENOTEMPTY: directory not empty, rmdir '/tmp/oc-vt-qFaVWf/oc-vt-0XBHte/openclaw-worker-service-2laeTn'",
+          },
+        ],
+      ],
       signatures: [
         {
           kind: "vitest",
@@ -97,7 +144,7 @@ const RELEASE_VALIDATION_WAIVERS = [
       ],
     },
     reason:
-      "Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact worker deletion fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371689694, if it recurs on this repaired candidate. The queued-deletion fixture now waits for the environment queue before releasing provisioning; the original failure was not reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney also authorized the exact ENOTEMPTY cleanup failure from CI 44494425456 job 135458736030 on 2026-11-19 at 13:06 UTC; this is accepted risk, not proof of a harmless flake. Dallin Romney authorized known-error acceptance on 2026-11-19 at 08:22 UTC after diagnosis and repair. Accept only the exact worker deletion fixture assertion from FRV 44467669773/1, CI 44468273128/1 job 135371689694, if it recurs on this repaired candidate. The queued-deletion fixture now waits for the environment queue before releasing provisioning; the original failure was not reproduced. This is accepted failure, not proof of a harmless flake or a passing test. Preserve complete execution and raw evidence. Changed or additional failures, other candidates, cancellation, incomplete coverage, security/integrity, install/update and publication gates remain blocking.",
   },
   {
     targetVersion: "2026.11.6",
@@ -132,7 +179,7 @@ const RELEASE_VALIDATION_WAIVERS = [
     targetVersion: "2026.11.10-beta.1",
     targetSha: FRV16_TARGET_SHA,
     reason:
-      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
+      "Dallin Romney authorized tooling-only acceptance on 2026-11-19 at 06:44 UTC, preserving C=Q 995f9059b6e6fe3ba0865a3354924fd2bcbfceea. The lead assessment found no demonstrated high-risk product defect; runtime, worker, UI and cron uncertainty remains accepted, not fixed or proven flaky. On 2026-11-19 at 10:12 UTC he additionally authorized the eight observed FRV17 failures after a focused check of the ambiguous chat-permissions case. That unchanged-candidate Bun test passed, including private-message and access-revocation assertions; the original CI failure remains unexplained. The other new failures are an infrastructure download timeout and suspected timing failures, not established harmless flakes. Following his 2026-11-19 07:06 UTC instruction, these grants apply across runs and attempts for the named terminal failed jobs on this exact release and candidate. Preserve raw failures, required execution and complete evidence. Other jobs, targets, unknown aggregate causes, missing/cancelled/incomplete evidence, integrity, install/update and publication gates remain blocking.",
   })),
   ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.6",
@@ -584,14 +631,15 @@ function aggregateCauses(waiver) {
   if (
     waiver.targetVersion === "2026.11.6" &&
     waiver.childRole === "normalCi" &&
-    STABLE_116_CI_FAILURES.has(waiver.jobName)
+    (STABLE_116_CI_FAILURES.has(waiver.jobName) || NOV19_CI_FAILURES.has(waiver.jobName))
   ) {
     return [
       {
         jobName: "openclaw/ci-gate",
         stepName: "Verify selected CI lanes",
         causes: [
-          STABLE_116_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+          (STABLE_116_CI_FAILURES.get(waiver.jobName) ?? NOV19_CI_FAILURES.get(waiver.jobName)) +
+            " finished with failure (selected=true)",
         ],
         exactCauses: true,
       },
@@ -810,7 +858,11 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const signatures = parseNodeFailureReport(String(await getJobLog(job.id)), true);
-    if (!isDeepStrictEqual(signatures, waiver.testFailures.signatures)) {
+    if (
+      ![waiver.testFailures.signatures, ...(waiver.testFailures.alternativeSignatures ?? [])].some(
+        (accepted) => isDeepStrictEqual(signatures, accepted),
+      )
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release test job has an unwaived or incomplete failure: ${waiver.jobName}`,
       );
