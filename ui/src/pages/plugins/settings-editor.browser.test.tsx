@@ -181,6 +181,7 @@ describe("grouped plugin settings", () => {
       { wrapper: provider.wrapper },
     );
     await settle();
+    await page.getByText("Slots", { exact: true }).click();
     await expect.element(page.getByRole("textbox", { name: "Label", exact: true })).toBeVisible();
     const input = mounted.container.querySelector<HTMLInputElement>('input[aria-label="Label"]')!;
     input.focus();
