@@ -9,6 +9,31 @@ const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.tes
 
 const routes = ["a .git file", "alternates", "symlinked objects and refs", "an unreadable folder"];
 
+it("refuses an unrelated branch even when its clone has the project tip", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const project = path.join(state.root, "project");
+    await fs.mkdir(project);
+    await requireGit(project, ["init", "-q", "-b", "main"]);
+    await requireGit(project, [...commit, "--allow-empty", "-m", "Project base"]);
+    const checkout = path.join(state.workspaceDir, "checkout");
+    await requireGit(state.workspaceDir, ["clone", "-q", project, checkout]);
+    await requireGit(checkout, ["switch", "--orphan", "unrelated"]);
+    await requireGit(checkout, [...commit, "--allow-empty", "-m", "Unrelated work"]);
+
+    const refName = "refs/openclaw/carry/review";
+    await expect(
+      importCarriedWork({
+        source: { kind: "host", workspaceDir: state.workspaceDir },
+        checkout: "checkout",
+        projectRoot: project,
+        refName,
+        assertCurrent() {},
+      }),
+    ).rejects.toThrow("shares no history");
+    expect(await requireGit(project, ["for-each-ref", "--format=%(refname)", refName])).toBe("");
+  });
+});
+
 it.each(routes)(
   "refuses and does not list a host checkout whose Git data has %s",
   async (route) => {

@@ -1,2 +1,3 @@
 # Prompt eligibility and menu selection cover empty, registered and already-bound conversations.
-76
+# Checkout carry covers diverged history on the host and sandbox, and rejects an unrelated branch.
+111

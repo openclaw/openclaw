@@ -25,7 +25,7 @@ import { listCarryCheckouts, type CarrySource } from "./session-workspace-carry.
 const commit = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit"];
 
 it.each(["sandbox", "host"] as const)(
-  "moves an unbound %s conversation into a project through the project open path, bringing its checkout work and running no agent or host Git programs",
+  "carries an unbound %s conversation after the project advances, preserving its checkout work and running no Git programs on the host",
   async (where) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
@@ -59,6 +59,11 @@ it.each(["sandbox", "host"] as const)(
       const clone = path.join(state.workspaceDir, "work");
       await requireGit(state.workspaceDir, ["clone", "--quiet", repoRoot, clone]);
       await requireGit(clone, ["remote", "set-url", "origin", origin]);
+      await requireGit(clone, ["switch", "-c", "conversation"]);
+      await requireGit(repoRoot, [...commit, "--allow-empty", "-m", "Project advances"]);
+      const projectTip = await requireGit(repoRoot, ["rev-parse", "HEAD"]);
+      await requireGit(repoRoot, ["update-ref", "refs/remotes/origin/main", projectTip]);
+      await expect(requireGit(clone, ["cat-file", "-e", projectTip])).rejects.toThrow();
       await fs.writeFile(path.join(clone, "feature.txt"), "committed work\n");
       await requireGit(clone, ["add", "feature.txt"]);
       // A committed link to a host file, replaced by a plain file before the move.
@@ -123,11 +128,16 @@ it.each(["sandbox", "host"] as const)(
                   },
                 }),
                 backend: {
-                  runShellCommand: async (params: { script: string; args?: string[] }) => {
+                  runShellCommand: async (params: {
+                    script: string;
+                    args?: string[];
+                    stdin?: Buffer | string;
+                  }) => {
                     const run = spawnSync(
                       "sh",
                       ["-c", params.script, "carry", ...(params.args ?? [])],
                       {
+                        input: params.stdin,
                         maxBuffer: 64 * 1024 * 1024,
                         env: { ...process.env, GIT_CONFIG_GLOBAL: sandboxGit },
                       },
