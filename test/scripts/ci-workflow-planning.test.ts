@@ -3524,9 +3524,9 @@ describe("ci workflow guards", () => {
         expect(routed.status, routed.output).toBe(0);
         const rows = readJsonOutput(routed.outputs, "checks_node_core_nondist_matrix").include;
         const stripPlacement = ({
-          runner,
-          runner_label,
-          cpu_budget,
+          runner: _runner,
+          runner_label: _runnerLabel,
+          cpu_budget: _cpuBudget,
           ...row
         }: Record<string, unknown>) => row;
         expect(rows.map(stripPlacement)).toEqual(
