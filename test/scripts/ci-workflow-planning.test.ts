@@ -2295,6 +2295,7 @@ describe("ci workflow guards", () => {
         const manifest = runCiManifestFixture({
           bundledPlanner: true,
           checkFamilyScope: true,
+          extensionLintCapability: true,
           historicalCompatibility: false,
           runnerProfile: "hybrid",
           eventName,
