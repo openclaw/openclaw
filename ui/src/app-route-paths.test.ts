@@ -137,15 +137,15 @@ describe("Dynamic route startup bridge", () => {
       });
       expect(router.getState().status).toBe("success");
       history.visit({ pathname: `${basePath}/INDEX.HTML`, search: "?draft=next", hash: "#second" });
-      await vi.waitFor(() =>
+      await vi.waitFor(() => {
         expect(router.getState().location).toEqual({
           pathname: `${basePath}/chat`,
           search: "?draft=next",
           hash: "#second",
-        }),
-      );
+        });
+        expect(router.getState().status).toBe("success");
+      });
       expect(history.location()).toEqual(router.getState().location);
-      expect(router.getState().status).toBe("success");
     },
   );
 
