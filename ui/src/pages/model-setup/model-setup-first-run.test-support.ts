@@ -21,7 +21,7 @@ import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.
 
 const onboarding = {
   pathname: "/openclaw/chat/main",
-  search: "?draft=Wake%20up%2C%20my%20friend!",
+  search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
 };
 export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
   waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat", onboarding));

@@ -823,12 +823,18 @@ extension OnboardingAISetupModel {
             supportsExactModel = supported
         }
         let routeFingerprint = await gateway.activationOwnershipFingerprint(ifCurrentServerLease: lease)
+        let completesFirstAgent = await gateway.supportsServerCapability(
+            .systemAgentSetupFirstAgent,
+            ifCurrentServerLease: lease) == true
         let requestTimeoutMs = await Self.activationRequestTimeoutMs(
             for: kind,
             gateway: self.gateway,
             serverLease: lease)
         guard self.isCurrentAttempt(context), !Task.isCancelled else { return }
         var params = request.params(supportsExactModel: supportsExactModel)
+        if completesFirstAgent {
+            params["completeFirstAgent"] = AnyCodable(true)
+        }
         if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
             params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
         }
@@ -1202,15 +1208,10 @@ extension OnboardingAISetupModel {
         self.providerWizardKind = kind
         self.authBusy = true
         self.providerAuthReconciliationPending = nil
-        var requestParams = params
-        if let modelTarget = option.modelTarget {
-            requestParams["modelTarget"] = AnyCodable(modelTarget.rawValue)
-        }
         let token = self.attemptToken
         let authAttemptID = self.authAttemptID
         let authSessionID = UUID().uuidString
         self.authSessionID = authSessionID
-        requestParams["sessionId"] = AnyCodable(authSessionID)
         let requestID = UUID()
         self.authRequestID = requestID
         return Task {
@@ -1218,6 +1219,19 @@ extension OnboardingAISetupModel {
                 if self.authRequestID == requestID { self.authRequestID = nil }
             }
             do {
+                var requestParams = params
+                if let modelTarget = option.modelTarget {
+                    requestParams["modelTarget"] = AnyCodable(modelTarget.rawValue)
+                }
+                requestParams["sessionId"] = AnyCodable(authSessionID)
+                if kind == .auth,
+                   await self.gateway.supportsServerCapability(
+                       .systemAgentSetupFirstAgent,
+                       ifCurrentServerLease: serverLease) == true
+                {
+                    requestParams["completeFirstAgent"] = AnyCodable(true)
+                }
+                guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
                 let data = try await self.gateway.request(
                     method: kind.startMethod,
                     params: requestParams,

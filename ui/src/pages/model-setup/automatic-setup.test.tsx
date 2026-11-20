@@ -145,7 +145,7 @@ it("offers the ordinary Home draft without sending a chat turn", async () => {
     "chat",
     expect.objectContaining({
       pathname: "/openclaw/chat/main",
-      search: "?draft=Wake%20up%2C%20my%20friend!",
+      search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
     }),
   );
   expect(request.mock.calls.map(([method]) => method)).toEqual([

@@ -19,10 +19,12 @@ export function openFirstAgentConversation(context: ApplicationContext, agent: S
     sessionKey: agent.sessionKey,
     focusComposer: true,
   });
+  const search = new URLSearchParams(target.options.search ?? "");
+  if (agent.bootstrapPending) {
+    search.set("draft", t("modelSetup.hatchDraft"));
+  }
   context.navigate("chat", {
     ...target.options,
-    ...(agent.bootstrapPending
-      ? { search: `?draft=${encodeURIComponent(t("modelSetup.hatchDraft"))}` }
-      : {}),
+    search: `?${search.toString()}`,
   });
 }

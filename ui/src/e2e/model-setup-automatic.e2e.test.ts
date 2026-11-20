@@ -318,6 +318,9 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe("Wake up, my friend!");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+      await expect
+        .poll(() => composer.evaluate((element) => element === document.activeElement))
+        .toBe(true);
       await capture(page, "first-agent-home", page.locator("openclaw-chat-page"), [composer]);
       await composer.fill("Help me draft a short launch checklist.");
       await page.getByRole("button", { name: "Send message" }).click();
