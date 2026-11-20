@@ -110,6 +110,7 @@ const enProfile = {
         "Appends this link to new pull requests. Off by default and separate from Git co-author credit. Does not add work-session links.",
       prAttributionLink: "🦞 Made with OpenClaw",
       avatarErrors: {
+        busy: "Your profile is busy. Wait for it to finish, then choose the image again.",
         invalid: "Couldn’t process that image. Try another image.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",
         tooLarge: "The processed avatar is larger than 512 KB.",

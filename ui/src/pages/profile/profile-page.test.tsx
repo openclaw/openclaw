@@ -573,10 +573,13 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     expect(request.mock.calls.some(([method]) => method === "users.setDisplayName")).toBe(true),
   );
   await waitForFast(() => {
-    expect(page.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(true);
+    expect(page.querySelector<HTMLInputElement>('input[type="file"]')?.hidden).toBe(true);
     expect(page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled).toBe(
       true,
     );
+    expect(
+      page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.textContent,
+    ).toBe("Saving…");
   });
   nameSave.resolve({ profile });
   await waitForFast(() =>
@@ -777,7 +780,9 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   const config = createApplicationConfigCapability({ resourceBasePath: "" });
   const page = mountProfilePage({ ...harness.context, config });
   await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>('input[type="file"]')?.disabled).toBe(false),
+    expect(page.querySelector<HTMLButtonElement>(".identity-avatar-control .btn")?.disabled).toBe(
+      false,
+    ),
   );
   const processed =
     createDeferred<Awaited<ReturnType<typeof avatarProcessing.processProfileAvatar>>>();
