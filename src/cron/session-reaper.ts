@@ -16,7 +16,7 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseCronBaseSessionJobId } from "../sessions/session-key-utils.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
@@ -148,7 +148,8 @@ export async function removeCronJobBaseSession(params: {
 }
 
 /**
- * Sweeps completed isolated cron run sessions while preserving base cron sessions.
+ * Sweeps completed isolated cron run sessions, plus base cron sessions whose job no
+ * longer exists (transient hook runs), while preserving stored-job base sessions.
  *
  * Run outside the cron service `locked()` section: cleanup acquires session
  * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
@@ -159,6 +160,12 @@ export async function sweepCronRunSessions(params: {
   /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
   isAgentAvailable?: CronAgentAvailability;
+  /**
+   * Cron-store job ids at sweep time. Base cron rows are pruned only when this is
+   * provided and their job id is absent: without job inventory a base row may still
+   * belong to a live stored job, whose base cleanup is owned by cron.remove.
+   */
+  knownJobIds?: ReadonlySet<string>;
   nowMs?: number;
   log: Logger;
 }): Promise<ReaperResult> {
@@ -222,6 +229,7 @@ export async function sweepCronRunSessions(params: {
         storePath,
         env: context.environment,
         updatedBefore: cutoff,
+        includeBaseCronCandidates: params.knownJobIds !== undefined,
       });
     // A receipt during discovery can only bring the next attempt forward.
     target.nextSweepAtMs = Math.min(
@@ -240,6 +248,14 @@ export async function sweepCronRunSessions(params: {
         ? await prepareCronDescendantDeletion(continuationKeys)
         : undefined;
     for (const { sessionKey, entry } of expiredEntries) {
+      const baseJobId = parseCronBaseSessionJobId(sessionKey);
+      if (baseJobId !== undefined) {
+        // Base rows serve stored jobs (cron.remove owns their cleanup) and transient
+        // hook runs. Prune only jobless ones, and only with readable job inventory.
+        if (!params.knownJobIds || params.knownJobIds.has(baseJobId)) {
+          continue;
+        }
+      }
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
         // Fresh rows and stores without continuations never read media operation state.

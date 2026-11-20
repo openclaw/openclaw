@@ -534,4 +534,30 @@ describe("sweepCronRunSessions", () => {
     expect(log.warn).not.toHaveBeenCalled();
     expect(readSessionEntries(storePath)).toEqual({ [keptKey]: kept });
   });
+
+  it("prunes an expired jobless hook base session while preserving stored-job base rows", async () => {
+    const hookBaseKey = "agent:main:cron:hook-orphan";
+    const storedBaseKey = "agent:main:cron:stored-job";
+    const runKey = "agent:main:cron:stored-job:run:r1";
+    const storedBase = expiredRun("stored-job-base", { delivery: { kind: "none" } });
+    await seedSessionEntries(storePath, {
+      [hookBaseKey]: expiredRun("hook-orphan", { delivery: { kind: "none" } }),
+      [storedBaseKey]: storedBase,
+      [runKey]: expiredRun("r1"),
+    });
+    await expectSweep(now, 2, true, { knownJobIds: new Set(["stored-job"]) });
+    expect(readSessionEntries(storePath)).toEqual({ [storedBaseKey]: storedBase });
+  });
+
+  it("keeps expired base cron rows when job inventory is unavailable", async () => {
+    const hookBaseKey = "agent:main:cron:hook-orphan";
+    const runKey = "agent:main:cron:job1:run:r1";
+    const hookBase = expiredRun("hook-orphan", { delivery: { kind: "none" } });
+    await seedSessionEntries(storePath, {
+      [hookBaseKey]: hookBase,
+      [runKey]: expiredRun("r1"),
+    });
+    await expectSweep(now, 1);
+    expect(readSessionEntries(storePath)).toEqual({ [hookBaseKey]: hookBase });
+  });
 });

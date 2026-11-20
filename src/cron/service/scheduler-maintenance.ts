@@ -48,6 +48,9 @@ export async function runCronSchedulerMaintenance(state: CronServiceState): Prom
             cronConfig: state.deps.cronConfig,
             sessionStorePath: storePath,
             isAgentAvailable: state.deps.isAgentAvailable,
+            // Base cron rows are pruned only against readable job inventory; without the
+            // store, their backing job may still exist and cron.remove owns its cleanup.
+            knownJobIds: state.store ? new Set(state.store.jobs.map((job) => job.id)) : undefined,
             nowMs,
             log: state.deps.log,
           });

@@ -39,11 +39,16 @@ export function withSessionRegistryEntriesInWorker(
 
 /** Return owned full entries only for expired cron runs; live deletion guards stay on the host. */
 export async function readExpiredCronRunEntriesInWorker(
-  input: SessionStoreWorkerReadScope & { updatedBefore: number },
+  input: SessionStoreWorkerReadScope & {
+    updatedBefore: number;
+    /** Also return expired base cron rows as candidates; callers own backing-job checks. */
+    includeBaseCronCandidates?: boolean;
+  },
 ) {
   const expiredCronRuns = {
     agentId: normalizeAgentId(input.agentId),
     updatedBefore: input.updatedBefore,
+    ...(input.includeBaseCronCandidates ? { includeBaseCronCandidates: true } : {}),
   };
   assertAgentDatabaseAdmitted(expiredCronRuns.agentId, { env: input.env });
   return withSessionStoreReaderInWorker(
