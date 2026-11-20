@@ -13,6 +13,7 @@ const descriptor = (name: string) => descriptors.find((entry) => entry.name === 
 
 it.each([
   ["toolUsage.status", "operator.admin", { since: "2026.11" }],
+  ["openclaw.setup.options", "operator.admin", { since: "2026.11" }],
   [
     "toolUsage.import toolUsage.reset",
     "operator.admin",
