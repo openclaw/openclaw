@@ -64,6 +64,7 @@ export type SessionSharingAcquisition = {
 };
 
 export type PreparedSessionSharingRead = {
+  authorityLost?: true;
   followLifecycle?: boolean;
   /** Transcript compaction preserves the logical session incarnation. */
   followTranscript?: boolean;

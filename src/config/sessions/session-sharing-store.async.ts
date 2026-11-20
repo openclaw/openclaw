@@ -417,7 +417,7 @@ export async function runSessionCollaborationWrite<
             }
             return publicationState.result.value;
           } catch (error) {
-            await mutationAdmission?.settled;
+            const nativeSettlement = await (mutationAdmission ?? activeAdmission)?.settled;
             if (publicationState.result) {
               return publicationState.result.value;
             }
@@ -439,6 +439,7 @@ export async function runSessionCollaborationWrite<
               );
             }
             publication.settle(undefined, unknown);
+            publication.prepareAuthorityReconciliation(options, nativeSettlement, receiptFailed);
             throw error;
           } finally {
             publication.settle(undefined, false);

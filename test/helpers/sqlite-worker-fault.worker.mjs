@@ -10,6 +10,7 @@ if (process.versions.bun) {
 const { DatabaseSync, StatementSync } = await import("node:sqlite");
 const enabled = new Int32Array(buffer);
 const statements = new WeakMap();
+const exitAfterCommit = new WeakSet();
 const prepare = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function (sql) {
   const statement = prepare.call(this, sql);
@@ -20,18 +21,24 @@ DatabaseSync.prototype.prepare = function (sql) {
   return statement;
 };
 const faults = rules.map((rule) => ({ ...rule, match: new RegExp(rule.pattern, rule.flags) }));
-function install(statement) {
-  const prepared = statements.get(statement);
+function install(prepared) {
   if (!prepared) {
     return () => {};
   }
+  let exitAfterStatement = false;
   const selected = faults.filter((fault, index) => {
     if (!Atomics.load(enabled, index) || !fault.match.test(prepared.sql)) {
       return false;
     }
     if ("exitOnMatch" in fault) {
       if (Atomics.sub(enabled, index, 1) === 1) {
-        process.exit(1);
+        if (fault.afterCommit) {
+          exitAfterCommit.add(prepared.database);
+        } else if (fault.afterStatement) {
+          exitAfterStatement = true;
+        } else {
+          process.exit(1);
+        }
       }
       return false;
     }
@@ -42,15 +49,33 @@ function install(statement) {
     prepared.database.exec(fault.sql);
   }
   return () => {
+    if (/^rollback\b/u.test(prepared.sql)) {
+      exitAfterCommit.delete(prepared.database);
+    }
+    if (/^commit\b/u.test(prepared.sql) && exitAfterCommit.delete(prepared.database)) {
+      process.exit(1);
+    }
+    if (exitAfterStatement) {
+      process.exit(1);
+    }
     for (const fault of selected.toReversed()) {
       prepared.database.exec(`DROP TRIGGER temp.${fault.name}`);
     }
   };
 }
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function (sql) {
+  const restore = install({ database: this, sql: sql.trim().toLowerCase() });
+  try {
+    return exec.call(this, sql);
+  } finally {
+    restore();
+  }
+};
 for (const method of ["run", "get", "all"]) {
   const original = StatementSync.prototype[method];
   StatementSync.prototype[method] = function (...args) {
-    const restore = install(this);
+    const restore = install(statements.get(this));
     try {
       return Reflect.apply(original, this, args);
     } finally {
@@ -60,7 +85,7 @@ for (const method of ["run", "get", "all"]) {
 }
 const iterate = StatementSync.prototype.iterate;
 StatementSync.prototype.iterate = function* (...args) {
-  const restore = install(this);
+  const restore = install(statements.get(this));
   try {
     const iterator = Reflect.apply(iterate, this, args);
     try {

@@ -249,6 +249,11 @@ async function mutateAcpSessionMeta(
                   }
                   const unknown = admitted.admission.settlement?.kind !== "completed" || !result;
                   const published = publication?.settle(result?.publication, unknown);
+                  publication?.prepareAuthorityReconciliation(
+                    options,
+                    settlement,
+                    admitted.admission.committed !== undefined || outcome.ok,
+                  );
                   if (published) {
                     publishCommittedSessionIdentity(
                       scope.agentId,

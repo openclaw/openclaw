@@ -1,3 +1,4 @@
+import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
 import {
   sessionChanges,
@@ -5,6 +6,7 @@ import {
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import {
   retainConversationWorkerPublication,
   type ConversationPublication,
@@ -44,6 +46,8 @@ import {
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
 import { isSessionEntryPublicationSourceCurrent } from "./session-entry-publication-source.js";
+import { reconcileUnknownSessionSharingAuthority } from "./session-sharing-authority-reconciliation.js";
+import { captureSessionSharingAuthorityReconciliation } from "./session-sharing-authority-state.js";
 import { retainSessionTranscriptWorkerPublication } from "./session-transcript-authority.js";
 import type { SessionTranscriptAuthorityReceipt } from "./session-transcript-authority.types.js";
 import type { SessionEntry } from "./types.js";
@@ -148,12 +152,30 @@ export function retainSessionEntryWorkerPublication(params: {
     settled: false,
     completion: completion.promise,
   };
+  const authorityOwner = {};
   let keys: string[] = [];
   let publicationKeys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
   let sharingAuthorityChanged = true;
   const publication = {
+    prepareAuthorityReconciliation(
+      database: OpenClawAgentDatabaseOptions & { path: string },
+      settlement: SqliteWorkerOperationSettlement | undefined,
+      conflictingReceipt: boolean,
+    ) {
+      return reconcileUnknownSessionSharingAuthority({
+        database,
+        databaseIdentity: params.databaseIdentity,
+        recovery: captureSessionSharingAuthorityReconciliation(
+          params.databaseIdentity,
+          keys,
+          authorityOwner,
+        ),
+        settlement,
+        conflictingReceipt,
+      });
+    },
     begin(
       sessionKeys: readonly string[],
       membershipInvalidatedKeys: readonly string[],
@@ -403,7 +425,7 @@ export function retainSessionEntryWorkerPublication(params: {
       conversation.settle(unknown ? undefined : receipt?.conversationPublication, unknown);
       if (unknown && sharingAuthorityChanged) {
         for (const sessionKey of keys) {
-          markSessionSharingAuthorityUnknown(params.databaseIdentity, sessionKey);
+          markSessionSharingAuthorityUnknown(params.databaseIdentity, sessionKey, authorityOwner);
         }
       }
       const committedTranscriptChanges = [

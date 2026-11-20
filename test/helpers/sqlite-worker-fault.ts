@@ -5,7 +5,7 @@ import * as workerCpu from "../../src/infra/worker-cpu.js";
 
 type SqliteWorkerFault = { match: RegExp } & (
   | { name: string; sql: string }
-  | { exitOnMatch: number }
+  | { exitOnMatch: number; afterStatement?: boolean; afterCommit?: boolean }
 );
 
 /** Register before fixture setup so retained workers inherit the disabled fault controls. */

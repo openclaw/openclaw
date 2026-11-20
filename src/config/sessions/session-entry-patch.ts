@@ -11,7 +11,10 @@ import type {
   SqliteWorkerOperationAdmission,
   SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
-import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
+import type {
+  SqliteWorkerOperationSettlement,
+  RetainedWorkerTransactionAdmission,
+} from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -471,8 +474,9 @@ export async function runSessionEntryWorkerOperation<
             let acknowledged = outcome.ok && matchesReceipt(outcome.value);
             let unknown = !outcome.ok && hasSqliteWorkerOutcomeUnknown(outcome.error);
             let nativeSettlementFailure: unknown;
+            let nativeSettlement: SqliteWorkerOperationSettlement | undefined;
             if (settlement.admitted) {
-              const nativeSettlement = await settlement.admitted.retained.settled;
+              nativeSettlement = await settlement.admitted.retained.settled;
               if (nativeSettlement.kind !== "completed") {
                 nativeSettlementFailure = nativeSettlement.error;
               }
@@ -512,6 +516,11 @@ export async function runSessionEntryWorkerOperation<
                   committed?.publication,
                   unknown,
                   transcriptChanges,
+                );
+                publication?.prepareAuthorityReconciliation(
+                  params.database,
+                  nativeSettlement,
+                  Boolean(settlement.admitted?.admission.committed || outcome.ok),
                 );
                 if (committed) {
                   publishedResult = {

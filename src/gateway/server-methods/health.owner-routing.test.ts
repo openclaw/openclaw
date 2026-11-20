@@ -6,6 +6,7 @@ import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-mode
 import { createGatewayHostLifecycle } from "../../cli/gateway-cli/host-lifecycle.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
+import { markSessionSharingAuthorityUnknown } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as childRuntime from "../../infra/child-runtime-viability.js";
 import { beginLifecycleWriteCustody } from "../../infra/lifecycle-write-custody.js";
@@ -425,6 +426,24 @@ describe("Gateway status owner routing", () => {
       const admin = await callStatus(config, ["operator.admin"]);
       expect(admin.startupMigrationWarning).toContain(warning);
       expect(admin.startupMigrationWarning).toContain(hint);
+    });
+  });
+
+  it("lists restart-required sessions only to administrators through status", async () => {
+    await withStateDirEnv("openclaw-sharing-health-", async ({ stateDir }) => {
+      const config = statusConfig(stateDir, { entries: { main: {} } });
+      const key = "agent:main:unknown-authority";
+      markSessionSharingAuthorityUnknown("private-database-identity", key);
+      const reader = await callStatus(config);
+      expect(reader.sessionSharing).toEqual({
+        restartRequired: true,
+        affectedSessionCount: 1,
+        recovery: "Restart the Gateway to clear unknown session sharing authority.",
+        reasons: ["unsettled"],
+      });
+      const admin = await callStatus(config, ["operator.admin"]);
+      expect(admin.sessionSharing).toEqual({ ...reader.sessionSharing, sessionKeys: [key] });
+      expect(JSON.stringify(admin.sessionSharing)).not.toContain("private-database-identity");
     });
   });
 

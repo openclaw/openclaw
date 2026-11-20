@@ -5,7 +5,7 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
-import { resolveGlobalSet, resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   readSessionEntryCreationIdentity,
@@ -36,6 +36,8 @@ import {
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
 import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
+import { SessionSharingAuthorityUnknownError } from "./session-sharing-authority-error.js";
+import { unknownSharingAuthorities } from "./session-sharing-authority-state.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export const preparedSharingReads = resolveGlobalSingleton(
@@ -46,11 +48,6 @@ export const pendingSessionEntryPublications = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingSessionEntryPublications"),
   () => new Map<string, Set<PendingSessionEntryPublication>>(),
 );
-const unknownSharingAuthorities = resolveGlobalSet<string>(
-  Symbol.for("openclaw.unknownSessionSharingAuthorities"),
-  "close-and-restart",
-);
-
 /** ID selection cannot pass a worker commit whose identity facts are not yet published. */
 export function isSessionIdSelectionPublished(params: {
   databaseIdentity: string;
@@ -58,7 +55,7 @@ export function isSessionIdSelectionPublished(params: {
   sessionKey?: string;
 }): boolean {
   const prefix = `${params.databaseIdentity}\0`;
-  for (const key of unknownSharingAuthorities) {
+  for (const key of unknownSharingAuthorities.keys()) {
     if (key.startsWith(prefix)) {
       return false;
     }
@@ -85,15 +82,25 @@ export function isSessionIdSelectionPublished(params: {
   return true;
 }
 
-/** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
+/** Unknown publication retires existing grants; only its settlement owner may reconcile. */
 export function markSessionSharingAuthorityUnknown(
   database: SessionEntryCacheDatabase | string,
   sessionKey: string,
+  owner?: object,
 ): void {
   const identity =
     typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
   if (typeof identity === "string") {
-    unknownSharingAuthorities.add(`file:${identity}\0${sessionKey}`);
+    const key = `file:${identity}\0${sessionKey}`;
+    // Another unknown write invalidates even an earlier pending reconciliation.
+    unknownSharingAuthorities.set(key, unknownSharingAuthorities.has(key) ? {} : { owner });
+    for (const read of preparedSharingReads.get(key) ?? []) {
+      read.authorityLost = true;
+      read.facts = undefined;
+      if (read.acquisition) {
+        read.acquisition.invalidated = true;
+      }
+    }
   }
 }
 
@@ -403,7 +410,10 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
-      if (!active || !acquisition || unknownSharingAuthorities.has(key)) {
+      if (unknownSharingAuthorities.has(key)) {
+        throw new SessionSharingAuthorityUnknownError();
+      }
+      if (!active || !acquisition || read.authorityLost) {
         throw new Error("Session sharing acquisition is no longer current");
       }
       read.facts = reconcileSessionSharingAcquisition(acquisition, snapshot);
@@ -417,7 +427,9 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
     readGenerationSettings: () =>
       active && !generationPending(true) ? read.generation?.current : undefined,
     readCurrent: (scope: "sharing" | "session-access" = "sharing") =>
-      pending(scope) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
+      pending(scope) || read.authorityLost || unknownSharingAuthorities.has(key)
+        ? undefined
+        : read.facts,
     release: () => {
       if (!active) {
         return;

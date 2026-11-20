@@ -13,6 +13,7 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import { reconcileSessionSharingAuthoritiesBeforeAcquisition } from "../config/sessions/session-sharing-authority-state.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import {
@@ -95,6 +96,13 @@ export async function prepareSessionMutationFacts(
   // Artifact-preserving reads qualify paths off the Gateway thread.
   const inspection = isArtifactPreservingStateRead();
   const initialStoreKeys = [params.sessionKey.trim(), canonicalKey];
+  const reconciliation = inspection
+    ? undefined
+    : reconcileSessionSharingAuthoritiesBeforeAcquisition(routing.logicalPaths, initialStoreKeys);
+  if (reconciliation) {
+    await reconciliation;
+    assertRoutingCurrent(params.cfg);
+  }
   const readScope = params.sessionAccessOnly ? "session-access" : "sharing";
   const releases: Array<() => void> = [];
   let active = true;

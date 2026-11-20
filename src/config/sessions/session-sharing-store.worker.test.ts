@@ -650,7 +650,18 @@ it.each([
             mutation === "invitation" ? ["guest"] : [],
           );
           expect(() => sharing.readCurrent(cfg)).toThrow(unavailable);
-          await expectUnavailable();
+          if (receipt === "conflicting") {
+            await expectUnavailable();
+          } else {
+            const fresh = await prepareSessionMutationFacts({ cfg, ...scope });
+            try {
+              expect([...fresh.readCurrent(cfg).membership]).toEqual(
+                mutation === "invitation" ? ["guest"] : [],
+              );
+            } finally {
+              fresh.release();
+            }
+          }
           open.mockRestore();
           corruptReceipt.mockRestore();
           if (mutation === "invitation") {
@@ -658,7 +669,19 @@ it.each([
           } else {
             await addSessionMember(scope, memberRow("guest", 3));
           }
-          await expectUnavailable();
+          expect(() => sharing.readCurrent(cfg)).toThrow(unavailable);
+          if (receipt === "conflicting") {
+            await expectUnavailable();
+          } else {
+            const fresh = await prepareSessionMutationFacts({ cfg, ...scope });
+            try {
+              expect([...fresh.readCurrent(cfg).membership]).toEqual(
+                mutation === "invitation" ? [] : ["guest"],
+              );
+            } finally {
+              fresh.release();
+            }
+          }
           return;
         }
         await expect(run()).resolves.toEqual(

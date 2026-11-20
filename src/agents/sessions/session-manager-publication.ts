@@ -27,6 +27,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 
 export type SessionManagerAuthorityPublication = {
   kind: "session-manager-authority";
@@ -45,6 +46,7 @@ export function unwrapSessionManagerPublication(
 
 /** Entry and transcript postimages share one native receipt and one observer boundary. */
 export function createSessionManagerPublicationHooks(params: {
+  database: OpenClawAgentDatabaseOptions;
   agentId: string;
   storePath: string;
   databaseIdentity: () => string | undefined;
@@ -221,6 +223,11 @@ export function createSessionManagerPublicationHooks(params: {
               admission.failureSource !== "protocol");
           owner.conversation?.settle(undefined, !rolledBack);
           owner.entry?.settle(undefined, !rolledBack, owner.transcript?.settle(false, !rolledBack));
+          owner.entry?.prepareAuthorityReconciliation(
+            { ...params.database, path: params.storePath },
+            outcome,
+            nativeCommit !== undefined,
+          );
         }
         if (pending === owner) {
           pending = undefined;

@@ -1,5 +1,6 @@
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { SessionSharingAuthorityUnknownError } from "../config/sessions/session-sharing-authority-error.js";
 import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 
 type IncognitoSessionSharingTarget = {
@@ -11,7 +12,12 @@ type IncognitoSessionSharingTarget = {
 
 export class SessionMutationFactsUnavailableError extends Error {
   constructor(options?: ErrorOptions) {
-    super("Session access facts are unavailable; retry after session storage is ready.", options);
+    super(
+      options?.cause instanceof SessionSharingAuthorityUnknownError
+        ? "Session access facts are unavailable; restart the Gateway to restore session sharing authority after an unconfirmed storage write."
+        : "Session access facts are unavailable; retry after session storage is ready.",
+      options,
+    );
     this.name = "SessionMutationFactsUnavailableError";
   }
 }

@@ -217,6 +217,7 @@ async function appendUnboundSdkTranscriptMessage(
   );
   const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
   const publication = createSessionManagerPublicationHooks({
+    database: options,
     agentId: input.target.agentId,
     storePath: execution.path,
     databaseIdentity: () => execution.fileIdentity?.physicalIdentity,

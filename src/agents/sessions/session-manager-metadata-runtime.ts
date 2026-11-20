@@ -64,6 +64,7 @@ export async function withSessionMetadataWorker<T>(
     ),
   );
   const transcriptPublication = createSessionManagerPublicationHooks({
+    database: options,
     agentId: database.agentId,
     storePath: database.path,
     databaseIdentity: () => database.fileIdentity?.physicalIdentity,

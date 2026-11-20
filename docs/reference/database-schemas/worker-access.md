@@ -1613,9 +1613,24 @@ Confirmed entry receipts publish exact membership and category facts instead of
 forcing a new membership read. Prepared membership guards use the entry owner's
 committed facts at the effect boundary. Authority-changing writes deny those
 guards before commit and install committed facts before releasing the denial or
-notifying observers. An unknown durable authority outcome remains denied until owner
-restart, including after a database handle closes and reopens; a fresh read or
-later successful write cannot settle it. Category and other metadata-only writes
+notifying observers. An unknown durable authority outcome initially denies new and retained grants.
+A fresh Gateway acquisition may consume one recovery attempt registered by that
+publication: native completion or broker-proven native retirement must establish
+that the interrupted writer cannot commit later. The existing physical writer FIFO
+then reads entry and membership together through its current native executor,
+without borrowing actor or row-cache facts. Only matching physical identity and
+that publication's covered keys clear the denial. Readers retained before the loss
+remain permanently invalid, including after later successful writes. Recovery does
+not acknowledge or replay the original mutation.
+Conflicting receipts, missing native settlement, failed reads and replacement
+identity mismatches remain denied until owner restart. Plain fresh reads and later
+writes cannot clear an earlier unresolved publication. Recovery emits
+`reconcile-attempted`, `reconcile-settled`, or `still-denied` diagnostics without
+session content. Unreconciled acquisitions report Gateway restart guidance rather
+than a storage-readiness retry. The live `health` and `status` RPCs report the
+`sessionSharing` affected-session count and restart guidance; only administrators
+receive the affected session keys. These diagnostics never clear the denial.
+Category and other metadata-only writes
 do not revoke membership authority. Delivery rechecks synchronous listener writes;
 moved membership and superseded metadata still invalidate.
 Incognito membership uses the session actor's memory backend. Its committed

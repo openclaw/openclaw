@@ -1,5 +1,6 @@
 import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { readSessionSharingAuthorityHealth } from "../../config/sessions/session-sharing-authority-state.js";
 import {
   prepareChildRuntimeViability,
   type ChildRuntimeViability,
@@ -120,6 +121,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
           ),
           recentCrashes: getGatewayRecentCrashes(),
+          sessionSharing: readSessionSharingAuthorityHealth(includeSensitive),
         },
         undefined,
         { cached: true },
@@ -146,6 +148,7 @@ export const healthHandlers: GatewayRequestHandlers = {
             client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
           ),
           recentCrashes: getGatewayRecentCrashes(),
+          sessionSharing: readSessionSharingAuthorityHealth(includeSensitive),
         },
         undefined,
       );
@@ -191,6 +194,7 @@ export const healthHandlers: GatewayRequestHandlers = {
           client?.connect.scopes?.includes(ADMIN_SCOPE) ?? false,
         ),
         recentCrashes: getGatewayRecentCrashes(),
+        sessionSharing: readSessionSharingAuthorityHealth(includeSensitive),
         pluginReload: context.getPluginReloadStatus?.(),
       },
       undefined,

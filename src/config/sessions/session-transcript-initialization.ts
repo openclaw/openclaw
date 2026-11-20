@@ -39,7 +39,7 @@ export async function initializeSessionTranscriptInWorker(
         let unknown = outcome.ok;
         if (admitted) {
           // Join delivery, then drain the native port before reading native completion.
-          await admitted.retained.settled;
+          const nativeSettlement = await admitted.retained.settled;
           const facts = admitted.admission.committed?.facts;
           const placeholder =
             isRecord(facts) &&
@@ -67,6 +67,11 @@ export async function initializeSessionTranscriptInWorker(
           }
           unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
           publication.settle(receipt, unknown);
+          publication.prepareAuthorityReconciliation(
+            options,
+            nativeSettlement,
+            admitted.admission.committed !== undefined || outcome.ok,
+          );
         }
         if (unknown) {
           throwSessionWorkerOutcomeUnknown(

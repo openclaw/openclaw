@@ -412,7 +412,7 @@ export async function runSessionEntryWorkerMutation<T>(
       }
       return false;
     }
-    await admitted.retained.settled;
+    const nativeSettlement = await admitted.retained.settled;
     const facts = admitted.admission.committed?.facts;
     let receipt: SessionEntryReplacementPublication | undefined;
     if (isRecord(facts) && facts.kind === "session-entry-replacements") {
@@ -437,6 +437,11 @@ export async function runSessionEntryWorkerMutation<T>(
       } finally {
         // Result adoption precedes observers, but its failure cannot retain publication custody.
         const published = retainedPublication.settle(receipt, unknown);
+        retainedPublication.prepareAuthorityReconciliation(
+          options,
+          nativeSettlement,
+          admitted.admission.committed !== undefined || completed !== undefined,
+        );
         if (published) {
           publishCommittedSessionIdentity(
             lifecycle.identityAgentId,
