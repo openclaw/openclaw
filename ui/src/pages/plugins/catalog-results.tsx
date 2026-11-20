@@ -21,7 +21,11 @@ import type {
 import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "./catalog-grid.tsx";
-import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
+import {
+  CatalogSkeletonCards,
+  PluginCatalogSkeleton,
+  renderCatalogGridSkeleton,
+} from "./catalog-skeleton.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -247,12 +251,17 @@ function CatalogSection(params: {
   title: string;
   items: readonly PluginDiscoveryEntry[];
   loading?: boolean;
+  hasPreviewCursor?: boolean;
   onViewAll?: () => void;
   state: CatalogResultsState;
 }): JSX.Element {
+  const missing = () =>
+    params.hasPreviewCursor && params.state.continuablePreviews.includes(params.id)
+      ? Math.max(0, PLUGIN_PREVIEW_SIZE - params.items.length)
+      : 0;
   return (
     <>
-      {params.loading || params.items.length > 0 ? (
+      {params.loading || params.items.length > 0 || missing() > 0 ? (
         <CatalogDiscoverySection
           id={params.id}
           title={params.title}
@@ -262,10 +271,17 @@ function CatalogSection(params: {
           {params.loading ? (
             renderCatalogGridSkeleton({ cards: PLUGIN_PREVIEW_SIZE })
           ) : params.onViewAll ? (
-            <div class="plugin-catalog-grid">
+            <div
+              class={[
+                "plugin-catalog-grid",
+                { "plugin-catalog-grid--continuable": params.hasPreviewCursor },
+              ]}
+              aria-busy={missing() > 0 ? "true" : undefined}
+            >
               <For each={params.items.slice(0, PLUGIN_PREVIEW_SIZE)} keyed={(plugin) => plugin.id}>
                 {(plugin) => <CatalogCard plugin={plugin()} state={params.state} />}
               </For>
+              <CatalogSkeletonCards count={missing()} />
             </div>
           ) : (
             <PluginCatalogGrid items={params.items}>
@@ -467,7 +483,10 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
     ),
   );
   const hasAnySection = () =>
-    props.featured.length > 0 || props.trending.length > 0 || hasCategoryItems();
+    props.featured.length > 0 ||
+    props.trending.length > 0 ||
+    hasCategoryItems() ||
+    props.continuablePreviews.length > 0;
   return (
     <>
       {!hasAnySection() && !props.loading && !props.error && !props.remoteError ? (
@@ -491,6 +510,7 @@ function GroupedCatalog(props: CatalogResultsState & { loading?: boolean }): JSX
               <CatalogSection
                 id={category().slug}
                 title={category().label}
+                hasPreviewCursor={Boolean(category().previewCursor)}
                 items={items()
                   .filter((plugin) => plugin.catalog.categories.includes(category().slug))
                   .toSorted((left, right) =>

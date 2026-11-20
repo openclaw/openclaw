@@ -19,6 +19,7 @@ export type PluginDiscoveryState = {
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
   categoriesError: string | null;
+  readonly continuablePreviews: readonly string[];
   featured: readonly PluginDiscoveryEntry[];
   trending: readonly PluginDiscoveryEntry[];
   loadMoreError: string | null;
@@ -101,6 +102,9 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     remoteError: null,
     categories: [],
     categoriesError: null,
+    get continuablePreviews() {
+      return previews?.continuableCategories ?? [];
+    },
     featured: [],
     trending: [],
     loadMoreError: null,

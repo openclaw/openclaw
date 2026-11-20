@@ -2112,6 +2112,11 @@
     gap: 12px;
   }
 
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
+  }
+
   .plugin-catalog-results--rows .installed-plugins-card__art {
     margin-top: 1px;
   }
