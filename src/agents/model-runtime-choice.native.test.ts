@@ -4,6 +4,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { clearActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -854,6 +855,78 @@ it("keeps a stored openclaw preference when its route is still signed in", async
   expect(selection).toMatchObject({ status: "ready" });
   if (selection.status === "ready") {
     expect(selection.runtime).toEqual({ kind: "set", runtime: "openclaw" });
+  }
+});
+
+it("does not let a stored native runtime that cannot serve the selected model block a model-only switch", async () => {
+  // A chat pinned to a provider's native runtime (for example Muse for meta/*)
+  // switches to another provider's API model with a plain /model.
+  const otherEntry: ModelCatalogEntry = {
+    provider: "other",
+    id: "chat",
+    name: "Chat",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://other.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+    nativeRuntime: "native-test",
+  };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      executionEnvironment: "host-only",
+      supports: (ctx) =>
+        ctx.provider === "fixture" ? { supported: true } : { supported: false, reason: "fixture" },
+      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+      runAttempt: vi.fn(),
+    },
+  });
+  // Session runtime compatibility sees registered harnesses as Gateway plugins do.
+  setActivePluginRegistry(registry);
+  try {
+    const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: {
+        entries: [otherEntry, nativeEntry],
+        routeVariants: [otherEntry, nativeEntry],
+      },
+    });
+    bindPreparedModelRuntimeAuth(owner, {
+      store: {
+        version: 1,
+        profiles: {
+          "other:default": { type: "token", provider: "other", token: "synthetic-token" },
+        },
+      },
+    });
+    published.owner = owner;
+    const selection = await prepareModelSelectionRuntime({
+      ...request,
+      provider: "other",
+      model: "chat",
+      cfg: {},
+      catalog: [otherEntry, nativeEntry],
+      sessionEntry: { agentRuntimeOverride: "native-test" },
+      thinkingPolicyRequired: false,
+    });
+    expect(selection).toMatchObject({
+      status: "ready",
+      runtime: { kind: "set", runtime: "openclaw" },
+    });
+  } finally {
+    clearActivePluginRegistry();
   }
 });
 

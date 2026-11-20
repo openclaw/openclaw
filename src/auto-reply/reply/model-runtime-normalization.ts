@@ -213,12 +213,28 @@ export async function prepareModelSelectionRuntime(params: {
       runtime.kind === "unchanged"
         ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
         : undefined;
+    // Session runtime compatibility accepts any registered harness for any
+    // provider, so a native runtime pinned for another provider's model arrives
+    // here. Pin only a runtime that can serve this model; any other stored
+    // runtime stays a preference, so the incompatible pin is replaced.
+    const storedRuntimeServesModel =
+      storedRuntime === "openclaw" ||
+      storedRuntime === inheritedCliRuntime ||
+      params.catalog.some(
+        (entry) =>
+          normalizeProviderId(entry.provider) === normalizeProviderId(params.provider) &&
+          entry.id.trim() === params.model.trim() &&
+          entry.nativeRuntime === storedRuntime,
+      );
     const choice = await preparePublishedModelRuntimeChoice({
       ...params,
       sessionEntry,
       runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
       // Stored "auto"/"default" rows mean "no preference" and stay unpinned.
-      pinnedRuntimeId: isDefaultAgentRuntimeId(storedRuntime) ? undefined : storedRuntime,
+      pinnedRuntimeId:
+        !isDefaultAgentRuntimeId(storedRuntime) && storedRuntimeServesModel
+          ? storedRuntime
+          : undefined,
       // The pinned field is what forbids falling through to another runtime.
       preferredRuntimeId: storedRuntime ?? inheritedCliRuntime,
     });
