@@ -72,7 +72,7 @@
     <string name="reading_conversation" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Läser agenter, sessioner och chatt"</string>
     <string name="phone_ready" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Telefonen är redo"</string>
     <string name="gateway_connected" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway ansluten"</string>
-    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway offline"</string>
+    <string name="gateway_offline" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Gateway är frånkopplad"</string>
     <string name="gateway_offline_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Återanslut Gateway i OpenClaw på den parkopplade telefonen."</string>
     <string name="open_phone_app" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Öppna OpenClaw på telefonen"</string>
     <string name="phone_not_ready_detail" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Klockan startar eller autentiserar aldrig Gateway på egen hand."</string>
