@@ -1,5 +1,5 @@
 import type { SessionWorkspaceStatResult } from "../../../api/types.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import { markdownFileLinkFromAnchor } from "../../../components/markdown-file-links.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import type {
   SessionWorkspaceHost,
@@ -11,54 +11,40 @@ type Reference = { path: string; messageEntryId?: string };
 
 // Matches the Gateway's sessions.files.stat request bound.
 const MAX_FILES_PER_REQUEST = 64;
-// Answers belong to a workspace, its permission scope and its current file listing;
-// a workspace refresh replaces `directories`. Failed checks are forgotten.
+// Answers belong to a workspace and its permission scope; failed checks are forgotten.
 const checksByWorkspace = new WeakMap<
   SessionWorkspaceState,
   {
     scope: string;
-    listing: SessionWorkspaceState["directories"];
-    seen: WeakSet<HTMLAnchorElement>;
     availability: Map<string, Availability>;
     waiting: Map<string, Set<HTMLAnchorElement>>;
   }
 >();
 
-/** Checks which settled file links under `root` `openSessionWorkspaceFile` would open. */
+/** Checks which settled transcript file links `openSessionWorkspaceFile` would open. */
 export async function checkFileLinkAvailability(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
-  root: ParentNode,
+  links: HTMLElement[],
   scope = "",
 ) {
-  const client = state.client;
-  if (!client) {
-    return;
-  }
   let checks = checksByWorkspace.get(workspace);
-  const listing = workspace.directories;
-  if (!checks || checks.scope !== scope || checks.listing !== listing) {
-    checks = { scope, listing, seen: new WeakSet(), availability: new Map(), waiting: new Map() };
+  if (!checks || checks.scope !== scope) {
+    checks = { scope, availability: new Map(), waiting: new Map() };
     checksByWorkspace.set(workspace, checks);
   }
-  const { availability, seen, waiting } = checks;
+  const { availability, waiting } = checks;
   const currentWorkspace = state.sessionWorkspaceState;
   const requests = new Map<string, { files: Reference[]; keys: string[] }>();
-  for (const element of root.querySelectorAll<HTMLElement>(
-    "a[data-file-path], span[data-file-path]",
-  )) {
-    if (element.closest('[data-chat-streaming="true"]')) {
-      continue;
-    }
+  for (const element of links) {
     const previous = unavailableFileLinks.get(element);
     if (previous?.checks === checks) {
       continue;
     }
     const anchor = previous?.anchor ?? element;
-    if (!(anchor instanceof HTMLAnchorElement) || (!previous && seen.has(anchor))) {
+    if (!(anchor instanceof HTMLAnchorElement)) {
       continue;
     }
-    seen.add(anchor);
     if (previous) {
       const focused = element.ownerDocument.activeElement === element;
       anchor.append(...element.childNodes);
@@ -68,8 +54,7 @@ export async function checkFileLinkAvailability(
       }
       unavailableFileLinks.delete(element);
     }
-    // Resolve the reference exactly as a click on this anchor would.
-    const target = markdownFileLinkFromEvent({ target: anchor } as unknown as Event);
+    const target = markdownFileLinkFromAnchor(anchor);
     if (!target || target.documentRelative) {
       continue;
     }
@@ -125,13 +110,7 @@ export async function checkFileLinkAvailability(
         }
       };
       batches.push(
-        client
-          .request<SessionWorkspaceStatResult>("sessions.files.stat", {
-            sessionKey,
-            files: batch,
-            ...(agentId ? { agentId } : {}),
-          })
-          .then(settle, () => settle(null)),
+        state.sessions.statFiles(sessionKey, batch, { agentId }).then(settle, () => settle(null)),
       );
     }
   }

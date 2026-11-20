@@ -197,24 +197,25 @@ it("rechecks retained file links when read permissions change, ignoring old answ
     sessionKey: workspace.sessionKey,
     files: [{ path: "/tmp/report.md", status: "missing" as const }],
   }));
-  const state = { client: { request: statFiles } } as unknown as Host;
+  const state = { sessions: { statFiles } } as unknown as Host;
   const root = document.createElement("div");
   root.innerHTML =
     '<a class="markdown-file-link" href="#" data-file-path="/tmp/report.md"><code>report.md</code></a>';
-  type Scan = (scanned: HTMLElement) => void;
-  let setScan!: (scan: Scan) => void;
-  const change = (scope: string) =>
-    setScan((scanned) => void checkFileLinkAvailability(state, workspace, scanned, scope));
+  let change!: (scope: string) => void;
   let show!: (presented: boolean) => void;
   const view = renderSolidRef(
     () => {
-      const [scan, writeScan] = createSignal<Scan>(() => (scanned) => {
-        void checkFileLinkAvailability(state, workspace, scanned, "workspace");
-      });
+      const [scope, setScope] = createSignal("workspace");
       const [shown, setShown] = createSignal(true);
       show = setShown;
-      setScan = (next) => writeScan(() => next);
-      return markdownBlocksRef(shown, scan);
+      change = setScope;
+      return markdownBlocksRef(
+        shown,
+        (links) => {
+          void checkFileLinkAvailability(state, workspace, links, scope());
+        },
+        scope,
+      );
     },
     { targetElement: root },
   );
@@ -248,19 +249,16 @@ it("rechecks retained file links when read permissions change, ignoring old answ
       await import("../pages/chat/components/chat-session-workspace-state.ts");
     state.sessionKey = workspace.sessionKey;
     state.sessionWorkspaceState = workspace;
-    // The chat pane renders a new production callback on each publish.
-    const render = () =>
-      setScan(
-        sessionWorkspaceFileLinkProps(state, { permissionMode: "full" }, undefined)
-          .onWorkspaceFileLinks,
-      );
+    const readScope = () =>
+      sessionWorkspaceFileLinkProps(state, { permissionMode: "full" }, undefined)
+        .workspaceFileLinkScope;
     statFiles.mockImplementation(async () => ({
       sessionKey: workspace.sessionKey,
       files: [{ path: "/tmp/report.md", status: "missing" }],
     }));
-    render();
+    change(readScope());
     await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
-    // Hidden run completion retires the workspace without changing its permission scope.
+    // Hidden run completion retires the workspace without changing its permission/revision scope.
     const { retireSessionWorkspaceCheckout } =
       await import("../pages/chat/components/chat-session-workspace-state.ts");
     show(false);
@@ -271,26 +269,25 @@ it("rechecks retained file links when read permissions change, ignoring old answ
       sessionKey: workspace.sessionKey,
       files: [{ path: "/tmp/report.md", status: "file" }],
     }));
-    render();
+    change(readScope());
     show(true);
     await waitForSolid(() => expect(root.querySelector("a")?.textContent).toBe("report.md"));
-    // Ordinary workspace refreshes recheck under the same permission scope.
-    const publish = vi.fn(render);
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    }));
+    change("refresh-negative");
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    // A completed run creates the missing file and uses the ordinary workspace refresh.
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    const publish = vi.fn(() => change(readScope()));
     const stop = sessionWorkspaceForHost(state).subscribe(publish);
     try {
-      statFiles.mockImplementation(async () => ({
-        sessionKey: workspace.sessionKey,
-        files: [{ path: "/tmp/report.md", status: "missing" }],
-      }));
       refreshSessionWorkspace(state, false);
-      await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
-      // A completed run creates the missing file.
-      statFiles.mockImplementation(async () => ({
-        sessionKey: workspace.sessionKey,
-        files: [{ path: "/tmp/report.md", status: "file" }],
-      }));
-      refreshSessionWorkspace(state, false);
-      expect(publish).toHaveBeenCalledTimes(2);
+      expect(publish).toHaveBeenCalledOnce();
       await waitForSolid(() => expect(root.querySelector("a")?.textContent).toBe("report.md"));
     } finally {
       stop();

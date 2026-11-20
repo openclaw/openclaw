@@ -320,7 +320,8 @@ function ChatThreadContent(
   ]);
   const markdownRef = createMarkdownBlocksRef(
     () => input.props.transcriptVisible ?? true,
-    () => input.props.onWorkspaceFileLinks,
+    (links) => input.props.onWorkspaceFileLinks?.(links),
+    () => input.props.workspaceFileLinkScope,
   );
   // The supplement takes the header only once the transcript has no earlier page,
   // so its controls never stack under the history boundary.
