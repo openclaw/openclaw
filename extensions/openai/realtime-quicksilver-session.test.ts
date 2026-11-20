@@ -118,7 +118,7 @@ describe("GPT-Live offer broker", () => {
       await vi.waitFor(() => expect(bridge.connect).toHaveBeenCalledOnce());
       expect(response.end).not.toHaveBeenCalled();
       expect(createBridge).toHaveBeenCalledWith({
-        apiKey: "platform-key",
+        auth: { type: "api-key", token: "platform-key" },
         callId: "rtc_gateway",
         onTerminal: expect.any(Function),
       });
@@ -136,6 +136,47 @@ describe("GPT-Live offer broker", () => {
       expect(hangups()).toHaveLength(1);
     } finally {
       releaseSideband();
+    }
+  });
+
+  it("runs a Gateway-controlled GA call over ChatGPT OAuth and hangs up with its account", async () => {
+    const fetchMock = createGaFetch("rtc_oauth");
+    const { realtime } = makeBroker({ fetchImpl: fetchMock });
+    const bridge = makeBridge();
+    let terminateSideband: (() => void) | undefined;
+    const createBridge = vi.fn((params: { onTerminal: () => void }) => {
+      terminateSideband = params.onTerminal;
+      return bridge;
+    });
+    const reservation = await reserveGaSession(
+      realtime,
+      createBridge,
+      { bindBridge: vi.fn() },
+      undefined,
+      oauth,
+    );
+    const response = await post(realtime, {
+      token: reservation.clientSecret,
+      body: AUDIO_ONLY_SDP,
+    });
+
+    expect(response.res.statusCode).toBe(201);
+    expect(createBridge).toHaveBeenCalledWith({
+      auth: oauth,
+      callId: "rtc_oauth",
+      onTerminal: expect.any(Function),
+    });
+    expect(bridge.connect).toHaveBeenCalledOnce();
+    terminateSideband?.();
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([url]) => requestTarget(url).endsWith("/rtc_oauth/hangup")),
+      ).toHaveLength(1),
+    );
+    for (const [, init] of fetchMock.mock.calls) {
+      const headers = new Headers(init?.headers);
+      expect(headers.get("Authorization")).toBe("Bearer synthetic-oauth");
+      expect(headers.get("chatgpt-account-id")).toBe("synthetic-account");
     }
   });
 

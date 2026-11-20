@@ -61,6 +61,8 @@ export type OpenAIRealtimeVoiceProviderConfig = Partial<ReturnType<typeof normal
 export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
   Omit<OpenAIRealtimeVoiceProviderConfig, "voice"> & {
     callId?: string;
+    /** ChatGPT account for an OAuth bearer on a Gateway-controlled call sideband. */
+    chatgptAccountId?: string;
     gaSessionPolicy?: RealtimeGaSessionPolicy;
     voice?: OpenAIRealtimeVoice;
     logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;

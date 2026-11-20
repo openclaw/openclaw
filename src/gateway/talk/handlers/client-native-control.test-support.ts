@@ -161,6 +161,7 @@ type NativePluginFixture = {
     response: ReturnType<typeof createResponse>;
   };
   broadcast: ReturnType<typeof vi.fn>;
+  warn: ReturnType<typeof vi.fn>;
   rpcSourceTesting: typeof rpcSourceTesting;
 };
 
@@ -202,6 +203,9 @@ export async function withNativePlugin(
       const capabilityCatalogContext = {
         ...resolvePluginCapabilityCatalogContext(),
         isProviderAuthProfileConfigured: nativeUpstream.authConfigured,
+        isProviderAuthProfileConfiguredAsync: async (
+          ...args: Parameters<typeof nativeUpstream.authConfigured>
+        ) => nativeUpstream.authConfigured(...args),
         resolveProviderAuthProfileApiKey: nativeUpstream.resolveAuth,
       };
       const previousRegistry = captureActivePluginRegistrySnapshot();
@@ -220,12 +224,13 @@ export async function withNativePlugin(
         }),
         connId: CONNECTION_ID,
       };
+      const warn = vi.fn();
       const context = {
         getRuntimeConfig: () => config,
         getClientConnIds: (filter?: (candidate: GatewayClient) => boolean) =>
           new Set(!filter || filter(client) ? [CONNECTION_ID] : []),
         broadcastToConnIds: broadcast,
-        logGateway: { warn: vi.fn() },
+        logGateway: { warn },
         chatRunState: createChatRunState(),
         removeChatRun: vi.fn(),
         agentRunSeq: new Map(),
@@ -343,6 +348,7 @@ export async function withNativePlugin(
             return { handling, response };
           },
           broadcast,
+          warn,
           rpcSourceTesting,
         });
       } finally {

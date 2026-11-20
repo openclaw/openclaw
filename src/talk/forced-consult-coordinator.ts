@@ -11,6 +11,26 @@ import {
 
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const DEFAULT_REALTIME_VOICE_FORCED_CONSULT_LIMIT = 12;
+/** How long a final transcript waits for a native consult before OpenClaw forces one. */
+export const REALTIME_VOICE_FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+
+/** Consult arguments for a final transcript the provider did not route to the agent. */
+export function buildRealtimeVoiceForcedConsultArgs(question: string) {
+  return {
+    question,
+    context:
+      "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult for realtime Talk.",
+    responseStyle: "Reply in a concise spoken tone.",
+  };
+}
+
+/** Tool output for a native consult whose request a forced consult already answered. */
+export function buildAlreadyDeliveredToolResult(): Record<string, string> {
+  return {
+    status: "already_delivered",
+    message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
+  };
+}
 
 /** Timer abstraction used so tests can inject deterministic fake timers. */
 type RealtimeVoiceForcedConsultTimer = {

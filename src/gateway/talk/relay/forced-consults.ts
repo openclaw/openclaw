@@ -7,7 +7,12 @@ import {
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
 import type { RealtimeVoiceAgentControlResult } from "../../../talk/agent-run-control.js";
 import { readSpeakableRealtimeVoiceToolResult } from "../../../talk/consult-question.js";
-import type { RealtimeVoiceForcedConsultHandle } from "../../../talk/forced-consult-coordinator.js";
+import {
+  buildAlreadyDeliveredToolResult,
+  buildRealtimeVoiceForcedConsultArgs,
+  REALTIME_VOICE_FORCED_CONSULT_FALLBACK_DELAY_MS as FORCED_CONSULT_FALLBACK_DELAY_MS,
+  type RealtimeVoiceForcedConsultHandle,
+} from "../../../talk/forced-consult-coordinator.js";
 import type { RealtimeVoiceToolResultOptions } from "../../../talk/provider-types.js";
 import {
   broadcastToolResultToOwner,
@@ -28,7 +33,6 @@ import {
   type RelaySession,
 } from "./state.js";
 
-const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 
 const FORCED_CONSULT_CHECKING_PROMPT = [
@@ -43,13 +47,6 @@ function buildForcedConsultSpeechPrompt(text: string): string {
     "",
     text,
   ].join("\n");
-}
-
-export function buildAlreadyDeliveredToolResult(): Record<string, string> {
-  return {
-    status: "already_delivered",
-    message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
-  };
 }
 
 function completeForcedTerminalProviderResult(
@@ -180,12 +177,7 @@ export function scheduleForcedAgentConsult(session: RelaySession, question: stri
       callId,
       name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
       forced: true,
-      args: {
-        question: handle.question,
-        context:
-          "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult for realtime Talk.",
-        responseStyle: "Reply in a concise spoken tone.",
-      },
+      args: buildRealtimeVoiceForcedConsultArgs(handle.question),
       talkEvent: session.harness.talk.emit({
         type: "tool.call",
         itemId,

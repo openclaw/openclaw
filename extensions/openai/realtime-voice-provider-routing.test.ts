@@ -356,6 +356,38 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(await capabilities(context)).not.toHaveProperty("supportsGatewayControl");
   });
 
+  it.each([
+    { name: "a usable Platform key wins over OAuth", platform: "usable" },
+    { name: "an unresolvable Platform profile blocks OAuth", platform: "unresolvable" },
+  ] as const)("selects GA Gateway control auth when $name", async ({ platform }) => {
+    mockOAuth();
+    mockAuthTypes(platform === "usable" ? "oauth" : "api_key");
+    const { session, createBrowserSession } = browserFixture();
+    const launch = session({
+      cfg: { agents: { defaults: {} } } as never,
+      providerConfig: platform === "usable" ? { apiKey: PLATFORM_KEY } : {},
+      model: GA_MODEL,
+      clientControl: { owner: "gateway" },
+      gatewayControl: { bindBridge: vi.fn(), bindControl: vi.fn() },
+      ...browserRequest,
+    } as never);
+    if (platform === "usable") {
+      await launch;
+      expect(createBrowserSession).toHaveBeenCalledWith(expect.any(Object), {
+        type: "api-key",
+        token: PLATFORM_KEY,
+      });
+      return;
+    }
+    await expect(launch).rejects.toThrow(
+      "OpenAI Realtime voice requires an OpenAI Platform API key",
+    );
+    expect(createBrowserSession).not.toHaveBeenCalled();
+    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ profileTypes: ["oauth"] }),
+    );
+  });
+
   it("gives GA OAuth the same browser session policy as Platform auth", async () => {
     const oauthToken = accountToken("account-123");
     mockOAuth(oauthToken);

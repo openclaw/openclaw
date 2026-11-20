@@ -9,7 +9,10 @@ export function createNativeSocketFixture() {
     readyState = 0;
     sent: string[] = [];
 
-    constructor(readonly url: string) {
+    constructor(
+      readonly url: string,
+      readonly options?: { headers?: Record<string, string> },
+    ) {
       super();
       sockets.push(this);
       events.emit("socket");

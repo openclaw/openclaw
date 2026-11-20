@@ -383,8 +383,8 @@ export async function createOpenAIQuicksilverCall(
   runtime: OpenAIRealtimeHost,
 ) {
   const isGptLive = isOpenAIGptLiveModel(params.session.model);
-  if (params.gaSideband && (isGptLive || params.auth.type !== "api-key")) {
-    throw new Error("OpenAI Realtime Gateway control requires a GA model and Platform API key");
+  if (params.gaSideband && isGptLive) {
+    throw new Error("OpenAI Realtime Gateway control requires a GA model");
   }
   if (isOpenAIGptLiveApiModel(params.session.model)) {
     if (params.auth.type !== "api-key") {
@@ -508,7 +508,7 @@ export async function createOpenAIQuicksilverCall(
 
 export async function hangupOpenAIRealtimeCall(
   params: {
-    apiKey: string;
+    auth: OpenAIQuicksilverAuth;
     callId: string;
     signal?: AbortSignal;
     fetchImpl?: typeof fetch;
@@ -520,7 +520,8 @@ export async function hangupOpenAIRealtimeCall(
   }
   const url = `${OPENAI_REALTIME_CALL_URL}/${encodeURIComponent(params.callId)}/hangup`;
   const headers = resolveOpenAIRealtimeRequestHeaders(runtime, url, {
-    Authorization: `Bearer ${params.apiKey}`,
+    Authorization: `Bearer ${params.auth.token}`,
+    ...(params.auth.type === "oauth" ? { "chatgpt-account-id": params.auth.accountId } : {}),
   });
   const response = await (params.fetchImpl ?? fetch)(url, {
     method: "POST",

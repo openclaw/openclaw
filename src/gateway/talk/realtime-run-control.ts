@@ -57,6 +57,8 @@ export function createTalkRunCancel(params: {
 export function createTalkRealtimeRunControlOwner(params: {
   controlSource?: "delegation" | "transcript";
   supportsToolCalls?: boolean;
+  /** Forced consult routing turns provider replies off, so idle status and cancel are answered here. */
+  answerIdleControls?: boolean;
   hasActiveRun: () => boolean;
   prepare: (args: unknown) => () => Promise<RealtimeVoiceAgentControlResult>;
   speak: (message: string) => void;
@@ -117,7 +119,10 @@ export function createTalkRealtimeRunControlOwner(params: {
   ): "control" | "consult" => {
     const intent = resolveRealtimeVoiceAgentControlIntent({ text });
     const intrinsic = intent.mode === "status" || intent.mode === "cancel";
-    const allowIdle = params.controlSource === "delegation" || params.supportsToolCalls === false;
+    const allowIdle =
+      params.answerIdleControls === true ||
+      params.controlSource === "delegation" ||
+      params.supportsToolCalls === false;
     if (!intent.shouldAutoControl || (!params.hasActiveRun() && !(allowIdle && intrinsic))) {
       return "consult";
     }

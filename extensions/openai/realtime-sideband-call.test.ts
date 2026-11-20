@@ -6,13 +6,21 @@ import {
   hangupOpenAIRealtimeCall,
 } from "./realtime-quicksilver-wire.js";
 
-function createCall(fetchImpl: typeof fetch, onCallAllocated = vi.fn()) {
+const platformAuth = { type: "api-key", token: "sk-platform" } as const; // pragma: allowlist secret
+const oauth = { type: "oauth", token: "oauth-access", accountId: "account-123" } as const;
+
+function createCall(
+  fetchImpl: typeof fetch,
+  onCallAllocated = vi.fn(),
+  auth: typeof platformAuth | typeof oauth = platformAuth,
+  model = "gpt-realtime-2.1",
+) {
   return createOpenAIQuicksilverCall(
     {
-      auth: { type: "api-key", token: "sk-platform" }, // pragma: allowlist secret
+      auth,
       requestIds: { realtimeSessionId: "realtime", sessionId: "session", threadId: "thread" },
       sdp: "v=0\r\n",
-      session: { type: "realtime", model: "gpt-realtime-2.1" },
+      session: { type: "realtime", model },
       gaSideband: true,
       onCallAllocated,
       fetchImpl,
@@ -44,6 +52,14 @@ describe("OpenAI Realtime sideband call wire", () => {
     expect(onCallAllocated).toHaveBeenCalledExactlyOnceWith("call_test-123");
   });
 
+  it("keeps GPT-Live out of the GA Gateway control sideband", async () => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    await expect(createCall(fetchImpl, vi.fn(), oauth, "gpt-live-1-codex")).rejects.toThrow(
+      "OpenAI Realtime Gateway control requires a GA model",
+    );
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it.each([
     [null, "missing"],
     ["https://attacker.example/v1/realtime/calls/rtc_test", "unexpected target"],
@@ -70,7 +86,7 @@ describe("OpenAI Realtime sideband call wire", () => {
     const fetchImpl = vi.fn(async () => new Response(new ReadableStream({ cancel }), { status }));
     const hangingUp = hangupOpenAIRealtimeCall(
       {
-        apiKey: "sk-platform", // pragma: allowlist secret
+        auth: platformAuth,
         callId: "call_test-123",
         fetchImpl: fetchImpl as typeof fetch,
       },

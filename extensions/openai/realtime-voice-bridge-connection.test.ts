@@ -250,12 +250,12 @@ describe("OpenAI realtime voice bridge connection", () => {
         },
       });
       const createBridge = gaSideband.createBridge as (params: {
-        apiKey: string;
+        auth: { type: "api-key"; token: string };
         callId: string;
         onTerminal: () => void;
       }) => RealtimeVoiceBridge;
       const bridge = createBridge({
-        apiKey: "test-api-key-platform",
+        auth: { type: "api-key", token: "test-api-key-platform" },
         callId: "rtc_gateway",
         onTerminal,
       });

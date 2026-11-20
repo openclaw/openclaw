@@ -167,6 +167,16 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         `Realtime provider "${resolution.provider.id}" does not support gateway-control-v1 with its configured authentication`,
       );
     }
+    // Client-owned sessions keep provider replies; only Gateway control can force consults.
+    const forceRequested =
+      wantsGatewayControl && realtimeConfig.consultRouting === "force-agent-consult";
+    // GPT-Live keeps native delegation; forced routing is a GA-model mode.
+    const forceAgentConsult = forceRequested && providerCapabilities?.handlesAgentConsult !== true;
+    if (forceRequested && !forceAgentConsult) {
+      context.logGateway.warn(
+        "talk client: force-agent-consult routing is ignored for GPT-Live under Gateway control; GPT-Live delegates to the agent natively",
+      );
+    }
     if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
       return rejectRequest(
         ErrorCodes.INVALID_REQUEST,
@@ -313,6 +323,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         voiceSessionId: activeVoiceSessionId,
         providerId: resolution.provider.id,
         controlSource,
+        forceAgentConsultOnFinalTranscript: forceAgentConsult,
         supportsToolCalls: providerCapabilities?.supportsToolCalls,
         sessionTarget: target,
         connId: ownerConnId,
@@ -434,6 +445,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
         instructions,
         initialItems,
         runAgentConsult: gatewayControlOwner.runAgentConsult,
+        ...(forceAgentConsult ? { autoRespondToAudio: false } : {}),
         ...controlRequest,
         ...(tools.length > 0 ? { tools } : {}),
         ...launchOptions,

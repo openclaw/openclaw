@@ -294,7 +294,10 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       headers: resolveOpenAIRealtimeRequestHeaders(
         this.runtime,
         url,
-        { Authorization: `Bearer ${apiKey}` },
+        {
+          Authorization: `Bearer ${apiKey}`,
+          ...(cfg.chatgptAccountId ? { "chatgpt-account-id": cfg.chatgptAccountId } : {}),
+        },
         "websocket",
       ),
     };

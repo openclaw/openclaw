@@ -49,6 +49,8 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
       role: "user" | "assistant";
       text: string;
     }>;
+    /** False when Gateway control forces an agent consult for each final user transcript. */
+    autoRespondToAudio?: boolean;
   };
 
 export type InternalRealtimeVoiceProviderApi = {
