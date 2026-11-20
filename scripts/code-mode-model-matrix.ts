@@ -1180,6 +1180,8 @@ async function executeAgentExec(params: {
     params.matrix.cell.mode,
     "--config",
     configPath,
+    "--agent-profile",
+    "openclaw/small",
     "--thinking",
     params.matrix.thinking,
     "--timeout",

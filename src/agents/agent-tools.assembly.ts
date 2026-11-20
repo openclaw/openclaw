@@ -22,6 +22,7 @@ import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { readSessionForkSource } from "../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
+import { resolveAgentProfilePreserveToolNames } from "./agent-profiles.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
 import {
   bindAssembledAgentToolActionDescriptor,
@@ -65,7 +66,6 @@ import { resolveGatewayExecAuthority } from "./execution-authority.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { buildHarnessHostRequester } from "./harness/host-requester.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
-import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
 import {
   filterToolsByClientCaps,
@@ -160,7 +160,7 @@ export function* assembleOpenClawCodingTools(
   const sourceReplyOnly =
     capabilityProfile.policy.requesterPolicySource === "completion-handoff" &&
     options?.sourceReplyDeliveryMode === "message_tool_only";
-  const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
+  const agentProfilePreserveToolNames = resolveAgentProfilePreserveToolNames({
     toolNames: capabilityProfile.policy.explicitToolOverrideAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
@@ -577,7 +577,7 @@ export function* assembleOpenClawCodingTools(
     ...options,
     agentId,
     preparedRequesterPolicy: capabilityProfile.policy,
-    localModelLeanPreserveToolNames,
+    agentProfilePreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");
   const declaredToolAllowlist = buildDeclaredToolAllowlistContext({

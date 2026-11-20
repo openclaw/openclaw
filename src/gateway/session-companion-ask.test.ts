@@ -316,6 +316,22 @@ describe("session companion embedded invocation", () => {
     expect(runEmbeddedAgent.mock.calls.map(([params]) => params.model)).toEqual(["main"]);
   });
 
+  it("runs Side chat on the utility model, not the large primary", async () => {
+    const cfg = config({
+      model: "anthropic/claude-opus-4-1",
+      utilityModel: "llama-cpp/qwen3.6-35b-a3b",
+    });
+    resolveSelection.mockImplementation(({ modelRef }) => {
+      const [provider = "", ...rest] = (modelRef ?? "").split("/");
+      return { provider, modelId: rest.join("/") };
+    });
+    const companion = createCompanion(cfg);
+    expectAnswer(await companion.rpc({ question: "Which file?" }));
+
+    const run = runEmbeddedAgent.mock.calls[0]?.[0];
+    expect(run).toMatchObject({ provider: "llama-cpp", model: "qwen3.6-35b-a3b" });
+  });
+
   it("answers with the question's chosen model, reasoning, and speed instead of the utility route", async () => {
     const cfg = utilityConfig({ "test/main": {}, "test/model-a": {}, "test/model-c": {} });
     resolveConfiguredModel();

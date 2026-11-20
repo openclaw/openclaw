@@ -127,9 +127,6 @@ export async function createCopilotToolBridge(
       forceMessageTool: shouldForceCopilotMessageTool(attemptParams),
     }).runtimeToolAllowlist,
   });
-  if (!toolPlan.constructTools) {
-    return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
-  }
 
   const toolSurfaceRuntime = await createAgentHarnessToolSurfaceRuntimeAsync({
     abortSignal: attemptParams.abortSignal,
@@ -161,6 +158,14 @@ export async function createCopilotToolBridge(
     toolsAllow: attemptParams.toolsAllow,
     trigger: attemptParams.trigger,
   });
+  if (!toolPlan.constructTools) {
+    return {
+      cleanup: toolSurfaceRuntime.cleanup,
+      codeModeEngaged: false,
+      promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY,
+      sourceTools: [],
+    };
+  }
   const toolOptions = await buildOpenClawCodingToolsOptions(
     input,
     {
@@ -185,9 +190,7 @@ export async function createCopilotToolBridge(
     toolSurfaceRuntime.runtimeToolAllowlist,
     { toolMeta: getPluginToolMeta },
   );
-  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools, {
-    localModelLeanApplied: true,
-  });
+  const compactedTools = toolSurfaceRuntime.compactTools(allowedSourceTools);
   // The constructor output is bound before catalog compaction so hidden tools
   // cannot outlive the attempt. Bind only controls created by compaction here;
   // rebinding retained tools would stack the before-tool hook.
@@ -335,6 +338,7 @@ async function buildOpenClawCodingToolsOptions(
     abortSignal: a.abortSignal,
     modelProvider: input.modelProvider,
     modelId: input.modelId,
+    resolvedAgentProfile: toolSurfaceRuntime?.agentProfile,
     includeCoreTools: toolPlan.includeCoreTools,
     includeToolSearchControls: toolSurfaceRuntime?.includeToolSearchControls,
     toolSearchCatalogRef: toolSurfaceRuntime?.toolSearchCatalogRef,

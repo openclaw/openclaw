@@ -2,7 +2,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isCoreCodingSurfaceToolName, isRunGrantedCoreToolId } from "./core-tool-facts.js";
-import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import {
   applyToolCatalogCompaction,
   collectUniqueCatalogToolNames,
@@ -75,7 +74,7 @@ export function buildToolSchemaDirectoryPrompt(
   ctx: ToolSearchToolContext,
   options?: CatalogVisibilityOptions & {
     contextTokenBudget?: number;
-    toolSearchDirectoryLean?: boolean;
+    toolSearchDirectoryCompact?: boolean;
     usageRanking?: ToolUsageRankingSnapshot;
   },
 ): string {
@@ -91,9 +90,8 @@ export function buildToolSchemaDirectoryPrompt(
           Math.max(768, Math.floor(contextTokens / 10)),
         )
       : MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS;
-  // Lean filtering must not buy longer descriptions for the remaining tools.
-  const descriptionMaxChars =
-    (options?.toolSearchDirectoryLean ?? isLocalModelLeanEnabled(ctx)) ? 0 : 180;
+  // Compact tool filtering must not buy longer descriptions for the remaining tools.
+  const descriptionMaxChars = options?.toolSearchDirectoryCompact ? 0 : 180;
   const usageRanking = hasToolUsageRanking(options?.usageRanking)
     ? options.usageRanking
     : undefined;

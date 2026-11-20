@@ -30,7 +30,49 @@ const basePlanParams: AgentToolSurfacePlanParams = {
   isRawModelRun: false,
 };
 
+const smallConfig: OpenClawConfig = { agents: { defaults: { agentProfileId: "openclaw/small" } } };
+
 describe("resolveAgentToolSurfacePlan", () => {
+  it("keeps the full directory when no profile is configured", () => {
+    const presentation = prepareAgentToolSurfacePresentation({
+      ...basePlanParams,
+      config: {},
+      modelProvider: "llama-cpp",
+      modelId: "local-8b",
+    });
+
+    expect(presentation.toolSearchDirectoryLean).toBe(false);
+  });
+
+  it("enables Tool Search when the small profile is selected", () => {
+    const plan = resolveAgentToolSurfacePlan({
+      ...basePlanParams,
+      config: smallConfig,
+      modelProvider: "llama-cpp",
+      modelId: "local-8b",
+    });
+
+    expect(plan.codeModeControlsEnabled).toBe(false);
+    expect(plan.toolSearchControlsEnabled).toBe(true);
+    expect(plan.toolSearchConfig).toMatchObject({
+      enabled: true,
+      mode: "tools",
+      searchDefaultLimit: 5,
+      maxSearchLimit: 10,
+    });
+  });
+
+  it("presents the compact directory when the small profile is selected", () => {
+    const presentation = prepareAgentToolSurfacePresentation({
+      ...basePlanParams,
+      config: smallConfig,
+      modelProvider: "custom",
+      modelId: "unbound-model",
+    });
+
+    expect(presentation.toolSearchDirectoryLean).toBe(true);
+  });
+
   it.each(
     (["tools", "directory", "code"] as const).flatMap((mode) =>
       [false, true].map((prepared) => ({ mode, prepared })),
@@ -111,7 +153,7 @@ describe("resolveAgentToolSurfacePlan", () => {
         tools: { toolSearch },
         agents: {
           ownership: "explicit",
-          defaults: { experimental: { localModelLean: false } },
+          defaults: { agentProfileId: "openclaw/base" },
           entries: { local: {}, hosted: {} },
         },
       };

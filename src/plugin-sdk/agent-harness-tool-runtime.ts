@@ -1,7 +1,7 @@
+import { hasCompactToolProfile, resolveAgentProfile } from "../agents/agent-profiles.js";
 import { prepareConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 // Keep Tool Search and Code Mode dependencies out of the lightweight harness lifecycle SDK.
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
-import { isLocalModelLeanEnabled } from "../agents/local-model-lean.js";
 import { withLegacySessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store-legacy.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
@@ -80,7 +80,12 @@ export function createAgentHarnessToolSurfaceRuntime(params: AgentHarnessToolSur
 export async function createAgentHarnessToolSurfaceRuntimeAsync(
   params: AgentHarnessToolSurfaceRuntimeParams,
 ): Promise<AgentHarnessToolSurfaceRuntime> {
-  const profile = isLocalModelLeanEnabled(params)
+  const agentProfile = resolveAgentProfile({
+    config: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  const profile = hasCompactToolProfile(agentProfile)
     ? await prepareConversationCapabilityProfile({
         config: params.config,
         agentId: params.agentId,
@@ -111,6 +116,7 @@ function projectToolSurfaceRuntime(
   > = runtime;
   return {
     codeModeControlsEnabled: runtime.codeModeControlsEnabled,
+    agentProfile: runtime.agentProfile,
     config: runtime.config,
     includeToolSearchControls: runtime.includeToolSearchControls,
     runtimeToolAllowlist: runtime.runtimeToolAllowlist,
@@ -122,16 +128,27 @@ function projectToolSurfaceRuntime(
       tools: Parameters<CoreCompactTools>[0],
       {
         hookContext,
+        agentProfileApplied,
         localModelLeanApplied,
       }: Pick<
         NonNullable<Parameters<CoreCompactTools>[1]>,
-        "hookContext" | "localModelLeanApplied"
-      > = {},
+        "hookContext" | "agentProfileApplied"
+      > & {
+        /** @deprecated Use agentProfileApplied. */
+        localModelLeanApplied?: boolean;
+      } = {},
     ) => {
+      if (localModelLeanApplied !== undefined) {
+        warnPluginSdkDeprecation({
+          family: "agent-harness-tool-surface",
+          method: "compactTools localModelLeanApplied",
+          replacement: "compactTools agentProfileApplied",
+        });
+      }
       const { tools: compacted, promptToolPolicy } = withCapabilityRead(() =>
         runtime.compactTools(tools, {
           hookContext,
-          localModelLeanApplied,
+          agentProfileApplied: agentProfileApplied ?? localModelLeanApplied,
         }),
       );
       return { tools: compacted, promptToolPolicy };

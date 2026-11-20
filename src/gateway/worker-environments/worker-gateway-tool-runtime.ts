@@ -169,9 +169,7 @@ export function createWorkerGatewayToolRuntime(params: {
             }
             return tool;
           });
-          const projected = runtime
-            .compactTools(tools, { prepared: { preserveToolNames: [] } })
-            .promptToolPolicy.apply();
+          const projected = runtime.compactTools(tools, { prepared: {} }).promptToolPolicy.apply();
           modelTools = {
             tools: projected.tools.map(({ name, description, parameters }) => ({
               name,

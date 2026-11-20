@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { filterToolsByAgentProfile } from "./agent-profiles.js";
 import { createAgentHarnessPromptToolPolicy } from "./harness/prompt-tool-policy.js";
-import { filterLocalModelLeanTools } from "./local-model-lean.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
   addClientToolsToToolCatalog,
@@ -19,7 +19,6 @@ import type { ToolUsageRankingSnapshot } from "./tool-usage-ranking.js";
 
 const optionalNames = [
   "browser",
-  "automations",
   "message",
   "image_generate",
   "music_generate",
@@ -32,6 +31,7 @@ function localCatalog() {
   return [
     ...Array.from({ length: 32 }, (_, i) => `local_tool_${String(i).padStart(2, "0")}`),
     ...optionalNames,
+    "automations",
   ].map((name) =>
     Object.assign(createStubTool(name), { description: "Search the local archive. ".repeat(10) }),
   );
@@ -75,65 +75,55 @@ describe("run-granted tools in the Tool Search directory", () => {
   });
 });
 
-describe("lean Tool Search directory", () => {
+describe("compact Tool Search directory", () => {
   it("does not spend removed tools' prompt savings on longer descriptions", () => {
     const tools = localCatalog();
     const config: OpenClawConfig = {
-      agents: { defaults: { experimental: { localModelLean: true } } },
+      agents: { defaults: { agentProfileId: "openclaw/small" } },
       tools: { toolSearch: { mode: "tools" } },
     };
-    const leanTools = filterLocalModelLeanTools({ tools, config });
+    const compactTools = filterToolsByAgentProfile({ tools, config });
     const options = { contextTokenBudget: 32_768 };
     const full = buildToolSchemaDirectoryPrompt({ catalogRef: catalogRef(tools) }, options);
-    const lean = buildToolSchemaDirectoryPrompt(
-      { config, catalogRef: catalogRef(leanTools) },
-      options,
+    const compact = buildToolSchemaDirectoryPrompt(
+      { config, catalogRef: catalogRef(compactTools) },
+      { ...options, toolSearchDirectoryCompact: true },
     );
 
-    expect(lean.length).toBeLessThanOrEqual(full.length);
-    expect(lean).not.toContain("Search the local archive");
+    expect(compact.length).toBeLessThanOrEqual(full.length);
+    expect(compact).not.toContain("Search the local archive");
     for (const name of optionalNames) {
-      expect(lean).not.toContain(`- ${name} `);
+      expect(compact).not.toContain(`- ${name} `);
     }
-    for (const tool of leanTools) {
-      expect(lean).toContain(`- ${tool.name} (core)`);
+    for (const tool of compactTools) {
+      expect(compact).toContain(`- ${tool.name} (core)`);
       expect(tool.description).toBe("Search the local archive. ".repeat(10));
     }
   });
 
-  it("caches directory text separately for lean and non-lean agents", () => {
+  it("caches directory text separately for compact and full presentation", () => {
     const ref = catalogRef(localCatalog().slice(0, 1));
-    const config: OpenClawConfig = {
-      agents: {
-        defaults: { experimental: { localModelLean: true } },
-        entries: { lean: {}, full: { experimental: { localModelLean: false } } },
-      },
-    };
-    const full = buildToolSchemaDirectoryPrompt({ config, agentId: "full", catalogRef: ref });
-    const lean = buildToolSchemaDirectoryPrompt({ config, agentId: "lean", catalogRef: ref });
+    const full = buildToolSchemaDirectoryPrompt({ catalogRef: ref });
+    const compact = buildToolSchemaDirectoryPrompt(
+      { catalogRef: ref },
+      { toolSearchDirectoryCompact: true },
+    );
 
     expect(full).toContain("Search the local archive");
-    expect(lean).toContain("- local_tool_00 (core)\n");
-    expect(lean).not.toContain("Search the local archive");
-    expect(buildToolSchemaDirectoryPrompt({ config, agentId: "full", catalogRef: ref })).toBe(full);
-    expect(buildToolSchemaDirectoryPrompt({ config, agentId: "lean", catalogRef: ref })).toBe(lean);
+    expect(compact).toContain("- local_tool_00 (core)\n");
+    expect(compact).not.toContain("Search the local archive");
+    expect(buildToolSchemaDirectoryPrompt({ catalogRef: ref })).toBe(full);
     expect(
-      buildToolSchemaDirectoryPrompt(
-        { config, agentId: "full", catalogRef: ref },
-        { toolSearchDirectoryLean: true },
-      ),
-    ).toBe(lean);
+      buildToolSchemaDirectoryPrompt({ catalogRef: ref }, { toolSearchDirectoryCompact: true }),
+    ).toBe(compact);
     expect(
-      buildToolSchemaDirectoryPrompt(
-        { config, agentId: "lean", catalogRef: ref },
-        { toolSearchDirectoryLean: false },
-      ),
+      buildToolSchemaDirectoryPrompt({ catalogRef: ref }, { toolSearchDirectoryCompact: false }),
     ).toBe(full);
     const policy = createAgentHarnessPromptToolPolicy({
       tools: [createStubTool("tool_search")],
       catalogRef: ref,
       codeModeControlsEnabled: false,
-      catalogPrompt: { config, agentId: "full" },
+      catalogPrompt: {},
     });
     expect(policy.apply().toolSchemaDirectoryPrompt).toBe(full);
   });

@@ -92,7 +92,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
     agentId?: string;
     sessionKey?: string;
     contextTokenBudget?: number;
-    toolSearchDirectoryLean?: boolean;
+    toolSearchDirectoryCompact?: boolean;
     usageRanking?: ToolUsageRankingSnapshot;
   };
 }) {
@@ -175,7 +175,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
                   { ...params.catalogPrompt, catalogRef: catalog.ref },
                   {
                     contextTokenBudget: params.catalogPrompt.contextTokenBudget,
-                    toolSearchDirectoryLean: params.catalogPrompt.toolSearchDirectoryLean,
+                    toolSearchDirectoryCompact: params.catalogPrompt.toolSearchDirectoryCompact,
                     usageRanking: params.catalogPrompt.usageRanking,
                   },
                 )

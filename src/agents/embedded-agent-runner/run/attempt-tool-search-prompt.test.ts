@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -37,7 +38,7 @@ async function promptFixture(
   skillsDeferred = false,
 ) {
   const config = {
-    agents: { defaults: { experimental: { localModelLean: false } } },
+    agents: { defaults: { agentProfileId: "openclaw/base" as const } },
     tools: { codeMode, ...(!codeMode && { toolSearch: { enabled: true, mode } }) },
   };
   const fixture = createFixture({ pendingImageCount: 0 });
@@ -83,6 +84,7 @@ async function promptFixture(
     }),
   } as EmbeddedRunAttemptParams;
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
+    agentProfile: resolveAgentProfile({}),
     activeContextEngine: undefined,
     attempt,
     bootstrap: createEmptyPromptBootstrap(),

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
@@ -127,8 +128,8 @@ async function plan(
       requireExplicitMessageTarget: false,
       inheritedToolAllowlist: [],
       additionalInheritedToolNamesRef: [],
-      localModelLeanEnabled: false,
-      localModelLeanPreserveToolNames: [],
+      agentProfile: resolveAgentProfile({}),
+      agentProfilePreserveToolNames: [],
       replaySafetyOptions: { declaredReplaySafe: () => undefined },
       runtimeCapabilityProfile: resolveConversationCapabilityProfile({ config, agentId: "main" }),
       releaseTools: async () => surface.cleanup(),

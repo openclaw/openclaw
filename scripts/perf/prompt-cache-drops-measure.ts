@@ -17,6 +17,7 @@ import { parseArgs } from "node:util";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { createAnthropicMessagesTransportStreamFn } from "../../packages/ai/src/transports/anthropic-transport-stream.js";
 import { prepareSystemAgentRunAdmission } from "../../src/agents/admitted-run-context.js";
+import { resolveAgentProfile } from "../../src/agents/agent-profiles.js";
 import { buildBootstrapBudgetState } from "../../src/agents/bootstrap-budget.js";
 import type { AgentCommandOpts } from "../../src/agents/command/types.js";
 import {
@@ -194,6 +195,7 @@ try {
         try {
           const prepared = await prepareEmbeddedAttemptSystemPrompt({
             activeContextEngine: undefined,
+            agentProfile: resolveAgentProfile({}),
             attempt: {
               config,
               agentId: "main",

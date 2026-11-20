@@ -162,6 +162,35 @@ describe("OpenClaw configured-model planner", () => {
       }
     },
   );
+  it("runs the setup assistant on its configured model, not the default primary", async () => {
+    const workspaceDir = path.resolve("profile-workspace");
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-1",
+          models: { "llama-cpp/qwen3.6-35b-a3b": { agentRuntime: { id: "openclaw" } } },
+        },
+        entries: { main: { workspace: workspaceDir, model: "llama-cpp/qwen3.6-35b-a3b" } },
+      },
+    };
+    const { binding } = await createSystemAgentVerifiedInferenceTestFixture(config);
+    useFastVerifiedInference(binding);
+    const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
+      payloads: [{ text: '{"reply":"Ready."}' }],
+      meta: { durationMs: 0 },
+    }));
+
+    await planSystemAgentCommand({
+      input: "check the gateway",
+      overview: overview(),
+      verifiedInference: binding,
+      deps: { runEmbeddedAgent },
+    });
+
+    const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "assistant run");
+    expect(run).toMatchObject({ provider: "llama-cpp", model: "qwen3.6-35b-a3b" });
+  });
+
   it.each(["embedded", "cli"] as const)(
     "rejects a failed %s completion before interpreting retained command text",
     async (runner) => {

@@ -1419,7 +1419,7 @@ describe("runCopilotAttempt", () => {
         execute: async () => ({ content: [], details: {} }),
       });
       const config = {
-        agents: { defaults: { experimental: { localModelLean: false } } },
+        agents: { defaults: { agentProfileId: "openclaw/base" as const } },
         tools: { codeMode: false, toolSearch: { enabled: true, mode: "tools" as const } },
       };
       const result = await run({

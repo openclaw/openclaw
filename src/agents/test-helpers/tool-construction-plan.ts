@@ -32,7 +32,7 @@ function createExplicitMediaToolConstructionOptions() {
   return {
     config: {
       agents: {
-        defaults: { experimental: { localModelLean: true } },
+        defaults: { agentProfileId: "openclaw/small" as const },
         entries: {
           artist: {
             tools: {
@@ -60,7 +60,7 @@ export function registerExplicitMediaToolConstructionTest(
     present: string[],
   ) => void,
 ) {
-  it("preserves configured media tools through local model lean filtering", () => {
+  it("preserves configured media tools through compact tool filtering", () => {
     expectToolSurface(createExplicitMediaToolConstructionOptions(), [
       "image_generate",
       "pdf",

@@ -110,7 +110,7 @@ it("admits the worker's code-mode schemas while rejecting raw or altered schemas
     const projected = worker
       .compactTools(
         h.surface.tools.map(({ definition }) => ({ ...definition, execute: h.execute })),
-        { prepared: { preserveToolNames: [] } },
+        { prepared: {} },
       )
       .tools.map(schema);
     expect(projected.map((tool) => tool.name)).toEqual(["exec", "wait"]);
