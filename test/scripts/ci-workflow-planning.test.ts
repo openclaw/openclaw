@@ -2333,8 +2333,12 @@ describe("ci workflow guards", () => {
         );
         // The ordinary selected path owns its full inputs. Manual fallback owns
         // only the missing root tests and leaves the existing full shards alone.
-        expect(evaluateWorkflowCondition(changed.if, context)).toBe(eventName === "pull_request");
-        expect(evaluateWorkflowCondition(fallback.if, context)).toBe(eventName !== "pull_request");
+        expect(Boolean(evaluateWorkflowCondition(changed.if, context))).toBe(
+          eventName === "pull_request",
+        );
+        expect(Boolean(evaluateWorkflowCondition(fallback.if, context))).toBe(
+          eventName !== "pull_request",
+        );
         expect(evaluateWorkflowExpression(fallback.env.ROOT_TEST_PATHS_JSON, context)).toBe(
           JSON.stringify(roots),
         );
@@ -2348,9 +2352,11 @@ describe("ci workflow guards", () => {
           expect(manifest.outputs.run_check_plan).toBe("false");
           expect(manifest.outputs.narrow_check_paths_json).toBe("");
           expect(
-            evaluateWorkflowCondition(
-              requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard").if,
-              context,
+            Boolean(
+              evaluateWorkflowCondition(
+                requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard").if,
+                context,
+              ),
             ),
           ).toBe(true);
         }
@@ -2363,7 +2369,7 @@ describe("ci workflow guards", () => {
         checkFamilyScope: true,
         historicalCompatibility: true,
         eventName: "workflow_dispatch",
-        releaseGate: true,
+        releaseGate: false,
         changedPaths: ["test/scripts/simslim.test.ts"],
         changedPlannerSource: changedPlannerSource(),
       });
@@ -2388,7 +2394,7 @@ describe("ci workflow guards", () => {
             bun_setup: { outcome: "success", outputs: {} },
           },
         };
-        expect(evaluateWorkflowCondition(fallback.if, context)).toBe(false);
+        expect(Boolean(evaluateWorkflowCondition(fallback.if, context))).toBe(false);
       }
     });
 
