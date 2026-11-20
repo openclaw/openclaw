@@ -1739,7 +1739,7 @@ jobs:
           set -euo pipefail
           # Keep the controller and mock provider in a sibling of the measured Gateway.
           systemd-run --user --wait --pipe --collect --service-type=exec --expand-environment=no \
-            --property=Delegate=cpu,memory --property=DelegateSubgroup=controller \
+            --property='Delegate=cpu memory' --property=DelegateSubgroup=controller \
             --working-directory="$PWD" --setenv="PATH=$PATH" \
             bash -euo pipefail -c '
               read -r group < /proc/self/cgroup
@@ -1759,7 +1759,8 @@ jobs:
                   --output "$2/memory-${cap}gib.json" 2>&1 | tee "$2/memory-${cap}gib.log" || status=1
               done
               exit "$status"
-            ' bash "$PERFORMANCE_HELPER_DIR" "$CONCURRENCY_OUTPUT"
+            ' bash "$PERFORMANCE_HELPER_DIR" "$CONCURRENCY_OUTPUT" \
+            2>&1 | tee "$CONCURRENCY_OUTPUT/memory-caps.log"
 
       - name: Record Gateway concurrency outcome
         if: ${{ always() }}
