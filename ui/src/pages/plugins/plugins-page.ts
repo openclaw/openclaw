@@ -69,6 +69,7 @@ export function createPluginsPage(options: {
     routeData: () => routeData,
     uninstalling: uninstallingSelection,
     selectInstalled: (pluginId) => mcpLogin.select(pluginId),
+    findCatalogEntry: (id) => discovery.findEntry(id),
   });
   const { showDetails, showCatalogDetail } = details;
 
@@ -303,6 +304,7 @@ export function createPluginsPage(options: {
         discovery.read(),
         rendered,
         state.detail?.catalog ?? state.catalogDetail?.result,
+        state.catalogDetail?.preview?.catalog.imageUrl,
       ),
   );
   onSettled(() => {
@@ -654,9 +656,7 @@ export function createPluginsPage(options: {
 
   function closeCatalogDetail() {
     setState({ catalogDetail: null, detail: null });
-    context.navigate("plugins", {
-      pathname: pathForRoute("plugins", context.basePath),
-    });
+    context.navigate("plugins", { pathname: pathForRoute("plugins", context.basePath) });
   }
 
   async function uninstall(pluginId: string, rowKey: string): Promise<void> {
@@ -737,7 +737,6 @@ export function createPluginsPage(options: {
     routeLoading: () => gateway.connected && !routeDataConsumed,
     catalogRead: catalog,
     inspectionRead: details.inspection,
-    detailRead: details.catalog,
     setState,
     refreshCatalog,
     accessBlockedReason,

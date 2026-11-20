@@ -383,8 +383,9 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
+                    preview={page().state.catalogDetail?.preview}
                     result={page().state.catalogDetail?.result ?? null}
-                    read={page().detailRead}
+                    error={page().state.catalogDetail?.error}
                     backHref={pathForRoute("plugins", page().context.basePath)}
                     onBack={() => page().closeCatalogDetail()}
                     onRetry={() =>

@@ -361,6 +361,9 @@ Search queries
 [ClawHub](https://clawhub.ai/plugins) without leaving the page. Catalog detail
 links use `/plugins/<catalog-id>`; installed-only links use
 `/settings/plugins/<plugin-id>`. Both show the same overview and actions.
+When you open an entry from browse or search, the overview shows the artwork,
+name, description, and publisher already available in the catalog while the
+remaining details load.
 
 Open a skill on a plugin detail page to browse its complete declared folder. The
 viewer starts with `SKILL.md`, includes unlinked files and nested folders, and
