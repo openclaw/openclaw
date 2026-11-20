@@ -341,8 +341,9 @@ async function insertBatch(
 async function scan(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
-  maxRowBytes: number,
   legacyDigest: boolean,
+  // Include the blob owner's 100 MiB allowance plus keys and JSON metadata.
+  maxRowBytes = 128 * 1024 * 1024,
   destination?: Endpoint,
   assertCurrent = () => {},
   transformRow?: (table: string, row: PortRow) => PortRow | undefined,
@@ -538,7 +539,7 @@ export async function inspectDatabasePort(
     }
     return {
       catalog,
-      ...(await scan(source, descriptor, 64 * 1024 * 1024, legacyDigest)),
+      ...(await scan(source, descriptor, legacyDigest)),
       allocations: await readDatabasePortAllocations(source, descriptor),
     };
   } finally {
@@ -597,7 +598,7 @@ export async function materializeDatabasePort(params: {
     params.descriptor,
     params.activeFragments,
   );
-  const maxRowBytes = params.maxRowBytes ?? 64 * 1024 * 1024;
+  const maxRowBytes = params.maxRowBytes;
   const postgres = [source, destination].find(
     (endpoint): endpoint is Extract<Endpoint, { engine: "postgres" }> =>
       endpoint.engine === "postgres",
@@ -659,12 +660,12 @@ export async function materializeDatabasePort(params: {
     // in the same snapshot so the copy is checked against its source, not against itself.
     const copied = sameServer
       ? (await copyPostgresTables(source, destination, descriptor, assertCurrent),
-        await scan(source, descriptor, maxRowBytes, legacyDigest))
+        await scan(source, descriptor, legacyDigest, maxRowBytes))
       : await scan(
           source,
           descriptor,
-          maxRowBytes,
           legacyDigest,
+          maxRowBytes,
           destination,
           assertCurrent,
           params.transformRow,
@@ -699,7 +700,7 @@ export async function materializeDatabasePort(params: {
       assertSqliteIntegrity(destination.db, "Port SQLite destination");
     }
     const verified = {
-      ...(await scan(destination, descriptor, maxRowBytes, legacyDigest)),
+      ...(await scan(destination, descriptor, legacyDigest, maxRowBytes)),
       allocations: await readDatabasePortAllocations(destination, descriptor),
     };
     const expected =

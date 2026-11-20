@@ -550,6 +550,28 @@ export async function clickPluginAction(page: HTMLElement, label: string): Promi
   await settlePlugins();
 }
 
+export function findPluginSwitch(page: HTMLElement, name: string): HTMLInputElement | undefined {
+  return [...page.querySelectorAll<HTMLInputElement>('input[role="switch"]')].find(
+    (input) => input.getAttribute("aria-label") === name,
+  );
+}
+
+export async function clickPluginSwitch(
+  page: HTMLElement,
+  name: string,
+  checked: boolean,
+): Promise<void> {
+  const control = await waitForSolid(() => {
+    const input = findPluginSwitch(page, name);
+    if (input?.checked !== checked) {
+      throw new Error(`No ${checked ? "enabled" : "disabled"} plugin switch for ${name}`);
+    }
+    return input;
+  });
+  control.click();
+  await settlePlugins();
+}
+
 export function resetPluginsPageTestState(): void {
   cleanupSolid();
   document.body.replaceChildren();
