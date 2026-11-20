@@ -21,8 +21,8 @@ import { stateTest } from "../plugin-state/plugin-state-fixtures.test-support.js
 import { createCorePluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { ensureOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 
 const { spawnCommand } = vi.hoisted(() => ({ spawnCommand: vi.fn() }));
 // mock-isolation: Only container engine I/O is synthetic; local storage and config writes stay real.
@@ -304,12 +304,25 @@ it("does not warn for unused required roles or an unprobed non-container backend
   expect(spawnCommand).not.toHaveBeenCalled();
 });
 
-it("keeps explicit assignments active without a default", async ({ state }) => {
+it("warns for inactive non-member assignments but not catalog-enforced members", async ({
+  state,
+}) => {
   state.applyEnv();
-  const profile = ensureProfileForEmail("alice@example.test");
+  const profile = ensureOpenClawIdUserProfile({ accountId: "alice" }, {});
   setUserProfileRole(profile.id, "viewer");
+  await writeStoredClaw(claw({ alice: "viewer" }));
   await closeOpenClawStateDatabaseAsync();
-  expect(await detect(cfg(false))).toEqual([]);
+  expect(await detect(cfg(false))).toEqual([
+    expect.objectContaining({
+      requirement: "assignments-inactive",
+      message: expect.stringContaining("1 profile(s)"),
+    }),
+  ]);
+  expect(await detect(cfg())).toEqual([]);
+  await writeStoredClaw(claw({}));
+  expect(await detect(cfg())).toEqual([
+    expect.objectContaining({ requirement: "assignments-inactive" }),
+  ]);
   const config = cfg(false);
   config.gateway!.roles!.default = "viewer";
   expect(await detect(config)).toEqual([]);
