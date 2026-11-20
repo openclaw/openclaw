@@ -7,13 +7,10 @@ import { decodePostgresRows } from "../postgres-sync/protocol.js";
 import { assertSqliteIntegrity } from "../sqlite-integrity.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
-import {
-  readAutoincrementHighWater,
-  restoreAutoincrementHighWater,
-  withSqliteForeignKeysDisabled,
-} from "../sqlite-strict.js";
+import { restoreAutoincrementHighWater, withSqliteForeignKeysDisabled } from "../sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { writeSqliteUserVersion } from "../sqlite-user-version.js";
+import { readSqlitePortAllocation } from "./port-allocation-fact.js";
 import {
   admitDatabasePortDescriptor,
   DatabasePortDataError,
@@ -240,21 +237,12 @@ export async function readDatabasePortAllocations(
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
       } else {
-        const statement = sqliteStatement(
+        result[key] = readSqlitePortAllocation(
           endpoint.db,
-          `SELECT max(${quote(identity.column)}) AS value FROM ${quote(table.name)}`,
+          table.name,
+          identity.column,
+          identity.autoIncrement,
         );
-        let value = statement.get()?.value;
-        if (identity.autoIncrement) {
-          const high = readAutoincrementHighWater(endpoint.db, table.name);
-          if (
-            high !== null &&
-            (value === null || (typeof value === "bigint" && BigInt(high) > value))
-          ) {
-            value = BigInt(high);
-          }
-        }
-        result[key] = { value: String(value ?? 1), called: value !== null && value !== undefined };
       }
     }
   }
