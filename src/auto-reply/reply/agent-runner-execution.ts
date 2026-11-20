@@ -484,9 +484,6 @@ async function executeAgentTurnInternalLoop(
     fallbackExhausted,
     fallbackAttempts,
     terminalRunFailed,
-    continueWorkRequests,
-    compactionTraceparent,
-    rawContinuationText,
   } = cycle;
 
   // Preserve successful content and formatted tool errors. Mid-turn provider failures
@@ -551,9 +548,9 @@ async function executeAgentTurnInternalLoop(
     resolved: { provider: fallbackProvider, model: fallbackModel },
     fallback: { exhausted: fallbackExhausted, attempts: fallbackAttempts },
     autoCompactionCount: compaction.count,
-    compactionTraceparent,
-    continueWorkRequests,
-    rawContinuationText,
+    compactionTraceparent: cycle.compactionTraceparent,
+    continueWorkRequests: cycle.continueWorkRequests,
+    rawContinuationText: cycle.rawContinuationText,
     hasDirectlySentBlockReply:
       directBlockDeliveries.some((delivery) => delivery.terminalDeliveryConfirmed === true) ||
       undefined,

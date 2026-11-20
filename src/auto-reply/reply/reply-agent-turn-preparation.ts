@@ -552,6 +552,8 @@ export async function prepareReplyAgentTurn<TConfigured>(
           resolvedVerboseLevel,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           onCompactionNotice: notifyPreflightCompaction,
+          replyOperation: operation,
+          abortSignal: operation.abortSignal,
         };
         const preflightAdmission = readPendingUserTurnTranscriptAdmission(
           preparation.followupRun.userTurnTranscriptRecorder,
@@ -564,9 +566,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
             runSessionCompactionIfNeeded({
               ...preparation,
               promptCarriesRefresh: true,
-              replyOperation: operation,
               pendingUserEntryId: preflightAdmission?.entryId,
-              abortSignal: operation.abortSignal,
               // Compaction decides whether work is needed, then replans from the
               // checkpoint result. A queued source must not bypass this memory write.
               beforeCompaction: async (entry) => {
@@ -575,8 +575,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
                   runMemoryFlushIfNeeded({
                     ...preparation,
                     preflightAdmission,
-                    replyOperation: operation,
-                    abortSignal: operation.abortSignal,
                     sessionEntry: entry,
                   }),
                 );
