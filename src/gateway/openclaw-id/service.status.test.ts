@@ -102,7 +102,7 @@ it("exposes configured and undefined member roles without replacing their opaque
       roles: {
         definitions: {
           guest: {
-            sessions: { others: "view" },
+            sessions: { others: "invited", maxInvitedAccess: "send" },
             agents: "*",
             scopes: ["operator.sessions.read"],
             sandbox: "required",
@@ -118,7 +118,7 @@ it("exposes configured and undefined member roles without replacing their opaque
     const status = await service.linkStatus();
     expect(status).toMatchObject({
       roles: [
-        { name: "guest", defined: true, requiresSandbox: true },
+        { name: "guest", defined: true, requiresSandbox: true, maxInvitedAccess: "send" },
         { name: "operator", defined: true, requiresSandbox: false },
         { name: "removed-role", defined: false, requiresSandbox: false },
         { name: "viewer", defined: true, requiresSandbox: false },
