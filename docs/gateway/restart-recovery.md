@@ -714,10 +714,8 @@ is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 Graceful shutdown marks the root requester of a running child, then cancels the
 child through the ordinary abort path. The child settles terminally without a
 shutdown completion announcement or a "subagent failed" notice to its parent.
-Children are not adopted or independently resumed at startup. If a person starts
-a new chat turn in a retained visible task, that turn belongs to the task chat,
-not to the parent that originally spawned it. A graceful restart resumes the
-turn in that same chat under the usual requester checks.
+Children are not adopted or independently resumed at startup. If a restart
+interrupts your request, the agent resumes in the same chat without asking again.
 
 Collector children retain their captured results. If shutdown recorded a terminal
 child before its collector result finished publishing, startup completes that
