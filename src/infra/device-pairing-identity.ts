@@ -35,8 +35,8 @@ export function resolveMemberOperatorGrantChange(
     ...current.filter((scope) => !scope.startsWith("operator.")),
     ...tokenScopes,
   ]);
-  return normalizeDeviceAuthScopes(current).join() === approvedScopes.join() &&
-    normalizeDeviceAuthScopes(token.scopes).join() === tokenScopes.join()
+  return normalizeDeviceAuthScopes(current).join(",") === approvedScopes.join(",") &&
+    normalizeDeviceAuthScopes(token.scopes).join(",") === tokenScopes.join(",")
     ? null
     : { approvedScopes, tokenScopes };
 }

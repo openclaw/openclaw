@@ -500,7 +500,7 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
         role: "operator",
-        scopes: [...savedScopes, ...("extra" in seed ? seed.extra : [])],
+        scopes: [...savedScopes, ...("extra" in seed && seed.extra ? seed.extra : [])],
         clientId: CONTROL_UI_CLIENT.id,
         clientMode: CONTROL_UI_CLIENT.mode,
         platform: CONTROL_UI_CLIENT.platform,
