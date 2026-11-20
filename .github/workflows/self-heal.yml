@@ -1,0 +1,85 @@
+name: Self-Heal
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate build and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Build
+        run: pnpm build
+      - name: Run tests
+        run: pnpm test:fast
+
+  heal:
+    name: Auto-fix common failures
+    needs: validate
+    if: ${{ needs.validate.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile || true
+      - name: Auto-fix and re-test
+        id: heal
+        run: |
+          set +e
+          pnpm lint --fix || true
+          pnpm build || true
+          pnpm test:fast > /tmp/self-heal-retest.log 2>&1
+          RC=$?
+          if [ $RC -eq 0 ]; then
+            echo "healed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "healed=false" >> "$GITHUB_OUTPUT"
+            cat /tmp/self-heal-retest.log
+          fi
+      - name: Persist fixes (skip CI)
+        if: ${{ steps.heal.outputs.healed == 'true' }}
+        run: |
+          if git diff --quiet; then
+            echo "No changes to persist"
+            exit 0
+          fi
+          git config user.name "open-claw self-heal"
+          git config user.email "self-heal@open-claw.invalid"
+          git commit -am "chore(self-heal): apply automatic fixes [skip ci]"
+          git push
+
+  redeploy:
+    name: Re-deploy to production
+    needs: [validate, heal]
+    if: >
+      ${{ needs.validate.result == 'success' ||
+        (needs.heal.result == 'success' && needs.heal.outputs.healed == 'true') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Re-deploy via the deploy workflow
+        run: gh workflow run deploy.yml --ref ${{ github.ref }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

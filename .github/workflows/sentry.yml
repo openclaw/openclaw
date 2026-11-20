@@ -1,0 +1,88 @@
+name: Sentry
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Railway environment to record a deploy for"
+        required: false
+        default: "production"
+        type: choice
+        options:
+          - staging
+          - production
+      provisionAlerts:
+        description: "Provision/update Sentry alert rules from config/sentry/sentry.alerts.yaml"
+        required: false
+        default: "false"
+        type: boolean
+
+env:
+  SENTRY_URL: https://sentry.io
+  SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+  SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+jobs:
+  release:
+    name: Create and finalize Sentry release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install sentry-cli
+        run: npm install --no-save @sentry/cli
+
+      - name: Create Sentry release from git tag
+        env:
+          SENTRY_RELEASE: ${{ github.ref_name }}
+        run: |
+          VERSION="${SENTRY_RELEASE#v}"
+          npx sentry-cli releases new "$VERSION"
+          # Associate every commit between the previous tag and this tag.
+          npx sentry-cli releases set-commits --auto "$VERSION"
+          npx sentry-cli releases finalize "$VERSION"
+          echo "SENTRY_RELEASE=$VERSION" >> $GITHUB_ENV
+
+      - name: Associate source maps (Control UI release assets)
+        if: always()
+        run: |
+          # The Control UI build uploads hidden source maps to its dist output.
+          # Point sentry-cli at dist/control-ui and release $SENTRY_RELEASE once
+          # the React/Vue build step is wired into this job (see docs/integrations/sentry.md).
+          echo "Source-map upload is framework-specific; configure per app (see docs/integrations/sentry.md)."
+
+  deploy:
+    name: Record Sentry deploy
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install sentry-cli
+        run: npm install --no-save @sentry/cli
+
+      - name: Record deploy to Sentry
+        env:
+          SENTRY_ENV: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          npx sentry-cli deploys --env "$SENTRY_ENV" new
+          echo "Recorded Sentry deploy for environment $SENTRY_ENV"
+
+  provision-alerts:
+    name: Provision Sentry alert rules
+    runs-on: ubuntu-latest
+    if: github.event.inputs.provisionAlerts == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision alert rules
+        run: node scripts/sentry-provision-alerts.mjs

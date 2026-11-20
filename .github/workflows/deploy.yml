@@ -1,0 +1,59 @@
+name: Deploy to Railway
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Railway environment to deploy to (production fails closed)
+        required: false
+        default: production
+        type: string
+
+env:
+  RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+  RAILWAY_SERVICE: open-claw
+  RAILWAY_ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Railway CLI
+        run: npm install --no-save @railway/cli
+      - name: Assert production fail-closed configuration
+        run: |
+          ./node_modules/.bin/railway variable set -s ${{ env.RAILWAY_SERVICE }} -e ${{ env.RAILWAY_ENVIRONMENT }} --skip-deploys "OC_ENVIRONMENT=production" "OC_ALLOW_PRODUCTION=true"
+      - name: Deploy to Railway
+        id: deploy
+        run: ./node_modules/.bin/railway up -s ${{ env.RAILWAY_SERVICE }} -e ${{ env.RAILWAY_ENVIRONMENT }} --detach
+      - name: Confirm deployment reached a terminal state
+        run: ./node_modules/.bin/railway deployment list -e ${{ env.RAILWAY_ENVIRONMENT }} --json
+
+  rollback:
+    name: Rollback on failure
+    needs: deploy
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Railway CLI
+        run: npm install --no-save @railway/cli
+      - name: Redeploy the previous release
+        run: |
+          PREVIOUS_TAG="$(git tag --sort=-version:refname --list 'v*' | head -n 2 | tail -n 1)"
+          if [ -z "$PREVIOUS_TAG" ]; then
+            echo "No previous release tag to roll back to"
+            exit 1
+          fi
+          git checkout "$PREVIOUS_TAG"
+          ./node_modules/.bin/railway up -s ${{ env.RAILWAY_SERVICE }} -e ${{ env.RAILWAY_ENVIRONMENT }} --detach

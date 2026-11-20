@@ -1,0 +1,35 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release:
+    name: Conventional-commit release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Node and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+      - name: Install dependencies
+        run: |
+          corepack enable
+          pnpm install --frozen-lockfile
+      - name: Install semantic-release tooling
+        run: pnpm add -D --no-save semantic-release@24 @semantic-release/github@9 @semantic-release/changelog@8
+      - name: Release (conventional commits -> version bump -> git tag -> GitHub release -> changelog)
+        run: pnpm semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
