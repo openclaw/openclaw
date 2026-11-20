@@ -168,6 +168,11 @@ the agent so it can follow the server's recovery guidance. The tool's
 `outputSchema` validates successful structured results only; structured error
 details do not need to match that schema.
 
+A local `Tool call authorization expired` refusal still blocks the call, but
+does not count as a configured-server failure or pause a healthy MCP server.
+Use a fresh authorized turn; changing the server's credential does not renew
+OpenClaw's caller grant.
+
 ### JSON Schema validation
 
 MCP schemas use draft-07 unless they declare draft-2020-12. Draft-07 checks known

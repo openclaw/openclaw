@@ -1,11 +1,15 @@
+import { Type } from "typebox";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { handleMcpJsonRpc } from "../gateway/mcp-http.handlers.js";
 import {
   readMcpFixtureMessage,
   replyMcpFixtureResult,
   startMcpHttpFixture,
+  startMcpLifecycleServer,
 } from "./agent-bundle-mcp-lifecycle.test-support.js";
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
+import { jsonResult } from "./tools/common.js";
 
 it("starts the failure cooldown when the failed MCP request settles", async () => {
   let elapsed = 0;
@@ -87,4 +91,63 @@ it("starts the failure cooldown when the failed MCP request settles", async () =
   } finally {
     clock.mockRestore();
   }
+});
+
+it("does not pause a healthy server after local bridge authority expires", async () => {
+  let calls = 0;
+  const server = await startMcpLifecycleServer({
+    toolName: "probe",
+    text: () => {
+      calls += 1;
+      return "healthy";
+    },
+  });
+  const runtime = createSessionMcpRuntime({
+    sessionId: "local-authority-proof",
+    workspaceDir: useAutoCleanupTempDirTracker(onTestFinished).make("mcp-local-authority-"),
+    cfg: { mcp: { servers: { healthy: { transport: "streamable-http", url: server.url } } } },
+  });
+  onTestFinished(async () => {
+    try {
+      await runtime.dispose();
+    } finally {
+      await server.close();
+    }
+  });
+  await runtime.getCatalog();
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let authorized = true;
+    const response = await handleMcpJsonRpc({
+      message: {
+        jsonrpc: "2.0",
+        id: attempt,
+        method: "tools/call",
+        params: { name: "bridge_probe", arguments: {} },
+      },
+      authorizeToolCall: () => authorized,
+      toolSchema: [
+        { name: "bridge_probe", description: undefined, inputSchema: { type: "object" } },
+      ],
+      tools: [
+        {
+          name: "bridge_probe",
+          label: "Bridge probe",
+          description: "Read the configured server",
+          parameters: Type.Object({}),
+          execute: async () => {
+            authorized = false;
+            return jsonResult(await runtime.callTool("healthy", "probe", {}));
+          },
+        },
+      ],
+    });
+    expect(response).toMatchObject({
+      result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
+    });
+  }
+  expect(calls).toBe(0);
+  await expect(runtime.callTool("healthy", "probe", {})).resolves.toMatchObject({
+    content: [{ text: "healthy" }],
+  });
+  expect(calls).toBe(1);
 });

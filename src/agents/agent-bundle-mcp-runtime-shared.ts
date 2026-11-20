@@ -85,6 +85,12 @@ export type BundleMcpSession = {
   nativeSubscription?: McpSubscription;
 };
 
+export type McpServerBackoffState = {
+  session: BundleMcpSession;
+  failures: number;
+  retryAfterMs?: number;
+};
+
 export type ServerMcpRuntime = SessionMcpRuntime & {
   readonly pluginOwned: boolean;
   resetStartupBackoff: () => void;

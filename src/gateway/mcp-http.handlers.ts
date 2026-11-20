@@ -14,6 +14,7 @@ import {
   protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
 } from "../agents/tool-execution-error.js";
+import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { resolveToolResultFailureKind } from "../agents/tool-result-error.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import type { McpLoopbackToolCallOutcome } from "./mcp-http.loopback-runtime.js";
@@ -225,7 +226,7 @@ export async function handleMcpJsonRpc(params: {
             authorizeToolCall &&
               (() => {
                 if (!authorizeToolCall()) {
-                  throw new Error("Tool call authorization expired");
+                  throw new ToolAuthorizationError("Tool call authorization expired");
                 }
               }),
             () => tool.execute(toolCallId, finalizedToolArgs, params.signal),
