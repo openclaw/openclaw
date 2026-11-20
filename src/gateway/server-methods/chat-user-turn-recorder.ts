@@ -388,6 +388,7 @@ export function createGatewayChatUserTurnController(params: {
                     },
                     retained.map((mention) => ({
                       profileId: mention.profileId,
+                      access: mention.access,
                       token: text.slice(mention.start, mention.end),
                     })),
                   );

@@ -1,0 +1,5 @@
+# Participate member access (.3 remainder and .7), measured against 7035c55.
+# The excess proves independent worker persistence/commit publication, memory storage,
+# real creator/admin member handlers and management denials, mention invitations,
+# protocol contracts, and non-ceiling compatibility through existing shared fixtures.
+205

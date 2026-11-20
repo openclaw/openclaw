@@ -10,12 +10,19 @@ import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   listResidentUserProfileDisplayFacts,
   readResidentUserProfileRevision,
+  readResidentUserProfileId,
 } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { operatorRoleSubject } from "../operator-role-enforcement.js";
-import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
+import {
+  resolveOperatorRolePolicyForAssignment,
+  resolveOperatorRolePolicyForProfile,
+} from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
-import { resolveSessionMemberAccess } from "../session-member-access.js";
+import {
+  resolveSessionMemberAccess,
+  resolveSessionInvitationAccess,
+} from "../session-member-access.js";
 import {
   authorizeOwnSessionMutation,
   authorizeSessionAgentRun,
@@ -25,6 +32,20 @@ import {
 import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
 import { sessionSuggestionAddPermissionError } from "./sessions-suggestions-access.js";
 import type { GatewayClient } from "./types.js";
+
+/** Role ceilings govern people; non-human members retain unspecified access. */
+export function resolveSessionMemberInvitationAccess(
+  identityId: string,
+  access: SessionMemberPermissionLevel | undefined,
+  cfg: OpenClawConfig,
+) {
+  return resolveSessionInvitationAccess(
+    readResidentUserProfileId(identityId)
+      ? resolveOperatorRolePolicyForProfile(identityId, cfg)
+      : undefined,
+    access,
+  );
+}
 
 /** Synchronous profile-policy projection, not a login or transport admission. */
 export function projectSessionMemberPermissions(params: {
