@@ -791,7 +791,7 @@ while a reached stage may report zero milliseconds.
 
 The tracker admits at most 64 active diagnostic observations per JavaScript
 runtime isolate and shares a budget of 60 records per fixed 60-second window
-across these three summaries. These limits suppress observations, not catalog
+across these summaries. These limits suppress observations, not catalog
 work. Each record's metadata is capped at 28 scalar fields and 2 KiB, excluding
 the logger envelope. `omittedObservations` reports accumulated capacity, rate
 or metadata-limit suppression on a later emitted record. Window-boundary bursts
