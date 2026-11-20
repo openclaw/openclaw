@@ -310,9 +310,7 @@ export function createProcessTool(
         await scope.resolveAncestorScopes();
         for (const session of listRunningSessions().filter((record) => isInScope(record))) {
           await session.durable?.observe();
-          assertCurrent();
         }
-        assertCurrent();
         const sessions = [...listRunningSessions(), ...listFinishedSessions()]
           .filter((s) => isInScope(s))
           .toSorted(compareProcessSessionStartOrder)
@@ -375,7 +373,6 @@ export function createProcessTool(
       let session = getSession(sessionId);
       let finished = getFinishedSession(sessionId);
       const assertSelectedCurrent = (record: ProcessSession) => {
-        assertCurrent();
         if (
           (getSession(record.id) ?? getFinishedSession(record.id)) !== record ||
           !isInScope(record)
@@ -448,7 +445,6 @@ export function createProcessTool(
               throw createAbortError(signal.reason);
             }
           }
-          assertCurrent();
           if (scopedSession.exited) {
             // Retention admission survives clear/eviction on this exact object.
             // A process removed before exit was never retained; never read a successor.
@@ -601,7 +597,6 @@ export function createProcessTool(
           }
           await writeProcessStdin(stdin, payload);
           if (inputAction === "write" && params.eof) {
-            assertCurrent();
             stdin.end();
           }
           const text =
