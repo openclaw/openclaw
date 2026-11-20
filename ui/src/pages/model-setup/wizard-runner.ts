@@ -371,11 +371,12 @@ export class ModelSetupWizardRunner {
         state.phase === "step" &&
         !state.busy &&
         !state.externalAuthInput &&
-        state.step.type === "text" &&
+        (state.step.type === "text" ||
+          (state.step.type === "note" && state.step.format === "plain")) &&
         state.step.executor === "client"
       ) {
-        // The Gateway can dismiss optional text after sign-in is saved. Unlike
-        // progress or browser sign-in, a client text step has no pending poll.
+        // The Gateway can dismiss optional naming and its warning after sign-in
+        // is saved. These client steps have no pending poll for the receipt.
         await this.completeInBackground(await this.requestNext(session));
       }
       return isCurrent() ? "running" : undefined;
@@ -462,6 +463,7 @@ export class ModelSetupWizardRunner {
         !this.isRetired(session) &&
         !result.done &&
         result.step?.type === "note" &&
+        result.step.format !== "plain" &&
         (session.authKind === "oauth" || session.authKind === "device-code")
       ) {
         if (result.step.message) {
@@ -536,6 +538,7 @@ export class ModelSetupWizardRunner {
       } else if (
         next.phase === "step" &&
         next.step.executor !== "gateway" &&
+        next.step.format !== "plain" &&
         !next.step.externalUrl
       ) {
         next = {

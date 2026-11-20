@@ -61,6 +61,20 @@ describe("WizardSession", () => {
     expect(skipped).toBe(true);
   });
 
+  test("dismissing an optional plain note does not cancel a completed operation", async () => {
+    const session = new WizardSession(async (prompter, signal) => {
+      const plain = expectDefined(prompter.plain, "plain wizard note");
+      await expect(plain("Account connected.", { optional: true })).rejects.toBeInstanceOf(
+        WizardCancelledError,
+      );
+      expect(signal.aborted).toBe(false);
+    });
+    cleanupSession(session);
+    await nextStep(session, { type: "note", format: "plain" });
+    session.cancel();
+    await expectTerminal(session);
+  });
+
   test.each([true, "false"])("only literal true confirms a wire answer (%j)", async (answer) => {
     let confirmed: boolean | undefined;
     const session = new WizardSession(async (prompter) => {

@@ -147,6 +147,20 @@ it("does not fail a completed sign-in when optional terminal input breaks", asyn
   expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("sign-in saved"));
 });
 
+it("displays a nonfatal naming warning from the Gateway before reporting success", async () => {
+  prompts.text.mockResolvedValueOnce("Work");
+  const warning = "Account connected, but its name was not saved.";
+  const h = gateway([
+    step({ id: "name", type: "text", initialValue: "Example" }),
+    step({ id: "warning", type: "note", format: "plain", message: warning }),
+    done,
+  ]);
+  await h.run();
+  expect(prompts.note).toHaveBeenCalledWith(warning, undefined);
+  expect(h.calls).toEqual([next(), next("name", "Work"), next("warning")]);
+  expect(runtime.error).not.toHaveBeenCalled();
+});
+
 it("observes browser completion while manual input remains open and retires the prompt", async () => {
   vi.useFakeTimers();
   let promptSignal: AbortSignal | undefined;

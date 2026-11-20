@@ -75,6 +75,14 @@ it.each([
   },
   { scenario: "cancel the name without losing the account", offer: true, cancel: true },
   { scenario: "failed name prompt leaves the account saved", offer: true, promptError: true },
+  { scenario: "reports a concurrent name-write miss", offer: true, updateMiss: true },
+  { scenario: "reports a name-write error", offer: true, updateError: true },
+  {
+    scenario: "a failed warning cannot fail the sign-in",
+    offer: true,
+    updateError: true,
+    warningError: true,
+  },
 ])("keeps sign-in and labeling independent: $scenario", async (test) => {
   await withOpenClawTestState({ label: "models-auth-account-name" }, async (state) => {
     await state.writeConfig({
@@ -129,6 +137,7 @@ it.each([
     };
     resolvePluginProvidersCore.mockReturnValue([plugin]);
     let credentialWasSavedDuringPrompt = false;
+    let submitName = false;
     const text = vi.fn(async () => {
       credentialWasSavedDuringPrompt = (await readStore()).profiles[savedId]?.type === "oauth";
       if (test.cancel || test.chat) {
@@ -137,10 +146,26 @@ it.each([
       if (test.promptError) {
         throw new Error("Synthetic terminal input failure");
       }
+      if (test.updateMiss) {
+        await upsertAuthProfileAsync({
+          profileId: savedId,
+          credential: {
+            ...credential(accountId, "new-access"),
+            refresh: "refreshed-during-prompt",
+          },
+        });
+      }
+      submitName = true;
       return test.answer ?? " Work ";
     });
+    const plain = vi.fn(async () => {
+      if (test.warningError) {
+        throw new Error("Synthetic wizard notification failure");
+      }
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const prompter = {
-      ...createWizardPrompter({ text }),
+      ...createWizardPrompter({ text, plain }),
       ...(!test.chat ? { optionalText: text } : {}),
     };
     await expect(
@@ -150,7 +175,12 @@ it.each([
         credentialOnly: true,
         ...(test.force ? { force: true } : {}),
         ...(test.useWorkSlot ? { profileId: work } : test.explicit ? { profileId: explicit } : {}),
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        assertCurrent: () => {
+          if (test.updateError && submitName) {
+            throw new Error("Synthetic name-write failure");
+          }
+        },
+        runtime,
       }),
     ).resolves.toMatchObject({ profiles: [{ profileId: savedId }] });
 
@@ -164,5 +194,12 @@ it.each([
     const saved = (await readStore()).profiles[savedId];
     expect(saved).toMatchObject({ type: "oauth", access: "new-access" });
     expect(saved?.displayName).toBe(test.name);
+    if (test.updateMiss || test.updateError) {
+      expect(plain).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining("set a display name in OpenClaw config"),
+        { optional: true },
+      );
+      expect(runtime.error).toHaveBeenCalledTimes(test.warningError ? 1 : 0);
+    }
   });
 });

@@ -65,8 +65,8 @@ function normalizeTextAnswer(value: unknown): string | undefined {
 
 /** Own enumerable, closure-bound methods survive the runtime installer's note adapter. */
 function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
-  async function prompt(step: Omit<WizardStep, "id">): Promise<unknown> {
-    return await session.awaitAnswer(createStep(step));
+  async function prompt(step: Omit<WizardStep, "id">, optional?: boolean): Promise<unknown> {
+    return await session.awaitAnswer(createStep(step), undefined, undefined, optional);
   }
 
   function createStep(step: Omit<WizardStep, "id">): WizardStep {
@@ -138,13 +138,11 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       });
     },
 
-    async plain(message: string): Promise<void> {
-      await prompt({
-        type: "note",
-        message,
-        format: "plain",
-        executor: "client",
-      });
+    async plain(message, options): Promise<void> {
+      await prompt(
+        { type: "note", message, format: "plain", executor: "client" },
+        options?.optional,
+      );
     },
 
     async select<T>(params: WizardSelectParams<T>): Promise<T> {

@@ -25,8 +25,6 @@ export async function offerSavedAuthProfileName(params: {
   const existingLabel =
     normalizeOptionalString(credential.displayName) ?? normalizeOptionalString(credential.email);
   const initialValue = existingLabel ?? providerLabel;
-  const warn = () =>
-    runtime.error("The account is connected, but its custom name could not be saved.");
   try {
     const displayName = normalizeOptionalString(
       await prompter.optionalText({
@@ -57,14 +55,25 @@ export async function offerSavedAuthProfileName(params: {
         return true;
       },
     });
-    if (updated?.profiles[profileId]?.displayName !== displayName) {
-      warn();
+    if (updated?.profiles[profileId]?.displayName === displayName) {
+      return;
     }
   } catch (error) {
     if (error instanceof WizardCancelledError) {
       runtime.log("The account is connected without a custom name.");
-    } else if (!params.signal?.aborted) {
-      warn();
+      return;
     }
+  }
+  if (params.signal?.aborted) {
+    return;
+  }
+  const warning =
+    "The account is connected, but OpenClaw could not save its name. You can keep its current label or set a display name in OpenClaw config (auth.profiles.<profile-id>.displayName).";
+  try {
+    // A plain wizard note stays visible in Models and also reaches the hosted CLI.
+    await (prompter.plain ? prompter.plain(warning, { optional: true }) : prompter.note(warning));
+  } catch {
+    // A closed prompt or failed notification cannot undo the completed sign-in.
+    runtime.error(warning);
   }
 }
