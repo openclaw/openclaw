@@ -9,7 +9,6 @@ import {
   refresh,
 } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { routeIdFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -38,14 +37,14 @@ import {
   setWorkshopMode,
   type SkillWorkshopMode,
 } from "./mode.ts";
+import { readWorkshopPage, workshopPageSearch } from "./page-location.ts";
 import { WorkshopPluginAvailabilityOwner } from "./plugin-availability.ts";
-import type { WorkshopViewerResult } from "./view-shared.tsx";
+import { defaultStartView, type WorkshopViewerResult } from "./view-shared.tsx";
 import {
-  archivedWorkshopSkills,
   SkillWorkshopView,
-  sortWorkshopSkills,
   type WorkshopFilter,
   type WorkshopSort,
+  type WorkshopStartView,
   type WorkshopTab,
   type WorkshopViewer,
   type WorkshopViewerTarget,
@@ -80,6 +79,8 @@ class SkillWorkshopPageState {
   private modeError: string | null = null;
   private learningBusy = false;
   private learningError: string | null = null;
+  /** Chosen on the first read of an agent's workshop, then the person's choice. */
+  private startView: WorkshopStartView | null = null;
   private filter: WorkshopFilter = "active";
   private sort: WorkshopSort = "uses";
   private tab: WorkshopTab = "instructions";
@@ -156,6 +157,9 @@ class SkillWorkshopPageState {
     this.learningError = null;
     this.modeBusy = false;
     this.modeError = null;
+    // Another agent's workshop opens on what needs the person there.
+    this.startView = null;
+    this.filter = "active";
     if (this.scope) {
       void this.load();
     }
@@ -175,6 +179,10 @@ class SkillWorkshopPageState {
       // The first read for this agent; later reads follow mutations and keep the open page.
       const first = this.snapshot === null;
       this.snapshot = snapshot;
+      const page = readWorkshopPage(this.context);
+      if (first && this.startView === null) {
+        this.startView = defaultStartView(snapshot);
+      }
       const selected = this.viewer?.target;
       if (
         selected &&
@@ -187,24 +195,22 @@ class SkillWorkshopPageState {
       }
       // A chat notice links here with ?skill=<name>; a draft page is ?draft=<id>. Open the page
       // in whichever list holds it.
-      const page = this.requestedPage();
       const requested = this.viewer ? null : (page.skill ?? null);
       const requestedLive = snapshot.list.skills.some((skill) => skill.name === requested);
-      const appliedSkill =
+      if (
         appliedDraft &&
-        !page.skill &&
-        (!page.draft || page.draft === appliedDraft.draftId) &&
-        snapshot.list.skills.find((skill) => skill.name === appliedDraft.name);
-      if (appliedSkill) {
-        // Choose the destination before an empty Drafts list can close the open page.
+        page.draft === appliedDraft.draftId &&
+        snapshot.list.skills.some((skill) => skill.name === appliedDraft.name)
+      ) {
+        // Follow a draft page to the live skill before the queue picks its next row.
         this.filter = "active";
-        this.selectSkill(appliedSkill.name);
+        this.selectSkill(appliedDraft.name);
       } else if (
         !this.viewer &&
         page.draft &&
         snapshot.list.drafts?.some((d) => d.id === page.draft)
       ) {
-        this.filter = "drafts";
+        this.startView = "drafts";
         this.selectDraft(page.draft);
       } else if (
         requested &&
@@ -233,32 +239,13 @@ class SkillWorkshopPageState {
     );
   }
 
-  /** The open skill or draft page, as the URL names it. */
-  private requestedPage(): { skill?: string; draft?: string } {
-    const { pathname, search } = this.context.router.getState().location;
-    if (routeIdFromPath(pathname, this.context.basePath) !== "skill-workshop") {
-      return {};
-    }
-    const params = new URLSearchParams(search);
-    return { skill: params.get("skill") ?? undefined, draft: params.get("draft") ?? undefined };
-  }
-
-  private pageSearch(target: WorkshopViewerTarget | undefined): string {
-    if (!target) {
-      return "";
-    }
-    return target.draftId
-      ? `?draft=${encodeURIComponent(target.draftId)}`
-      : `?skill=${encodeURIComponent(target.name)}`;
-  }
-
   /** While a page is open its URL follows the selection (Apply, Discard, Previous / Next). */
   private syncLocation() {
-    const page = this.requestedPage();
+    const page = readWorkshopPage(this.context);
     if (!this.snapshot || (!page.skill && !page.draft)) {
       return;
     }
-    const search = this.pageSearch(this.viewer?.target);
+    const search = workshopPageSearch(this.viewer?.target);
     if (search !== this.context.router.getState().location.search) {
       this.context.replace("skill-workshop", { search });
     }
@@ -267,7 +254,7 @@ class SkillWorkshopPageState {
   /** Back and Forward between pages select the skill or draft the URL names. */
   private followLocation() {
     const snapshot = this.snapshot;
-    const page = this.requestedPage();
+    const page = readWorkshopPage(this.context);
     const target = this.viewer?.target;
     if (!snapshot || !this.scope) {
       return;
@@ -276,7 +263,7 @@ class SkillWorkshopPageState {
       if (!snapshot.list.drafts?.some((draft) => draft.id === page.draft)) {
         this.context.replace("skill-workshop", { search: "" });
       } else if (target?.draftId !== page.draft) {
-        this.filter = "drafts";
+        this.startView = "drafts";
         this.selectDraft(page.draft);
       }
     } else if (page.skill) {
@@ -291,7 +278,7 @@ class SkillWorkshopPageState {
   }
 
   readonly openPage = () => {
-    const search = this.pageSearch(this.viewer?.target);
+    const search = workshopPageSearch(this.viewer?.target);
     if (search) {
       this.context.navigate("skill-workshop", { search });
     }
@@ -338,28 +325,16 @@ class SkillWorkshopPageState {
     await pending.catch(() => undefined);
   }
 
-  /** Selects the top row of the current list so the detail pane is never empty. */
+  /** In Drafts the newest draft opens in place; the other views select nothing until a click. */
   private selectFirst() {
     const snapshot = this.snapshot;
     if (!snapshot) {
       return;
     }
-    if (this.filter === "drafts") {
-      // The list shows drafts newest first; select its top row.
-      const draft = snapshot.list.drafts?.at(-1);
-      if (draft) {
-        this.selectDraft(draft.id);
-      } else {
-        this.viewer = null;
-      }
-      return;
-    }
-    const name =
-      this.filter === "active"
-        ? sortWorkshopSkills(snapshot.list.skills, snapshot.changes, this.sort)[0]?.name
-        : archivedWorkshopSkills(snapshot.list)[0]?.name;
-    if (name) {
-      this.selectSkill(name);
+    // The list shows drafts newest first; select its top row.
+    const draft = this.startView === "drafts" ? snapshot.list.drafts?.at(-1) : undefined;
+    if (draft) {
+      this.selectDraft(draft.id);
     } else {
       this.viewer = null;
     }
@@ -390,10 +365,28 @@ class SkillWorkshopPageState {
       return;
     }
     this.filter = filter;
-    this.tab = "instructions";
-    this.selectFirst();
     this.changed();
   };
+
+  private readonly setStartView = (view: WorkshopStartView) => {
+    if (view === this.startView) {
+      return;
+    }
+    this.startView = view;
+    if (view === "drafts" && !this.viewer?.target.draftId) {
+      this.selectFirst();
+    }
+    this.changed();
+  };
+
+  /** Drafts is offered in Propose mode, while drafts wait, or while it is the open view. */
+  private draftsShown() {
+    return (
+      resolveWorkshopMode(this.context.runtimeConfig) === "propose" ||
+      (this.snapshot?.list.drafts?.length ?? 0) > 0 ||
+      this.startView === "drafts"
+    );
+  }
 
   private readonly setTab = (tab: WorkshopTab) => {
     this.tab = tab;
@@ -596,11 +589,15 @@ class SkillWorkshopPageState {
         : context.runtimeConfig.state.lastError,
       viewer: this.viewer,
       pageOpen: (() => {
-        const page = this.requestedPage();
+        const page = readWorkshopPage(this.context);
         return Boolean(page.skill || page.draft);
       })(),
       onOpenPage: this.openPage,
       onClosePage: this.closePage,
+      startView:
+        this.startView ?? (this.snapshot ? defaultStartView(this.snapshot) : ("skills" as const)),
+      draftsShown: this.draftsShown(),
+      onStartView: this.setStartView,
       filter: this.filter,
       sort: this.sort,
       tab: this.tab,
