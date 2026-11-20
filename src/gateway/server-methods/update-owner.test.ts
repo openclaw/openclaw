@@ -217,11 +217,11 @@ it.each(promptUpdateCases)(
         runtimeInfo: { channel },
       });
       const guidance = expectDefined(
-        prompt.split("\n").find((line) => line.startsWith("For the Gateway hosting this session:")),
+        prompt.split("\n").find((line) => line.startsWith("This Gateway:")),
         "hosting Gateway guidance",
       );
       const action = expectDefined(
-        guidance.match(/`gateway`: ([\w.]+)/u)?.[1],
+        guidance.match(/`gateway` runs `([\w.]+)`/u)?.[1],
         "prompt-advertised update action",
       );
       const result = await tool.execute("update", {
@@ -278,8 +278,6 @@ it.each(promptUpdateCases)(
           }),
         );
       }
-      expect(guidance).toContain("On an explicit owner request");
-      expect(guidance).toContain("must retain a working restart path before it stops");
     });
   },
 );

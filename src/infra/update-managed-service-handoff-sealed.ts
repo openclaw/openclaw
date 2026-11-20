@@ -30,6 +30,7 @@ routeLogsToStderr();
 registerSealedRuntimeProcessEntrypoints("managedHandoff", import.meta.url);
 
 export { parseLaunchctlJob } from "../daemon/launchctl-job.js";
+export { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 export { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 
 export { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
