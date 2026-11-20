@@ -3,6 +3,7 @@ import {
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
@@ -24,7 +25,7 @@ async function createDefaultOnboardingRecommendationsStore(
 ): Promise<OnboardingRecommendationsStore> {
   const requested = requestedAgentId?.trim();
   if (requestedAgentId !== undefined && !requested) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const cfg = await captureRuntimeConfigAsyncReader()();
   const agentId = requested ? resolveConfiguredAgentId(cfg, requested) : resolveDefaultAgentId(cfg);

@@ -12,7 +12,7 @@ export default {
     yes: "Yes",
     no: "No",
     relink: "Relink",
-    working: "Working…",
+    working: "Working",
     showQr: "Show QR",
     waitForScan: "Wait for scan",
     logout: "Logout",

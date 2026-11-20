@@ -60,6 +60,8 @@ export type NodeEventHandlerOptions = {
   presenceAllowed?: boolean;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
   assertSessionEventCurrent?: () => void;
+  /** Retained pairing authority, independent of transport lifetime, checked at turn selection. */
+  assertAgentTurnCurrent?: () => void;
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   assertApnsRegistrationCurrent?: () => void;
 };

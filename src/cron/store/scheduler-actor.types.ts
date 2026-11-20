@@ -17,6 +17,10 @@ export type CronScheduleMaintenanceOptions = {
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
   preparingAgentIds?: string[];
+  /** See `cron.drainQueue`. */
+  busyConversationJobIds?: string[];
+  /** See `cron.drainQueue`. */
+  memoryAllowsExtraRun?: boolean;
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];

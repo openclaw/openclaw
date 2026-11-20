@@ -6,7 +6,7 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import type { TranscriptsGetResult } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
-import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./types.js";
 
 type TranscriptSummaryWire = NonNullable<TranscriptsGetResult["summary"]>;
 

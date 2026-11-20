@@ -1,11 +1,34 @@
 import type { ConversationRecord } from "../../../config/sessions/conversation-registry.types.js";
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
+import type { PreparedCompactionSource } from "../../../config/sessions/session-compaction-prepared.types.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineRuntimeContext } from "../../../context-engine/types.js";
-import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../../sessions/compaction/preparation.types.js";
 import type { CompactionAppendPersistenceAsync } from "../../sessions/session-compaction-persistence.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
 import type { NormalizedUsage } from "../../usage.js";
+import type { EmbeddedAgentCompactResult } from "../types.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
+
+/** Publish committed custody before model admission or handled hooks can bypass settlement. */
+export function publishClaimedSessionWriter(
+  observe: RunEmbeddedAgentInternalParams["onCompactionAccounting"],
+  target: SessionTranscriptRuntimeTarget,
+  entry: InternalSessionEntry,
+): void {
+  observe?.({
+    kind: "durable",
+    count: 0,
+    target: {
+      agentId: target.agentId,
+      sessionId: entry.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+      lifecycleRevision: entry.lifecycleRevision,
+      activeWriterRunId: entry.activeWriterRunId,
+    },
+  });
+}
 
 export type CompactionAccountingReceipt = {
   tokensBefore: number;
@@ -18,8 +41,15 @@ export type CompactionAccountingReceipt = {
 export type PreparedCompactionSession = {
   sessionTarget: SessionTranscriptRuntimeTarget;
   entry: InternalSessionEntry;
-  sessionManager: SessionManager;
+  source?: PreparedCompactionSource;
+  memoryTranscript?: CompactionMemoryTranscript;
   primaryConversation?: ConversationRecord;
+};
+
+type CompactionMemoryTranscript = {
+  sessionManager: SessionManager;
+  sessionTarget: SessionTranscriptRuntimeTarget;
+  assertActive: () => void;
 };
 
 type CompactionAccountingRecorder = CompactionRequestConstraints & {
@@ -30,13 +60,11 @@ type CompactionAccountingRecorder = CompactionRequestConstraints & {
   preparedSession?: PreparedCompactionSession;
   withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   /** The caller's buffer owns recovery; its portable identity grants no durable access. */
-  memoryTranscript?: {
-    sessionManager: SessionManager;
-    sessionTarget: SessionTranscriptRuntimeTarget;
-    assertActive: () => void;
-  };
+  memoryTranscript?: CompactionMemoryTranscript;
   recordUsage?: (usage: NormalizedUsage) => void;
   recordCompaction?: (receipt: CompactionAccountingReceipt) => void;
+  /** Provider facts for a failed compaction; the public engine result carries only its reason. */
+  recordFailure?: (failure: NonNullable<EmbeddedAgentCompactResult["failure"]>) => void;
 };
 
 // Bind to the actual invocation context after watchdog projection. Public
@@ -47,6 +75,7 @@ export function attachCompactionAccountingRecorder(
   runtimeContext: ContextEngineRuntimeContext,
   recorder: CompactionAccountingRecorder,
 ): void {
+  recorder.memoryTranscript ??= recorder.preparedSession?.memoryTranscript;
   recorderByRuntimeContext.set(runtimeContext, recorder);
 }
 

@@ -26,7 +26,7 @@ export async function runGatewayStartupObservers(params: {
   workspaceDir: string;
   getCron: () => PluginHookGatewayCronService | undefined;
   isClosing?: () => boolean;
-  unlockStartupMethods?: () => void;
+  unlockStartupMethods?: () => void | Promise<void>;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -65,9 +65,9 @@ export async function runGatewayStartupObservers(params: {
         return;
       }
       const { resumeMarkedSessions } = await import("./session-restart-resume.js");
-      const unlock = () => {
+      const unlock = async () => {
         if (!params.signal.aborted && !params.isClosing?.()) {
-          params.unlockStartupMethods?.();
+          await params.unlockStartupMethods?.();
         }
       };
       try {
@@ -80,7 +80,7 @@ export async function runGatewayStartupObservers(params: {
       } catch (error) {
         params.signal.throwIfAborted();
         params.log.warn(`Restart resume discovery failed: ${String(error)}`);
-        unlock();
+        await unlock();
       }
     },
     "startup:session-resume",

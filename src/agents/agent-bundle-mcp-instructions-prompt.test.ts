@@ -1,6 +1,7 @@
 import http from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import net from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   readMcpFixtureMessage,
   replyMcpFixtureResult,
@@ -12,56 +13,56 @@ import { buildAttemptSystemPrompt } from "./embedded-agent-runner/run/attempt-sy
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 
 async function startInstructionsMcpServer(params: { toolNames: string[]; instructions?: string }) {
-  const server = http.createServer((request, response) => {
-    if (request.method === "DELETE") {
-      response.writeHead(204).end();
-      return;
-    }
-    if (request.method !== "POST") {
-      response.writeHead(405).end();
-      return;
-    }
-    void (async () => {
-      const message = await readMcpFixtureMessage(request);
-      if (message.method === "initialize") {
-        response.setHeader("mcp-session-id", "instructions-prompt-session");
-        replyMcpFixtureResult(response, message, {
-          protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-          capabilities: { tools: {} },
-          serverInfo: { name: "instructions-prompt-fixture", version: "1.0.0" },
-          ...(params.instructions ? { instructions: params.instructions } : {}),
-        });
-        return;
-      }
-      if (message.method === "notifications/initialized") {
-        response.writeHead(202).end();
-        return;
-      }
-      const rawSessionId = request.headers["mcp-session-id"];
-      response.setHeader("mcp-session-id", typeof rawSessionId === "string" ? rawSessionId : "");
-      replyMcpFixtureResult(response, message, {
-        tools: params.toolNames.map((name) => ({
-          name,
-          inputSchema: { type: "object", properties: {} },
-        })),
-      });
-    })();
-  });
-  const portClaim = await acquireTestPortBlock({ offsets: [0] });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(portClaim.port, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
+  const reservation = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () =>
+      http.createServer((request, response) => {
+        if (request.method === "DELETE") {
+          response.writeHead(204).end();
+          return;
+        }
+        if (request.method !== "POST") {
+          response.writeHead(405).end();
+          return;
+        }
+        void (async () => {
+          const message = await readMcpFixtureMessage(request);
+          if (message.method === "initialize") {
+            response.setHeader("mcp-session-id", "instructions-prompt-session");
+            replyMcpFixtureResult(response, message, {
+              protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+              capabilities: { tools: {} },
+              serverInfo: { name: "instructions-prompt-fixture", version: "1.0.0" },
+              ...(params.instructions ? { instructions: params.instructions } : {}),
+            });
+            return;
+          }
+          if (message.method === "notifications/initialized") {
+            response.writeHead(202).end();
+            return;
+          }
+          const rawSessionId = request.headers["mcp-session-id"];
+          response.setHeader(
+            "mcp-session-id",
+            typeof rawSessionId === "string" ? rawSessionId : "",
+          );
+          replyMcpFixtureResult(response, message, {
+            tools: params.toolNames.map((name) => ({
+              name,
+              inputSchema: { type: "object", properties: {} },
+            })),
+          });
+        })();
+      }),
   });
   return {
-    url: `http://127.0.0.1:${portClaim.port}/mcp`,
+    url: `http://127.0.0.1:${reservation.claim.port}/mcp`,
     close: async () => {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      await portClaim.release();
+      try {
+        await reservation.releaseListener();
+      } finally {
+        await reservation.claim.release();
+      }
     },
   };
 }
@@ -108,6 +109,36 @@ afterEach(async () => {
 });
 
 describe("embedded system prompt MCP server instructions", () => {
+  it("retains prompt coverage when another listener takes the probed port", async () => {
+    const competitor = net.createServer();
+    let collisionError: Error | undefined;
+    const collision = vi.spyOn(http.Server.prototype, "listen").mockImplementationOnce(function (
+      this: http.Server,
+      ...args
+    ) {
+      const port = args[0];
+      if (typeof port !== "number") {
+        throw new Error("Expected the fixture's claimed TCP port");
+      }
+      collision.mockRestore();
+      this.once("error", (error) => {
+        collisionError = error;
+      });
+      competitor.listen(port, "127.0.0.1", () => this.listen(...args));
+      return this;
+    });
+    try {
+      await withTools("Retain guidance after a listener collision.", async ({ tools }) => {
+        expect(await renderPrompt(tools)).toContain("Retain guidance after a listener collision.");
+      });
+      expect(collisionError).toMatchObject({ code: "EADDRINUSE" });
+    } finally {
+      collision.mockRestore();
+      await new Promise<void>((resolve, reject) => {
+        competitor.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
   it("lists a server once when several of its tools share one guidance block", async () => {
     await withTools(
       "Use the publisher's citation format.",

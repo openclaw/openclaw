@@ -143,10 +143,14 @@ it.each(["portal", "environment"] as const)("retries initial %s read", async (ki
   }
   first.reject(new Error(error));
   await waitForText(page, error);
+  if (!isPortal) {
+    expectText(page).toContain("Couldn’t check this device’s status.");
+    expectText(page).not.toContain("Couldn’t start this device");
+  }
   const retryButton = isPortal
     ? page.querySelector<HTMLButtonElement>('[role="alert"] button')!
-    : [...page.querySelectorAll("button")].find((button) => button.textContent === "Retry")!;
-  expect(retryButton.textContent).toBe("Retry");
+    : [...page.querySelectorAll("button")].find((button) => button.textContent === "Check again")!;
+  expect(retryButton.textContent).toBe(isPortal ? "Retry" : "Check again");
   retryButton.click();
   await waitForSolid(() => expect(callsTo(source, method)).toHaveLength(2));
   await waitForText(page, loading);
@@ -386,6 +390,27 @@ it("waits for machine startup and an explicitly opened app", async () => {
   await waitForTitle(page, "Seeded app");
   expect(page.requestedEnvironmentId).toBeNull();
 });
+it.each(["unavailable", "stopping", "error"] as const)(
+  "describes a reported %s device without promising a restart",
+  async (status) => {
+    const environment = machine("pending-machine", status);
+    const source = createContext(["environments.status"], async () => environment);
+    const { page } = await mountPage(source.context, undefined, environment.id);
+    await waitForText(
+      page,
+      status === "stopping" ? "This device is stopping." : "This device is unavailable.",
+    );
+    expectText(page).not.toContain("Couldn’t start this device");
+    const refresh = [...page.querySelectorAll("button")].find(
+      (button) => button.textContent === "Check again",
+    )!;
+    refresh.click();
+    await waitForSolid(() => expect(callsTo(source, "environments.status")).toHaveLength(2));
+    expect(source.request.mock.calls.every(([method]) => method === "environments.status")).toBe(
+      true,
+    );
+  },
+);
 it("pauses machine startup polling in a hidden browser tab and catches up on return", async () => {
   usePollingTimers();
   let environment = machine("pending-machine");
@@ -454,7 +479,7 @@ it.each(["success", "failure"] as const)("retired %s keeps current polling", asy
     expectText(page).toContain("Starting your device");
     replacement = { ...replacement, status: "error" };
     await updatePage(page, { presented: true });
-    await waitForText(page, "Couldn’t start this device");
+    await waitForText(page, "This device is unavailable");
   } else {
     retired.reject(new Error("Previous machine failed"));
     await retired.promise.catch(() => undefined);

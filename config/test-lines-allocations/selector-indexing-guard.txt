@@ -1,3 +1,0 @@
-# Five Stylelint regressions cover unkeyed subjects, keyed exceptions, and exact per-file/context allowance ownership.
-# Exact net growth for test/scripts/stylelint-selector-indexing.test.ts; retain assertions and the shared scalar.
-92

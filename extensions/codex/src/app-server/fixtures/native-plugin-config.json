@@ -108,7 +108,6 @@
     ],
     "remoteWorkspaceRoot": "/workspaces",
     "codeModeOnly": true,
-    "loopDetectionPreToolUseRelay": false,
     "requestTimeoutMs": 1000,
     "approvalPolicy": "on-request",
     "sandbox": "workspace-write",

@@ -124,12 +124,12 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   const pricedRunParams = {
     ...runParams,
     provider: turnTotal ? "claude-cli" : "codex-cli",
-    // Only the Claude backend's model has a price: the other turn stays unpriced, never $0.
+    // The synthetic model has no vendor catalog price: the other turn stays unpriced, never $0.
     config: sourcePricing("claude-cli", "claude-opus-4-8", rates),
   };
-  const modelId = turnTotal ? "claude-opus-4-8" : "gpt-5.4";
+  const modelId = turnTotal ? "claude-opus-4-8" : "unpriced-cli-test-model";
   const cacheUsage = { input: 4418, output: 5, cacheWrite: 36955, cacheWrite1h: 36955 };
-  const priced = buildCliAssistantTranscriptUsage({
+  const priced = await buildCliAssistantTranscriptUsage({
     runParams: pricedRunParams,
     modelId,
     usage: turnTotal ? cacheUsage : { input: 10, output: 5, cacheRead: 100 },
@@ -152,10 +152,11 @@ it.each([false, true])("persists CLI usage with separate turn total=%s", async (
   );
   expect(priced.costUsd).toEqual(turnTotal ? expect.closeTo(turnCost, 12) : undefined);
   // Known rates cannot make an unmeasured turn free; a measured zero turn still prices at $0.
-  const turn = (usage?: { input: number }) =>
-    buildCliAssistantTranscriptUsage({ runParams: pricedRunParams, modelId, usage }).costUsd;
-  expect(turnTotal ? turn() : undefined).toBeUndefined();
-  expect(turnTotal ? turn({ input: 0 }) : 0).toBe(0);
+  const turn = async (usage?: { input: number }) =>
+    (await buildCliAssistantTranscriptUsage({ runParams: pricedRunParams, modelId, usage }))
+      .costUsd;
+  expect(turnTotal ? await turn() : undefined).toBeUndefined();
+  expect(turnTotal ? await turn({ input: 0 }) : 0).toBe(0);
 });
 
 it.each([

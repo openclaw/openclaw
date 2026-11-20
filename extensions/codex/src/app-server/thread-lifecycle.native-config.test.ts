@@ -391,9 +391,13 @@ describe("Codex native configuration lifecycle", () => {
           ? undefined
           : "",
     );
-    expect(frames.at(-1)?.[1]).toMatchObject({
-      developerInstructions: "<thread_policy>\n\n</thread_policy>",
-    });
+    // Replacing OpenClaw policy does not remove native collaboration guidance;
+    // managed threads now carry that guidance in the developer instructions.
+    const developerInstructions = frames.at(-1)?.[1].developerInstructions;
+    expect(developerInstructions).toMatch(/^<thread_policy>\n<collaboration_mode>\n/);
+    expect(developerInstructions).toMatch(/<\/collaboration_mode>\n<\/thread_policy>$/);
+    expect(developerInstructions).not.toContain("personal assistant running inside OpenClaw");
+    expect(developerInstructions).not.toContain("OpenClaw has dynamic tools");
     expect(frames.at(-1)?.[1].baseInstructions).toBe(key ? undefined : "");
     expect(resumed.preparedOpenClawBaseInstructions).toBeUndefined();
   });

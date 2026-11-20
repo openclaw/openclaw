@@ -130,6 +130,7 @@ export async function startCodexAttemptTurn(
     if (started === undefined) {
       const startupFailure = await resolveCodexTurnStartError({
         client: resourceState.client,
+        model: params.modelId,
         error: turnStartError,
         errorNotification: state.latestStartupErrorNotification,
         rateLimitsRevisionBeforeTurnStart: state.rateLimitsRevisionBeforeLastTurnStart,

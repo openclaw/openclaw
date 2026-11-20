@@ -28,6 +28,8 @@ export type ToolSearchCallOptions = CatalogVisibilityOptions &
 
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
+  /** Stable catalog identity captured by the catalog owner before execution. */
+  toolId: string;
   toolName: string;
   source: CatalogSource;
   sourceName?: string;
@@ -45,6 +47,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
+  modelContextWindowTokens?: number;
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
   agentId?: string;

@@ -37,7 +37,7 @@ export function* walkSessionCurrentTurn(
   return parentId;
 }
 
-function resolveSessionCanonicalParentId(
+export function resolveSessionCanonicalParentId(
   parentId: string | null,
   byId: ReadonlyMap<string, SessionParentEntry>,
   opaqueParentsById: ReadonlyMap<string, string | null>,
@@ -325,21 +325,32 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   getBranch(fromId?: string): T[] {
-    const path: T[] = [];
-    const seen = new Set<string>();
-    let currentId = fromId ?? this.leafId;
-    while (currentId && !seen.has(currentId)) {
-      seen.add(currentId);
-      const current = this.byId.get(currentId);
-      if (current) {
-        const normalizedCurrent = this.normalizeEntryParent(current);
-        path.push(normalizedCurrent);
-        currentId = normalizedCurrent.parentId;
-      } else {
-        currentId = this.opaqueParentsById.get(currentId) ?? null;
-      }
-    }
-    path.reverse();
-    return path;
+    return readSessionEntryBranch(fromId ?? this.leafId, (id) => {
+      const entry = this.byId.get(id);
+      const normalized = entry ? this.normalizeEntryParent(entry) : undefined;
+      return {
+        entry: normalized,
+        parentId: normalized ? normalized.parentId : (this.opaqueParentsById.get(id) ?? null),
+      };
+    });
   }
+}
+
+/** Traverse the same selected ancestry for full entries and payload-free compaction facts. */
+export function readSessionEntryBranch<T>(
+  fromId: string | null,
+  read: (id: string) => { entry?: T; parentId: string | null },
+): T[] {
+  const path: T[] = [];
+  const seen = new Set<string>();
+  let currentId = fromId;
+  while (currentId && !seen.has(currentId)) {
+    seen.add(currentId);
+    const { entry, parentId } = read(currentId);
+    if (entry) {
+      path.push(entry);
+    }
+    currentId = parentId;
+  }
+  return path.toReversed();
 }

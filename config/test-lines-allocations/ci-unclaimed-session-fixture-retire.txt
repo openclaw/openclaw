@@ -1,2 +1,0 @@
-68
-# Preserve existing unclaimed delivery fixtures and live publication controls after host API retirement.

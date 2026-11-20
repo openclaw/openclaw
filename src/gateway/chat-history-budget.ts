@@ -19,7 +19,7 @@ export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MES
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
-  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+  "[chat.history unavailable: chat history too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
 
 export function createChatHistoryActivityProjection(
@@ -128,6 +128,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
+  const transport = asOptionalRecord(metadata.transport);
   return {
     role,
     timestamp,
@@ -142,6 +143,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
       ...(transcriptPosition ? { transcriptPosition } : {}),
+      ...(transport ? { transport } : {}),
       truncated: true,
       reason: "oversized",
     },
@@ -171,19 +173,18 @@ export function replaceOversizedChatHistoryMessages(params: {
 
 export function reportOmittedChatHistory(params: {
   omittedCount: number;
-  normalizedBytes: number;
   maxHistoryBytes: number;
   logDebug: (message: string) => void;
 }): number {
-  const { omittedCount, normalizedBytes, maxHistoryBytes, logDebug } = params;
+  const { omittedCount, maxHistoryBytes, logDebug } = params;
   if (omittedCount === 0) {
     return 0;
   }
   chatHistoryOmittedEmitCount += omittedCount;
+  // Sizing discarded input here would undo bounded page selection.
   logLargePayload({
     surface: "gateway.chat.history",
     action: "truncated",
-    bytes: normalizedBytes,
     limitBytes: maxHistoryBytes,
     count: omittedCount,
     reason: "chat_history_budget",

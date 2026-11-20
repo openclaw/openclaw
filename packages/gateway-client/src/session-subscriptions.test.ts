@@ -39,6 +39,49 @@ function pendingApprovalClient() {
     }),
   };
 }
+it("merges provisional and committed live-output interest without changing the wire observer", async () => {
+  const admission = createDeferred<unknown>();
+  const { coordinator, request } = createClient(async (method, params) =>
+    method === "sessions.messages.subscribe" && !params.includeLiveToolOutput
+      ? await admission.promise
+      : { key: params.key },
+  );
+  const plainPending = coordinator.acquire("main");
+  const inlinePending = coordinator.acquire("main", { includeLiveToolOutput: true });
+  admission.resolve({ key: "main" });
+  const [plain, inline] = await Promise.all([plainPending, inlinePending]);
+  expect(plain.includeLiveToolOutput).toBeUndefined();
+  expect(inline.includeLiveToolOutput).toBe(true);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }]);
+  const secondInline = await coordinator.acquire("main", { includeLiveToolOutput: true });
+  await coordinator.release(inline);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }]);
+  await coordinator.release(secondInline);
+  expectWireCalls(request, "subscribe", [{}, { includeLiveToolOutput: true }, {}]);
+  const ids = request.mock.calls.map(([, params]) => params.subscriptionId);
+  expect(new Set(ids).size).toBe(1);
+  await coordinator.release(plain);
+  expectWire(request, "unsubscribe");
+});
+
+it("settles the final plain release after a failed provisional output/approval admission", async () => {
+  const { approval, coordinator, request } = pendingApprovalClient();
+  const plain = await coordinator.acquire("main");
+  const inline = coordinator.acquire("main", {
+    includeLiveToolOutput: true,
+    includeApprovals: true,
+  });
+  const release = coordinator.release(plain);
+  approval.reject(new Error("approval replay unavailable"));
+  await expect(inline).rejects.toThrow("approval replay unavailable");
+  await release;
+  expectWireCalls(request, "subscribe", [
+    {},
+    { includeApprovals: true, includeLiveToolOutput: true },
+  ]);
+  expectWire(request, "unsubscribe");
+});
+
 it.each([
   { ok: true as const, payload: { messages: [{ role: "assistant", content: "initial" }] } },
   { ok: false as const, error: { code: "UNAVAILABLE", message: "history unavailable" } },
@@ -108,15 +151,19 @@ it("keeps unacknowledged subscriptions isolated by canonical agent", async () =>
   const { coordinator, request } = createClient(async (_method, params) =>
     params.agentId === "main" ? await acknowledgement.promise : { key: params.key },
   );
-  const main = coordinator.acquire("global", { agentId: "main" });
+  const main = coordinator.acquire("global", { agentId: "main", includeLiveToolOutput: true });
   const research = await coordinator.acquire("global", { agentId: "research" });
   expect(research).toEqual({ key: "global", agentId: "research" });
   expectWireCalls(request, "subscribe", [
-    { key: "global", agentId: "main" },
+    { key: "global", agentId: "main", includeLiveToolOutput: true },
     { key: "global", agentId: "research" },
   ]);
   acknowledgement.resolve({ key: "global" });
-  await expect(main).resolves.toEqual({ key: "global", agentId: "main" });
+  await expect(main).resolves.toEqual({
+    key: "global",
+    agentId: "main",
+    includeLiveToolOutput: true,
+  });
 });
 it("subscribes another session before its agent's stalled subscription times out", async () => {
   vi.useFakeTimers();

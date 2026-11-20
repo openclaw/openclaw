@@ -8,7 +8,8 @@ import { hasErrnoCode, ignoreMissingPath, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
-import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { createPackageUpdateErrorFacts, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
@@ -16,14 +17,43 @@ import {
   resolvePnpmIsolatedInstallOwner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
 import {
   resolveNpmGlobalPrefixLayoutFromGlobalRoot,
   readPackageManagerProbeValue,
 } from "./update-npm-prefix.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-export async function resolveCanonicalPath(filePath: string): Promise<string> {
-  return path.resolve(await fs.realpath(filePath).catch(() => filePath));
+/**
+ * Bind verified paths through both pnpm configuration dialects, in both cases,
+ * after original-env probes so inherited aliases cannot redirect it. pnpm 11
+ * keeps its already-probed config and cwd.
+ */
+export function bindPnpmGlobalInstallEnv(
+  globalRoot: string,
+  env: NodeJS.ProcessEnv,
+  globalBinDir: string | null | undefined,
+): NodeJS.ProcessEnv {
+  const globalDir = resolvePnpmGlobalDirFromGlobalRoot(globalRoot);
+  return {
+    ...env,
+    ...(globalDir
+      ? {
+          pnpm_config_global_dir: globalDir,
+          PNPM_CONFIG_GLOBAL_DIR: globalDir,
+          npm_config_global_dir: globalDir,
+          NPM_CONFIG_GLOBAL_DIR: globalDir,
+        }
+      : {}),
+    ...(globalBinDir
+      ? {
+          pnpm_config_global_bin_dir: globalBinDir,
+          PNPM_CONFIG_GLOBAL_BIN_DIR: globalBinDir,
+          npm_config_global_bin_dir: globalBinDir,
+          NPM_CONFIG_GLOBAL_BIN_DIR: globalBinDir,
+        }
+      : {}),
+  };
 }
 
 export async function runPnpmPreflightProbe(params: {
@@ -144,8 +174,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   if (
     !reportedGlobalRoot ||
     !expectedGlobalRoot ||
-    (await resolveCanonicalPath(reportedGlobalRoot)) !==
-      (await resolveCanonicalPath(expectedGlobalRoot))
+    (await realpathOrResolve(reportedGlobalRoot)) !== (await realpathOrResolve(expectedGlobalRoot))
   ) {
     return {
       globalBinDir: null,

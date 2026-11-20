@@ -1,5 +1,8 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import { isAgentRunDirectAbortReason } from "../agents/run-termination.js";
+import {
+  isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createAbortError } from "./abort-signal.js";
@@ -213,9 +216,12 @@ export async function withExecRequestTurn<T>(
   }
   const turn = { identity, owners };
   const stop = () => {
-    // Only the current run's explicit cancellation owner carries this marker.
+    // Restart interrupts commands with their run, overlapping their cleanup grace.
     // Handler retirement and inherited event cancellation preserve other owners.
-    if (isAgentRunDirectAbortReason(params.abortSignal?.reason)) {
+    if (
+      isAgentRunDirectAbortReason(params.abortSignal?.reason) ||
+      isAgentRunRestartAbortReason(params.abortSignal?.reason)
+    ) {
       cancelExecRequestOwners(owners);
     }
   };

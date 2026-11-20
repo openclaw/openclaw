@@ -79,6 +79,15 @@ describe("automation invocation tools", () => {
     });
     expect(invocation.result).toEqual({ outcome: "no_change", summary: "Nothing new." });
     await expect(
+      tool.execute("repeat", {
+        action: "record_result",
+        outcome: "no_change",
+        summary: "Nothing new.",
+      }),
+    ).resolves.toMatchObject({
+      details: { ok: true, outcome: "no_change", summary: "Nothing new." },
+    });
+    await expect(
       tool.execute("duplicate", {
         action: "record_result",
         outcome: "done",

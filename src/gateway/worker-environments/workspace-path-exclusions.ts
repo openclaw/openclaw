@@ -30,6 +30,9 @@ const TOOL_CACHE_ROOTS = [
   [".cargo/registry", "Cargo registry cache", "CARGO_HOME"],
   [".cargo/git", "Cargo Git cache", "CARGO_HOME"],
   [".gradle/caches", "Gradle cache", "GRADLE_USER_HOME"],
+  [".local/share/NuGet/http-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".local/share/NuGet/v3-cache", "NuGet HTTP cache", "NUGET_HTTP_CACHE_PATH"],
+  [".nuget/packages", "NuGet global packages", "NUGET_PACKAGES"],
 ] as const;
 
 export function workspaceToolCacheHint(entryPath: string): string {
@@ -45,6 +48,7 @@ const DERIVED_WORKSPACE_ROOT_PATHS = [
   ".cache/bun-transpiler",
   ".cache/openclaw/bun",
   ".cache/ms-playwright",
+  ".cache/convex/binaries",
   ".local/share/pnpm/store",
   "artifacts/task-environment/local/share/pnpm/store",
   // pnpm falls back here for projects beneath the protected .openclaw self-bind.

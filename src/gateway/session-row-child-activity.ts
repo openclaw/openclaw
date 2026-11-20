@@ -250,8 +250,8 @@ export function createSessionRowChildActivity(readChildren: (link: Link) => read
           }
         }
       }
-      const subagentRuns = context.subagentRuns.atTime(now);
       if (parent.dirty.size) {
+        const subagentRuns = context.subagentRuns.atTime(now);
         let recomputeExpiry = now < parent.sampledAt || now > parent.nextExpiry;
         for (const key of parent.dirty) {
           for (const child of parent.byKey.get(key) ?? []) {

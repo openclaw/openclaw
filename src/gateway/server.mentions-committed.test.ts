@@ -257,7 +257,7 @@ it("records a message addressed to people without an agent turn", async ({ signa
           await releaseFirstTurn.promise;
         }
       }
-      reply("Acknowledged.");
+      reply(agentTurns.length === 3 ? "NO_REPLY" : "Acknowledged.");
     },
   });
   const { alice, bob, bobClient, sender, target, inboxChanged } = fixture;
@@ -359,4 +359,25 @@ it("records a message addressed to people without an agent turn", async ({ signa
   expect(agentTurns).toHaveLength(2);
   expect(agentTurns[1]).toContain("put them on one sheet");
   expect(agentTurns[1]).toContain("stickers are cool");
+
+  // Incidental mentions still reach the model, but do not demand chatter.
+  const chatter = "Thanks @Bob, those stickers look good.";
+  const silent = await sender.request<{ runId: string }>("chat.send", {
+    sessionKey: target,
+    message: chatter,
+    idempotencyKey: "incidental-chatter",
+    mentions: [{ profileId: bob.id, start: 7, end: 11 }],
+  });
+  expect(await withinTest(terminal(silent.runId).promise, signal)).toEqual({
+    state: "final",
+    message: undefined,
+  });
+  expect(agentTurns).toHaveLength(3);
+  expect(agentTurns[2]).toContain("If no text reply is needed");
+  expect(agentTurns[2]).toContain("as the entire final answer, without commentary");
+  const afterSilence = await sender.request<{ messages: Array<Record<string, unknown>> }>(
+    "chat.history",
+    { sessionKey: target },
+  );
+  expect(afterSilence.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
 });

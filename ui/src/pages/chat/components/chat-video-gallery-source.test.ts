@@ -11,6 +11,11 @@ import {
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 
+const native = { playback: "native" } as const;
+const first: AttachmentItem = {
+  type: "attachment",
+  attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
+};
 let pause: ReturnType<typeof vi.spyOn>;
 let container: HTMLDivElement | undefined;
 let view: ReturnType<typeof mountSolid> | undefined;
@@ -88,10 +93,6 @@ it("renews a selected video's ticket without interrupting playback and releases 
       url: source + "?mediaTicket=B",
       expiresAt: new Date(Date.now() + 300_000).toISOString(),
     });
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
   const next: AttachmentItem = {
     type: "attachment",
     attachment: {
@@ -100,6 +101,7 @@ it("renews a selected video's ticket without interrupting playback and releases 
       artifactId: "synthetic-video",
       label: "Clip",
       mimeType: "video/mp4",
+      ...native,
     },
   };
   const opened = await open(first, resolve, [first, next]);
@@ -183,14 +185,10 @@ it("aborts selected rendition preparation and never assigns a late source after 
 });
 
 it("explicit retry clears a cached recoverable neighbor failure through its source owner", async () => {
-  const first: AttachmentItem = {
-    type: "attachment",
-    attachment: { kind: "video", url: "https://example.com/first.mp4", label: "First" },
-  };
   const url = "/api/chat/media/outgoing/agent%3Amain%3Amain/" + crypto.randomUUID() + "/full";
   const next: AttachmentItem = {
     type: "attachment",
-    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next" },
+    attachment: { kind: "video", url, artifactId: "synthetic-retry", label: "Next", ...native },
   };
   const resolve = vi
     .fn()

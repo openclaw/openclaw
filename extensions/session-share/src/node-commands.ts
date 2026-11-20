@@ -52,13 +52,25 @@ function isSharedEntry(
   );
 }
 
+export type SessionShareSourceAuthority = {
+  assertCurrent: () => void;
+  /** Synchronous consumer called before the native source guards are released. */
+  consumeResult?: (payload: unknown) => void;
+};
+
+function sourceSelection(api: OpenClawPluginApi, authority?: SessionShareSourceAuthority) {
+  authority?.assertCurrent();
+  return sessionShareSelection(api.runtime.config.current());
+}
+
 function withSharedEntries<T>(
   api: OpenClawPluginApi,
   selected: readonly { agentId: string; storePath: string; sessionKey: string }[],
   consume: (entries: SessionStoreSelectedEntry[]) => T,
+  authority?: SessionShareSourceAuthority,
 ): Promise<T> {
   const config = api.runtime.config.current();
-  const selection = sessionShareSelection(config);
+  const selection = sourceSelection(api, authority);
   const selectionKey = JSON.stringify(selection);
   const groups = new Set(selection?.groups ?? []);
   const stores = (selection ? listAgentIds(config) : [])
@@ -80,7 +92,7 @@ function withSharedEntries<T>(
       const current = api.runtime.config.current();
       if (
         current !== config ||
-        JSON.stringify(sessionShareSelection(current)) !== selectionKey ||
+        JSON.stringify(sourceSelection(api, authority)) !== selectionKey ||
         stores.some(
           ({ agentId, storePath }) =>
             !listAgentIds(current).includes(agentId) ||
@@ -97,8 +109,15 @@ function withSharedEntries<T>(
 
 export function createSessionShareNodeCommands(
   api: OpenClawPluginApi,
+  authority?: SessionShareSourceAuthority,
 ): OpenClawPluginNodeHostCommand[] {
   const source = { pluginId: "session-share", sourceDomain: "openclaw" };
+  const serializeResult = (payload: unknown) => {
+    const serialized = JSON.stringify(payload);
+    authority?.assertCurrent();
+    authority?.consumeResult?.(payload);
+    return serialized;
+  };
   let readersConfig: ReturnType<typeof api.runtime.config.current> | undefined;
   const readers = new Map<
     string,
@@ -110,7 +129,7 @@ export function createSessionShareNodeCommands(
       readers.clear();
       readersConfig = config;
     }
-    const selection = sessionShareSelection(config);
+    const selection = sourceSelection(api, authority);
     const selectionKey = JSON.stringify(selection);
     const groups = new Set(selection?.groups ?? []);
     const sessions: Array<SessionStoreSelectedEntry & { assertSourceCurrent: () => void }> = [];
@@ -130,7 +149,7 @@ export function createSessionShareNodeCommands(
       const current = api.runtime.config.current();
       if (
         current !== config ||
-        JSON.stringify(sessionShareSelection(current)) !== selectionKey ||
+        JSON.stringify(sourceSelection(api, authority)) !== selectionKey ||
         !listAgentIds(current).includes(agentId) ||
         api.runtime.agent.session.resolveStorePath(current.session?.store, { agentId }) !==
           storePath
@@ -158,17 +177,22 @@ export function createSessionShareNodeCommands(
     }
     // Inventory stays worker-owned. The selected cohort gets current canonical
     // person membership before pagination, then is checked again at disclosure.
-    return withSharedEntries(api, sessions, (current) => {
-      sessions.forEach((session) => session.assertSourceCurrent());
-      const selected = new Set(
-        current.map(({ agentId, storePath, sessionKey, entry }) =>
-          JSON.stringify([agentId, storePath, sessionKey, entry.sessionId]),
-        ),
-      );
-      return sessions.filter(({ agentId, storePath, sessionKey, entry }) =>
-        selected.has(JSON.stringify([agentId, storePath, sessionKey, entry.sessionId])),
-      );
-    });
+    return withSharedEntries(
+      api,
+      sessions,
+      (current) => {
+        sessions.forEach((session) => session.assertSourceCurrent());
+        const selected = new Set(
+          current.map(({ agentId, storePath, sessionKey, entry }) =>
+            JSON.stringify([agentId, storePath, sessionKey, entry.sessionId]),
+          ),
+        );
+        return sessions.filter(({ agentId, storePath, sessionKey, entry }) =>
+          selected.has(JSON.stringify([agentId, storePath, sessionKey, entry.sessionId])),
+        );
+      },
+      authority,
+    );
   }
   return [
     {
@@ -294,13 +318,14 @@ export function createSessionShareNodeCommands(
                 };
               },
             );
-            return JSON.stringify({
+            return serializeResult({
               sessions: page,
               ...(offset + page.length < sessions.length
                 ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
                 : {}),
             });
           },
+          authority,
         );
       },
     },
@@ -342,22 +367,27 @@ export function createSessionShareNodeCommands(
         );
         session.assertSourceCurrent();
         // The final worker callback retains all sources through synchronous serialization.
-        return withSharedEntries(api, [session], (current) => {
-          session.assertSourceCurrent();
-          if (
-            !current.some(
-              ({ agentId, sessionKey, storePath, entry }) =>
-                agentId === session.agentId &&
-                sessionKey === session.sessionKey &&
-                storePath === session.storePath &&
-                entry.sessionId === session.entry.sessionId,
-            )
-          ) {
-            throw new Error("Session is no longer shared. Refresh the session catalog.");
-          }
-          assertActorsCurrent();
-          return JSON.stringify({ threadId: params.threadId, ...page });
-        });
+        return withSharedEntries(
+          api,
+          [session],
+          (current) => {
+            session.assertSourceCurrent();
+            if (
+              !current.some(
+                ({ agentId, sessionKey, storePath, entry }) =>
+                  agentId === session.agentId &&
+                  sessionKey === session.sessionKey &&
+                  storePath === session.storePath &&
+                  entry.sessionId === session.entry.sessionId,
+              )
+            ) {
+              throw new Error("Session is no longer shared. Refresh the session catalog.");
+            }
+            assertActorsCurrent();
+            return serializeResult({ threadId: params.threadId, ...page });
+          },
+          authority,
+        );
       },
     },
   ];

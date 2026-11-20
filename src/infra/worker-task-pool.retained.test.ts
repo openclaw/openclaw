@@ -1,18 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { once } from "node:events";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import type { WorkerOptions } from "node:worker_threads";
+import { pathToFileURL } from "node:url";
+import { MessageChannel, type WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   installDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { prepareSqliteDatabaseAdmissionAsync } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
   AdmissionTaskResult,
@@ -94,6 +99,162 @@ it("preserves workerData through retained task startup", async () => {
   const pool = taskFixture(true, { workerData });
   const reply = await pool.run({ label: "startup", readStartupOptions: true }, {});
   expect(reply.startupOptions?.data).toEqual(workerData);
+});
+
+async function createChannelLossPool() {
+  const workerPath = path.join(tempDirs.make("worker-preparation-loss-"), "worker.mjs");
+  await writeFile(
+    workerPath,
+    `
+    import { parentPort, workerData } from "node:worker_threads";
+    parentPort.once("message", ({ port }) => {
+      port.on("message", ({ input, taskId }) => {
+        port.postMessage({ status: "ok", taskId, value: input });
+      });
+      workerData.control.on("message", () => {
+        port.close();
+        workerData.control.postMessage("closed");
+      });
+      port.postMessage({ status: "ready" });
+    });
+  `,
+  );
+  const control = new MessageChannel();
+  const pool = createPool<string, string>(pathToFileURL(workerPath).href, true, {
+    maxPendingBytes: 8,
+    workerOptions: { workerData: { control: control.port2 }, transferList: [control.port2] },
+  });
+  return { pool, control };
+}
+
+it.each(["runTask", "startTask"] as const)(
+  "rejects owned task-channel loss during pending preparation (%s)",
+  async (method) => {
+    const { pool, control } = await createChannelLossPool();
+    const preparation = Promise.withResolvers<void>();
+    const captured = ["retained input"];
+    let preparedInput: string[] | undefined;
+    const consumed = vi.fn(() => {
+      captured.length = 0;
+    });
+    const settled = vi.fn();
+    const prepare = async () => {
+      await preparation.promise;
+      preparedInput = [...captured];
+      return "late input";
+    };
+    const options = { inputBytes: 8, onInputConsumed: consumed, onExecutionSettled: settled };
+    let outcome: unknown = "pending";
+    let observed: Promise<void> | undefined;
+    try {
+      const warm = pool.startTask("warm", {});
+      await expect(warm.result).resolves.toBe("warm");
+      await warm.release().result;
+      const task =
+        method === "runTask" ? pool.runTask(prepare, options) : pool.startTask(prepare, options);
+      observed = task.result.then(
+        (value) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+      const closed = once(control.port1, "message");
+      control.port1.postMessage("close task channel");
+      await closed;
+      // Service the real closed endpoint without letting preparation settle.
+      warm.service();
+      await Promise.resolve();
+      expect(outcome).toMatchObject({
+        code: "unavailable",
+        message: expect.stringContaining("Native worker task channel closed"),
+      });
+      let cleanupDone = false;
+      const cleanup = pool.close().then(() => {
+        cleanupDone = true;
+      });
+      await Promise.resolve();
+      expect(cleanupDone).toBe(false);
+      expect(consumed).not.toHaveBeenCalled();
+      expect(settled).not.toHaveBeenCalled();
+      expect(captured).toEqual(["retained input"]);
+      expect(pool.getSnapshot().pendingTasks).toBe(1);
+      preparation.resolve();
+      await cleanup;
+      expect(preparedInput).toEqual(["retained input"]);
+      expect(consumed).toHaveBeenCalledOnce();
+      expect(settled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(captured).toEqual([]);
+      expect(pool.getSnapshot().pendingTasks).toBe(0);
+    } finally {
+      preparation.resolve();
+      await observed;
+      await pool.close();
+      control.port1.close();
+      control.port2.close();
+    }
+  },
+);
+
+it("rejects task-channel loss after retirement without waiting for pending preparation", async () => {
+  const { pool, control } = await createChannelLossPool();
+  const preparation = Promise.withResolvers<void>();
+  const execution = Promise.withResolvers<{ retired: boolean }>();
+  const captured = ["retained input"];
+  let preparedInput: string[] | undefined;
+  const consumed = vi.fn(() => {
+    captured.length = 0;
+  });
+  let outcome: unknown = "pending";
+  let observed: Promise<void> | undefined;
+  try {
+    await expect(pool.run("warm", {})).resolves.toBe("warm");
+    observed = pool
+      .run(
+        async () => {
+          await preparation.promise;
+          preparedInput = [...captured];
+          return "late input";
+        },
+        { inputBytes: 8, onInputConsumed: consumed, onExecutionSettled: execution.resolve },
+      )
+      .then(
+        (value) => {
+          outcome = value;
+        },
+        (error: unknown) => {
+          outcome = error;
+        },
+      );
+    control.port1.postMessage("close task channel");
+    expect(await execution.promise).toEqual({ retired: true });
+    // Let the caller's rejection reaction run after the native execution receipt.
+    await Promise.resolve();
+    expect(outcome).toMatchObject({
+      code: "unavailable",
+      message: expect.stringContaining("Native worker task channel closed"),
+    });
+    expect(consumed).not.toHaveBeenCalled();
+    expect(captured).toEqual(["retained input"]);
+    expect(pool.getSnapshot()).toMatchObject({ workers: 0, pendingTasks: 1 });
+    await expect(pool.run("over capacity", { inputBytes: 1 })).rejects.toMatchObject({
+      code: "overloaded",
+    });
+    preparation.resolve();
+    await pool.close();
+    await observed;
+    expect(preparedInput).toEqual(["retained input"]);
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(captured).toEqual([]);
+    expect(pool.getSnapshot().pendingTasks).toBe(0);
+  } finally {
+    preparation.resolve();
+    await observed;
+    await pool.close();
+    control.port1.close();
+    control.port2.close();
+  }
 });
 
 const pause = new Int32Array(new SharedArrayBuffer(4));
@@ -281,7 +442,9 @@ it("answers an earlier task's synchronous host exchange while servicing a queued
   read(second.release({ retire: true }));
 });
 
-it("services a sibling pool's database facts while the host event loop is blocked", async () => {
+it("services a sibling pool's database facts while the host event loop is blocked", async ({
+  signal,
+}) => {
   const blockedPool = fixture();
   const admissionPool = createPool<AdmissionTaskInput, AdmissionTaskResult>(
     "./sqlite-database-admission.task.test-support.ts",
@@ -291,6 +454,11 @@ it("services a sibling pool's database facts while the host event loop is blocke
   const database = new DatabaseSync(location);
   database.exec("CREATE TABLE proof (value INTEGER)");
   database.close();
+  await prepareSqliteDatabaseAdmissionAsync({
+    location,
+    assertCurrent: () => signal.throwIfAborted(),
+  });
+  using observed = observeMainThreadFs();
   const barrier = blockingInput();
   const blocked = blockedPool.startTask(barrier.input, {});
   const admission = admissionPool.startTask({ path: location }, {});
@@ -306,6 +474,7 @@ it("services a sibling pool's database facts while the host event loop is blocke
     read(blocked);
     read(blocked.release());
   }
+  expect(observed.calls()).toEqual({});
 });
 
 it("serializes resource cleanup after an asynchronous task without cancelling it", async () => {

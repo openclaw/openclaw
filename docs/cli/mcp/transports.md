@@ -119,7 +119,7 @@ Native MCP OAuth sessions live in the owner-only shared SQLite database at `<sta
 
 Upgrades from the retired `<state-dir>/mcp-oauth/*.json` store are handled only by `openclaw doctor --fix`. Runtime code never reads, writes, or falls back to those files.
 
-Until shared credentials are available, OpenClaw omits only that MCP server from the agent runtime instead of failing the agent turn. The operator, or an agent with shell access, can then run `openclaw mcp login <name>` and use the server on a later turn.
+Until shared credentials are available, OpenClaw withholds that server's account tools instead of failing the agent turn. The owner can ask the agent to connect in a direct chat and receive a sign-in link in the same turn, or run `openclaw mcp login <name>` while the Gateway runs. After approval, send another message to use the server; no Gateway restart is needed. Shared sign-in links are not posted in group chats.
 
 If a server rejects a token with `insufficient_scope`, OpenClaw preserves the requested scope and asks for `openclaw mcp login <name>` instead of repeating a refresh that cannot grant new scope. That login starts a new authorization request while keeping the previous token until replacement credentials are saved.
 
@@ -154,7 +154,7 @@ The per-requester flow is sender-driven:
 2. OpenClaw returns a sign-in link for that sender instead of exposing another sender's credentials.
 3. The provider redirects through the Gateway callback. After the callback succeeds, the sender retries the tool call with their connected account.
 
-If `gateway.publicOrigin` is missing, the sign-in result names that setting and `openclaw doctor` reports the same operator fix. `openclaw mcp login` and `openclaw mcp logout` remain operator-only commands for shared credentials; they do not manage per-requester accounts.
+For per-requester accounts, missing `gateway.publicOrigin` is reported by the sign-in result and `openclaw doctor`. Shared operator sign-in instead falls back to the Gateway's loopback address. `openclaw mcp login` and `openclaw mcp logout` manage only shared credentials, not per-requester accounts.
 
 Sign-in links are single-use bearer links: any chat participant who opens one connects their own account to the sender the link was issued for. Use per-requester OAuth in channels where every trusted sender is mutually trusted; a requester-private sign-in handoff is tracked as follow-up work.
 
@@ -182,21 +182,23 @@ The shared operator flow uses the following commands:
     openclaw mcp login docs
     ```
 
-    OpenClaw starts the registered loopback callback, prints the authorization URL, and stores temporary OAuth verifier state in shared SQLite. Approve the request in the browser and return to the terminal; token exchange completes automatically after the callback arrives.
+    With the Gateway running, login asks that Gateway to create the sign-in link and prints it. The provider redirects to `<gateway.publicOrigin>/oauth/mcp/callback`, or to `http://127.0.0.1:<gateway-port>/oauth/mcp/callback` without a public origin. Approve the request until the page says **You're connected.** The Gateway saves credentials in shared SQLite and the next agent turn can use them.
+
+    With the Gateway stopped, login keeps its local loopback flow: it starts a callback listener and waits for the browser to return. Offline login resolves configured `mcp.servers`; the running Gateway can also resolve plugin-declared servers.
 
     Providers may register an HTTP loopback callback without a port, as allowed by RFC 8252. OpenClaw retains that registration for the same `127.0.0.1`, `[::1]`, or `localhost` callback while sending the listener's port in authorization and token requests. Other callback components must match; non-loopback callbacks still require an exact match.
 
   </Step>
   <Step title="Use the manual fallback when needed">
-    If the browser runs on another machine or cannot reach the printed loopback address, copy the returned code and pass it back to OpenClaw.
+    With a running Gateway, if the browser is on another device and cannot load the loopback callback, copy the complete failed redirect address. Paste it into the direct chat that started sign-in, or pass it to the CLI:
 
     ```bash
-    openclaw mcp login docs --code abc123
+    openclaw mcp login docs --callback-url 'http://127.0.0.1:18789/oauth/mcp/callback?code=abc123&state=<state>'
     ```
 
-    If the callback URL also contains `iss`, pass its exact decoded value from
-    that same callback. OpenClaw validates it against the sign-in provider; do
-    not replace it with a different issuer or omit it when the provider requires it.
+    Keep the entire URL, including `state` and any `iss` value. The code is single-use and bound to the original state and PKCE verifier.
+
+    For an offline CLI attempt only, use the returned code with `--code`. If the redirect includes `iss`, pass its exact decoded value with `--issuer`:
 
     ```bash
     openclaw mcp login docs --code abc123 --issuer https://accounts.example.com

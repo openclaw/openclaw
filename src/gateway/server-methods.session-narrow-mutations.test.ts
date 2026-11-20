@@ -824,6 +824,7 @@ describe("guest dictation request boundary", () => {
         providers: {},
         model: undefined,
         file: undefined,
+        source: "streaming",
       });
       let transcript: ((text: string) => void) | undefined;
       vi.spyOn(config, "resolveConfiguredRealtimeTranscriptionProvider").mockResolvedValue({
