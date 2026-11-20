@@ -14,13 +14,15 @@ export type GatewayReadinessPlan = {
 
 export function planGatewayReadiness(
   gateway: { status: string; action?: string },
-  skipHealth: boolean,
+  skipHealth: boolean | undefined,
   sessionGateway: boolean,
 ): GatewayReadinessPlan {
   const started = gateway.status === "ready" && gateway.action !== "reused";
+  // `--skip-health` is optional, so an omitted flag behaves like `false` here.
+  const skipHealthChecks = skipHealth === true;
   return {
-    awaitReadiness: !skipHealth || sessionGateway || started,
-    probeOnce: skipHealth && !sessionGateway && !started,
+    awaitReadiness: !skipHealthChecks || sessionGateway || started,
+    probeOnce: skipHealthChecks && !sessionGateway && !started,
     startupBudget: sessionGateway || started,
   };
 }
