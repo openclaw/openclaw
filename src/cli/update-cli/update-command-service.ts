@@ -345,6 +345,7 @@ export async function maybeRestartService(
       requireRunningService: opts.requireRunningService,
       health: opts.health,
       onVerified: params.onVerified,
+      rollbackBlockedReason: params.rollbackBlockedReason,
       assertCurrent,
       recoverHealth: async (initialHealth, reinspect, assertReadinessCurrent) => {
         assertReadinessCurrent();
