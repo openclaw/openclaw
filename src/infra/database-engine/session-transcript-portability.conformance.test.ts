@@ -443,7 +443,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
             content: "admitted request \udc00",
             idempotencyKey: "seed:user",
           });
-          expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
         }));
 
       it("reads, validates and indexes escapes JSONB rejects without rewriting rows", async () => {
@@ -511,7 +510,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
         );
         expect(seed.messages).toEqual([]);
         expect(seed.seed?.admittedUser).toMatchObject(entries[0]!);
-        expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
         await append(3);
         withEngineStoreAdmission(() => {
           // Growth after the read takes detached validation through its prefix scan.

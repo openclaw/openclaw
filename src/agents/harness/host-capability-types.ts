@@ -72,6 +72,8 @@ export type AgentHarnessHostCapabilities = Readonly<{
       signal?: AbortSignal;
       /** Final delivery allowance; valid smaller values only narrow the captured host budget. */
       tokenBudget?: number;
+      /** The native thread can call sessions_history, so omission notices may name it. */
+      historyToolAvailable?: boolean;
     }>,
   ) => Promise<readonly AgentMessage[]>;
   /**

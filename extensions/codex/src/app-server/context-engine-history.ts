@@ -16,11 +16,13 @@ import {
 } from "./attempt-context.js";
 import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import {
+  CodexContextAttachmentError,
   isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
+import { selectCodexStaleBindingDelta } from "./run-attempt-prompt-continuity.js";
 import {
   hashCodexAppServerBindingFingerprint,
   type CodexAppServerBindingIdentity,
@@ -141,6 +143,53 @@ export async function prepareCodexContextEngineHistory(params: {
       tokenBudget: params.historyTokenBudget,
       prepareFileContext: projectionParams.prepareFileContext,
     });
+  const historyToolAvailable = params.toolSpecs.some(
+    (tool) =>
+      typeof tool === "object" && tool !== null && Reflect.get(tool, "name") === "sessions_history",
+  );
+  // A returning thread receives what other models added since its last turn. That delta can
+  // exceed the final delivery allowance, so keep its newest intact messages and say how many
+  // older ones stay in the session transcript.
+  const buildDelta = async (delta: AgentMessage[]) => {
+    const attempt = async (omitted: number) => {
+      const note: AgentMessage[] = omitted
+        ? [
+            {
+              role: "user",
+              content: `[OpenClaw context handoff] ${omitted} earlier messages since this thread last ran are omitted here and stay in the session transcript.${historyToolAvailable ? " Read them only if needed with sessions_history." : ""}`,
+              timestamp: 0,
+            },
+          ]
+        : [];
+      try {
+        return await buildSeed([...note, ...delta.slice(omitted)]);
+      } catch (error) {
+        if (error instanceof CodexContextAttachmentError) {
+          return undefined;
+        }
+        throw error;
+      }
+    };
+    const whole = await attempt(0);
+    if (whole) {
+      return whole;
+    }
+    // Fewer kept messages always fit at least as well: binary-search the smallest cut.
+    let low = 1;
+    let high = delta.length;
+    let best: Awaited<ReturnType<typeof buildSeed>> | undefined;
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const built = await attempt(mid);
+      if (built) {
+        best = built;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return best;
+  };
   const historyBootstrapItems = !configured
     ? undefined
     : prepareSeed
@@ -151,16 +200,23 @@ export async function prepareCodexContextEngineHistory(params: {
               assertCurrent: assertSeedCurrent,
               signal: params.runtimeParams.abortSignal,
               tokenBudget: params.historyTokenBudget,
+              historyToolAvailable,
             })
           ).filter(includeMessage);
           assertSeedCurrent();
           return buildSeed(seed);
         }
       : await buildSeed(messages);
+  const legacyDeltaMessages =
+    configured && prepareSeed && startupBinding?.threadId
+      ? selectCodexStaleBindingDelta(messages, startupBinding)
+      : [];
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
-      ? await buildSeed(messages.slice(selection.prefixLength))
-      : undefined;
+      ? await buildDelta(messages.slice(selection.prefixLength))
+      : legacyDeltaMessages.length > 0
+        ? await buildDelta(legacyDeltaMessages)
+        : undefined;
   assertCurrent();
   return {
     projection,
@@ -221,14 +277,20 @@ export async function injectCodexHistoryDelta(
           },
         }
       : undefined;
-    const marked = await params.bindingStore.mutate(
-      bindingIdentity,
-      { kind: "patch", threadId: thread.threadId, patch: { contextEngine: pendingContextEngine } },
-      assert,
-      authority,
-    );
-    if (!marked) {
-      throw new CodexThreadBindingConflictError(thread.threadId, "marking history delivery");
+    if (pendingContextEngine) {
+      const marked = await params.bindingStore.mutate(
+        bindingIdentity,
+        {
+          kind: "patch",
+          threadId: thread.threadId,
+          patch: { contextEngine: pendingContextEngine },
+        },
+        assert,
+        authority,
+      );
+      if (!marked) {
+        throw new CodexThreadBindingConflictError(thread.threadId, "marking history delivery");
+      }
     }
     await lifecycleTiming.measure("thread-reuse-seed-history", () =>
       params.client.request(
@@ -250,16 +312,21 @@ export async function injectCodexHistoryDelta(
       params.contextEngineProjection,
       true,
     );
+    const patch = acknowledged
+      ? { contextEngine: acknowledged }
+      : { historyCoveredThrough: new Date().toISOString() };
     const committed = await params.bindingStore.mutate(
       bindingIdentity,
-      { kind: "patch", threadId: thread.threadId, patch: { contextEngine: acknowledged } },
+      { kind: "patch", threadId: thread.threadId, patch },
       assert,
       authority,
     );
     if (!committed) {
       throw new CodexThreadBindingConflictError(thread.threadId, "acknowledging history delivery");
     }
-    thread.contextEngine = acknowledged;
+    if (acknowledged) {
+      thread.contextEngine = acknowledged;
+    }
   } catch (error) {
     // Preserve the native transcript but retire uncertain delivery from future reuse.
     await params.bindingStore.mutate(

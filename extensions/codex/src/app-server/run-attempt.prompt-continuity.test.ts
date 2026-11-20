@@ -1,16 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assistantMessage,
   createParams,
+  createResumeHarness,
   createStartedThreadHarness,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
   tempDir,
+  userMessage,
 } from "./run-attempt-test-harness.js";
 import { writeExistingBinding } from "./run-attempt.existing-binding.test-support.js";
+import { readCodexAppServerBinding } from "./session-binding.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
@@ -62,4 +67,86 @@ describe("Codex prompt continuity", () => {
       | undefined;
     expect(turnStart?.input?.[0]?.text).toContain("restored notes");
   });
+});
+
+// Codex -> Gemini/Claude -> Codex: the host seed covers fresh threads only, so a resumed
+// thread must still receive the turns another model added while Codex was not selected.
+it("injects only turns from another model when selected history resumes a Codex thread", async () => {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  const workspaceDir = path.join(tempDir, "workspace");
+  const params = createParams(sessionFile, workspaceDir);
+  await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+  const coveredThrough = Date.parse(
+    (await readCodexAppServerBinding(sessionFile))?.historyCoveredThrough ?? "",
+  );
+  const session = openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+  session.appendMessage(userMessage("old native-owned context", coveredThrough - 2_000));
+  session.appendMessage(
+    userMessage("GEMINI_DELTA_USER: pick the blue rollout", coveredThrough + 1_000),
+  );
+  session.appendMessage({
+    ...assistantMessage("GEMINI_DELTA_ASSISTANT: blue rollout chosen", coveredThrough + 2_000),
+    provider: "google",
+    model: "gemini-3-pro",
+  });
+  const prepareBoundedSeed = vi.fn(async () => []);
+  params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+  params.contextTokenBudget = 200_000;
+  params.prompt = "continue on Codex";
+  const harness = createResumeHarness();
+
+  const run = runCodexAppServerAttempt(params);
+  await harness.waitForMethod("turn/start");
+  await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+  await run;
+
+  const methods = harness.requests.map((request) => request.method);
+  expect(methods).toContain("thread/resume");
+  expect(methods).not.toContain("thread/start");
+  expect(prepareBoundedSeed).not.toHaveBeenCalled();
+  const injected = JSON.stringify(
+    harness.requests.filter((request) => request.method === "thread/inject_items"),
+  );
+  expect(injected).toContain("GEMINI_DELTA_USER: pick the blue rollout");
+  expect(injected).toContain("GEMINI_DELTA_ASSISTANT: blue rollout chosen");
+  expect(injected).not.toContain("old native-owned context");
+  const turnStart = JSON.stringify(
+    harness.requests.find((request) => request.method === "turn/start")?.params,
+  );
+  expect(turnStart).not.toContain("GEMINI_DELTA");
+});
+
+it("keeps the newest intact turns when another model's delta exceeds the allowance", async () => {
+  const sessionFile = path.join(tempDir, "session.jsonl");
+  const workspaceDir = path.join(tempDir, "workspace");
+  const params = createParams(sessionFile, workspaceDir);
+  await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+  const coveredThrough = Date.parse(
+    (await readCodexAppServerBinding(sessionFile))?.historyCoveredThrough ?? "",
+  );
+  const session = openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+  for (let index = 1; index <= 8; index += 1) {
+    session.appendMessage(
+      userMessage(`DELTA_${index} ${"q".repeat(30_000)}`, coveredThrough + index * 1_000),
+    );
+  }
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    prepareBoundedSeed: vi.fn(async () => []),
+  };
+  params.contextTokenBudget = 40_000;
+  params.prompt = "continue on Codex";
+  const harness = createResumeHarness();
+
+  const run = runCodexAppServerAttempt(params);
+  await harness.waitForMethod("turn/start");
+  await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+  await run;
+
+  const injected = JSON.stringify(
+    harness.requests.filter((request) => request.method === "thread/inject_items"),
+  );
+  expect(injected).toContain("DELTA_8");
+  expect(injected).not.toContain("DELTA_1 ");
+  expect(injected).toMatch(/\[OpenClaw context handoff\] \d+ earlier messages/);
 });
