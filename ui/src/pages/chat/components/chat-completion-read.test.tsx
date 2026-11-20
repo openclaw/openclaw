@@ -7,6 +7,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createChatCompletionReadRef } from "./chat-completion-read.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-layout.ts";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -77,7 +78,9 @@ it("admits a persisted final only when its source bubble is presented and inters
   };
   const mounted = mountSolid(() => (
     <ApplicationProvider value={app}>
-      <Bubble />
+      <TranscriptReadPresentation value={() => true}>
+        <Bubble />
+      </TranscriptReadPresentation>
     </ApplicationProvider>
   ));
   try {

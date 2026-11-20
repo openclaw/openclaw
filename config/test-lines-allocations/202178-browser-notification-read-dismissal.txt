@@ -1,4 +1,4 @@
-# Issue #202178: 276 lines above the 400-line regression budget.
+# Issue #202178: 436 lines above the 400-line regression budget.
 # Distinct producer/recipient, service-worker ordering, lazy admission and real
-# Chromium notification delivery/view/foreground/late-push boundaries.
-276
+# Chromium delivery/view/foreground/late-push and real transcript layout read boundaries.
+436

@@ -6,10 +6,10 @@ import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
-import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { hasTerminalRunOutcome, resolveAssistantReplyPhase } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-layout.ts";
 
 /** Only the mounted answer bubble can acknowledge its delivered completion. */
 export function createChatCompletionReadRef(
@@ -17,7 +17,7 @@ export function createChatCompletionReadRef(
   options: () => GroupedMessageOptions,
 ) {
   const app = useOptionalApplication();
-  const parentPresented = useContext(ContentPresentation);
+  const parentPresented = useContext(TranscriptReadPresentation);
   const transcriptPresented = usePanePresentation(() => options().transcriptVisible ?? false);
   const visible = createDocumentVisibility();
   const [element, setElement] = createSignal<HTMLElement>();
