@@ -121,7 +121,7 @@ it("records revoked Discord followups once without model or channel effects", as
         policyUnavailable: unavailable,
       });
       expect(inboundEventKind).toBe(roomEvent ? "room_event" : "user_request");
-      const context = await host.buildContext({
+      const context = host.buildContext({
         channel: "discord",
         accountId: "default",
         messageId,
@@ -176,7 +176,7 @@ it("records revoked Discord followups once without model or channel effects", as
           (event.data.phase === "end" || event.data.phase === "error")
         ) {
           writes.push(
-            persistGatewaySessionLifecycleEvent({ ...scope, event }).catch((error) => {
+            persistGatewaySessionLifecycleEvent({ ...scope, event }).catch((error: unknown) => {
               writeErrors.push(error);
             }),
           );
