@@ -261,7 +261,7 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
           "- sessions_yield: End turn; await subagent events",
           work,
           delegate,
-          "- subagents: Subagent status; never wait-loop",
+          "- subagents: Subagent status/cancel",
           "- alpha_x",
           "- zeta_x",
         ]);
