@@ -64,6 +64,10 @@ const INBOUND_SILENCE_CHECK_INTERVAL_MS = 1_000;
 const UNANSWERED_REQUEST_SILENCE_MS = 5_000;
 const INBOUND_SILENCE_PROBE_TIMEOUT_MS = 10_000;
 const STALE_OPENING_MS = 8_000;
+// Transient native refusals recover within the normal backoff. A document the app
+// keeps refusing still retries, but no longer every 15 seconds for hours.
+const NATIVE_AUTH_FAST_REFUSALS = 10;
+const NATIVE_AUTH_REFUSED_RETRY_MS = 5 * 60_000;
 
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
@@ -87,6 +91,7 @@ export class GatewayBrowserClient {
   private readonly remoteIngress = isRemoteControlUiIngress();
   private nativeAuthAbort: AbortController | null = null;
   private nativeAuthError: GatewayRequestError | null = null;
+  private nativeAuthRefusals = 0;
   // Close/stop advances this generation before another socket can make stale hello work look active.
   private recovery = { value: "", resolved: false, generation: 0 };
   private scopeUpgradeBinding: ScopeUpgradeBinding | null = null;
@@ -138,13 +143,19 @@ export class GatewayBrowserClient {
       buildConnectParams: (plan) => plan.params,
       onConnectPlanError: (error) => {
         if (this.opts.nativeConnectAuth) {
+          const refused = error instanceof NativeGatewayAuthUnavailableError;
+          this.nativeAuthRefusals = refused ? this.nativeAuthRefusals + 1 : 0;
           this.nativeAuthError =
             error instanceof GatewayRequestError
               ? error
               : new GatewayRequestError({
                   code: "UNAVAILABLE",
                   message: formatConnectionErrorSummary(error),
-                  retryable: error instanceof NativeGatewayAuthUnavailableError,
+                  retryable: refused,
+                  retryAfterMs:
+                    this.nativeAuthRefusals >= NATIVE_AUTH_FAST_REFUSALS
+                      ? NATIVE_AUTH_REFUSED_RETRY_MS
+                      : undefined,
                 });
           return {
             closeCode: CONNECT_FAILED_CLOSE_CODE,
@@ -429,6 +440,8 @@ export class GatewayBrowserClient {
           this.pendingDeviceTokenRetry,
         ),
     });
+    // A built plan carries any native grant; it restores fast recovery.
+    this.nativeAuthRefusals = 0;
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
     }
