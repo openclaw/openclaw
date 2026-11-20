@@ -395,12 +395,12 @@ export async function listCarryCheckouts(
   const fields = listed.code === 0 ? listed.stdout.toString().split("\0") : [];
   const checkouts: CarryCheckout[] = [];
   for (let index = 0; index + 3 < fields.length; index += 4) {
-    const path = fields[index]!;
+    const checkoutPath = fields[index]!;
     const originUrl = fields[index + 1]!;
     const commit = fields[index + 2]!;
     const unsavedFiles = Number(fields[index + 3]);
     if (COMMIT_PATTERN.test(commit) && Number.isSafeInteger(unsavedFiles) && unsavedFiles >= 0) {
-      checkouts.push({ path, originUrl, commit, unsavedFiles });
+      checkouts.push({ path: checkoutPath, originUrl, commit, unsavedFiles });
     }
   }
   return checkouts.slice(0, MAX_LISTED_CHECKOUTS);

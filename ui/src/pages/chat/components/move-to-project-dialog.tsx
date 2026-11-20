@@ -8,12 +8,12 @@ import { withPromiseModalHost } from "../../../components/promise-modal-host.ts"
 import { Picker } from "../../../components/select-picker.ts";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
-import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatMoveToProjectEnglish } from "../../../i18n/locales/en-chat-move-to-project.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { showToast } from "../../../lib/toast.ts";
 
-registerEnglishCatalog(registerChatSessionOptionalEnglish);
+registerEnglishCatalog(registerChatMoveToProjectEnglish);
 
 export type MoveToProjectRequest = {
   client: GatewayBrowserClient;

@@ -2,7 +2,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { i18n, t } from "../../i18n/index.ts";
-import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
+import { registerChatMoveToProjectEnglish } from "../../i18n/locales/en-chat-move-to-project.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
@@ -14,7 +14,7 @@ import type { HeaderMenuAction } from "./chat-pane-session-menu-contract.ts";
 import type { HeaderMenuSessionAction } from "./components/chat-quick-action.tsx";
 
 registerSessionOrganizationSharedEnglish();
-registerEnglishCatalog(registerChatSessionOptionalEnglish);
+registerEnglishCatalog(registerChatMoveToProjectEnglish);
 
 const hasMoveProjects = createSharedOwnerProjection(
   (catalog: ProjectCatalog) =>
