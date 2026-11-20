@@ -25,7 +25,13 @@ export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRo
   {
     loaderDeps: (context, location) => {
       const restored = restoreBridgedRouteLocation(location, INTERNAL_TEMPLATES_PATH_PARAM);
-      return `${restored.pathname}${restored.search}:${isTemplatesAvailable(context.runtimeConfig.state)}`;
+      const available = isTemplatesAvailable(context.runtimeConfig.state);
+      // A direct document starts on a bridged URL while config may still be loading.
+      // Resolving that same entry to enabled isn't another visit; a known denial still is distinct.
+      const gate = templateRouteSource(restored, context.basePath)
+        ? available !== false
+        : available;
+      return `${restored.pathname}${restored.search}:${gate}`;
     },
     // Returning to a release needs a fresh access check, not a cached loader receipt.
     gcTime: 0,

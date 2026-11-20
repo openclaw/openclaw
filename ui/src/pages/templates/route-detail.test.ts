@@ -3,6 +3,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createApplicationRouter, startApplicationRouter } from "../../app-routes.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -74,36 +75,64 @@ it("dispatches an admitted detail before mounting, and a remount joins the same 
   mountOnce.unmount();
 });
 
-it("reads once across the bridged document startup, then once on a fresh revisit", async () => {
-  const { context, request, unmountPage } = createPage({ templatesEnabled: true });
-  unmountPage();
-  request.mockClear();
-  const router = createApplicationRouter();
-  let current: RouteLocation = location;
-  const write = (next: RouteLocation) => {
-    current = next;
-  };
-  const history = { location: () => current, push: write, replace: write, listen: () => () => {} };
-  const calls = () => request.mock.calls.filter(([method]) => method.startsWith("templates."));
-  const detail = [
-    "templates.catalog.detail",
-    { packageName: workflowOperator.packageName, version: "1.2.0" },
-  ];
-  try {
-    await startApplicationRouter(router, history, "", context);
-    expect(calls()).toEqual([detail]);
-    await router.navigate(
-      "templates",
-      context,
-      {},
-      { ...location, pathname: "/templates", search: "" },
+it.each([false, true])(
+  "reads once across the bridged document startup and revisit (cold config: %s)",
+  async (cold) => {
+    const { context, request, unmountPage, setTemplatesEnabled } = createPage({
+      templatesEnabled: true,
+    });
+    unmountPage();
+    request.mockClear();
+    const original = request.getMockImplementation()!;
+    const config = context.runtimeConfig.state.configSnapshot!;
+    request.mockImplementation((method, params, options) =>
+      method === "config.get" ? Promise.resolve(config) : original(method, params, options),
     );
-    await router.navigate("templates", context, {}, location);
-    expect(calls()).toEqual([detail, detail]);
-  } finally {
-    router.stop();
-  }
-});
+    const runtimeConfig = cold ? createRuntimeConfigCapability(context.gateway) : undefined;
+    const routedContext = runtimeConfig ? { ...context, runtimeConfig } : context;
+    const router = createApplicationRouter();
+    let current: RouteLocation = location;
+    const write = (next: RouteLocation) => {
+      current = next;
+    };
+    const history = {
+      location: () => current,
+      push: write,
+      replace: write,
+      listen: () => () => {},
+    };
+    const calls = () => request.mock.calls.filter(([method]) => method.startsWith("templates."));
+    const detail = [
+      "templates.catalog.detail",
+      { packageName: workflowOperator.packageName, version: "1.2.0" },
+    ];
+    try {
+      await startApplicationRouter(router, history, "", routedContext);
+      expect(calls()).toEqual([detail]);
+      await router.navigate(
+        "templates",
+        routedContext,
+        {},
+        { ...location, pathname: "/templates", search: "" },
+      );
+      await router.navigate("templates", routedContext, {}, location);
+      expect(calls()).toEqual([detail, detail]);
+      setTemplatesEnabled(false);
+      await expect(router.navigate("templates", routedContext, {}, location)).rejects.toMatchObject(
+        {
+          type: "notFound",
+        },
+      );
+      expect(calls()).toEqual([detail, detail]);
+      setTemplatesEnabled(true);
+      await router.navigate("templates", routedContext, {}, location);
+      expect(calls()).toEqual([detail, detail, detail]);
+    } finally {
+      router.stop();
+      runtimeConfig?.dispose();
+    }
+  },
+);
 
 it("does not dispatch a detail for draft, directory, retired navigation, or disconnected entries", async () => {
   const { context, request, setPhase, unmountPage } = createPage({ templatesEnabled: true });
@@ -179,5 +208,7 @@ it("rejects a prepared read after loss of access or an identity change on the sa
   publish({ ...gateway.snapshot, hello: { ...hello } });
   beginTemplateDetailRead(gateway, source, { prepared: first });
   expect(request).toHaveBeenCalledTimes(3);
+  beginTemplateDetailRead(gateway, source, { fresh: true });
+  expect(request).toHaveBeenCalledTimes(4);
   reply.reject(new Error("retired"));
 });
