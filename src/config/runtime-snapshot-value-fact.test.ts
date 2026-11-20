@@ -61,7 +61,7 @@ it.each<[string, Config]>([
   ["provider credentials", { auth: { order: { openai: ["second"] } } }],
   ["agent model", { agents: { defaults: { model: { primary: "openai/second" } } } }],
   ["runtime placement", { cloudWorkers: { requiredProfile: "fixture" } }],
-  ["unknown dependency", Object.assign({}, { futureModelPolicy: { enabled: true } })],
+  ["unknown dependency", Object.assign({ ui: {} }, { futureModelPolicy: { enabled: true } })],
 ])("invalidates model metadata for %s", (_label, change) => {
   setSnapshot({});
   const before = modelKey();
