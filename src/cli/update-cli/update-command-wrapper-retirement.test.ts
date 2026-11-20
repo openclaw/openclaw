@@ -197,6 +197,7 @@ describe("retireStandaloneGitWrapper", () => {
 
     expect(run("gateway", "status")).toBe("old entry.js\n");
     expect(run("gateway", "run", "--help")).toBe("old entry.js\n");
+    expect(run("--", "gateway", "run")).toBe("new index.js\n");
     expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
     expect(run("--version")).toBe("new entry.js\n");
   });

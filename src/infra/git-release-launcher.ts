@@ -45,17 +45,23 @@ const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 // launcher (it reads the global below), so only the child's starts count. An unknown value flag
 // can make a start look like a subcommand; it is then not counted (accepted).
 const valueFlags = new Set(${JSON.stringify([...ROOT_VALUE_FLAGS, ...GATEWAY_RUN_VALUE_FLAGS, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG])});
+// As the CLI's command-path parser: after "--" every argument is a literal positional.
 const positionals = [];
-for (let i = 2; i < process.argv.length && process.argv[i] !== "--"; i++) {
+let literal = false;
+let informational = false;
+for (let i = 2; i < process.argv.length; i++) {
   const arg = process.argv[i];
-  if (!arg.startsWith("-")) {
+  if (literal || !arg.startsWith("-")) {
     positionals.push(arg);
+  } else if (arg === "--") {
+    literal = true;
   } else if (valueFlags.has(arg)) {
     i++;
+  } else if (["-h", "--help", "-V", "--version"].includes(arg)) {
+    // Help and version requests only print, so they never select a release or count.
+    informational = true;
   }
 }
-// Help and version requests only print, so they never select a release or count.
-const informational = process.argv.slice(2).some((arg) => ["-h", "--help", "-V", "--version"].includes(arg));
 const gatewayRun =
   !informational &&
   positionals[0] === "gateway" &&
