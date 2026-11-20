@@ -39,13 +39,16 @@ export function prepareCoreToolPolicy(
         true);
   const readOnly = sessionPolicy?.readOnly ?? false;
   const patch = execConfig.applyPatch;
-  const applyPatchContainmentSource: ApplyPatchContainmentSource = options.requireWorkspaceOnly
-    ? "required-root"
-    : sessionPolicy
-      ? "session"
-      : "config";
+  const applyPatchContainmentSource: ApplyPatchContainmentSource =
+    options.participationCeiling || options.requireWorkspaceOnly
+      ? "required-root"
+      : sessionPolicy
+        ? "session"
+        : "config";
   return {
     workspaceOnly,
+    // Participation is Gateway-local; ordinary worker policies retain their wire shape.
+    ...(options.participationCeiling ? { strictWorkspaceRoot: true } : {}),
     readOnly,
     applyPatchEnabled:
       !readOnly &&

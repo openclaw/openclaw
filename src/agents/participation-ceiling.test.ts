@@ -123,6 +123,8 @@ describe("participation permission intersection", () => {
         }),
       ).toMatchObject({
         workspaceOnly: true,
+        strictWorkspaceRoot: true,
+        applyPatchContainmentSource: "required-root",
         readOnly: mode === "read-only",
         applyPatchWorkspaceOnly: true,
       });

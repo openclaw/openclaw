@@ -183,6 +183,8 @@ type CoreCodingToolsOptions = {
   includeBaseCodingTools: boolean;
   shellTools: "disabled" | "patch-only" | "full";
   workspaceOnly: boolean;
+  /** Keep participant access within this root, except exact-session attachment reads. */
+  strictWorkspaceRoot?: boolean;
   readOnly: boolean;
   sandbox?: SandboxContext;
   skillsSnapshot?: SkillSnapshot;
@@ -216,7 +218,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
 
-  const skillReadResources = options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills;
+  const skillReadResources = options.strictWorkspaceRoot
+    ? undefined
+    : (options.skillReadResources ?? options.skillsSnapshot?.resolvedSkills);
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(skillReadResources);
   const attachmentReadRoot = !sandboxRoot ? options.attachmentReadRoot : undefined;
   const hostReadRoots = [
@@ -255,7 +259,9 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     : [];
   // Declared mount read exceptions do not grant writes or enumeration outside
   // the container workspace. Both sets reuse the same effective selection.
-  const sandboxReadMounts = sandboxFileMounts;
+  const sandboxReadMounts = options.strictWorkspaceRoot
+    ? sandboxWorkspaceMounts
+    : sandboxFileMounts;
 
   const guardWorkspaceTool = (tool: AnyAgentTool) =>
     options.workspaceOnly
@@ -273,7 +279,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                 resolutionCwd: options.codingRoot,
                 containmentSource: options.applyPatchContainmentSource,
                 normalizeGuardedPathParams: true,
-                allowLinkedWorktrees: tool.name !== "ls",
+                allowLinkedWorktrees: !options.strictWorkspaceRoot && tool.name !== "ls",
               },
         )
       : tool;
@@ -346,7 +352,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
             : {
                 additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
                 containmentSource: options.applyPatchContainmentSource,
-                allowLinkedWorktrees: true,
+                allowLinkedWorktrees: !options.strictWorkspaceRoot,
                 resolutionCwd: options.codingRoot,
                 normalizeGuardedPathParams: true,
               },
@@ -422,6 +428,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
               }
             : undefined,
         workspaceOnly: options.applyPatchWorkspaceOnly,
+        strictWorkspaceRoot: options.strictWorkspaceRoot,
         containmentSource: options.applyPatchContainmentSource,
         memoryWriteProvenance: options.memoryWriteProvenance,
         prepareHostFileMutation: options.prepareHostFileMutation,
