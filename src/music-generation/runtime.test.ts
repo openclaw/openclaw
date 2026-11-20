@@ -111,6 +111,37 @@ it("clamps duration and records normalization metadata", async () => {
   });
 });
 
+it.each([
+  { model: "automatic", durationSeconds: 42, rejected: true },
+  { model: "bounded", durationSeconds: 191, rejected: true },
+  { model: "bounded", durationSeconds: 1.5, rejected: true },
+  { model: "bounded", durationSeconds: 190, rejected: false },
+  { model: "fractional", durationSeconds: 30.5, rejected: false },
+])("enforces exact $model durations before normalization ($durationSeconds)", async (testCase) => {
+  providers[0]!.capabilities = {
+    generate: {
+      supportsDuration: true,
+      maxDurationSeconds: 240,
+      durationConstraintsByModel: {
+        automatic: false,
+        bounded: { minSeconds: 1, maxSeconds: 190, integer: true },
+        fractional: { minSeconds: 5, maxSeconds: 240 },
+      },
+    },
+  };
+  const result = runGenerateMusic(
+    { durationSeconds: testCase.durationSeconds, autoProviderFallback: false },
+    { primary: `music/${testCase.model}` },
+  );
+  if (testCase.rejected) {
+    await expect(result).rejects.toThrow("durationSeconds");
+    expect(providers[0]!.generateMusic).not.toHaveBeenCalled();
+  } else {
+    expect((await result).normalization).toBeUndefined();
+    expectRequest({ durationSeconds: testCase.durationSeconds });
+  }
+});
+
 it("skips candidates with insufficient reference-image capacity", async () => {
   const incompatible = createProvider("fal", { edit: { enabled: true, maxInputImages: 1 } });
   providers = [

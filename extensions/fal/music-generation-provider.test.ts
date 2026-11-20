@@ -52,13 +52,11 @@ it("submits MiniMax music through fal and downloads the generated track", async 
   const result = await generateMusic({
     model: "",
     lyrics: "[Verse]\nNeon rain",
-    durationSeconds: 42,
     format: "mp3",
   });
 
   expectRequest("minimax-music/v2.6", {
     lyrics: "[Verse]\nNeon rain",
-    duration: 42,
     audio_setting: { sample_rate: 44100, bitrate: 256000, format: "mp3" },
   });
   expect(result).toMatchObject({
@@ -130,13 +128,26 @@ it("maps ACE-Step duration and instrumental controls", async () => {
   await generateMusic({
     model: "fal-ai/ace-step/prompt-to-audio",
     instrumental: true,
-    durationSeconds: 30,
+    durationSeconds: 30.5,
   });
-  expectRequest("ace-step/prompt-to-audio", { instrumental: true, duration: 30 });
+  expectRequest("ace-step/prompt-to-audio", { instrumental: true, duration: 30.5 });
 });
 
-it("maps Stable Audio duration", async () => {
+it.each([1, 190])("maps Stable Audio duration %s", async (durationSeconds) => {
   mockAudio({ audio: audioUrl });
-  await generateMusic({ model: "fal-ai/stable-audio-25/text-to-audio", durationSeconds: 12 });
-  expectRequest("stable-audio-25/text-to-audio", { seconds_total: 12 });
+  await generateMusic({ model: "fal-ai/stable-audio-25/text-to-audio", durationSeconds });
+  expectRequest("stable-audio-25/text-to-audio", { seconds_total: durationSeconds });
+});
+
+it.each([
+  { model: "fal-ai/minimax-music/v2.6", durationSeconds: 42 },
+  ...[0, 190.5, 191, 240, Number.NaN, Number.POSITIVE_INFINITY].map((durationSeconds) => ({
+    model: "fal-ai/stable-audio-25/text-to-audio",
+    durationSeconds,
+  })),
+])("rejects unsupported $model duration $durationSeconds before I/O", async (request) => {
+  await expect(generateMusic(request)).rejects.toThrow("durationSeconds");
+  expect(resolveApiKeyForProviderMock).not.toHaveBeenCalled();
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+  expect(fetchWithTimeoutMock).not.toHaveBeenCalled();
 });

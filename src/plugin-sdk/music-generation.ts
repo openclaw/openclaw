@@ -8,6 +8,7 @@ export type {
   MusicGenerationProviderCapabilities,
   MusicGenerationSourceImage,
 } from "../music-generation/types.js";
+export { validateMusicGenerationDuration } from "../music-generation/capabilities.js";
 export {
   downloadGeneratedMusicAsset,
   extractGeneratedMusicFileCandidates,

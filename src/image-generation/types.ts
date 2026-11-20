@@ -38,6 +38,8 @@ type ImageGenerationModeCapabilities = {
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
+  /** False rejects explicit geometry for that model and suppresses inferred geometry. */
+  supportsGeometryByModel?: Readonly<Record<string, boolean>>;
 };
 
 export type ImageGenerationNormalization = {

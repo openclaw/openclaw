@@ -402,6 +402,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
+        supportsGeometryByModel: {
+          [`${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`]: false,
+        },
       },
       edit: {
         enabled: true,
@@ -422,6 +425,10 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
+        supportsGeometryByModel: {
+          [DEFAULT_FAL_IMAGE_MODEL]: false,
+          [`${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}`]: false,
+        },
       },
       geometry: {
         sizes: [...FAL_SUPPORTED_SIZES],
@@ -480,6 +487,17 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const inputImageCount = req.inputImages?.length ?? 0;
       const hasInputImages = inputImageCount > 0;
       const requestedModel = req.model?.trim() || DEFAULT_FAL_IMAGE_MODEL;
+      const isFluxEdit =
+        requestedModel === `${DEFAULT_FAL_IMAGE_MODEL}/${DEFAULT_FAL_EDIT_SUBPATH}` ||
+        (requestedModel === DEFAULT_FAL_IMAGE_MODEL && hasInputImages);
+      if (
+        isFluxEdit &&
+        (req.size !== undefined || req.aspectRatio !== undefined || req.resolution !== undefined)
+      ) {
+        throw new Error(
+          "fal FLUX dev edit does not support size, aspectRatio, or resolution overrides",
+        );
+      }
       const schema = resolveFalImageModelSchema(requestedModel);
       const isGptImage25 = isFalGptImage25Model(requestedModel);
       if (isGptImage25 && req.resolution) {
@@ -592,7 +610,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
               schema.resolutionCase === "lower" ? req.resolution.toLowerCase() : req.resolution;
           }
         }
-      } else if (imageSize !== undefined) {
+      } else if (!isFluxEdit && imageSize !== undefined) {
         requestBody.image_size = imageSize;
       }
 

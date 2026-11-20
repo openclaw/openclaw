@@ -44,6 +44,10 @@ export type MusicGenerationModeCapabilities = {
   supportsInstrumental?: boolean;
   supportsInstrumentalByModel?: Readonly<Record<string, boolean>>;
   supportsDuration?: boolean;
+  /** Exact model constraints reject unsupported durations instead of rounding or dropping them. */
+  durationConstraintsByModel?: Readonly<
+    Record<string, false | { minSeconds: number; maxSeconds: number; integer?: boolean }>
+  >;
   supportsFormat?: boolean;
   supportedFormats?: readonly MusicGenerationOutputFormat[];
   supportedFormatsByModel?: Readonly<Record<string, readonly MusicGenerationOutputFormat[]>>;
