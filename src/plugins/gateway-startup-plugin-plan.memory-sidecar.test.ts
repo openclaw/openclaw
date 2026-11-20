@@ -34,50 +34,23 @@ it.each(["selected-memory", "Selected-Memory"])(
   },
 );
 
-it.each([true, false])(
-  "starts an enabled non-owner memory plugin only when it opts in as a backend (%s)",
-  (memoryBackend) => {
-    const manifestRegistry = {
-      plugins: ["memory-fusion", "memory-store"].map((id) =>
-        createPluginManifestRecordFixture({ id, kind: "memory", origin: "global" }),
-      ),
-      diagnostics: [],
-    };
-    const index = createInstalledPluginIndexFixture(manifestRegistry);
-    const config: OpenClawConfig = {
-      channels: {},
-      plugins: {
-        slots: { memory: "memory-fusion" },
-        entries: {
-          "memory-fusion": { enabled: true },
-          "memory-store": { enabled: true, memoryBackend },
-        },
-      },
-    };
-    expect(
-      resolveGatewayStartupPluginPlanFromRegistry({ config, env: {}, index, manifestRegistry })
-        .pluginIds,
-    ).toEqual(memoryBackend ? ["memory-fusion", "memory-store"] : ["memory-fusion"]);
-  },
-);
-
+const store = (expected: string[]) => ["memory-fusion", ...expected];
 it.each([
-  { label: "without an entry", entry: {}, expected: ["memory-fusion", "memory-store"] },
-  {
-    label: "with memoryBackend: false",
-    entry: { memoryBackend: false },
-    expected: ["memory-fusion"],
-  },
+  { owner: false, entry: { memoryBackend: true }, expected: store(["memory-store"]) },
+  { owner: false, entry: { memoryBackend: false }, expected: store([]) },
+  { owner: false, entry: {}, expected: store([]) },
+  { owner: true, entry: {}, expected: store(["memory-store"]) },
+  { owner: true, entry: { memoryBackend: false }, expected: store([]) },
 ])(
-  "starts memory plugins the owner manifest requests as backends $label",
-  ({ entry, expected }) => {
+  "starts a non-owner memory plugin as a backend only when requested (owner $owner, $entry)",
+  ({ owner, entry, expected }) => {
     const manifestRegistry = {
       plugins: [
         createPluginManifestRecordFixture({
           id: "memory-fusion",
           kind: "memory",
           origin: "global",
-          memoryBackends: true,
+          ...(owner ? { memoryBackends: true } : {}),
         }),
         createPluginManifestRecordFixture({ id: "memory-store", kind: "memory", origin: "global" }),
       ],
