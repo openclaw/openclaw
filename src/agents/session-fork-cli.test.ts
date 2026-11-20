@@ -14,6 +14,7 @@ const runEmbeddedAgent = vi.hoisted(() =>
 const runCliAgent = vi.hoisted(() => vi.fn<typeof import("./cli-runner.runtime.js").runCliAgent>());
 // mock-isolation: run the real fork preparation without a provider request or CLI process.
 vi.mock("./embedded-agent.js", () => ({ runEmbeddedAgent }));
+// mock-isolation: observe the CLI fork request without starting a CLI process.
 vi.mock("./cli-runner.runtime.js", () => ({ runCliAgent }));
 
 const CLI_MODEL = { provider: "anthropic", model: "claude-opus-4-7" };

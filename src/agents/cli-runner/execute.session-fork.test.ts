@@ -68,8 +68,8 @@ it("branches the source native session at the checkpoint and keeps no successor"
     text: "fork answer",
     sessionId: "fork-successor",
   });
-  const argv: unknown = supervisorSpawnMock.mock.calls[0]?.[0]?.argv;
-  expect(argv).toEqual(
+  const spawn = supervisorSpawnMock.mock.calls[0]?.[0];
+  expect(spawn?.mode === "child" ? spawn.argv : undefined).toEqual(
     expect.arrayContaining([
       "--resume",
       "parent-session",
