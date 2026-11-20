@@ -239,6 +239,36 @@ it("rechecks retained file links when read permissions change, ignoring old answ
     await Promise.resolve();
     expect(root.querySelector("a")?.textContent).toBe("report.md");
     expect(root.querySelector("a")?.getAttribute("href")).toBe("#");
+
+    const { refreshSessionWorkspace, sessionWorkspaceFileLinkProps } =
+      await import("../pages/chat/components/chat-session-workspace.ts");
+    const { sessionWorkspaceForHost } =
+      await import("../pages/chat/components/chat-session-workspace-state.ts");
+    state.sessionKey = workspace.sessionKey;
+    state.sessionWorkspaceState = workspace;
+    const readScope = () =>
+      sessionWorkspaceFileLinkProps(state, { permissionMode: "full" }, undefined)
+        .workspaceFileLinkScope;
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "missing" }],
+    }));
+    change(readScope());
+    await waitForSolid(() => expect(root.querySelector("a")).toBeNull());
+    // A completed run creates the missing file and uses the ordinary workspace refresh.
+    statFiles.mockImplementation(async () => ({
+      sessionKey: workspace.sessionKey,
+      files: [{ path: "/tmp/report.md", status: "file" }],
+    }));
+    const publish = vi.fn(() => change(readScope()));
+    const stop = sessionWorkspaceForHost(state).subscribe(publish);
+    try {
+      refreshSessionWorkspace(state, false);
+      expect(publish).toHaveBeenCalledOnce();
+      await waitForSolid(() => expect(root.querySelector("a")?.textContent).toBe("report.md"));
+    } finally {
+      stop();
+    }
   } finally {
     view.unmount();
   }

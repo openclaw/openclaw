@@ -1,8 +1,5 @@
 import type { SessionWorkspaceStatResult } from "../../../api/types.ts";
-import {
-  markdownFileLinkFromAnchor,
-  setMarkdownFileLinkUnavailable,
-} from "../../../components/markdown-file-links.ts";
+import { markdownFileLinkFromAnchor } from "../../../components/markdown-file-links.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import type {
   SessionWorkspaceHost,
@@ -28,7 +25,7 @@ const checksByWorkspace = new WeakMap<
 export async function checkFileLinkAvailability(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
-  links: HTMLAnchorElement[],
+  links: HTMLElement[],
   scope = "",
 ) {
   let checks = checksByWorkspace.get(workspace);
@@ -38,7 +35,18 @@ export async function checkFileLinkAvailability(
   }
   const { availability, waiting } = checks;
   const requests = new Map<string, { files: Reference[]; keys: string[] }>();
-  for (const anchor of links) {
+  for (const element of links) {
+    const previous = unavailableFileLinks.get(element);
+    if (previous?.scope === scope) continue;
+    const anchor = previous?.anchor ?? element;
+    if (!(anchor instanceof HTMLAnchorElement)) continue;
+    if (previous) {
+      const focused = element.ownerDocument.activeElement === element;
+      anchor.append(...element.childNodes);
+      element.replaceWith(anchor);
+      if (focused) anchor.focus({ preventScroll: true });
+      unavailableFileLinks.delete(element);
+    }
     const target = markdownFileLinkFromAnchor(anchor);
     if (!target || target.documentRelative) {
       continue;
@@ -48,7 +56,7 @@ export async function checkFileLinkAvailability(
     const key = JSON.stringify([sessionKey, target.messageEntryId ?? null, target.path]);
     const known = availability.get(key);
     if (known === "missing") {
-      setMarkdownFileLinkUnavailable(anchor, true);
+      unlink(anchor, scope);
     } else if (known === "pending") {
       waiting.get(key)?.add(anchor);
     } else if (known === undefined) {
@@ -86,7 +94,7 @@ export async function checkFileLinkAvailability(
           } else {
             availability.set(key, status);
             if (status === "missing") {
-              anchors?.forEach((anchor) => setMarkdownFileLinkUnavailable(anchor, true));
+              anchors?.forEach((anchor) => unlink(anchor, scope));
             }
           }
         }
@@ -97,4 +105,22 @@ export async function checkFileLinkAvailability(
     }
   }
   await Promise.all(batches);
+}
+
+const unavailableFileLinks = new WeakMap<
+  HTMLElement,
+  { anchor: HTMLAnchorElement; scope: string }
+>();
+
+/** Demoted references retain their anchor for a subsequent owner-driven recheck. */
+function unlink(anchor: HTMLAnchorElement, scope: string) {
+  if (!anchor.isConnected) return;
+  const text = document.createElement("span");
+  text.dataset.filePath = anchor.dataset.filePath;
+  text.append(...anchor.childNodes);
+  const focused = anchor.ownerDocument.activeElement === anchor;
+  if (focused) text.tabIndex = -1;
+  unavailableFileLinks.set(text, { anchor, scope });
+  anchor.replaceWith(text);
+  if (focused) text.focus({ preventScroll: true });
 }

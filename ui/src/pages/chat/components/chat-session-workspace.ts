@@ -56,8 +56,8 @@ export type { SessionWorkspaceHost } from "./chat-session-workspace-types.ts";
 export function refreshSessionWorkspace(state: SessionWorkspaceHost, refreshFiles: boolean) {
   if (refreshSessionWorkspaceState(state, refreshFiles)) {
     state.sidebarContent = resolveSessionDiffSidebarContent(state);
-    sessionWorkspaceForHost(state).publish();
   }
+  sessionWorkspaceForHost(state).publish();
 }
 
 async function readWorkspaceContent<T>(
@@ -204,7 +204,7 @@ export function openSessionWorkspaceFile(
 /** Turns settled transcript file links that `openSessionWorkspaceFile` cannot open into text. */
 export function checkSessionWorkspaceFileLinks(
   state: SessionWorkspaceHost,
-  links: HTMLAnchorElement[],
+  links: HTMLElement[],
   scope: string,
 ) {
   const workspace = getSessionWorkspace(state);
@@ -681,10 +681,14 @@ export function sessionWorkspaceFileLinkProps(
   session: { permissionMode?: string | null } | null | undefined,
   picker: { defaultMode?: string | null } | undefined,
 ) {
-  const scope = JSON.stringify([session?.permissionMode, picker?.defaultMode]);
+  const scope = JSON.stringify([
+    session?.permissionMode,
+    picker?.defaultMode,
+    state.sessionWorkspaceState?.fileLinksRevision ?? 0,
+  ]);
   return {
     workspaceFileLinkScope: scope,
-    onWorkspaceFileLinks: (links: HTMLAnchorElement[]) =>
+    onWorkspaceFileLinks: (links: HTMLElement[]) =>
       checkSessionWorkspaceFileLinks(state, links, scope),
     onOpenWorkspaceFile: (target: WorkspaceFileLinkTarget) =>
       void openSessionWorkspaceFile(state, target),

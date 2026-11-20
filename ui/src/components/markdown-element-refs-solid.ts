@@ -54,7 +54,7 @@ export function linkReaderPrefetchRef(
 
 export function markdownBlocksRef(
   presented: () => PresentationValue,
-  onFileLinks?: (links: HTMLAnchorElement[]) => void,
+  onFileLinks?: (links: HTMLElement[]) => void,
   fileLinkScope?: () => string | undefined,
 ): (element: HTMLElement) => void {
   const [element, setElement] = createSignal<HTMLElement>();
