@@ -16,13 +16,18 @@ export const GIT_RELEASE_START_COUNTED_ENV = "OPENCLAW_GIT_RELEASE_START_COUNTED
 /**
  * Every Git install updates through releases (on Windows the link is a junction). The layout
  * never refuses an update (#197949 decision 8): something other than a release link at the
- * package path is moved aside, and the returned warning names where. A state directory that
- * cannot hold `releases/` fails the update at its first write, naming the path.
+ * package path is moved aside, and the returned warning names where. A Git checkout there (the
+ * installer accepts any `--git-dir`) is a live installation that services and wrappers name, so
+ * it stays; publication then refuses with the installation unchanged (rare, accepted). A state
+ * directory that cannot hold `releases/` fails the update at its first write, naming the path.
  */
 export function prepareGitReleaseLayout(): string | undefined {
   const slot = gitReleaseSlot(resolveGitReleasePrefix());
   if (!fs.lstatSync(slot, { throwIfNoEntry: false }) || readPackageReleaseSlotSync(slot)) {
     return undefined;
+  }
+  if (fs.existsSync(path.join(slot, ".git"))) {
+    return `${slot} is a Git checkout at the release link path, so Git releases cannot be published there; move the checkout (or reinstall with another --git-dir), then update again.`;
   }
   const aside = `${slot}.displaced-${Date.now()}`;
   try {

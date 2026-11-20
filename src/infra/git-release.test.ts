@@ -549,6 +549,10 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await fs.mkdir(gitReleaseSlot(prefix), { recursive: true });
         expect(prepareGitReleaseLayout()).toMatch(/was not a release link; it was moved to /u);
         await expect(fs.lstat(gitReleaseSlot(prefix))).rejects.toThrow();
+        // A checkout installed there is a live installation: it stays where it is.
+        await fs.mkdir(path.join(gitReleaseSlot(prefix), ".git"), { recursive: true });
+        expect(prepareGitReleaseLayout()).toMatch(/is a Git checkout at the release link path/u);
+        expect((await fs.lstat(gitReleaseSlot(prefix))).isDirectory()).toBe(true);
       } finally {
         vi.unstubAllEnvs();
       }
