@@ -43,6 +43,7 @@ export type MessageRenderOptions = {
   replyNavigationId?: string | null;
   sessionKey?: string;
   presented?: boolean;
+  transcriptVisible?: PresentationValue;
   boardProvider?: BoardProvider;
   widgetLayout?: import("../session-message-cache.ts").ChatWidgetLayout;
   displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
@@ -80,7 +81,6 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   isForwarded?: boolean;
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
-  transcriptVisible?: PresentationValue;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

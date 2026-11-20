@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { WebPushCompletion } from "../shared/web-push-completion.js";
 import path from "node:path";
 import { expectDefined, normalizeOptionalString } from "@openclaw/normalization-core";
 import {
@@ -174,6 +175,7 @@ export async function clearBoundWebPushSubscription(params: {
 }
 
 type WebPushPayload = {
+  completion?: WebPushCompletion;
   title: string;
   body?: string;
   renotify?: boolean;

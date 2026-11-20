@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "@openclaw/retry";
+import { createWebPushReadRuntime, type ViewedWebPushCompletion } from "./web-push-read.runtime.ts";
 import type {
   WebPushDevicePreferences,
   WebPushNotificationPreferences,
@@ -47,6 +48,7 @@ export type WebPushCapabilityPatch = Partial<WebPushAccess> & {
 };
 
 export type WebPushCapabilityRuntime = {
+  viewed: (completion: ViewedWebPushCompletion, stillPresented: () => boolean) => void;
   readonly pending: boolean;
   run: (action: WebPushCapabilityAction) => Promise<void>;
   dispose: () => void;
@@ -191,6 +193,7 @@ export function createWebPushCapabilityRuntime(params: {
   gateway: ApplicationGateway;
   publish: (patch: WebPushCapabilityPatch) => void;
 }): WebPushCapabilityRuntime {
+  let readNotifications: ReturnType<typeof createWebPushReadRuntime> | undefined;
   let operation: Promise<void> | null = null;
   let connectedClient: GatewayBrowserClient | null = null;
   let profileId: string | undefined;
@@ -282,6 +285,13 @@ export function createWebPushCapabilityRuntime(params: {
   });
   handleGateway(params.gateway.snapshot);
   return {
+    viewed(completion, stillPresented) {
+      if (disposed) {
+        return;
+      }
+      readNotifications ??= createWebPushReadRuntime(params.gateway);
+      readNotifications.viewed(completion, stillPresented);
+    },
     get pending() {
       return operation !== null;
     },
@@ -328,6 +338,7 @@ export function createWebPushCapabilityRuntime(params: {
     },
     dispose() {
       disposed = true;
+      readNotifications?.dispose();
       scope.resolve();
       retire();
       stopGateway();

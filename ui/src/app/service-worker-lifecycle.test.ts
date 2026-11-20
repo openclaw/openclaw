@@ -297,6 +297,28 @@ describe("Control UI service worker notification scope", () => {
     },
   );
 
+  it("announces a completion only after display, and only within its registration scope", async () => {
+    const worker = createNotificationServiceWorker(nestedScope, [
+      nestedScope + "chat", "https://other.example/chat", rootScope + "elsewhere",
+    ]);
+    const displayed = Promise.withResolvers<void>();
+    worker.showNotification.mockImplementationOnce(() => displayed.promise);
+    const completion = {
+      version: 1, agentId: "a", sessionKey: "agent:a:s", runId: "r",
+      messageId: "m", profileId: null,
+    };
+    const pending = worker.dispatchPush({ title: "Done", body: "", completion });
+    expect(worker.clients.matchAll).not.toHaveBeenCalled();
+    displayed.resolve();
+    const result = await pending;
+    expect(result.options.data.completion).toEqual(completion);
+    expect(worker.windowClients[0].postMessage).toHaveBeenCalledWith({
+      type: "openclaw-completion-delivered",
+    });
+    expect(worker.windowClients[1].postMessage).not.toHaveBeenCalled();
+    expect(worker.windowClients[2].postMessage).not.toHaveBeenCalled();
+  });
+
   it("requests sound while preserving quiet same-tag approval replacements", async () => {
     const worker = createNotificationServiceWorker(nestedScope, []);
     const tag = "openclaw-approval-exec:replacement";
@@ -337,6 +359,7 @@ type NotificationClickScenario = {
 };
 
 type ServiceWorkerPushPayload = {
+  completion?: unknown;
   title: string;
   body: string;
   renotify?: boolean;
@@ -351,7 +374,7 @@ type ServiceWorkerNotificationOptions = {
   badge: string;
   tag: string;
   renotify: boolean;
-  data: { url: string; explicitUrl: boolean };
+  data: { url: string; explicitUrl: boolean; completion?: unknown };
 };
 
 type ServiceWorkerNotificationEventStub = {
@@ -377,6 +400,7 @@ function createNotificationServiceWorker(
     return {
       url,
       focus,
+      postMessage: vi.fn(),
       navigate: vi.fn(async (_url: string) => {
         if (options.rejectNavigation) {
           throw new Error("Window is controlled by a previous service worker");
@@ -419,6 +443,7 @@ function createNotificationServiceWorker(
   return {
     clients,
     windowClients,
+    showNotification,
     async dispatchPush(payload: ServiceWorkerPushPayload) {
       const listener = listeners.get("push");
       if (!listener) {

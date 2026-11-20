@@ -645,10 +645,30 @@ self.addEventListener("push", (event) => {
     data: {
       url: data.url || self.registration.scope,
       explicitUrl: Boolean(data.url),
+      // The page validates the descriptor before matching; legacy deliveries stay untouched.
+      ...(data.completion ? { completion: data.completion } : {}),
     },
   };
 
-  event.waitUntil(self.registration.showNotification(data.title || "OpenClaw", options));
+  event.waitUntil(
+    self.registration.showNotification(data.title || "OpenClaw", options).then(async () => {
+      if (!data.completion) {
+        return;
+      }
+      // Enumeration can finish before a queued push is displayed. Reconcile only
+      // after display settles; pages keep exact seen receipts, not session watermarks.
+      try {
+        const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        for (const client of clients) {
+          if (controlUiPathname(new URL(client.url)) !== null) {
+            client.postMessage({ type: "openclaw-completion-delivered" });
+          }
+        }
+      } catch {
+        // Display succeeded; optional reconciliation must not fail push delivery.
+      }
+    }),
+  );
 });
 
 self.addEventListener("notificationclick", (event) => {

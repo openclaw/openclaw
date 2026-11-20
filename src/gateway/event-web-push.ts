@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
+import { readWebPushCompletion, webPushCompletionMessageId, type WebPushCompletion } from "../shared/web-push-completion.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import {
   extractErrorCode,
@@ -198,6 +200,7 @@ export function createEventWebPushDelivery(
               body: string;
               icon?: string;
               subscriptions: BoundWebPushSubscription[];
+              completion?: WebPushCompletion;
             }
           >();
           for (const target of targets) {
@@ -270,8 +273,31 @@ export function createEventWebPushDelivery(
                 : (identifiedBody ??
                   (agentLabel ? `${agentLabel}: ${notification.body}` : notification.body));
             const icon = preferences.detailLevel === "private" ? undefined : agentIcon;
-            const key = JSON.stringify({ title, body, icon });
-            const group = groups.get(key) ?? { title, body, icon, subscriptions: [] };
+            // Only a native persisted final in one authorized session can be read-dismissed.
+            // Do not derive identity from the display-normalized tag or a session URL.
+            const final = event === "chat" && isRecord(payload) ? payload : null;
+            const identity = readSessionMessageIdentity(final?.message);
+            const authorized = sessionKeys.length === 1 && sessionKey
+              ? authority.sessions.get(sessionKey)?.target
+              : undefined;
+            const completion =
+              notification.category === "agent-finished" &&
+              authorized &&
+              identity?.role === "assistant" &&
+              !identity.isImported &&
+              webPushCompletionMessageId(identity) &&
+              identity.runId === final?.runId
+                ? readWebPushCompletion({
+                    version: 1,
+                    agentId: authorized.agentId,
+                    sessionKey: authorized.canonicalKey,
+                    runId: identity.runId,
+                    messageId: webPushCompletionMessageId(identity),
+                    profileId: target.userProfileId,
+                  }) ?? undefined
+                : undefined;
+            const key = JSON.stringify({ title, body, icon, completion });
+            const group = groups.get(key) ?? { title, body, icon, completion, subscriptions: [] };
             group.subscriptions.push(target.subscription);
             groups.set(key, group);
           }
@@ -296,6 +322,7 @@ export function createEventWebPushDelivery(
                       body: group.body,
                       ...(group.icon ? { icon: group.icon } : {}),
                       tag: notification.tag,
+                      ...(group.completion ? { completion: group.completion } : {}),
                       renotify: false,
                       url,
                     },

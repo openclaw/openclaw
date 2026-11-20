@@ -34,6 +34,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
+import { createChatCompletionReadRef } from "./chat-completion-read.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { OmittedMedia, PairingQrNotices } from "./chat-message-attachment-status-solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
@@ -122,6 +123,7 @@ export function GroupedMessage(props: {
         fallback={
           <Show when={!state().empty}>
             {(_visible) => {
+              const completionRead = createChatCompletionReadRef(() => state().message, () => props.options);
               const entryRef = messageElements?.forKey(initialMessageKey);
               const bindEntry = elementRef((element) => {
                 entryRef?.(element);
@@ -131,7 +133,7 @@ export function GroupedMessage(props: {
                 <>
                   <div
                     class={state().bubbleClasses}
-                    ref={[bindEntry]}
+                    ref={[bindEntry, completionRead]}
                     data-message-id={props.messageKey}
                     data-file-session-key={props.options.fileLinkSessionKey}
                     data-entry-id={props.options.entryId || undefined}
