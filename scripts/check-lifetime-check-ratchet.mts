@@ -32,7 +32,6 @@ export const LIFETIME_CHECK_CALLS = [
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
   "captureGatewayToolReceiptAssertion",
-  "captureAgentToolSourceExecutionGuard",
   "captureSourceInvocationGuard",
   "captureMediaGenerationAdmission",
   "captureCronJobMessageAuthority",
