@@ -1629,7 +1629,7 @@ var External = [
     /(^security$|^ask$|^askFallback$|^autoAllowSkills$)/u,
     /(^baseHashRequired$|^defaultAllowAllowed$|^broadAllowRulesAllowed$|^dangerousAllowRulesAllowed$)/u,
     /(^overview$|^query$|^category$|^featured$|^limit$)/u,
-    /(^name$|^description$|^version$|^scope$|^manifest$|^files$)/u,
+    /(^name$|^description$|^version$|^scope$|^manifest$|^files$|^avatar$)/u,
     /(^input$|^job$|^output$|^authority$)/u,
     /(^path$|^content$)/u,
     /(^agentId$|^sourceSessionKey$)/u,
@@ -19782,7 +19782,8 @@ var External = [
     check_22(value.version) &&
     check_2974(value.scope) &&
     check_2976(value.manifest) &&
-    check_2977(value.files),
+    check_2977(value.files) &&
+    (value.avatar === void 0 || !("avatar" in value) || check_94(value.avatar)),
   check_2973 = (value) =>
     typeof value == "string" &&
     (value.length <= 64e3 || (value.length <= 128e3 && CodePointCount(value) <= 64e3)),
