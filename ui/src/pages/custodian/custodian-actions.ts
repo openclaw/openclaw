@@ -101,6 +101,8 @@ export function createCustodianActions(getStore: () => CustodianSessionStore) {
     activate: (candidate: SetupAutoCandidate) =>
       void run("verification", (source) => source.autoSetup.activate(candidate)),
     retry: () => void run("verification", (source) => source.autoSetup.retry()),
+    setUpAutomatically: () =>
+      void run("verification", (source) => source.autoSetup.setUpAutomatically()),
     signIn: () => void run("wizard", (source) => source.autoSetup.signIn()),
     answer: (value: unknown) =>
       void run("wizard", (source) => source.autoSetup.answerWizard(value)),

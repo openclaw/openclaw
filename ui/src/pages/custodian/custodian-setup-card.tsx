@@ -113,6 +113,13 @@ export function CustodianSetupCard(props: {
     if (props.actions.verifying || current.pending) {
       return t("custodian.autoSetup.connecting");
     }
+    if (current.result?.status === "choose") {
+      return t(
+        current.result.alternatives.length
+          ? "custodian.autoSetup.chooseTitle"
+          : "custodian.autoSetup.noChoicesTitle",
+      );
+    }
     const selected = current.result?.selected;
     if (selected) {
       return t("custodian.autoSetup.using", {
@@ -127,6 +134,8 @@ export function CustodianSetupCard(props: {
         : "custodian.autoSetup.unavailableTitle",
     );
   };
+  const choosing = () => result()?.status === "choose";
+  const noChoices = () => choosing() && !result()?.alternatives.length;
   return (
     <openclaw-custodian-setup-card>
       <Show when={setup().supported && !setup().dismissed}>
@@ -181,8 +190,20 @@ export function CustodianSetupCard(props: {
               </ul>
             </Show>
           </Show>
-          <Show when={!setup().pending && result()?.status === "unavailable"}>
-            <p>{t("custodian.autoSetup.unavailableBody")}</p>
+          <Show when={!setup().pending && choosing()}>
+            <p>
+              {t(
+                noChoices()
+                  ? "custodian.autoSetup.noChoicesBody"
+                  : "custodian.autoSetup.chooseBody",
+                { gateway: gatewayLabel() },
+              )}
+            </p>
+          </Show>
+          <Show when={!setup().pending && (result()?.status === "unavailable" || noChoices())}>
+            <Show when={!noChoices()}>
+              <p>{t("custodian.autoSetup.unavailableBody")}</p>
+            </Show>
             <Show
               when={native()?.openAiSetup}
               fallback={
@@ -198,7 +219,9 @@ export function CustodianSetupCard(props: {
           </Show>
           <Show when={result()?.alternatives.length}>
             <div class="custodian-setup__alternatives">
-              <h3>{t("custodian.autoSetup.alternatives")}</h3>
+              <Show when={!choosing()}>
+                <h3>{t("custodian.autoSetup.alternatives")}</h3>
+              </Show>
               <div class="custodian-setup__actions">
                 <For each={result()?.alternatives}>
                   {(candidate) => (
@@ -214,6 +237,19 @@ export function CustodianSetupCard(props: {
                   )}
                 </For>
               </div>
+            </div>
+          </Show>
+          <Show when={choosing()}>
+            <div class="custodian-setup__automatic">
+              <button
+                class="btn btn--ghost"
+                type="button"
+                disabled={busy()}
+                onClick={() => props.actions.setUpAutomatically()}
+              >
+                {t("custodian.autoSetup.automatic")}
+              </button>
+              <p>{t("custodian.autoSetup.automaticHint")}</p>
             </div>
           </Show>
           <SignInWizard setup={setup} actions={props.actions} />

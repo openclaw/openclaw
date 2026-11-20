@@ -3,14 +3,17 @@ import type {
   SystemAgentSetupAutoResult as SetupAutoResult,
 } from "../../../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SystemAgentSetupActivateResult } from "../../api/types.ts";
+import type {
+  SystemAgentSetupActivateResult,
+  SystemAgentSetupDetectResult,
+} from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { initialWizardValue } from "../model-setup/state.ts";
+import { initialWizardValue, MODEL_SETUP_DETECT_TIMEOUT_MS } from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
@@ -19,13 +22,22 @@ import type { CustodianConfiguredInferenceState } from "./custodian-session-vari
 
 export type { SetupAutoCandidate, SetupAutoResult };
 
+/** Detected first-run access waiting for the person's choice; nothing is active yet. */
+export type SetupChoiceResult = Omit<SetupAutoResult, "status"> & { status: "choose" };
+
 const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
-/** Connection-owned first-run setup. The Gateway owns selection and verification. */
+/**
+ * Connection-owned first-run setup. The Gateway owns detection and verification;
+ * opening only detects. Activation follows the person's choice, and the
+ * automatic ladder runs only when they request it.
+ */
 export class CustodianAutoSetup {
-  result: SetupAutoResult | null = null;
+  result: SetupAutoResult | SetupChoiceResult | null = null;
   pending = false;
   error: string | null = null;
+  /** The person's unfinished choice; Retry repeats it instead of trying another route. */
+  private retryChoice: SetupAutoCandidate | null = null;
   dismissed = false;
   supported = false;
   wizardValue: unknown;
@@ -119,6 +131,7 @@ export class CustodianAutoSetup {
       if (ownerChanged) {
         this.result = null;
         this.error = null;
+        this.retryChoice = null;
         this.started = false;
         this.dismissalKey = DISMISSED_KEY + context.gateway.connection.gatewayUrl;
         try {
@@ -137,12 +150,12 @@ export class CustodianAutoSetup {
     this.supported = supported;
     if (client && !this.started) {
       this.started = true;
-      void this.retry();
+      void this.refresh();
     }
   }
 
   private async run(
-    task: (client: GatewayBrowserClient) => Promise<SetupAutoResult>,
+    task: (client: GatewayBrowserClient) => Promise<SetupAutoResult | SetupChoiceResult>,
   ): Promise<void> {
     const client = this.client;
     if (!client || this.pending) {
@@ -173,11 +186,38 @@ export class CustodianAutoSetup {
     }
   }
 
+  /** Detection is not consent: show the configured model or the detected choices. */
+  private refresh(): Promise<void> {
+    return this.run(async (client) => {
+      this.retryChoice = null;
+      const detected = await client.request<SystemAgentSetupDetectResult>(
+        "openclaw.setup.detect",
+        {},
+        { timeoutMs: MODEL_SETUP_DETECT_TIMEOUT_MS },
+      );
+      if (detected.setupComplete) {
+        // With a configured model, setup.auto only reports it, including a shared Codex login.
+        // Accepted edge: removing the model between these two reads lets the Gateway choose.
+        return client.request<SetupAutoResult>("openclaw.setup.auto", {}, { timeoutMs: null });
+      }
+      const alternatives = detected.candidates
+        .filter((entry) => entry.modelTarget !== "utility" && entry.credentials !== false)
+        .toSorted((a, b) => Number(b.recommended) - Number(a.recommended));
+      return { status: "choose", alternatives, attempts: [], installedPlugins: [] };
+    });
+  }
+
   retry(): Promise<void> {
+    return this.retryChoice ? this.activate(this.retryChoice) : this.refresh();
+  }
+
+  /** Explicit request: the Gateway tries detected routes in order and may prepare Codex. */
+  setUpAutomatically(): Promise<void> {
     // Verification and plugin preparation can exceed a minute. The Gateway owns the lifetime.
-    return this.run((client) =>
-      client.request<SetupAutoResult>("openclaw.setup.auto", {}, { timeoutMs: null }),
-    );
+    return this.run((client) => {
+      this.retryChoice = null;
+      return client.request<SetupAutoResult>("openclaw.setup.auto", {}, { timeoutMs: null });
+    });
   }
 
   async activate(candidate: SetupAutoCandidate): Promise<void> {
@@ -186,14 +226,21 @@ export class CustodianAutoSetup {
       return;
     }
     await this.run(async (client) => {
+      this.retryChoice = candidate;
       const result = await client.request<SystemAgentSetupActivateResult>(
         "openclaw.setup.activate",
-        { kind: candidate.kind },
+        { kind: candidate.kind, modelRef: candidate.modelRef },
         { timeoutMs: null },
       );
       if (!result.ok) {
-        throw new Error(result.error || t("custodian.autoSetup.failed"));
+        throw new Error(
+          t("custodian.autoSetup.choiceFailed", {
+            label: candidate.label,
+            error: result.error || t("custodian.autoSetup.failed"),
+          }),
+        );
       }
+      this.retryChoice = null;
       return {
         ...previous,
         status: "activated",
@@ -226,7 +273,7 @@ export class CustodianAutoSetup {
       return;
     }
     this.wizard.close();
-    await this.retry();
+    await this.refresh();
   }
 
   async answerWizard(value: unknown): Promise<void> {
