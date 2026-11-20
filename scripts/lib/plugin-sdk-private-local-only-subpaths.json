@@ -46,6 +46,7 @@
   "compiled-subprocess-testing",
   "concurrency-runtime",
   "continuation-test-runtime",
+  "continuation-tracer-runtime",
   "context-visibility-runtime",
   "conversation-binding-runtime",
   "cron-store-runtime",

@@ -30,12 +30,12 @@ import type { AgentInternalEvent } from "../../internal-events.js";
 import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ModelFallbackAvailability } from "../../model-fallback.types.js";
+import type { ContinuationRunToolOptions } from "../../openclaw-tools.types.js";
 import type { ReplyDeliveryObserver } from "../../reply-completion.js";
 import type { ResolvedToolPromptFinalizer } from "../../resolved-tool-prompt.types.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { PromptMode } from "../../system-prompt.types.js";
-import type { RequestCompactionToolOpts } from "../../tools/request-compaction-tool.js";
 import type { EmbeddedAgentExecutionPhaseInfo } from "../execution-phase.js";
 import type { SessionForkRequest } from "../session-fork-request.js";
 import type { BlockReplyFlushContext } from "../types.js";
@@ -122,16 +122,6 @@ export type RunEmbeddedAgentParams = Pick<
   forceMessageTool?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
-  /** Whether this run drains continue_delegate work staged during the turn. */
-  drainsContinuationDelegateQueue?: boolean;
-  /** Runs whose lifecycle owner cannot execute any same-session continuation tools. */
-  disableContinuationTools?: boolean;
-  /** Callback for continue_work to request a post-turn continuation. */
-  continueWorkOpts?: {
-    requestContinuation: (
-      request: import("../../tools/continue-work-tool.js").ContinueWorkRequest,
-    ) => void;
-  };
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
   sessionFile?: string;
   /** Require file tools to stay within the task workspace without changing exec policy. */
@@ -272,15 +262,8 @@ export type RunEmbeddedAgentParams = Pick<
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersistenceInvalidated?: () => void;
-  /** Continuation: request_compaction tool opts (injected from execution context). */
-  requestCompactionOpts?: {
-    sessionId?: string;
-    ownerAgentId?: string;
-    getContextUsage: RequestCompactionToolOpts["getContextUsage"];
-    contextUsageOrigin?: RequestCompactionToolOpts["contextUsageOrigin"];
-    triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
-  };
-} & AgentRunExecutionContext;
+} & AgentRunExecutionContext &
+  ContinuationRunToolOptions;
 
 export type EmbeddedForegroundPromptContext = Pick<
   RunEmbeddedAgentParams,

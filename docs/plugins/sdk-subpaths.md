@@ -520,6 +520,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/http-response-runtime` | Private-local bundled runtime; JSON charset, cache, framing, and header-commit policies with their established serialization timing; not a typed public SDK contract |
     | `plugin-sdk/diagnostic-flags` | `isDiagnosticFlagEnabled` for flag-only consumers without event, trace, or redaction initialization |
     | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, trace-context, and low-cardinality dimension normalization helpers |
+    | `plugin-sdk/continuation-tracer-runtime` | Private official-plugin runtime; the continuation tracer registry (`getContinuationTracer`, `setContinuationTracer`, `resetContinuationTracer`, `noopTracer`) and its `Span` and `Tracer` types, which the diagnostics OpenTelemetry exporter installs its adapter into. Not for third-party plugins. |
     | `plugin-sdk/error-runtime` | Error graph, formatting, unknown-value coercion, shared error classification helpers, `PlatformMessageNotDispatchedError`, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Private-local after July 2026; Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/proxy-capture` | Debug proxy configuration, async capture storage and noncreating readers, HTTP/WebSocket capture events, lifecycle helpers, and shipped synchronous compatibility APIs; see [async capture](/plugins/sdk-subpaths#asynchronous-proxy-capture) |

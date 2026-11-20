@@ -513,7 +513,8 @@
     "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
     "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
     "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
-    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts"
+    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts",
+    "!dist/plugin-sdk/continuation-tracer-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -768,6 +769,9 @@
     },
     "./plugin-sdk/concurrency-runtime": {
       "default": "./dist/plugin-sdk/concurrency-runtime.js"
+    },
+    "./plugin-sdk/continuation-tracer-runtime": {
+      "default": "./dist/plugin-sdk/continuation-tracer-runtime.js"
     },
     "./plugin-sdk/dedupe-runtime": {
       "types": "./dist/plugin-sdk/dedupe-runtime.d.ts",

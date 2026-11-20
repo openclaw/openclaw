@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import type { ContinuationRunToolOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createContinueDelegateTool } from "./tools/continue-delegate-tool.js";
 import { createContinueWorkTool } from "./tools/continue-work-tool.js";
@@ -9,16 +9,8 @@ import { createRequestCompactionTool } from "./tools/request-compaction-tool.js"
 
 const log = createSubsystemLogger("agents/openclaw-tools");
 
-type OpenClawContinuationToolOptions = Pick<
-  OpenClawToolsOptions,
-  | "drainsContinuationDelegateQueue"
-  | "disableContinuationTools"
-  | "continueWorkOpts"
-  | "requestCompactionOpts"
->;
-
 export function createOpenClawContinuationTools(
-  options: OpenClawContinuationToolOptions & {
+  options: ContinuationRunToolOptions & {
     config?: OpenClawConfig;
     agentSessionKey?: string;
     runSessionKey?: string;

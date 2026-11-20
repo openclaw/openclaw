@@ -13,26 +13,6 @@ import { getSystemEventStorePath, isSystemEventStoreCurrent } from "./system-eve
 
 export { resetSystemEventDeliveryAdoptionClaimsForTest as resetForTest } from "./system-event-delivery-claims.js";
 
-export type ManagedSystemEventOptions = {
-  sessionDeliveryAckId?: string;
-  sessionDeliveryAckStateDir?: string;
-  /** Defer the durable ack to turn adoption; see the SystemEvent field. */
-  sessionDeliveryAwaitsTurnAdoption?: boolean;
-  expectedSessionId?: string;
-  recipientAuthority?: SessionRecipientAuthority;
-  /**
-   * Trusted-internal enrichment marker. Only core producers may attach managed
-   * delivery provenance such as expectedSessionId and recipientAuthority.
-   */
-  trusted?: boolean;
-  /**
-   * Optional W3C `traceparent` to attach to the queued event for cross-boundary
-   * trace correlation. Invalid values are silently dropped (additive contract:
-   * a malformed traceparent never prevents an enqueue).
-   */
-  traceparent?: string;
-};
-
 /** Managed-delivery provenance a queued system event carries (see SystemEvent in system-events.ts). */
 export type ManagedSystemEventFields = {
   sessionDeliveryAckId?: string;
@@ -55,6 +35,15 @@ export type ManagedSystemEventFields = {
    * enqueue-time so producers never fail-the-write on a malformed header.
    */
   traceparent?: string;
+};
+
+/** Enqueue options: the managed fields plus the trust marker that gates them. */
+export type ManagedSystemEventOptions = ManagedSystemEventFields & {
+  /**
+   * Trusted-internal enrichment marker. Only core producers may attach managed
+   * delivery provenance such as expectedSessionId and recipientAuthority.
+   */
+  trusted?: boolean;
 };
 
 /** The queued-event shape these helpers read; system-events.ts passes its SystemEvent. */

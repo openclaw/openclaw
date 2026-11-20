@@ -23,7 +23,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { ContinueWorkRequest } from "./tools/continue-work-tool.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
-import type { RequestCompactionToolOpts } from "./tools/request-compaction-tool.js";
+import type { RequestCompactionRunOpts } from "./tools/request-compaction-tool.js";
 import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
@@ -120,6 +120,20 @@ export type OpenClawSharedToolsOptions = {
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;
+};
+
+/** Continuation tool wiring a run supplies; see openclaw-tools.continuation.ts. */
+export type ContinuationRunToolOptions = {
+  /** Whether this run consumes the continue_delegate staging queue. */
+  drainsContinuationDelegateQueue?: boolean;
+  /** Runs whose lifecycle owner cannot execute any same-session continuation tools. */
+  disableContinuationTools?: boolean;
+  /** Callback for continue_work to request a post-turn continuation. */
+  continueWorkOpts?: {
+    requestContinuation: (request: ContinueWorkRequest) => void;
+  };
+  /** Closures for request_compaction when continuation is enabled. */
+  requestCompactionOpts?: RequestCompactionRunOpts;
 };
 
 export type OpenClawToolsOptions = {
@@ -220,25 +234,11 @@ export type OpenClawToolsOptions = {
   beforeToolCallHookContext?: HookContext;
   /** Trusted sender id from inbound context (not tool args). */
   requesterSenderId?: string | null;
-  /** Whether this run consumes the continuation delegate staging queue. */
-  drainsContinuationDelegateQueue?: boolean;
-  /** Internal maintenance/model-only runs that cannot schedule continuation work. */
-  disableContinuationTools?: boolean;
-  /** Callback for continue_work to request a post-turn continuation. */
-  continueWorkOpts?: {
-    requestContinuation: (request: ContinueWorkRequest) => void;
-  };
-  /** Closures for request_compaction when continuation is enabled. */
-  requestCompactionOpts?: {
-    sessionId?: string;
-    getContextUsage: RequestCompactionToolOpts["getContextUsage"];
-    contextUsageOrigin?: RequestCompactionToolOpts["contextUsageOrigin"];
-    triggerCompaction: RequestCompactionToolOpts["triggerCompaction"];
-  };
   /** Prepared exec/process isolation key for this run. */
   processScopeKey?: string;
   inputProvenance?: InputProvenance;
 } & OpenClawSharedToolsOptions &
+  ContinuationRunToolOptions &
   AgentRunClientContext &
   AgentRunMessageContext &
   SpawnedToolContext &
