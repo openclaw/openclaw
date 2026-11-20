@@ -1278,6 +1278,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/talk/client-voice-session.worker.test.ts",
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",
+  "src/agents/prepared-model-catalog.hosted-metadata.integration.test.ts",
   "src/agents/embedded-agent-runner/compaction-runtime-admission.test.ts",
   "src/media-understanding/image.auth-routing.test.ts",
   "src/media-understanding/image.resources.test.ts",
