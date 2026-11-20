@@ -37,3 +37,17 @@ export function assertParticipationRuntime(
     });
   }
 }
+
+export const PARTICIPATION_WORKER_ERROR =
+  "Participating inputs require Gateway-local OpenClaw execution. Worker placements cannot enforce their permission ceiling; use a Gateway-local OpenClaw session.";
+
+/** Worker launch protocols do not carry the per-input execution ceiling. */
+export function assertParticipationWorkerExecution(
+  ceiling: ParticipationCeiling | undefined,
+): void {
+  if (ceiling) {
+    throw new AgentHarnessPreflightError(PARTICIPATION_WORKER_ERROR, {
+      userMessage: PARTICIPATION_WORKER_ERROR,
+    });
+  }
+}
