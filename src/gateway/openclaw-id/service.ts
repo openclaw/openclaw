@@ -633,10 +633,10 @@ export function createOpenClawIdService(params: {
     return await check({ channel, request, config, signal, gatewayKey });
   };
 
-  const ownerLinkStatus = async (options?: { includeSandboxBackend?: true }) => {
+  const ownerLinkStatus = async (options?: { includeSandboxReadiness?: true }) => {
     const { readOwnerLinkStatus } = await import("./owner-link-view.js");
     return readOwnerLinkStatus({
-      includeSandboxBackend: options?.includeSandboxBackend,
+      includeSandboxReadiness: options?.includeSandboxReadiness,
       enabled: isOpenClawIdEnabled(params.getConfig()),
       getAuthority,
       getEffects,
