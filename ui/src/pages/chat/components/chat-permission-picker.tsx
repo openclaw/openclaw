@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createUniqueId, Errored, lazy, Loading, onSettled } from "solid-js";
+import { createUniqueId, Errored, lazy, Loading, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
@@ -17,8 +17,6 @@ import { listen } from "../../../lib/reactive/listener.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
-const PERMISSION_MODES = ["read-only", "guarded", "workspace", "full"] as const;
-const DEFAULT_PERMISSION_VALUE = "default";
 const PERMISSION_ICONS = {
   "read-only": "shieldEllipsis",
   guarded: "shieldLock",
@@ -53,12 +51,6 @@ export function modeLabel(
       : t("chat.permissionControls.default");
 }
 
-function permissionSelection(value: string): PermissionSelection | undefined {
-  return value === DEFAULT_PERMISSION_VALUE
-    ? null
-    : PERMISSION_MODES.find((mode) => mode === value);
-}
-
 export function permissionIcon(mode: PermissionSelection | undefined) {
   return mode ? PERMISSION_ICONS[mode] : "shieldCheck";
 }
@@ -69,49 +61,25 @@ const Content = lazy(() => import("./chat-permission-picker-content.tsx"), {
 export type ChatPermissionPickerContentProps = {
   picker: ChatPermissionPickerProps;
   renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
-  onReady: (items: (() => MenuItem[]) | undefined) => void;
+  readMenu: () => MenuHandle | undefined;
+  onReady: (content: ChatPermissionPickerContent | undefined) => void;
+};
+
+export type ChatPermissionPickerContent = {
+  items: () => MenuItem[];
+  select: (id: string) => void;
 };
 
 export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   const id = createUniqueId();
   let menu: MenuHandle | undefined;
-  let stopSurface: (() => void) | undefined;
   let stopTrigger: (() => void) | undefined;
   // Menu publishes its handle during settlement; release its listeners with this view.
   onSettled(() => () => {
-    stopSurface?.();
     stopTrigger?.();
   });
-  // Equal owner refreshes must not recreate the open menu's option content.
-  const pending = createMemo(() => props.pending);
-  const disabled = createMemo(() => props.disabled || pending());
-  const selectMode = (mode: PermissionSelection) => {
-    if (
-      props.participant &&
-      (mode === null ||
-        mode === "workspace" ||
-        mode === "full" ||
-        (props.mode === "read-only" && mode !== "read-only"))
-    ) {
-      return;
-    }
-    if (!disabled() && (mode !== "full" || props.canSelectFull) && mode !== (props.mode ?? null)) {
-      // The owner reports failures; keep its pending choice visible until settlement.
-      const result = props.onSelect(mode);
-      if (result instanceof Promise) {
-        void result.then(
-          () => menu?.close(),
-          () => menu?.close(),
-        );
-      } else {
-        menu?.close();
-      }
-    } else if (!disabled()) {
-      menu?.close();
-    }
-  };
   const controls = createMenuControls();
-  let readItems: (() => MenuItem[]) | undefined;
+  let content: ChatPermissionPickerContent | undefined;
   let keyboardOpen = false;
   let focusLast = false;
   let openingFocus: Element | null | undefined;
@@ -143,7 +111,7 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       kind: "group",
       id: "permission-options",
       get items() {
-        return readItems?.() ?? [];
+        return content?.items() ?? [];
       },
       render: (renderItems) => (
         <Errored
@@ -172,8 +140,9 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
             <Content
               picker={props}
               renderItems={renderItems}
+              readMenu={() => menu}
               onReady={(next) => {
-                readItems = next;
+                content = next;
                 if (next) {
                   focusReady();
                 }
@@ -184,27 +153,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       ),
     },
   ];
-  const keydown = (event: KeyboardEvent) => {
-    if (
-      !menu?.overlay.open ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      event.defaultPrevented ||
-      !/^[1-5]$/u.test(event.key)
-    ) {
-      return;
-    }
-    const item = readItems?.()[Number(event.key)];
-    if (!item || item.disabled) {
-      return;
-    }
-    const mode = permissionSelection(item.id);
-    if (mode !== undefined) {
-      event.preventDefault();
-      event.stopPropagation();
-      selectMode(mode);
-    }
-  };
   return (
     <Menu
       lazy
@@ -242,7 +190,6 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
       }}
       ref={(handle) => {
         menu = handle;
-        stopSurface = listen(handle.overlay.surface, "keydown", keydown, true);
         if (handle.overlay.trigger) {
           stopTrigger = listen(
             handle.overlay.trigger,
@@ -252,18 +199,12 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
                 keyboardOpen = ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key);
                 focusLast = event.key === "ArrowUp";
               }
-              keydown(event);
             },
             true,
           );
         }
       }}
-      onSelect={(item) => {
-        const mode = permissionSelection(item.id);
-        if (mode !== undefined) {
-          selectMode(mode);
-        }
-      }}
+      onSelect={(item) => content?.select(item.id)}
       trigger={
         <>
           <span class="chat-controls__permission-icon" aria-hidden="true">

@@ -5,6 +5,7 @@ import type { MenuItem } from "../../../components/solid/menu.tsx";
 import { registerPermissionPickerEnglish } from "../../../i18n/locales/en-permission-picker.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../../lib/external-link.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import {
   modeLabel,
   permissionIcon,
@@ -16,6 +17,13 @@ registerEnglishCatalog(registerPermissionPickerEnglish);
 const PERMISSION_MODES_DOCS_URL = "https://docs.openclaw.ai/gateway/permission-modes";
 const DEFAULT_PERMISSION_VALUE = "default";
 const PERMISSION_OPTIONS = [null, "read-only", "guarded", "workspace", "full"] as const;
+
+type PermissionSelection = SessionPermissionMode | null;
+function permissionSelection(value: string): PermissionSelection | undefined {
+  return value === DEFAULT_PERMISSION_VALUE
+    ? null
+    : PERMISSION_OPTIONS.find((mode) => mode === value);
+}
 
 function agentDefaultLabel(defaultMode?: SessionPermissionMode): string {
   return defaultMode
@@ -116,9 +124,73 @@ export function ChatPermissionPickerContent(props: ChatPermissionPickerContentPr
     ],
     { lazy: true },
   );
+  const selectMode = (mode: PermissionSelection) => {
+    if (
+      props.picker.participant &&
+      (mode === null ||
+        mode === "workspace" ||
+        mode === "full" ||
+        (props.picker.mode === "read-only" && mode !== "read-only"))
+    ) {
+      return;
+    }
+    if (
+      !disabled() &&
+      (mode !== "full" || props.picker.canSelectFull) &&
+      mode !== (props.picker.mode ?? null)
+    ) {
+      // The owner reports failures; keep its pending choice visible until settlement.
+      const result = props.picker.onSelect(mode);
+      if (result instanceof Promise) {
+        void result.then(
+          () => props.readMenu()?.close(),
+          () => props.readMenu()?.close(),
+        );
+      } else {
+        props.readMenu()?.close();
+      }
+    } else if (!disabled()) {
+      props.readMenu()?.close();
+    }
+  };
+  const keydown = (event: KeyboardEvent) => {
+    if (
+      !props.readMenu()?.overlay.open ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      event.defaultPrevented ||
+      !/^[1-5]$/u.test(event.key)
+    ) {
+      return;
+    }
+    const item = items()[Number(event.key)];
+    if (!item || item.disabled) {
+      return;
+    }
+    const mode = permissionSelection(item.id);
+    if (mode !== undefined) {
+      event.preventDefault();
+      event.stopPropagation();
+      selectMode(mode);
+    }
+  };
+  const select = (id: string) => {
+    const mode = permissionSelection(id);
+    if (mode !== undefined) {
+      selectMode(mode);
+    }
+  };
   onSettled(() => {
-    props.onReady(items);
-    return () => props.onReady(undefined);
+    const menu = props.readMenu();
+    const stopSurface = menu && listen(menu.overlay.surface, "keydown", keydown, true);
+    const stopTrigger =
+      menu?.overlay.trigger && listen(menu.overlay.trigger, "keydown", keydown, true);
+    props.onReady({ items, select });
+    return () => {
+      stopSurface?.();
+      stopTrigger?.();
+      props.onReady(undefined);
+    };
   });
   return <>{props.renderItems(items)}</>;
 }
