@@ -576,11 +576,11 @@ for (const engine of ["sqlite", "postgres"] as const) {
           const appended: Array<
             NonNullable<Awaited<ReturnType<typeof appendSessionTranscriptMessageByIdentity>>>
           > = [];
-          for (const [index, message] of messages.entries()) {
+          for (const [index, transcriptMessage] of messages.entries()) {
             const result = await appendSessionTranscriptMessageByIdentity({
               ...scope,
               eventId: `mirror-message-${index}`,
-              message,
+              message: transcriptMessage,
             });
             expect(result?.appended).toBe(true);
             expect(result?.anchor).toBeDefined();
