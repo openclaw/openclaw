@@ -48,6 +48,33 @@ function dropUpload(path: string, shell: string, uploadPathStyle?: "native", ove
   return { upload, terminal, request, arrayBuffer };
 }
 
+/** Same real upload owner as dropUpload, but without first starting a batch. */
+function createUpload(path: string, shell: string) {
+  const base = createApplicationConfigCapability({ resourceBasePath: "" });
+  const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+  const terminal = createTerminalController();
+  const tab = {
+    gatewaySessionId: "session-1",
+    shell,
+    status: "live",
+    controller: terminal as unknown as GhosttyTerminalController,
+  };
+  const request = vi.fn().mockResolvedValue({ path, size: 4 });
+  let upload!: TerminalPanelUpload;
+  mountSolid(() => {
+    upload = createTerminalPanelUpload({
+      config: () => config,
+      activeTab: () => tab,
+      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+      isCurrent: (candidate) => candidate === tab,
+      fileInput: () => null,
+      setError: vi.fn(),
+    });
+    return null;
+  });
+  return { upload, terminal, request };
+}
+
 const expectUploadFailure = (upload: TerminalPanelUpload, error: unknown) =>
   waitForSolid(() =>
     expect(upload.progress()).toMatchObject({ state: "failed", retryable: false, error }),
@@ -102,6 +129,39 @@ it.each([
   const { upload, terminal } = dropUpload(path, shell, style);
   await expectUploadFailure(upload, expect.stringContaining(message));
   expect(terminal.terminal.paste).not.toHaveBeenCalled();
+});
+
+it("stages a pasted image through the same upload owner as dropped files", async () => {
+  const { upload, terminal, request } = createUpload("/tmp/pasted-image.png", "/bin/zsh");
+  const file = new File(["png!"], "pasted-image.png", { type: "image/png" });
+  Object.defineProperty(file, "arrayBuffer", {
+    value: async () => new TextEncoder().encode("png!").buffer,
+  });
+  const paste = new Event("paste", { cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: { files: [file] } });
+
+  upload.handlePaste(paste as ClipboardEvent);
+
+  await waitForSolid(() =>
+    expect(request).toHaveBeenCalledWith(
+      "terminal.upload",
+      { sessionId: "session-1", name: "pasted-image.png", contentBase64: "cG5nIQ==" },
+      { signal: expect.any(AbortSignal) },
+    ),
+  );
+  expect(paste.defaultPrevented).toBe(true);
+  expect(terminal.terminal.input).not.toHaveBeenCalled();
+});
+
+it("leaves a text-only paste to the input's own handling", () => {
+  const { upload, request } = createUpload("/tmp/report.pdf", "/bin/zsh");
+  const paste = new Event("paste", { cancelable: true });
+  Object.defineProperty(paste, "clipboardData", { value: { files: [] } });
+
+  upload.handlePaste(paste as ClipboardEvent);
+
+  expect(paste.defaultPrevented).toBe(false);
+  expect(request).not.toHaveBeenCalled();
 });
 
 it("localizes validation and rejects files over 16 MiB before reading or sending", async () => {
