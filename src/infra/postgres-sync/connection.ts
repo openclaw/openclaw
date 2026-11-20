@@ -35,6 +35,7 @@ import {
   validatePostgresBindings,
   type BridgeReply,
   type BridgeCommand,
+  type BridgeRequest,
 } from "./protocol.js";
 import { runPostgresTransactionSync } from "./transaction.js";
 
@@ -49,6 +50,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private requestId = 0;
   private outcomeUnknown = true;
   private readonly mainThread = threadId === 0;
+  private readonly statementTimeoutMs: number;
 
   constructor(
     url: string,
@@ -63,6 +65,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     assertEngineStoreExecutionAllowed();
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
+    this.statementTimeoutMs = options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS;
     const { port1, port2 } = new MessageChannel();
     this.port = port1;
     const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
@@ -74,7 +77,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
         schema,
         connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
         lockTimeoutMs: options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
-        statementTimeoutMs: options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
+        statementTimeoutMs: this.statementTimeoutMs,
       },
       transferList: [port2],
       execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
@@ -135,8 +138,12 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (id > 2_147_483_647) {
       throw this.loseConnection();
     }
-    const deadline = performance.now() + 120_000;
-    this.port.postMessage({ ...request, id }, []);
+    // Give the server time to report statement_timeout and the dedicated bridge
+    // time to retire a silent client before the host must terminate the worker.
+    const deadlineMs = request.operation === "query" ? this.statementTimeoutMs + 30_000 : 120_000;
+    const deadline = performance.now() + deadlineMs;
+    const message: BridgeRequest = { ...request, id, deadlineMs };
+    this.port.postMessage(message, []);
     recordWorkerMessage("sqlite_request", "to_worker");
     // A notify for an earlier request can arrive after this request starts.
     let observed: number;

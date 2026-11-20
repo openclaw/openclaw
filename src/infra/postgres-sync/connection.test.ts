@@ -35,6 +35,7 @@ function transportFixture(
     control,
     worker: { terminate },
     requestId: 1,
+    statementTimeoutMs: 90_000,
     anchor,
     isOpen: true,
   });

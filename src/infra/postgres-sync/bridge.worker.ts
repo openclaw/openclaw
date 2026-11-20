@@ -17,9 +17,12 @@ const {
   statementTimeoutMs,
 }: BridgeWorkerData = workerData;
 const control = new Int32Array(signal);
+const TRANSPORT_TIMEOUT_MS = 10_000;
 const client = new pg.Client({
   connectionString: url,
   connectionTimeoutMillis: connectTimeoutMs,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: TRANSPORT_TIMEOUT_MS,
   types: {
     // Store decoders own JSON parsing, including malformed legacy payload handling.
     getTypeParser: (oid, format) =>
@@ -39,14 +42,27 @@ process.once("exit", () => {
 
 async function handleRequest(request: BridgeRequest) {
   let reply: BridgeReply;
+  // A socket can stay open after PostgreSQL has already finished the statement.
+  // End only this connection; the host owns outcome classification and never retries it.
+  const cutoff =
+    request.operation === "query"
+      ? setTimeout(() => void client.end().catch(() => {}), request.deadlineMs - 20_000)
+      : undefined;
   try {
     if (request.operation === "connect") {
       await client.connect();
-      await client.query(
-        "SELECT set_config('lock_timeout', $1, false), " +
+      const setup = {
+        text:
+          "SELECT set_config('lock_timeout', $1, false), " +
           "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
-        [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, `"${schema.replaceAll('"', '""')}"`],
-      );
+        values: [
+          `${lockTimeoutMs}ms`,
+          `${statementTimeoutMs}ms`,
+          `"${schema.replaceAll('"', '""')}"`,
+        ],
+        query_timeout: TRANSPORT_TIMEOUT_MS,
+      };
+      await client.query(setup);
       reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
     } else if (request.operation === "close") {
       await client.end();
@@ -94,6 +110,8 @@ async function handleRequest(request: BridgeRequest) {
       });
     }
     reply = { id: request.id, error: details };
+  } finally {
+    clearTimeout(cutoff);
   }
   port.postMessage(reply);
   Atomics.store(control, 0, request.id);

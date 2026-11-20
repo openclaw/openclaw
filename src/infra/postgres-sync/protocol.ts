@@ -21,7 +21,7 @@ export type BridgeCommand =
   | { operation: "connect" }
   | { operation: "close" }
   | { operation: "query"; sql: string; parameters: readonly SQLInputValue[] };
-export type BridgeRequest = BridgeCommand & { id: number };
+export type BridgeRequest = BridgeCommand & { id: number; deadlineMs: number };
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }
   | { error: PostgresErrorData }

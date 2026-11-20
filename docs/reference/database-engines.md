@@ -149,6 +149,10 @@ durably. The adapter sets generous
 lock and statement timeouts once during connection setup; operations do not
 change timeout settings individually.
 
+A silent PostgreSQL transport is retired before the bridge's host deadline.
+If a commit was sent but its reply is lost, the outcome is unknown. The bridge
+does not replay the commit or close other healthy connections.
+
 ## Anchors and backups
 
 A PostgreSQL store keeps a small SQLite anchor at its usual local database path.
