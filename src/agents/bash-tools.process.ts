@@ -54,6 +54,8 @@ import { failText, textResult } from "./tools/tool-results.js";
 export type ProcessToolDefaults = {
   /** Observe existing processes without inheriting their launch authority. */
   readOnly?: boolean;
+  /** Session invites do not grant visibility into ancestor sessions. */
+  includeAncestors?: boolean;
   hasCronTool?: boolean;
   inputWaitIdleMs?: number;
   scopeKey?: string;

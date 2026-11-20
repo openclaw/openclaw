@@ -108,6 +108,67 @@ test.skipIf(process.platform === "win32")(
   },
 );
 
+test.skipIf(process.platform === "win32")(
+  "keeps a participating child's observations within the invited session",
+  async () => {
+    const parent = "agent:main:private-parent";
+    const child = "agent:main:subagent:invited-child";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: parent },
+      { sessionId: parent, updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: child },
+      { sessionId: child, updatedAt: 1, parentSessionKey: parent },
+    );
+    const start = async (sessionKey: string, output: string) => {
+      const result = await createExecTool({
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        allowBackground: true,
+        agentId: "main",
+        scopeKey: sessionKey,
+        sessionKey,
+        notifyOnExit: false,
+      }).execute("start", { command: `printf '${output}\\n'; sleep 60`, background: true });
+      expect(result.details).toMatchObject({ status: "running" });
+      const sessionId = (result.details as { sessionId: string }).sessionId;
+      await createProcessTool({ scopeKey: sessionKey }).execute("ready", {
+        action: "poll",
+        sessionId,
+        timeout: 5_000,
+      });
+      return sessionId;
+    };
+    const parentId = await start(parent, "SENSITIVE_PARENT_OUTPUT");
+    const childId = await start(child, "INVITED_CHILD_OUTPUT");
+    const participant = createProcessTool({
+      scopeKey: child,
+      sessionKey: child,
+      agentId: "main",
+      readOnly: true,
+      includeAncestors: false,
+    });
+    using reads = vi.spyOn(sessionReads, "withSessionEntryReadOnlyInWorker");
+    const listed = await participant.execute("list", { action: "list" });
+    expect(listed.details).toMatchObject({ sessions: [{ sessionId: childId }] });
+    expect(JSON.stringify(listed)).not.toContain("SENSITIVE_PARENT_OUTPUT");
+    for (const action of ["poll", "log"] as const) {
+      const denied = await participant.execute(action, { action, sessionId: parentId });
+      expect(denied.details).toMatchObject({ status: "failed" });
+      expect(JSON.stringify(denied)).not.toContain("SENSITIVE_PARENT_OUTPUT");
+      expect(
+        (await participant.execute(action, { action, sessionId: childId })).details,
+      ).toMatchObject({ status: "running" });
+    }
+    expect(
+      getTextContent(await participant.execute("log", { action: "log", sessionId: childId })),
+    ).toContain("INVITED_CHILD_OUTPUT");
+    expect(reads).not.toHaveBeenCalled();
+  },
+);
+
 test("explains a pre-restart handle after the process registry is recreated", async () => {
   const exec = createExecTool({
     host: "gateway",

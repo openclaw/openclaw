@@ -329,6 +329,7 @@ export function* assembleOpenClawCodingTools(
             },
             processDefaults: {
               readOnly: Boolean(options?.participationCeiling),
+              includeAncestors: !options?.participationCeiling,
               scopeKey,
               sessionKey: executionSessionKey,
               agentId: executionAgentId,
