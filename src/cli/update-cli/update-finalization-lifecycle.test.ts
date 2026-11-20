@@ -88,9 +88,15 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
   });
 });
 
-it.each(["failed", "succeeded"] as const)(
-  "links standalone repair only when the newest prior update %s",
-  (status) => {
+it.each([
+  ["failed", "none"],
+  ["succeeded", "none"],
+  ["failed", "observation"],
+  ["succeeded", "observation"],
+  ["failed", "receipt"],
+] as const)(
+  "links standalone repair only when the newest prior update %s (settlement: %s)",
+  (status, settlement) => {
     const prior = ledger.createUpdateRun({
       trigger: "cli",
       target: { kind: "package", version: "2026.11.5" },
@@ -103,11 +109,32 @@ it.each(["failed", "succeeded"] as const)(
         detail: "SQLite migration publication could not be verified: database is locked",
       },
     });
-    ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+    let latest = prior;
     if (status === "succeeded") {
+      ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
       vi.advanceTimersByTime(1);
-      const newer = ledger.createUpdateRun({ trigger: "cli" });
-      ledger.finishUpdateRun(newer.runId, { status: "succeeded" });
+      latest = ledger.createUpdateRun({ trigger: "cli" });
+      ledger.recordUpdateRunPhase(latest.runId, "staging");
+      ledger.recordUpdateRunPhase(latest.runId, "activating");
+    }
+    if (settlement === "observation") {
+      ledger.recordUpdateRunStep(latest.runId, {
+        step: "reconcile:settle",
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: "Interrupted completion observed.",
+      });
+    }
+    ledger.finishUpdateRun(latest.runId, {
+      status,
+      reason: status === "failed" ? "post-update-failed" : undefined,
+    });
+    if (settlement === "receipt") {
+      vi.advanceTimersByTime(1);
+      ledger.createUpdateRun({
+        trigger: "cli",
+        settlement: { reason: "settled", detail: "Retained recovery settled." },
+      });
     }
 
     vi.advanceTimersByTime(1);

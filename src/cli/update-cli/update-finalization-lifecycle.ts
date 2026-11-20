@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
 import os from "node:os";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "../../infra/sqlite-readonly-worker.js";
@@ -135,7 +136,12 @@ export class UpdateFinalizationLifecycle {
     const prior =
       repair && !inherited
         ? listUpdateRuns({ limit: 3, excludeReason: "dry-run" }, this.ledgerOptions).find(
-            (run) => !run.steps.some((step) => step.step === "reconcile:settle"),
+            (run) =>
+              !run.steps.some((step) => step.step === "reconcile:settle") ||
+              run.steps.some(
+                ({ step }) =>
+                  step !== "requested" && UPDATE_RUN_PHASES.some((phase) => phase === step),
+              ),
           )
         : undefined;
     this.runId = createUpdateRun(
