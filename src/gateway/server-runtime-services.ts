@@ -140,12 +140,15 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     scheduleGatewayIdleTask({
       ...idle,
       id: "database:page-cache",
-      // Reclaim remains useful under memory pressure; warming checks memory separately.
+      // Reclaim remains useful under memory pressure; defer the warmer's import below.
       isBusy: isRecovering,
       repeatDelayMs: 15 * 60 * 1000,
       errorMessage: "database page-cache probe failed",
       run: async (signal) => {
         void sweepAgentExecCgroups();
+        if (isConstrainedProcessLowOnMemory()) {
+          return;
+        }
         try {
           const { warmGatewayDatabasePageCache } = await import("./server-database-page-cache.js");
           signal.throwIfAborted();

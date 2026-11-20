@@ -94,6 +94,8 @@ describe("post-ready maintenance scheduling", () => {
   });
 
   it.each(["recovery", "memory pressure"])("defers optional work during %s", async (cause) => {
+    const platform = mockProcessPlatform("linux");
+    const sweep = vi.spyOn(execCgroup, "sweepAgentExecCgroups").mockResolvedValue();
     const lowMemory = vi
       .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
       .mockReturnValue(cause === "memory pressure");
@@ -131,6 +133,8 @@ describe("post-ready maintenance scheduling", () => {
       expect(cron.start).toHaveBeenCalledOnce();
       await clock.advanceBy(1_000);
       expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(sweep).toHaveBeenCalledTimes(cause === "memory pressure" ? 1 : 0);
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       finishRecovery.resolve();
       await recovery;
       lowMemory.mockReturnValue(false);
@@ -145,6 +149,8 @@ describe("post-ready maintenance scheduling", () => {
       await recovery;
       await scheduler.stop();
       lowMemory.mockRestore();
+      sweep.mockRestore();
+      platform.mockRestore();
     }
   });
 
