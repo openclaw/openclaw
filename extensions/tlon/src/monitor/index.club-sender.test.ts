@@ -3,6 +3,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { messageEssay, useTlonMonitorFixture } from "./monitor.test-harness.js";
 const {
+  configureTlon,
   startMonitor,
   authenticateMock,
   sseClientMock,
@@ -71,6 +72,22 @@ function startMonitorDefaults(settings: Record<string, unknown> = {}) {
   ingressMock.receive.mockResolvedValueOnce({ kind: "ignored" });
 }
 describe("monitorTlonProvider club (group DM) sender identity", () => {
+  it("serializes configured club grants when migrating them to ship settings", async () => {
+    configureTlon({ ownerShip: OWNER, clubRules: { [CLUB_ID]: "allow" } });
+    startMonitorDefaults();
+    await withMonitor(async () => {
+      const clubRulesWrite = sseClientMock.poke.mock.calls
+        .map(([poke]) => poke)
+        .find(
+          (poke) =>
+            poke.app === "settings" && poke.json?.["put-entry"]?.["entry-key"] === "clubRules",
+        );
+      expect(clubRulesWrite?.json?.["put-entry"]?.value).toBe(
+        JSON.stringify({ [CLUB_ID]: "allow" }),
+      );
+    });
+  });
+
   it("does not use a direct-DM allowlist to admit an unverified club author", async () => {
     startMonitorDefaults({ dmAllowlist: ["~bus"] });
     await withMonitor(async () => {

@@ -7,6 +7,8 @@ export function buildTlonSettingsMigrations(
   account: TlonResolvedAccount,
   currentSettings: TlonSettingsStore,
 ): Array<{ key: keyof TlonSettingsStore; fileValue: unknown; settingsValue: unknown }> {
+  const configuredClubRules =
+    Object.keys(account.clubRules).length > 0 ? JSON.stringify(account.clubRules) : undefined;
   const keys = [
     "dmAllowlist",
     "clubPolicy",
@@ -21,10 +23,7 @@ export function buildTlonSettingsMigrations(
   return [
     ...keys.map((key) => ({
       key,
-      fileValue:
-        key === "clubRules" && Object.keys(account.clubRules).length === 0
-          ? undefined
-          : account[key],
+      fileValue: key === "clubRules" ? configuredClubRules : account[key],
       settingsValue: currentSettings[key],
     })),
     {
