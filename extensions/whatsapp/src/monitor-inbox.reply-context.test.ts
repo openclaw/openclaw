@@ -192,6 +192,37 @@ describe("web monitor inbox reply context", () => {
     await listener.close();
   });
 
+  it("resolves quoted LID sender to phone number using account authDir", async () => {
+    fsSync.writeFileSync(
+      path.join(getAuthDir(), "lid-mapping-888_reverse.json"),
+      JSON.stringify("1888"),
+    );
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const upsert = quotedMessageUpsert(nextMessageId("quoted-lid"), "reply", {
+      stanzaId: "q-lid",
+      participant: "888@lid",
+      quotedMessage: { conversation: "original lid quote" },
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage);
+    expect(inbound.quote).toMatchObject({
+      id: "q-lid",
+      body: "original lid quote",
+      sender: { displayName: "+1888", e164: "+1888" },
+      context: {
+        id: "q-lid",
+        body: "original lid quote",
+        sender: { lid: "888@lid", e164: "+1888", label: "+1888" },
+      },
+    });
+
+    await listener.close();
+  });
+
   it.each([
     ["captures reply context from wrapped quoted messages", "viewOnceMessageV2Extension"],
     ["captures reply context from botInvokeMessage wrapped quoted messages", "botInvokeMessage"],

@@ -60,11 +60,21 @@ export function resolveComparableIdentity(
       ? normalizeE164(identity.e164)
       : ((jid ? jidToE164(jid, authDir ? { authDir } : undefined) : null) ??
         (lid ? jidToE164(lid, authDir ? { authDir } : undefined) : null));
+  const rawLabel = identity?.label;
+  const isRawIdentifier =
+    rawLabel != null &&
+    (rawLabel === rawJid ||
+      rawLabel === rawLid ||
+      rawLabel === lid ||
+      rawLabel === jid ||
+      isLidJid(rawLabel));
+  const label = isRawIdentifier && e164 ? e164 : rawLabel;
   return {
     ...identity,
     jid,
     lid,
     e164,
+    ...(label !== undefined ? { label } : {}),
   };
 }
 

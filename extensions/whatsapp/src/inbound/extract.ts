@@ -371,6 +371,7 @@ export function extractLocationData(
 
 export function describeReplyContext(
   source: WhatsAppInboundMessageSource,
+  options?: { authDir?: string },
 ): WhatsAppReplyContext | null {
   const projection = resolveWhatsAppInboundMessageProjection(source);
   const message = unwrapMessage(projection);
@@ -387,10 +388,16 @@ export function describeReplyContext(
     return null;
   }
   const senderJid = contextInfo?.participant ?? undefined;
-  const sender = resolveComparableIdentity({
-    jid: senderJid,
-    label: senderJid ? (jidToE164(senderJid) ?? senderJid) : "unknown sender",
-  });
+  const sender = resolveComparableIdentity(
+    {
+      jid: senderJid,
+      label: senderJid
+        ? (jidToE164(senderJid, options?.authDir ? { authDir: options.authDir } : undefined) ??
+          senderJid)
+        : "unknown sender",
+    },
+    options?.authDir,
+  );
   if (!quoted) {
     // Baileys may preserve a real reply ID while omitting its private quoted payload.
     return {
