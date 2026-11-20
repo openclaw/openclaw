@@ -307,6 +307,10 @@ the mapping to hide an outage, because that changes which files are authoritativ
 
 ### Size-limited node connections
 
+Before enabling this option, install matching OpenClaw builds that support
+binary `file.fetch` on the Gateway and the Linux node. An older node can ignore
+the binary request and send the entire file in one reply.
+
 If a paired Linux node connects through a route that limits WebSocket replies to
 4 MiB, add `boundedReplies: true` to its entry under
 `plugins.entries.file-transfer.config.nodes` on the Gateway. Use the exact
