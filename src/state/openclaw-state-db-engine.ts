@@ -49,6 +49,7 @@ import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v3
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v41-worker-loss-recovery.js";
 import {
   admitStateSchemaFacts,
   parseStateSchemaContentVersion,
@@ -174,10 +175,14 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
-  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchema.postgres);
+  const statePostgresSchemaV40 = {
+    ...statePostgresSchema,
+    postgres: withLegacyWorkerLossRecovery(statePostgresSchema.postgres),
+  };
+  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres);
   const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
   const statePostgresSchemaV39 = {
-    ...statePostgresSchema,
+    ...statePostgresSchemaV40,
     postgres: v39Postgres,
     // Main builds used both shapes while the numeric state version was 39.
     postgresWithoutOptionalColumn: {
@@ -187,7 +192,7 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     },
   };
   const statePostgresSchemaV38 = {
-    ...statePostgresSchema,
+    ...statePostgresSchemaV40,
     postgres: withLegacyWorkerRetention(v39WithoutBootstrapDeferred),
   };
   const statePostgresSchemaV37 = {
@@ -406,7 +411,7 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV40,
       sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
         ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
         UPDATE worker_environments
@@ -415,6 +420,13 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
           OR state = 'bootstrapping' AND owner_epoch = 0)
           AND provision_source_json IS NULL;
         ${statePostgresVersionSql(40)}`,
+    },
+    {
+      version: 41,
+      fromSchema: statePostgresSchemaV40,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE worker_session_placements ADD COLUMN confirmed_loss_recovery_json text COLLATE "C";
+        ${statePostgresVersionSql(41)}`,
     },
   ];
 }
