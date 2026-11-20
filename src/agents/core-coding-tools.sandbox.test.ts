@@ -105,7 +105,7 @@ ${moveTo ? `*** Move to: ${moveTo}\n` : ""}@@
 
 installFsBridgeTestHarness();
 
-it("retains only exact-session attachment reads for sandboxed participants", () =>
+it.each([false, true])("retains exact-session attachment reads with state alias=%s", (aliased) =>
   withTempDir("openclaw-participant-attachments-", async (root) => {
     const workspaceDir = path.join(root, "workspace");
     const attachments = path.join(root, "attachments");
@@ -115,12 +115,16 @@ it("retains only exact-session attachment reads for sandboxed participants", () 
       "attachments/marker": "ATTACHED",
       "outside/marker": "PRIVATE",
     });
+    const attachmentReadRoot = aliased ? path.join(root, "state-link", "attachments") : attachments;
+    if (aliased) {
+      await linkDirectory(root, path.join(root, "state-link"));
+    }
     const sandbox = createSandbox({
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
       workspaceAccess: "rw",
       readOnlyResourceMounts: [
-        { hostPath: attachments, containerPath: "/openclaw/attachments" },
+        { hostPath: await fs.realpath(attachments), containerPath: "/openclaw/attachments" },
         { hostPath: outside, containerPath: "/private-resource" },
       ],
     });
@@ -129,7 +133,7 @@ it("retains only exact-session attachment reads for sandboxed participants", () 
     installLocalTransport(bridge);
     const { execute, text, edit, patch } = createSandboxCodingTools(sandbox, {
       strictWorkspaceRoot: true,
-      attachmentReadRoot: attachments,
+      attachmentReadRoot,
       shellTools: "patch-only",
       applyPatchEnabled: true,
     });
@@ -152,7 +156,8 @@ it("retains only exact-session attachment reads for sandboxed participants", () 
     await expect(otherSession.text("read", "/openclaw/attachments/marker")).rejects.toThrow(
       /escapes .*root/,
     );
-  }));
+  }),
+);
 
 it.runIf(process.platform !== "win32").each([true, false])(
   "keeps literal backslash read/write/edit/patch targets distinct with workspaceOnly=%s",
