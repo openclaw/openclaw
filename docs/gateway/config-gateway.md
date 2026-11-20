@@ -412,6 +412,37 @@ replaces the whole shared host: every hosted endpoint's in-flight work fails wit
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
 OOM guarantee.
 
+### Lean worker memory admission
+
+In `lean`, the Gateway admits extra workers only while they fit a memory budget:
+**85% of the effective memory limit** (a provisional 15% margin). Lean trades
+latency for staying inside the limit; work waits rather than starting a worker
+that would exceed the budget.
+
+- **Floors always run.** Each worker pool has a floor of one worker (two for
+  shared-state reads, so a held settlement read cannot block a fresh one), plus a
+  point-read lane once a pool uses point reads. Fixed direct workers (native lifecycle
+  supervisor, state heartbeats, SQLite broker carriers, Knowledge registry and
+  storage, PostgreSQL bridges, the shared core host) keep their normal counts. Floors
+  are reserved and never refused, so admission cannot deadlock.
+- **Growth waits.** A pool worker beyond its floor starts only if current memory use,
+  plus reservations not yet running, plus that worker's estimated cost stays under the
+  budget. Otherwise the task waits in the same pool queue for an existing worker. It
+  is never dropped; existing deadlines and cancellation still apply.
+- **Nested pools** created inside worker threads stay at their floor in lean.
+- **Measurement.** Inside a cgroup v2 limit, memory use is the limiting cgroup's
+  `memory.current` minus `inactive_file`. Active file cache still counts, so this can
+  overstate process memory; it is read at each admission decision, not continuously.
+  Without a cgroup limit, it is host RAM in use (total minus available).
+- **Estimates** are per worker kind heap measurements, not marginal RSS.
+- **Not covered:** memory already admitted (including floors, the main thread and
+  growth inside running workers), subprocesses, and plugin workers created directly
+  rather than through a worker pool. These are measured once running but not refused.
+
+If the floors alone exceed the budget, the Gateway logs a warning at startup or when
+the pool that crosses the budget first starts. Mandatory workers still run, and no
+growth is admitted.
+
 `openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
 report the active profile, selection reason, effective memory limit/source and CPU
 count. Their live census reports direct worker kind, count, retained idle floor,
@@ -426,3 +457,8 @@ policy fields. The census covers directly registered workers, not subprocesses o
 nested workers; it is not a process RSS breakdown. In lean, the shared host is one
 worker whose row also reports its live hosted endpoints. Offline status does not substitute
 the CLI's own resource profile for the Gateway's.
+
+In `lean`, status and `diagnostics.lanes` also report `memoryBudget`: the budget and
+limit, last measured use, reserved floor bytes, reservations not yet running, growth
+admissions and refusals, and waits (count, currently waiting, total and longest
+wait), in total and per worker kind.

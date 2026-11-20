@@ -29,6 +29,7 @@ import {
   type SqliteDatabaseAdmissionCursor,
 } from "./sqlite-database-admission.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { captureWorkerMemoryBudgetEnvironmentData } from "./worker-memory-budget.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
 import {
@@ -594,7 +595,10 @@ function startNativeWorker(
         type: "create",
         id,
         filename: { kind: filename instanceof URL ? "url" : "path", value: String(filename) },
-        environmentData: captureSqliteWorkerEnvironmentData(databaseAdmissions),
+        environmentData: [
+          ...captureSqliteWorkerEnvironmentData(databaseAdmissions),
+          captureWorkerMemoryBudgetEnvironmentData(),
+        ],
         options: {
           ...captured,
           environment: { ...(env === SHARE_ENV ? process.env : (env ?? process.env)) },
