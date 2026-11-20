@@ -139,8 +139,9 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
-  it("uses installed plugin artwork in the browser sign-in dialog", async () => {
+  it("keeps plugin actions within a narrow phone and retains sign-in artwork", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      await page.setViewportSize({ width: 320, height: 720 });
       const linear = { ...workboard, id: "linear", name: "Linear", hasIcon: true };
       await page.route("**/__openclaw__/plugin-icon/linear", (route) =>
         route.fulfill({
@@ -149,7 +150,14 @@ suite.define(() => {
         }),
       );
       const gateway = await installMockGateway(page, {
-        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        featureMethods: [
+          ...pluginMethods,
+          "openclaw.chat",
+          "mcp.authLogin",
+          "wizard.next",
+          "wizard.cancel",
+        ],
+        operatorScopes: ["operator.admin"],
         methodResponses: {
           ...pluginResponses(),
           "plugins.list": { ...inventory, plugins: [linear] },
@@ -179,6 +187,28 @@ suite.define(() => {
         .poll(() => heroIcon.evaluate((image: HTMLImageElement) => image.naturalWidth))
         .toBeGreaterThan(0);
       const iconUrl = await heroIcon.getAttribute("src");
+      const actions = page.locator(".plugin-catalog-detail__actions");
+      await actions
+        .getByRole("button", { name: "Ask OpenClaw", exact: true })
+        .waitFor({ timeout: 3000 });
+      await actions.getByRole("switch", { name: "Linear" }).waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "plugin-actions-phone.png"),
+        });
+      }
+      expect(
+        await actions.evaluate((header) =>
+          Math.max(
+            ...Array.from(
+              header.querySelectorAll("button, a, [role=switch]"),
+              (control) => control.getBoundingClientRect().right,
+            ),
+          ),
+        ),
+      ).toBeLessThanOrEqual(320);
+
       await page
         .getByRole("button", { name: "Sign in to linear-mcp", exact: true })
         .first()

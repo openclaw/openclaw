@@ -2724,6 +2724,7 @@
 
   .plugin-catalog-detail--rail .plugin-catalog-detail__actions {
     flex: 1 1 100%;
+    flex-wrap: wrap;
     gap: 8px;
   }
 
