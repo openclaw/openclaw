@@ -43,12 +43,22 @@ const lmStudio = {
   label: "LM Studio",
   actionLabel: "Connect server",
 };
+// The Gateway always sends its bundled install catalog (scripts/lib/recommended-tool-installs.json).
+const ollamaInstall = {
+  id: "ollama",
+  brandId: "ollama",
+  label: "Ollama",
+  hint: "Run open models locally",
+  website: "https://ollama.com/download",
+  icon: "https://cdn.simpleicons.org/ollama",
+};
 function detection(candidates: Detection["candidates"] = [codex, local]): Detection {
   return {
     candidates,
     manualProviders: [apiKey],
     authOptions: [chatgpt],
     prepareOptions: [lmStudio],
+    recommendedInstalls: [ollamaInstall],
     workspace: "/workspace",
     setupComplete: false,
   };
@@ -160,18 +170,22 @@ it("waits for the user to pick the detected AI before testing and saving it", as
   expectRpc(request, "detect", {});
   expect(calls(request, "activate.start")).toHaveLength(0);
   expect(request.mock.calls.filter(([method]) => method === "openclaw.chat")).toHaveLength(0);
-  // Rows name the AI the way the Mac does, never by model id.
-  // A Codex login and the ChatGPT sign-in are one ChatGPT choice.
-  text(page).toContain("ChatGPTUse your existing login");
-  // ChatGPT, Local model, LM Studio, API Keys.
-  expect(page.querySelectorAll(".custodian-setup .option-card__choice").length).toBe(4);
+  // One row per provider, ChatGPT first as on main, never a model id.
+  expect(
+    [...page.querySelectorAll(".custodian-setup .option-card__choice")].map(
+      (row) => row.textContent,
+    ),
+  ).toEqual(["ChatGPT", "Run a model locally", "Another provider"]);
   text(page).not.toContain("Codex");
   text(page).not.toContain("Sign in with ChatGPT");
   text(page).not.toContain("openai/gpt-5.5");
-  const row = findButton(page, "Local modelLoaded in Ollama");
+  await click(page, "Run a model locally");
+  const row = findButton(page, "Local modelLoaded in OllamaUse");
   row.click();
   row.click();
-  await waitForFast(() => text(page).toContain("Asking for a quick reply…"));
+  await waitForFast(() =>
+    text(page).toContain("Checking a real conversation. This may take a minute."),
+  );
   expect(calls(request, "activate.start")).toHaveLength(1);
   expectRpc(
     request,
@@ -194,17 +208,16 @@ it("shows a short reason for a failed test and folds the Gateway's error into de
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "ChatGPTUse your existing login");
-  const row = findButton(
-    page,
-    "ChatGPTIt couldn’t complete the test. Try again, or choose another AI.Sign in",
+  await click(page, "ChatGPT");
+  await waitForFast(() =>
+    text(page).toContain("It couldn’t complete the test. Try again, or choose another AI."),
   );
   const details = page.querySelector<HTMLDetailsElement>(".custodian-setup details")!;
   expect(details.open).toBe(false);
   expect(details.querySelector("pre")?.textContent).toBe(error);
   expect(page.store.autoSetup.ready).toBe(false);
-  // The same row now signs in instead of retrying the login that failed.
-  row.click();
+  // After the stored login fails its test, ChatGPT offers its one sign-in, as on main.
+  findButton(page, "Sign in with ChatGPT").click();
   await waitForFast(() =>
     expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id })),
   );
@@ -227,8 +240,8 @@ it.each([
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  text(page).toContain("No usable AI access found on this Gateway");
-  await click(page, "ChatGPTSign in");
+  await click(page, "ChatGPT");
+  await click(page, "Sign in with ChatGPT");
   expectRpc(request, "auth.start", expect.objectContaining({ authChoice: chatgpt.id }));
   await click(page, "Yes");
   if (outcome === "done") {
@@ -236,10 +249,8 @@ it.each([
     return;
   }
   const alert = page.querySelector<HTMLElement>('.custodian-setup [role="alert"]')!;
-  expect(alert.querySelector("strong")?.textContent).toBe("ChatGPT didn’t finish");
-  expect(alert.querySelector("p")?.textContent).toBe(
-    "Sign-in didn’t work. Try again, or choose another AI.",
-  );
+  expect(alert.querySelector("strong")?.textContent).toBe("Sign-in didn’t complete");
+  expect(alert.querySelector("p")?.textContent).toBe("Try again, or choose another AI.");
   expect(alert.querySelector("details")?.open).toBe(false);
   expect(alert.querySelector("pre")?.textContent).toContain(realSignInError);
 });
@@ -259,9 +270,9 @@ it("shows detection failures briefly and checks again", async () => {
     "Couldn’t check this Gateway for AI access",
   );
   expect(alert.querySelector("pre")?.textContent).toContain("Gateway lost its connection");
-  await click(page, "Retry");
+  await click(page, "Try again");
   expect(calls(request, "detect")).toHaveLength(2);
-  text(page).toContain("ChatGPTUse your existing login");
+  findButton(page, "ChatGPT");
 });
 
 it("shows a configured Gateway as done without testing anything", async () => {
@@ -301,7 +312,7 @@ it("retires a held activation when the visible store is replaced", async () => {
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  findButton(page, "ChatGPTUse your existing login").click();
+  findButton(page, "ChatGPT").click();
   await waitForFast(() => expect(page.store.autoSetup.testing).toBe("codex-cli"));
   page.store = new CustodianSessionStore();
   await settled(page, () => page.store.autoSetup.detection !== null);
@@ -332,6 +343,7 @@ it("sets up a local model from the card, as on the Mac", async () => {
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
+  await click(page, "Run a model locally");
   await click(page, "LM StudioConnect server");
   expectRpc(request, "prepare.start", expect.objectContaining({ authChoice: lmStudio.id }));
   await waitForFast(() =>
@@ -351,7 +363,7 @@ it("connects an API key from the card's own form", async () => {
   });
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "API KeysConnect with an API key or tokenConnect");
+  await click(page, "Another provider");
   const form = page.querySelector("form")!;
   form.querySelector<HTMLInputElement>('input[name="key"]')!.value = "sk-test-not-real";
   form.requestSubmit();
@@ -368,22 +380,26 @@ it("connects an API key from the card's own form", async () => {
   );
 });
 
-it("offers install links when the Gateway finds no AI", async () => {
-  const ollama = {
-    id: "ollama",
-    label: "Ollama",
-    hint: "Run open models locally",
-    website: "https://ollama.com",
-    icon: "https://ollama.com/icon.png",
-  };
-  const { page } = await mountSetup(
-    setupRequest(() => ({ ...detection([]), recommendedInstalls: [ollama] })),
-  );
+it("uses a Claude Code login the Gateway found with one click", async () => {
+  const claudeCode = {
+    kind: "claude-cli",
+    brandId: "anthropic",
+    label: "Claude Code",
+    detail: "installed; signed in",
+    modelRef: "anthropic/claude-sonnet",
+    recommended: false,
+  } satisfies Detection["candidates"][number];
+  const request = setupRequest(() => detection([claudeCode]), {
+    "openclaw.setup.activate.start": () => activated(claudeCode.modelRef),
+  });
+  const { page } = await mountSetup(request);
   await openAiStep(page);
-  text(page).toContain("Install one of these, then check again.");
-  const link = page.querySelector<HTMLAnchorElement>('a[href="https://ollama.com"]')!;
-  expect(link.textContent).toBe("OllamaRun open models locally");
-  expect(link.target).toBe("_blank");
+  await click(page, "Claude");
+  expect(page.querySelector('.custodian-setup input[name="key"]')).toBeNull();
+  await click(page, "Use my Claude Code login");
+  expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
+  await settled(page, () => page.store.autoSetup.ready);
+  text(page).toContain("You’re all set!");
 });
 
 it("ignores an old Gateway result after connection ownership changes", async () => {
@@ -424,7 +440,8 @@ it("keeps cancellation available during an answer and resumes after protected ca
   );
   const { page } = await mountSetup(request);
   await openAiStep(page);
-  await click(page, "ChatGPTSign in");
+  await click(page, "ChatGPT");
+  await click(page, "Sign in with ChatGPT");
   findButton(page, "Yes").click();
   await waitForSolid(() => expect(findButton(page, "Yes").disabled).toBe(true));
   expect(findButton(page, "Cancel").disabled).toBe(false);

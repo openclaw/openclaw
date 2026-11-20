@@ -17,7 +17,7 @@ export type SetupCandidate = SetupDetection["candidates"][number];
 export type SetupAuthOption = NonNullable<SetupDetection["authOptions"]>[number];
 export type SetupPrepareOption = NonNullable<SetupDetection["prepareOptions"]>[number];
 export type SetupManualProvider = SetupDetection["manualProviders"][number];
-type SetupAttempt = { key: string; label: string; progress?: string; signIn?: true };
+type SetupAttempt = { key: string; progress?: string; signIn?: true };
 export type SetupStep = "welcome" | "where" | "ai";
 /** One short sentence for the card; the Gateway's own text stays behind Show details. */
 export type SetupFailure = { title: string; summary: string; detail?: string };
@@ -240,7 +240,8 @@ export class CustodianAutoSetup {
       ...(candidate.modelTarget ? { modelTarget: candidate.modelTarget } : {}),
       ...this.catalogPreference(),
     };
-    return this.begin({ key: candidate.kind, label: candidate.label }, () =>
+    const progress = t("custodian.autoSetup.testing");
+    return this.begin({ key: candidate.kind, progress }, () =>
       this.wizard.activate(params, activationTargetId(candidate.kind, candidate.modelRef)),
     );
   }
@@ -254,15 +255,14 @@ export class CustodianAutoSetup {
       ...(provider.modelTarget ? { modelTarget: provider.modelTarget } : {}),
       ...this.catalogPreference(),
     };
-    return this.begin(
-      { key: "api-key", label: provider.label, progress: t("custodian.autoSetup.testing") },
-      () => this.wizard.activate(params, "api-key"),
+    return this.begin({ key: "api-key", progress: t("custodian.autoSetup.testing") }, () =>
+      this.wizard.activate(params, "api-key"),
     );
   }
 
   signIn(option: SetupAuthOption): Promise<void> {
     const progress = t("custodian.autoSetup.startingSignIn");
-    return this.begin({ key: option.id, label: option.label, progress, signIn: true }, () => {
+    return this.begin({ key: option.id, progress, signIn: true }, () => {
       this.wizard.prepareSignIn(option.kind, option.label, option.brandId);
       return this.wizard.start(
         option.id,
@@ -275,7 +275,7 @@ export class CustodianAutoSetup {
 
   prepare(option: SetupPrepareOption): Promise<void> {
     const progress = t("custodian.autoSetup.preparing");
-    return this.begin({ key: option.id, label: option.label, progress }, () =>
+    return this.begin({ key: option.id, progress }, () =>
       this.wizard.start(option.id, "openclaw.setup.prepare.start"),
     );
   }
@@ -319,13 +319,11 @@ export class CustodianAutoSetup {
     if (state.phase !== "error") {
       return null;
     }
-    const label = this.attempt?.label ?? t("custodian.autoSetup.signInFallbackLabel");
     const signIn = this.attempt?.signIn === true;
     return {
       key,
       title: t(
         signIn ? "custodian.autoSetup.signInFailedTitle" : "custodian.autoSetup.testFailedTitle",
-        { label },
       ),
       summary: t(signIn ? "custodian.autoSetup.signInFailed" : "custodian.autoSetup.testFailed"),
       detail: state.message,
