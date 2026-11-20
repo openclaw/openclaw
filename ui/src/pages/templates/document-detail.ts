@@ -5,6 +5,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { currentDisplayConfig } from "../../lib/config/config-state-model.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { isTemplatesAvailable } from "./availability.ts";
 import {
   beginTemplateDetailRead,
@@ -79,8 +80,8 @@ export function prepareConnectingDocument(
     stopGateway();
     stopConfig();
     stopRoute();
-    signal.removeEventListener("abort", retire);
-    lifecycleAbortSignal?.removeEventListener("abort", retire);
+    stopNavigationAbort();
+    stopLifecycleAbort?.();
     data.takeInitialDetail = undefined;
     return read;
   };
@@ -161,8 +162,10 @@ export function prepareConnectingDocument(
   const stopGateway = gateway.subscribe(reconcile);
   const stopConfig = runtimeConfig.subscribe(reconcile);
   const stopRoute = router.subscribe(reconcile);
-  signal.addEventListener("abort", retire, { once: true });
-  lifecycleAbortSignal?.addEventListener("abort", retire, { once: true });
+  const stopNavigationAbort = listen(signal, "abort", retire, { once: true });
+  const stopLifecycleAbort = lifecycleAbortSignal
+    ? listen(lifecycleAbortSignal, "abort", retire, { once: true })
+    : undefined;
   data.takeInitialDetail = take;
   reconcile();
   return () => {

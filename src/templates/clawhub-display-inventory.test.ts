@@ -96,9 +96,11 @@ describe("display-only registry inventory", () => {
   );
   function expectOneRead() {
     expect(fetch).toHaveBeenCalledOnce();
-    const url = new URL(String(fetch.mock.calls[0]![0]));
+    const [input] = fetch.mock.calls[0]!;
+    const url = new URL(input instanceof Request ? input.url : input);
     expect(url.pathname).toBe("/api/v1/packages/" + encodeURIComponent(packageName));
     expect(url.searchParams.get("view")).toBe("template-inventory");
+    return url;
   }
   it("rejects a too-large inventory response before parsing, without legacy fallback", async () => {
     fetch.mockImplementation(async () => new Response(" ".repeat(512 * 1024 + 1)));
@@ -131,13 +133,10 @@ describe("display-only registry inventory", () => {
         scheduledJobs: 0,
         security: { verdict: "benign" },
       });
-      expectOneRead();
-      expect(new URL(String(fetch.mock.calls[0]![0])).searchParams.get("version")).toBe(
-        pinned ? version : null,
-      );
+      expect(expectOneRead().searchParams.get("version")).toBe(pinned ? version : null);
     },
   );
-  it.each([
+  const invalidInventories: ReadonlyArray<readonly [string, () => unknown]> = [
     ["missing icon", () => ({ ...inventory(), icon: undefined })],
     [
       "conflicting legacy SHA",
@@ -236,7 +235,8 @@ describe("display-only registry inventory", () => {
         },
       }),
     ],
-  ] as const)(
+  ];
+  it.each(invalidInventories)(
     "refuses a present %s inventory, without a secondary read",
     async (_reason, fixture) => {
       serve(fixture());

@@ -44,7 +44,6 @@ import { measureTemplateAddStage, startTemplateAddStage } from "./timings.js";
 export type {
   ClawHubTemplateCatalogDetail,
   ClawHubTemplateCatalogEntry,
-  ClawHubTemplateCatalogOverview,
 } from "./clawhub-catalog-types.js";
 export type { ClawHubTemplateCatalogPreview } from "./clawhub-preview-content.js";
 export { ClawHubSourceError };
@@ -67,10 +66,6 @@ const verifiedDetailContents = new Map<
     contents: ClawHubTemplateCatalogDetail["contents"];
   }
 >();
-
-export function resetTemplateDetailContentsForTest(): void {
-  verifiedDetailContents.clear();
-}
 
 export async function readClawHubTemplateDetail(
   params: ClawHubFetchOptions & { packageName: string; version?: string },

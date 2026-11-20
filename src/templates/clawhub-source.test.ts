@@ -57,9 +57,8 @@ vi.mock("./reader.js", () => ({
 }));
 
 import {
-  readClawHubTemplateDetail,
+  readClawHubTemplateDetail as loadDetail,
   readClawHubTemplatePreview,
-  resetTemplateDetailContentsForTest,
   readClawHubTemplatesOverview,
   searchClawHubTemplates,
   withResolvedClawHubSource,
@@ -74,6 +73,9 @@ const digest = createHash("sha256").update(archiveBytes).digest("hex");
 const tempDirs = createTrackedTempDirs();
 let fixtureRoot: string;
 let fixtureStateDir: string;
+let registryBaseUrl: string;
+const readClawHubTemplateDetail = (params: Parameters<typeof loadDetail>[0]) =>
+  loadDetail({ baseUrl: registryBaseUrl, ...params });
 const packageJson = (name = packageName, selectedVersion = version, template = "CLAW.md") =>
   JSON.stringify({ name, version: selectedVersion, openclaw: { template } });
 const writePackage = (name = packageName, selectedVersion = version) =>
@@ -229,9 +231,10 @@ async function prepareResolverFixture(
 }
 
 beforeEach(async () => {
-  resetTemplateDetailContentsForTest();
   vi.resetAllMocks();
   const temp = await tempDirs.make("openclaw-clawhub-catalog-");
+  // Isolate verified-contents cache keys between tests, not between reads in one test.
+  registryBaseUrl = `https://${path.basename(temp).toLowerCase()}.example`;
   const extractedRoot = (fixtureRoot = path.join(temp, "extracted"));
   fixtureStateDir = path.join(temp, "state");
   const archivePath = path.join(temp, "catalog.clawpack");
@@ -722,7 +725,7 @@ describe("public ClawHub Template catalog", () => {
 
       const detail = await readClawHubTemplateDetail({ packageName, version: selectedVersion });
       expect(detail.version).toBe(selectedVersion);
-      expect(detail.iconUrl).toBe(icon ? `https://clawhub.ai${icon}` : undefined);
+      expect(detail.iconUrl).toBe(icon ? `${registryBaseUrl}${icon}` : undefined);
       expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
       expect(detail).not.toHaveProperty("scanStatus");
     },
