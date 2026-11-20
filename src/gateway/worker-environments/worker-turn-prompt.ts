@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerToolSurface } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agents/agent-project-settings.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
@@ -18,6 +19,7 @@ import {
   persistSessionSystemPrompt,
   prepareSessionSystemPrompt,
   retainEmbeddedSessionPromptState,
+  SYSTEM_PROMPT_UPDATE_HEADER,
 } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import {
   prepareHarnessContextEnginePrompt,
@@ -40,6 +42,10 @@ import type { Model } from "../../llm/types.js";
 import { logWarn } from "../../logger.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
+import {
+  omitRecordedModelPrompt,
+  readModelPromptProjection,
+} from "../../sessions/user-turn-transcript.message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -289,6 +295,25 @@ export async function prepareWorkerTurnPrompt(params: {
       entries,
       historyBoundaryCount: params.manager.getBoundaryCount(),
     });
+    // A rebuilt prompt already holds earlier deltas; older user rows stop replaying them.
+    const rebuild = pinned.restart
+      ? Infinity
+      : Date.parse(
+          entries.findLast(
+            (entry) =>
+              entry.type === "custom" &&
+              entry.customType === "openclaw.system-prompt" &&
+              isRecord(entry.data) &&
+              entry.data.restart === true,
+          )?.timestamp ?? "",
+        );
+    params.history = params.history.map((message) =>
+      message.role === "user" &&
+      message.timestamp < rebuild &&
+      readModelPromptProjection(message)?.startsWith(SYSTEM_PROMPT_UPDATE_HEADER)
+        ? omitRecordedModelPrompt(message)
+        : message,
+    );
     if (pinned.update) {
       assembly.effectivePrompt = `${pinned.update.content}\n\n${assembly.effectivePrompt}`;
     }

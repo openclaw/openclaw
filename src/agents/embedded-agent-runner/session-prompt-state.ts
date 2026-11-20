@@ -379,6 +379,9 @@ export function beginSessionSystemPrompt(state: EmbeddedSessionPromptState): voi
  *   session's selected person.
  * The operator refresh is one of these: `/compact`, `/new` or a model switch.
  */
+export const SYSTEM_PROMPT_UPDATE_HEADER =
+  "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.";
+
 export function prepareSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
@@ -486,7 +489,7 @@ export function prepareSessionSystemPrompt(params: {
       ? buildSystemUpdateMessage(
           restart
             ? sections.join("\n\n")
-            : `System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n${sections.join("\n\n")}`,
+            : `${SYSTEM_PROMPT_UPDATE_HEADER}\n\n${sections.join("\n\n")}`,
           "prompt-update",
           false,
         )
