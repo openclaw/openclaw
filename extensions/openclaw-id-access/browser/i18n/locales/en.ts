@@ -1,13 +1,16 @@
+import type { RoleSessionAccess } from "../../types.js";
+
 const en = {
   role: "Role",
   administrator: "Administrator access",
   noAdministrator: "No administrator access",
   sessions: {
     none: "No access to other people's sessions",
+    invited: "Only sessions they're invited to",
     view: "Read other people's sessions",
     suggest: "Read and suggest changes to other people's sessions",
     write: "Read and change other people's sessions",
-  },
+  } satisfies Record<RoleSessionAccess, string>,
   sandboxRequired: "Sandbox required",
   sandboxInherited: "Sandbox follows agent settings",
   noRoles:
