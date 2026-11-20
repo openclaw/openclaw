@@ -2,9 +2,9 @@ import {
   recordBackupRunInDatabase,
   type PreparedBackupRunRecord,
 } from "./backup-run-records.kernel.js";
-import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
 import { isOpenClawStateDatabaseOpen } from "./openclaw-state-db.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-schema-inspection.js";
 import type { WorkerWriteOperationContext } from "./worker-operation-registry.js";
 
 export const backupRunOperations = {

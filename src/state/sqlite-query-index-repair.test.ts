@@ -19,10 +19,8 @@ import {
   openExistingOpenClawStateDatabaseReadOnly as readState,
   openOpenClawStateDatabase as openState,
 } from "./openclaw-state-db.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
+import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "./openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function closeDatabases() {

@@ -16,9 +16,9 @@ import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js"
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-schema-inspection.js";
 import {
   compactDoctorSqliteFile,
   DoctorSqliteCompactionDeferredError,

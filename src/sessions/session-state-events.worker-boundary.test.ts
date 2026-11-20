@@ -30,10 +30,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  getOpenClawStateRuntimeSchema,
-  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-} from "../state/openclaw-state-schema-compatibility.js";
+import { STATE_RUNTIME_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";

@@ -10,7 +10,7 @@ import {
   trackSqliteSchema,
 } from "../infra/sqlite-schema-facts.js";
 import { readExistingAgentSchemaMeta as readAgentMeta } from "./openclaw-agent-db-metadata.js";
-import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-schema-inspection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());

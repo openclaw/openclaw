@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { assertSqliteSchemaContains } from "../../infra/sqlite-schema-contract.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { getOpenClawStateRuntimeSchema } from "../../state/openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "../../state/openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";

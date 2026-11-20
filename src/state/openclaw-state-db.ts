@@ -64,10 +64,7 @@ import {
   assertStateDatabaseSchemaAdmission,
 } from "./openclaw-state-db-existing-schema.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "./openclaw-state-db-fast-path.js";
-import {
-  assertOpenClawStateDatabaseForMaintenance,
-  markCurrentStateSchemaVersion,
-} from "./openclaw-state-db-maintenance.js";
+import { markCurrentStateSchemaVersion } from "./openclaw-state-db-maintenance.js";
 import {
   openUnpublishedStateDatabase,
   openUnpublishedStateDatabaseAsync,
@@ -107,6 +104,7 @@ import {
   assertOpenClawStateWriteAllowed,
   isOpenClawStateWriteContentionError,
 } from "./openclaw-state-ownership.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-schema-inspection.js";
 import {
   readStateSchemaPublicationBlocker,
   type StateSchemaPublicationBlocker,
@@ -120,7 +118,6 @@ export type {
   OpenClawStateDatabaseOptions,
   OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
-export { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
 export { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
 export { detectOpenClawStateDatabaseSchemaMigrations } from "./openclaw-state-db-schema-discovery.js";
 

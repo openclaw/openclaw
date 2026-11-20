@@ -1,18 +1,14 @@
 import type { DatabaseSync } from "node:sqlite";
 import { CLIENT_CREDENTIAL_SOURCE_TABLES } from "../infra/client-credential-schema.js";
-import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { withSqliteWritableSchema } from "../infra/sqlite-schema-catalog.js";
 import {
-  assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
   collectSqliteSchemaIssues,
   createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexContracts,
-  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { splitSqlList } from "../infra/sqlite-schema-sql.js";
@@ -23,12 +19,7 @@ import {
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-context.js";
 import { VERSION } from "../version.js";
-import {
-  getStateRuntimeSchemaAdmission,
-  getStateSchemaVersionAdmission,
-  adoptPeerPublishedStateSchemaVersion,
-  publishStateSchemaVersionAdmission,
-} from "./openclaw-state-db-admission.js";
+import { publishStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import {
   CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -47,12 +38,7 @@ import {
 import { migrateHistoricalStateImports } from "./openclaw-state-db-historical-imports.js";
 import { stateIndexOrderingMigrations } from "./openclaw-state-db-index-ordering-migrations.js";
 import { migrateMeetingTranscriptStartTime } from "./openclaw-state-db-meeting-chronology-migration.js";
-import {
-  classifySqliteTableReadError,
-  ensureColumn,
-  tableExists,
-  tableHasColumn,
-} from "./openclaw-state-db-schema-helpers.js";
+import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { statePredicateColumnMigration } from "./openclaw-state-db-schema-v21-columns.js";
 import {
@@ -79,23 +65,24 @@ import { stateWorkerProvisionSourceMigration } from "./openclaw-state-db-schema-
 import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
-  type StateSchemaVersionFacts,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
   findMissingLazyStateStartupColumn,
-  getOpenClawStateRuntimeSchema,
-  OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
   STATE_RUNTIME_SCHEMA_COMPATIBILITY,
   STATE_V5_ADDITIVE_TABLES,
   STATE_V6_ADDITIVE_TABLES,
 } from "./openclaw-state-schema-compatibility.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-schema-inspection.js";
 import {
   readStateSchemaPublicationBlocker,
   resolveStateSchemaVersionToPublish,
 } from "./openclaw-state-schema-publication.js";
-import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
+import {
+  getOpenClawStateRuntimeSchema,
+  getOpenClawStatePredecessorSchema,
+} from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
 import {
@@ -186,84 +173,6 @@ export function prepareStateDatabaseSchemaRepair(
 }
 
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
-
-/** Require canonical shared-state ownership without requiring the latest schema. */
-export function assertOpenClawStateDatabaseOwner(
-  database: EngineConnection,
-  options: { pathname: string },
-): { schema_version?: unknown } {
-  const admitted = getStateSchemaVersionAdmission(database);
-  if (admitted && getStateRuntimeSchemaAdmission(database)) {
-    return { schema_version: admitted.userVersion };
-  }
-  const hasMetadataTable = tableExists(database, "schema_meta");
-  let metadata;
-  try {
-    metadata = hasMetadataTable
-      ? database
-          .prepare(
-            "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary' LIMIT 1",
-          )
-          .get()
-      : undefined;
-  } catch (error) {
-    throw classifySqliteTableReadError(
-      database,
-      "schema_meta",
-      ["meta_key", "role", "schema_version"],
-      error,
-    );
-  }
-  if (metadata?.role !== "global") {
-    const role = typeof metadata?.role === "string" ? metadata.role : "missing";
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} has schema role ${role}; expected global. Run openclaw doctor --fix to inspect and repair its ownership.`,
-    );
-  }
-  return metadata;
-}
-
-/** Require the canonical shared-state owner and schema before offline file maintenance. */
-export function assertOpenClawStateDatabaseForMaintenance(
-  database: EngineConnection,
-  options: { pathname: string; schemaVersions?: StateSchemaVersionFacts },
-  readTable?: SqliteTableContractReader,
-): void {
-  if (isPostgresSqlConnection(database)) {
-    requireNativeDatabaseFile("postgres", "repair");
-  }
-  const userVersion = assertSupportedStateSchemaVersion(
-    database,
-    options.pathname,
-    options.schemaVersions,
-  );
-  const contentVersion =
-    options.schemaVersions?.contentVersion ?? readStateSchemaContentVersion(database);
-  if (contentVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} uses schema version ${userVersion}; run openclaw doctor --fix before compacting it.`,
-    );
-  }
-
-  const metadata = assertOpenClawStateDatabaseOwner(database, options);
-  if (
-    metadata?.schema_version !== userVersion &&
-    !adoptPeerPublishedStateSchemaVersion(database, metadata)
-  ) {
-    const schemaVersion =
-      typeof metadata?.schema_version === "number" ? metadata.schema_version : "invalid";
-    throw new SqliteSchemaMismatchError(
-      `OpenClaw state database ${options.pathname} metadata schema version ${schemaVersion} does not match ${userVersion}; run openclaw doctor --fix before compacting it.`,
-    );
-  }
-  assertSqliteSchemaContains(
-    database,
-    options.pathname,
-    OPENCLAW_STATE_SCHEMA_SQL,
-    OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
-    readTable,
-  );
-}
 
 function assertOpenClawStateDatabaseVersionForMigration(
   database: DatabaseSync,

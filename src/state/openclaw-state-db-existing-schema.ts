@@ -18,10 +18,6 @@ import {
   OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
 } from "./openclaw-state-db-contract.js";
-import {
-  assertCurrentStateRuntimeSchema,
-  assertNoLegacyStateRuntimeRepair,
-} from "./openclaw-state-db-fast-path.js";
 import { readTrackedStateDatabaseIdentity } from "./openclaw-state-db-handle.js";
 import {
   assertOpenClawStateRuntimeIntegrity,
@@ -34,6 +30,10 @@ import {
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
+import {
+  assertCurrentStateRuntimeSchema,
+  assertNoLegacyStateRuntimeRepair,
+} from "./openclaw-state-schema-inspection.js";
 
 /** Metadata is validated with the physical database's first runtime admission. */
 function assertExistingOpenClawStateRuntimeMetadata(

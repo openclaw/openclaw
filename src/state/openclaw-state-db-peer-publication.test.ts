@@ -8,13 +8,13 @@ import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { getStateSchemaVersionAdmission } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
 } from "./openclaw-state-db-schema-version.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
+import { assertCurrentStateRuntimeSchema } from "./openclaw-state-schema-inspection.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {

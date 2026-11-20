@@ -6,12 +6,9 @@ import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js"
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
-  assertSqliteSchemaContains,
   createSqliteTableContractReader,
   readSqliteSchemaCookie,
-  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
-import { throwSqliteSchemaMismatches } from "../infra/sqlite-schema-issues.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { hasLegacyCronRunLogs } from "../infra/state-legacy-cron-presence.js";
@@ -25,19 +22,15 @@ import type { OpenClawStateIntegrityAdmission } from "./openclaw-state-db-async-
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { hasHistoricalImageReserveSnapshots } from "./openclaw-state-db-image-snapshot-migration.js";
 import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "./openclaw-state-db-maintenance.js";
-import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
-import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import {
-  findMissingLazyStateStartupColumn,
-  STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-} from "./openclaw-state-schema-compatibility.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+  assertCurrentStateRuntimeSchema,
+  assertNoLegacyStateRuntimeRepair,
+} from "./openclaw-state-schema-inspection.js";
 
 /** Doctor must yield while preserving the captured source's WAL artifacts. */
 export async function needsOpenClawStateDatabaseSchemaRepair(
@@ -101,35 +94,6 @@ function inspectStateSchemaRepair(
     return true;
   } finally {
     database?.close();
-  }
-}
-
-export function assertCurrentStateRuntimeSchema(
-  database: DatabaseSync,
-  pathname: string,
-  readTable: SqliteTableContractReader = createSqliteTableContractReader(database),
-): void {
-  const missing = findMissingLazyStateStartupColumn(readTable);
-  if (missing) {
-    throwSqliteSchemaMismatches(pathname, [
-      "missing column " + missing.tableName + "." + missing.columnName,
-    ]);
-  }
-  assertCanonicalStateSchemaShape(database, pathname);
-  assertOpenClawStateDatabaseForMaintenance(database, { pathname }, readTable);
-  assertSqliteSchemaContains(
-    database,
-    pathname,
-    OPENCLAW_STATE_SCHEMA_SQL,
-    STATE_RUNTIME_SCHEMA_COMPATIBILITY,
-    readTable,
-  );
-}
-
-/** Catalog presence is enough to refuse retired history without reading or rewriting its rows. */
-export function assertNoLegacyStateRuntimeRepair(database: DatabaseSync, pathname: string): void {
-  if (hasLegacyCronRunLogs(database)) {
-    throw new OpenClawStateDatabaseSchemaMigrationRequiredError("legacy-cron-run-logs", pathname);
   }
 }
 

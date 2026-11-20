@@ -8,7 +8,6 @@ import {
   inspectStateSqlite,
   stateEngineSchema,
 } from "../../state/openclaw-state-db-engine.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
 import { ensureFirstUseAdditiveStateColumnsForStrictMigration } from "../../state/openclaw-state-db-schema-additive.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
@@ -30,6 +29,7 @@ import { withLegacyWorkspaceBootstrapDeferred } from "../../state/openclaw-state
 import { withLegacyWorkerProvisionSource } from "../../state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-schema-inspection.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import manifest from "../../state/postgres-schema.generated/manifest.json" with { type: "json" };
 import { statePostgresRuntime } from "../../state/postgres-schema.generated/runtime.js";

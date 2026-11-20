@@ -21,13 +21,15 @@ import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "./openclaw-state-db-contract.js";
-import { assertNoLegacyStateRuntimeRepair } from "./openclaw-state-db-fast-path.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import {
   inspectOpenClawStateOwnershipFromDatabase,
   type OpenClawExternalStateOwnership,
 } from "./openclaw-state-ownership.js";
-import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
+import {
+  assertNoLegacyStateRuntimeRepair,
+  inspectCurrentStateStartupSchema,
+} from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 
 /** Compare one explicit SQLite file with this release's canonical shared-state schema. */

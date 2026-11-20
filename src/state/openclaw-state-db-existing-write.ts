@@ -43,7 +43,6 @@ import {
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabase, closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
-import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-db-maintenance.js";
 import {
   assertOpenClawStateSchemaRepairAllowed,
   isExistingOpenClawStateSchema,
@@ -56,6 +55,7 @@ import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
+import { assertOpenClawStateDatabaseOwner } from "./openclaw-state-schema-inspection.js";
 
 type ExistingWriteOptions = OpenClawStateDatabaseOptions & { busyTimeoutMs?: number };
 type ExistingWriteContract = Pick<SqliteTransactionOptions, "beginLockFailureReporting"> & {

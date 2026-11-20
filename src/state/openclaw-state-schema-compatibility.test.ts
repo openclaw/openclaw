@@ -2,10 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
 import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import {
-  getOpenClawStateRuntimeSchema,
   OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY as maintenanceCompatibility,
   STATE_RUNTIME_SCHEMA_COMPATIBILITY as runtimeCompatibility,
 } from "./openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL as fullSchema } from "./openclaw-state-schema.js";
 
 it.each([

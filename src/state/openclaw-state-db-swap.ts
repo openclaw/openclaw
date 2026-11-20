@@ -9,8 +9,8 @@ import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
 } from "./openclaw-state-feature-schema.js";
-import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
+import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import {
   buildSqliteWithFoldIns,

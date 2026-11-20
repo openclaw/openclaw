@@ -81,8 +81,6 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   return openClawStateCanonicalNamedIndexSet;
 }
 
-export { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-runtime.js";
-
 // Retirement preserves existing tables and rows without creating them on fresh installs.
 export const RETAINED_STATE_TABLES = ["fleet_cells"] as const;
 

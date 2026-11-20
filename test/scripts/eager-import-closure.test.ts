@@ -705,7 +705,19 @@ const deferredOwnerCases: Array<[string, string[], string[], boolean?]> = [
   [
     "shared-state read worker startup",
     ["src/state/openclaw-state-read.worker.ts"],
-    ["src/infra/state-migrations.cron-run-logs.ts", "src/cron/run-history-detail.ts"],
+    [
+      "src/infra/state-migrations.cron-run-logs.ts",
+      "src/cron/run-history-detail.ts",
+      "src/state/openclaw-state-db-fast-path.ts",
+      "src/state/openclaw-state-db-maintenance.ts",
+      "src/state/openclaw-state-db-schema-repair.ts",
+      "src/state/openclaw-state-db-audit-migration.ts",
+      "src/state/openclaw-state-db-operator-approval-migration.ts",
+      "src/state/openclaw-state-db-image-snapshot-migration.ts",
+      "src/state/openclaw-state-schema-runtime.ts",
+      "src/gateway/worker-environments/preparation-identity.schema.ts",
+      "src/gateway/worker-environments/environment-recipe.ts",
+    ],
   ],
   [
     "state and session readiness",

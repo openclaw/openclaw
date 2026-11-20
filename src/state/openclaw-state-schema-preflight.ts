@@ -24,15 +24,15 @@ import {
   getStateSchemaVersionAdmission,
 } from "./openclaw-state-db-admission.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import {
-  assertOpenClawStateDatabaseForMaintenance,
-  openClawStateMigrationAssertions,
-} from "./openclaw-state-db-maintenance.js";
+import { openClawStateMigrationAssertions } from "./openclaw-state-db-maintenance.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
-import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
 import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
-import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
+import {
+  assertOpenClawStateDatabaseForMaintenance,
+  assertCanonicalStateSchemaShape,
+  inspectCurrentStateStartupSchema,
+} from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 

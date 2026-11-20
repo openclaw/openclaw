@@ -12,11 +12,11 @@ import * as configIo from "../../config/io.js";
 import { loadGatewayConfigRevisionProjector } from "../../gateway/config-revision-token.js";
 import * as pluginMetadata from "../../plugins/plugin-metadata-snapshot.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
-import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-db-maintenance.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { assertOpenClawStateDatabaseForMaintenance } from "../../state/openclaw-state-schema-inspection.js";
 import { readClientCredentialReceipt } from "../client-credential-readiness.js";
 import { readClientCredentialFileIdentity } from "../client-credential-receipt.js";
 import { openClientCredentialCustody } from "../client-credential-store.js";

@@ -32,7 +32,7 @@ import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
 } from "../state/openclaw-state-db-schema-version.js";
-import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
+import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-runtime.js";
 import { gitBackupRedaction, redactGitBackupRow } from "./git-backup-sanitizer.js";
 import { hashSnapshotArtifact } from "./manifest.js";
 import { buildSnapshotValidator } from "./openclaw-snapshot-copy.js";
