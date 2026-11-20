@@ -422,8 +422,8 @@ export async function finalizeWorkerTurnResult(
   if (!terminal || terminal.type !== "message" || terminal.message.role !== "assistant") {
     throw new Error("Cloud worker completed without a terminal assistant transcript message");
   }
-  // A cancelled turn keeps its committed rows but advances no prompt series.
-  if (!workerTurnFailed && !params.signal.aborted && promptContext.commitSystemPrompt) {
+  // The turn's rows, including any prompt delta on its user row, are committed: advance the series.
+  if (promptContext.commitSystemPrompt) {
     await promptContext.commitSystemPrompt(completed, (run) =>
       withSessionTranscriptWriteAssertion(resultTarget, assertResultCurrent, run),
     );
