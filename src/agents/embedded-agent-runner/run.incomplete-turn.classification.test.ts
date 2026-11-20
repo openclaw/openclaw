@@ -20,7 +20,7 @@ const EMPTY_RETRY =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current state; do not restart from scratch.";
 const REJECTION = "Provider completed tool call with malformed JSON arguments";
 const spawn = { runId: "child", childSessionKey: "agent:test:subagent:child" };
-type Assistant = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+type Assistant = ReturnType<typeof buildEmbeddedRunnerAssistant>;
 type Attempt = Partial<EmbeddedRunAttemptResult>;
 
 function assistant(overrides: Partial<Assistant> = {}) {

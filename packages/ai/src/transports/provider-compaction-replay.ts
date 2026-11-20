@@ -1,4 +1,4 @@
-import type { AssistantMessage, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNewestAnthropicCompaction } from "./anthropic-compaction-replay.js";
 import { resolveAnthropicServerCompactionPlan } from "./anthropic-payload-policy.js";
@@ -35,7 +35,7 @@ type ReplayPressureEstimator = {
 
 function isAssistantReplayMessage<T extends ReplayMessage>(
   message: T,
-): message is T & AssistantMessage {
+): message is T & AssistantHistoryMessage {
   return message.role === "assistant";
 }
 
@@ -254,10 +254,10 @@ export function resolveCompactionReplayPressure<T extends ReplayMessage>(
 }
 
 /** Preserve the covered prefix and reindex checkpoints after known content removals. */
-export function replaceCompactionReplayOwnerContent(
-  message: AssistantMessage,
-  content: AssistantMessage["content"],
-): AssistantMessage {
+export function replaceCompactionReplayOwnerContent<T extends AssistantHistoryMessage>(
+  message: T,
+  content: AssistantHistoryMessage["content"],
+): T {
   const next = { ...message, content };
   const replay = message.providerReplay;
   if (!isCompactionReplayCheckpoint(replay)) {

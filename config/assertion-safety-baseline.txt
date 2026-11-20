@@ -2246,7 +2246,7 @@ src/talk/consult-question.ts	2
 src/talk/exact-speech-protocol.ts	1
 src/talk/provider-internal.ts	2
 src/talk/turn-context-tracker.ts	2
-src/templates/cron.ts	9
+src/templates/cron.ts	6
 src/templates/mcp.ts	1
 src/templates/openclaw-profile.ts	1
 src/templates/project-build.ts	4

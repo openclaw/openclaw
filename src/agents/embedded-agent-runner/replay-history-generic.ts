@@ -58,7 +58,6 @@ import {
   makeZeroUsageSnapshot,
   normalizeUsage,
   type AssistantUsageSnapshot,
-  type UsageLike,
 } from "../usage.js";
 import { isZeroUsageEmptyStopAssistantTurn } from "./empty-assistant-turn.js";
 import { isSameModelSnapshot } from "./replay-model-snapshot.js";
@@ -87,7 +86,7 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
     if (message?.role !== "user") {
       return message;
     }
-    const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+    const provenance = normalizeInputProvenance(asOptionalObjectRecord(message)?.provenance);
     if (provenance?.kind !== "inter_session") {
       return message;
     }
@@ -103,22 +102,21 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
       return message;
     }
     const content = [...message.content];
-    const textIndex = content.findIndex((block) => {
+    const existing = content.find((block): block is Extract<typeof block, { type: "text" }> => {
       const record = asOptionalObjectRecord(block);
       return record?.type === "text" && typeof record.text === "string";
     });
-    if (textIndex < 0) {
+    if (!existing) {
       content.unshift({
         type: "text",
         text: annotateInterSessionPromptText("Inter-session content follows.", provenance),
       });
     } else {
-      const existing = content[textIndex] as { type: "text"; text: string };
       const text = annotateInterSessionPromptText(existing.text, provenance);
       if (text === existing.text) {
         return message;
       }
-      content[textIndex] = { ...existing, text };
+      content[content.indexOf(existing)] = { ...existing, text };
     }
     touched = true;
     return { ...message, content };
@@ -153,10 +151,10 @@ function sanitizeUserReplayContent(
 
 function normalizeAssistantReplayBlockContent(
   message: AssistantReplayMessage,
-  replayContent: unknown[],
+  replayContent: AssistantReplayMessage["content"],
 ): AssistantReplayMessage | null {
   let touched = false;
-  const sanitizedContent: unknown[] = [];
+  const sanitizedContent: AssistantReplayMessage["content"] = [];
   for (const block of replayContent) {
     const record = asOptionalRecord(block);
     const type = record?.type;
@@ -177,7 +175,8 @@ function normalizeAssistantReplayBlockContent(
     }
     touched = true;
     if (trimmed) {
-      sanitizedContent.push({ ...record, text: strippedText });
+      const sanitizedBlock = { ...block, text: strippedText };
+      sanitizedContent.push(sanitizedBlock);
     }
   }
   const spoken = message.openclawDelivery?.tts?.text;
@@ -201,10 +200,7 @@ function normalizeAssistantReplayBlockContent(
   if (sanitizedContent.length === 0) {
     return null;
   }
-  const normalized = replaceCompactionReplayOwnerContent(
-    message,
-    sanitizedContent as AssistantReplayMessage["content"],
-  );
+  const normalized = replaceCompactionReplayOwnerContent(message, sanitizedContent);
   return normalized;
 }
 
@@ -221,19 +217,19 @@ function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantRepla
   if (!previous || previous.role !== "assistant") {
     return false;
   }
-  const usage = (next as { usage?: unknown }).usage;
+  const usage = next.usage;
   if (
     !usage ||
     typeof usage !== "object" ||
-    hasNonzeroUsage(normalizeUsage(usage as UsageLike)) ||
-    (next as { stopReason?: unknown }).stopReason !== "stop" ||
+    hasNonzeroUsage(normalizeUsage(usage)) ||
+    next.stopReason !== "stop" ||
     extractToolCallsFromAssistant(previous).length > 0 ||
     extractToolCallsFromAssistant(next).length > 0
   ) {
     return false;
   }
-  const previousContent = (previous as { content?: unknown }).content;
-  const nextContent = (next as { content?: unknown }).content;
+  const previousContent = previous.content;
+  const nextContent = next.content;
   return (
     Array.isArray(previousContent) &&
     previousContent.length > 0 &&
@@ -261,7 +257,7 @@ function normalizeAssistantReplayMessage(
   ) {
     return null;
   }
-  const replayContent = (message as { content?: unknown }).content;
+  const replayContent = message.content;
   // Hidden transcript rows still belong to model context, including tool-call/result pairs.
   if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
     return null;
@@ -281,7 +277,7 @@ function normalizeAssistantReplayMessage(
   const assistantMessage =
     blockContent === replayContent
       ? message
-      : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
+      : replaceCompactionReplayOwnerContent(message, blockContent);
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
   // Token-limited thinking is incomplete provider state. Replaying it can
   // resend a partial signature, while visible text or tool calls remain useful.
@@ -358,8 +354,8 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   return touched ? out : messages;
 }
 
-function normalizeAssistantUsageSnapshot(usage: unknown) {
-  const normalized = normalizeUsage((usage ?? undefined) as UsageLike | undefined);
+function normalizeAssistantUsageSnapshot(usage: AssistantReplayMessage["usage"]) {
+  const normalized = normalizeUsage(usage ?? undefined);
   if (!normalized) {
     return makeZeroUsageSnapshot();
   }
@@ -408,7 +404,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
   let touched = false;
   const out = [...messages];
   for (let i = 0; i < out.length; i += 1) {
-    const message = out[i] as (AgentMessage & { role?: unknown; usage?: unknown }) | undefined;
+    const message = out[i];
     if (!message || message.role !== "assistant") {
       continue;
     }
@@ -443,7 +439,7 @@ function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[]
     out[i] = {
       ...message,
       usage: normalizedUsage,
-    } as AgentMessage;
+    };
     touched = true;
   }
 

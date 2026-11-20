@@ -7,7 +7,7 @@ import {
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { classifyGatewayStorageFailure } from "../../../infra/sqlite-error-diagnostics.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
 import {
@@ -169,7 +169,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   prepared: ReturnType<typeof prepareEmbeddedRunTerminal>;
   retryState: EmbeddedRunTerminalRetryState;
   attempt: EmbeddedRunAttemptResult;
-  attemptAssistant?: AssistantMessage;
+  attemptAssistant?: AssistantHistoryMessage;
   activeErrorContext: { provider: string; model: string };
   modelApi: string | undefined;
   executionContract: string | undefined;

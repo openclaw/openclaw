@@ -319,11 +319,18 @@ describe("sanitizeSessionHistory", () => {
     });
   });
 
-  it("preserves unknown cost when token fields already match", async () => {
-    const usage = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10 };
-    const out = await sanitize([user("question"), { ...textAssistant("answer"), usage }]);
-    expect((out[1] as AssistantMessage).usage).toEqual(usage);
-    expect((out[1] as AssistantMessage).usage.cost).toBeUndefined();
+  it.each([1, -1])("preserves unknown cost with input token count %s", async (input) => {
+    const usage = { input, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: 10 };
+    const message: AgentMessage = { ...assistant([text("answer")]), usage };
+    const out = await sanitize([user("question"), message]);
+    const replay = out[1];
+    expect(replay?.role).toBe("assistant");
+    if (replay?.role !== "assistant") {
+      throw new Error("Expected the replay assistant");
+    }
+    expect(replay.usage).toEqual({ ...usage, input: Math.max(0, input) });
+    expect(replay.usage.cost).toBeUndefined();
+    expect(message.usage.input).toBe(input);
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {

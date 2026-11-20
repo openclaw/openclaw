@@ -4,7 +4,7 @@ import {
   requestPreparedOpenAIResponsesCompaction,
   usesNativeOpenAICodexResponsesBackend,
 } from "@openclaw/ai/transports";
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { decideContextPressure } from "../../context-pressure.js";
@@ -83,7 +83,7 @@ export function createChatGPTV2CompactionBoundary(params: {
   context: Context,
   options: Parameters<StreamFn>[2],
   requestAnchor?: MeasuredRequestContext,
-) => Promise<AssistantMessage | undefined> {
+) => Promise<AssistantHistoryMessage | undefined> {
   let failed = false;
   return async (streamFn, model, context, options, requestAnchor) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {

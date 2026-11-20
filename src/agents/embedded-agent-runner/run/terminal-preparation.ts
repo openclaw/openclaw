@@ -6,7 +6,7 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.js";
@@ -69,7 +69,7 @@ export function prepareEmbeddedRunTerminal(input: {
   replyDeliveryState?: ReplyDeliveryState;
   sourceReplyDeliveryState?: ReplyDeliveryState;
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
-  currentAttemptCompletedAssistant?: AssistantMessage;
+  currentAttemptCompletedAssistant?: AssistantHistoryMessage;
   provider: string;
   providerOwner?: PreparedProviderFailoverOwner;
   model: string;

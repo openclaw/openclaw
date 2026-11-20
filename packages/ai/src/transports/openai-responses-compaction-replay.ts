@@ -1,4 +1,10 @@
-import type { AssistantMessage, Context, Model, ProviderReplayState } from "@openclaw/llm-core";
+import type {
+  AssistantHistoryMessage,
+  AssistantMessage,
+  Context,
+  Model,
+  ProviderReplayState,
+} from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ResponseCompactionItemParam,
@@ -214,21 +220,21 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
   options?: Pick<BaseOpenAIStreamOptions, "sessionId">,
 ):
   | {
-      owner: AssistantMessage;
+      owner: AssistantHistoryMessage;
       item: ResponseCompactionItemParam;
       mode: "compacted-prefix";
       replayIndex: number;
     }
   | {
-      owner: AssistantMessage;
+      owner: AssistantHistoryMessage;
       item: ResponseCompactionItemParam;
       mode: "complete-window";
       output: OpenAIResponsesCompactionOutput;
       outputTokens?: number;
       replayIndex: number;
     }
-  | { owner: AssistantMessage; mode: "refresh-required" }
-  | { owner: AssistantMessage; mode: "item-recovery"; anchor: string }
+  | { owner: AssistantHistoryMessage; mode: "refresh-required" }
+  | { owner: AssistantHistoryMessage; mode: "item-recovery"; anchor: string }
   | undefined {
   const context = buildProviderReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -353,7 +359,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
     let replayMessages = messages;
     if (resolveFailedAssistantReplay(owner, { pairingAware: false }) === "drop") {
       // Keep a content-free boundary while normal transforms discard the failed output.
-      const boundary: AssistantMessage = {
+      const boundary: AssistantHistoryMessage = {
         role: "assistant",
         content: [],
         stopReason: "stop",

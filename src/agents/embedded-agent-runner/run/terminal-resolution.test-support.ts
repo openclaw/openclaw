@@ -1,4 +1,5 @@
 import { expect, vi } from "vitest";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
@@ -36,7 +37,7 @@ export function textAssistant(
 }
 
 export function assistantAttempt(
-  assistant: ReturnType<typeof buildEmbeddedRunnerAssistant> | undefined,
+  assistant: AssistantHistoryMessage | undefined,
   overrides: Parameters<typeof makeEmbeddedRunnerAttempt>[0] = {},
 ) {
   return makeEmbeddedRunnerAttempt({

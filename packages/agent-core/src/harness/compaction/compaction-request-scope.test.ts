@@ -1,5 +1,5 @@
+import type { AssistantMessage } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
-import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { compactWithoutSummary, prepareCompaction } from "./compaction.js";
 import {
@@ -10,7 +10,7 @@ import {
 import { compactWith, responseStream } from "./shard-fixtures.test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 };
-function assistant(text: string, timestamp: number): Extract<AgentMessage, { role: "assistant" }> {
+function assistant(text: string, timestamp: number): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],

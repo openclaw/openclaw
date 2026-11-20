@@ -1,5 +1,6 @@
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
@@ -11,7 +12,7 @@ import { log } from "./logger.js";
 import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
 
 type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AssistantHistoryMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = {
   id: string;
@@ -56,7 +57,7 @@ function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
 
 function mapAssistantMessages(
   messages: AgentMessage[],
-  transform: (message: AssistantMessage, index: number) => AgentMessage,
+  transform: (message: AssistantHistoryMessage, index: number) => AgentMessage,
 ): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];
@@ -69,9 +70,9 @@ function mapAssistantMessages(
 }
 
 function filterAssistantContent(
-  message: AssistantMessage,
+  message: AssistantHistoryMessage,
   keepBlock: (block: AssistantContentBlock) => boolean,
-): AssistantMessage {
+): AssistantHistoryMessage {
   const content = message.content.filter(keepBlock);
   return content.length === message.content.length
     ? message

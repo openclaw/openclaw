@@ -1,4 +1,4 @@
-import type { AssistantMessage, ProviderReplayState } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, ProviderReplayState } from "@openclaw/llm-core";
 
 /** Whether provider replay state is a prefix-bound server compaction checkpoint. */
 export function isCompactionReplayCheckpoint(replay: unknown): replay is ProviderReplayState {
@@ -22,7 +22,7 @@ export function stripCompactionReplayCheckpointInPlace(message: {
 }
 
 /** Strip prefix-bound checkpoints after local history rewrites. */
-export function stripCompactionReplayCheckpoint(message: AssistantMessage): AssistantMessage {
+export function stripCompactionReplayCheckpoint<T extends AssistantHistoryMessage>(message: T): T {
   if (!isCompactionReplayCheckpoint(message.providerReplay)) {
     return message;
   }

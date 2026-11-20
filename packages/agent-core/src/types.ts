@@ -214,8 +214,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   /**
    * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.
    *
-   * Each AgentMessage must be converted to a UserMessage, AssistantMessage, or ToolResultMessage
-   * that the LLM can understand. AgentMessages that cannot be converted (e.g., UI-only notifications,
+   * Each AgentMessage must be converted to a UserMessage, AssistantHistoryMessage, or
+   * ToolResultMessage that the LLM can understand. AgentMessages that cannot be converted (e.g., UI-only notifications,
    * status messages) should be filtered out.
    *
    * Contract: must not throw or reject. Return a safe fallback value instead.
@@ -562,11 +562,15 @@ export type AgentEvent =
   | { type: "agent_end"; messages: AgentMessage[] }
   // Turn lifecycle - a turn is one assistant response + any tool calls/results
   | { type: "turn_start" }
-  | { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] }
-  // Message lifecycle - emitted for user, assistant, and toolResult messages
+  | { type: "turn_end"; message: AssistantMessage; toolResults: ToolResultMessage[] }
+  // Prompt and queued messages may include historical assistant messages.
   | { type: "message_start"; message: AgentMessage }
   // Only emitted for assistant messages during streaming
-  | { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
+  | {
+      type: "message_update";
+      message: AssistantMessage;
+      assistantMessageEvent: AssistantMessageEvent;
+    }
   | { type: "message_end"; message: AgentMessage }
   | {
       type: "tool_execution_start";

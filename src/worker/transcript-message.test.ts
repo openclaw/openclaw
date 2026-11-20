@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../packages/ai/src/utils/provider-error.js";
 import {
   validateWorkerTranscriptCommitParams,
+  validateWorkerInferenceTerminalOutcome,
+  WorkerInferenceContextSchema,
   WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
   WorkerTranscriptMessageSchema,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -10,7 +12,7 @@ import { WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES } from "../../packages/gateway-
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { createUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
-import type { AssistantMessage, Context } from "../llm/types.js";
+import type { AssistantHistoryMessage, AssistantMessage, Context } from "../llm/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 import {
@@ -80,6 +82,55 @@ function assistantWithReplay(
 }
 
 describe("worker transcript provider replay", () => {
+  it.each([false, true])(
+    "preserves historical cost availability across worker boundaries (priced=%s)",
+    async (priced) => {
+      const original = assistantWithReplay();
+      const { cost, ...tokens } = original.usage;
+      const message: AssistantHistoryMessage = {
+        ...original,
+        usage: priced ? { ...tokens, cost: { ...cost, totalOrigin: "provider-billed" } } : tokens,
+      };
+      const launch = toWorkerTranscriptMessage(message, "launch");
+      expect(launch?.kind).toBe("complete");
+      if (!launch || launch.kind !== "complete") {
+        throw new Error("Expected launch history");
+      }
+      expect(Value.Check(WorkerTranscriptMessageSchema, launch.message)).toBe(true);
+      expect(launch.message).toHaveProperty("usage", message.usage);
+      const inference = toWorkerInferenceContext({ messages: [message] });
+      if (inference.kind !== "complete") {
+        throw new Error("Expected inference history");
+      }
+      expect(Value.Check(WorkerInferenceContextSchema, inference.context)).toBe(true);
+      expect(inference.context.messages[0]).toHaveProperty("usage", message.usage);
+      const commit = vi.fn<WorkerTranscriptClient["commit"]>(async () => {});
+      const runtime = createWorkerTranscriptRuntime({ commit });
+      runtime.onMessagePersisted(message);
+      await runtime.withSessionWriteSettlement(() => undefined);
+      expect(commit.mock.calls[0]?.[0][0]).toHaveProperty("usage", message.usage);
+      expect(
+        validateWorkerTranscriptCommitParams({
+          runEpoch: 1,
+          seq: 1,
+          baseLeafId: null,
+          messages: commit.mock.calls[0]?.[0],
+        }),
+      ).toBe(true);
+      expect(validateWorkerInferenceTerminalOutcome({ type: "done", message })).toBe(priced);
+      expect(
+        validateWorkerInferenceTerminalOutcome({
+          type: "error",
+          reason: "provider-error",
+          message: "failed",
+          usage: message.usage,
+        }),
+      ).toBe(priced);
+      expect(message.usage).toEqual(
+        priced ? { ...tokens, cost: { ...cost, totalOrigin: "provider-billed" } } : tokens,
+      );
+    },
+  );
   it.each([true, false])(
     "correlates identical assistant occurrences through guarded persistence (previews=%s)",
     async (previews) => {

@@ -7,7 +7,7 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { InvalidSummaryOutputError } from "../../../packages/agent-core/src/harness/types.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import type { AssistantMessage, ModelRequestHeaders } from "../../llm/types.js";
+import type { AssistantHistoryMessage, ModelRequestHeaders } from "../../llm/types.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { resolveCompactionInstructions } from "../agent-hooks/compaction-instructions.js";
 import { sanitizeCompactionReplayMessages } from "../compaction-replay.js";
@@ -601,7 +601,7 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
   }
 
   protected async checkCompaction(
-    assistantMessage: AssistantMessage,
+    assistantMessage: AssistantHistoryMessage,
     skipAbortedCheck = true,
     requestBudget?: CompactionRequestBudget,
   ): Promise<boolean> {

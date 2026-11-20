@@ -23,7 +23,7 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import type { AssistantHistoryMessage } from "../../llm/types.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
@@ -604,10 +604,10 @@ export function runWorkerTurnAdmissionContinuation<T>(
 }
 
 /** Host-owned preparation runs at append time, after any awaited transcript admission. */
-export function prepareWorkerTurnTranscriptMessage(
+export function prepareWorkerTurnTranscriptMessage<T extends AssistantHistoryMessage>(
   identity: WorkerConnectionIdentity,
-  message: AssistantMessage,
-): AssistantMessage {
+  message: T,
+): T {
   return (
     resolveWorkerTurnRuntime(identity)?.prepareAssistantTranscriptMessage?.(
       message,

@@ -5,6 +5,7 @@ import { createAssistantOutput } from "../../../../packages/ai/src/transports/as
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
@@ -138,7 +139,7 @@ it("publishes restored assistant history without rehashing it on later model req
     },
   ];
   fixture.messages.push(restored);
-  const wire = (message: typeof restored) =>
+  const wire = (message: AssistantHistoryMessage) =>
     JSON.stringify(convertResponsesMessages(model, { messages: [message] }, new Set()));
   const before = wire(restored);
   await prepareEmbeddedAttemptHistory(fixture.input, fixture.assertActive);

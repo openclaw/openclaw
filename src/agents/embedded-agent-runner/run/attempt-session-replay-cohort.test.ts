@@ -12,6 +12,7 @@ import * as historyReaders from "../../../config/sessions/session-transcript-wor
 import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
 import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import type { AssistantHistoryMessage } from "../../../llm/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { MODEL_FALLBACK_NOTICE_KIND } from "../../../shared/model-fallback-notice.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../../state/openclaw-agent-db.js";
@@ -460,7 +461,7 @@ describe("fallback replay HTTP dispatch", () => {
               run: async (_provider, model, options) => {
                 selected = model;
                 fixture.attempt.fallbackReason = options?.modelRoutingProvenance.fallbackReason;
-                let last: ReturnType<typeof createAssistant> | undefined;
+                let last: AssistantHistoryMessage | undefined;
                 await withReplaySession(fixture, false, async (session, submit) => {
                   await submit();
                   const message = session.messages.findLast((entry) => entry.role === "assistant");

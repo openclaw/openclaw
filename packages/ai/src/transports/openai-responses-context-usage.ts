@@ -1,4 +1,4 @@
-import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
+import type { AssistantHistoryMessage, AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -149,7 +149,7 @@ export function resolveResponsesContextUsageBoundary(
   return undefined;
 }
 
-function isAssistant(message: { role: string }): message is AssistantMessage {
+function isAssistant(message: { role: string }): message is AssistantHistoryMessage {
   return message.role === "assistant";
 }
 
