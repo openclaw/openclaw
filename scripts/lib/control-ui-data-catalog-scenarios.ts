@@ -13,10 +13,7 @@ import {
   defaultControlUiFeatureMethods,
   waitForControlUiRoute,
 } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import {
-  openNavigationDrawer,
-  prepareInteractionNavigation,
-} from "./control-ui-interaction-navigation.ts";
+import { openNavigationDrawer } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionFixtureOverrides,
   InteractionScenario,
@@ -763,6 +760,8 @@ function skillsRefreshScenario(roundTripMs: 0 | 100): InteractionScenario {
 }
 
 function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
+  const catalogLink = (page: Page) =>
+    page.locator(`.sidebar-rail a[href="${pathForRoute("plugins")}"]`);
   return {
     ...fixture,
     id: `data-catalog-first-render${roundTripMs ? "-100ms" : ""}`,
@@ -792,19 +791,22 @@ function catalogEntryScenario(roundTripMs: 0 | 100): InteractionScenario {
       };
     },
     prepare: async (page, gateway) => {
-      await prepareInteractionNavigation(page);
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await openNavigationDrawer(page);
+      }
+      await catalogLink(page).waitFor({ state: "visible" });
       if ((await gateway.getRequests("plugins.catalog.browse")).length !== 0) {
         throw new Error("The catalog was fetched before first navigation");
       }
     },
     run: async (page, gateway) => {
-      await page.locator(`.sidebar-pages a[href="${pathForRoute("plugins")}"]`).click();
+      await catalogLink(page).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
         match: { intent: "all", pageSize: catalogPageSize },
         exactParams: true,
       });
       const shelf = page.locator('[data-catalog-section="tools"]');
-      await shelf.locator("h2").getByText("Tools", { exact: true }).waitFor();
+      await shelf.getByRole("heading", { level: 2, name: "Tools", exact: true }).waitFor();
       await page.waitForFunction(() => {
         const cards = Array.from(document.querySelectorAll(".plugin-catalog-card"));
         return (
