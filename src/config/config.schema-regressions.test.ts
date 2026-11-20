@@ -19,6 +19,26 @@ function validateBinding(agentId: string, entries: Record<string, unknown>) {
 }
 
 describe("config schema regressions", () => {
+  it.each([false, true])("preserves the instructions cache capability %s", (cachesInstructions) => {
+    const result = validateConfigObject({
+      models: {
+        providers: {
+          openai: {
+            models: [
+              { id: "fixture-model", name: "Fixture Model", compat: { cachesInstructions } },
+            ],
+          },
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.openai?.models[0]?.compat?.cachesInstructions).toBe(
+        cachesInstructions,
+      );
+    }
+  });
+
   it("accepts and preserves mixed extra memory path entries", () => {
     const extraPaths = [
       "../team-notes",
