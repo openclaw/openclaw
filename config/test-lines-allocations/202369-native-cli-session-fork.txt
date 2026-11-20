@@ -1,0 +1,2 @@
+# Exact net regression-test lines above the allowance for #202369: native Claude CLI session forks keep the fork guarantees (tool gate, account, cwd, no kept session) and carry an opt-in live proof.
+429

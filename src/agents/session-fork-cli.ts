@@ -21,8 +21,10 @@ export type CliSessionForkAnchor = {
 
 /**
  * The native session and checkpoint of the anchored turn's CLI reply. The CLI keeps the
- * conversation in its own session, so a fork can only branch at a reply that session recorded,
- * in the session the source currently resumes. Anything else fails before any CLI or provider I/O.
+ * conversation in its own session, so a fork can only branch at a reply a native session recorded.
+ * It resumes that reply's own session, which the CLI keeps after the source moves to a successor;
+ * the account and cwd checks use the source's current binding. Anything else fails before any CLI
+ * or provider I/O.
  */
 export function resolveCliSessionForkAnchor(params: {
   config: OpenClawConfig;
@@ -49,12 +51,12 @@ export function resolveCliSessionForkAnchor(params: {
     );
   }
   const binding = getCliSessionBinding(params.entry, provider);
-  if (binding?.sessionId !== cliSessionId) {
+  if (!binding) {
     throw new Error(
-      `Session forks on CLI runtime ${provider} read the session's current native session; the anchored reply belongs to an earlier one.`,
+      `Session forks on CLI runtime ${provider} need the session's ${provider} binding; it has none. Send a turn on ${provider}, then fork again.`,
     );
   }
-  return { provider, binding, resumeAt };
+  return { provider, binding: { ...binding, sessionId: cliSessionId }, resumeAt };
 }
 
 /**

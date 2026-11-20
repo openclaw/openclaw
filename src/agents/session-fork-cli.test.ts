@@ -236,6 +236,20 @@ it.each([
   );
 });
 
+it("forks the anchored reply's own native session after the source moved to a successor", async () => {
+  await withCliSession(
+    async ({ anchor, workspaceDir }) => {
+      await fork(anchor, workspaceDir);
+      expect(runCliAgent.mock.calls[0]?.[0]).toMatchObject({
+        cliSessionId: "native-1",
+        cliSessionBinding: { sessionId: "native-1" },
+        cliSessionResumeAt: "reply-uuid",
+      });
+    },
+    { bindingSessionId: "native-2" },
+  );
+});
+
 it("keeps exec out of a CLI fork of a turn the owner did not send", async () => {
   await withCliSession(async ({ anchor, workspaceDir }) => {
     await fork(anchor, workspaceDir);
@@ -248,11 +262,6 @@ it.each([
     name: "a reply the CLI session did not record",
     options: { nativeReply: false },
     error: "branch at a claude-cli reply recorded in the transcript; the anchored turn has none",
-  },
-  {
-    name: "a reply from an earlier native session",
-    options: { bindingSessionId: "native-2" },
-    error: "belongs to an earlier one",
   },
 ])("refuses a CLI fork through $name before any CLI or provider I/O", async (row) => {
   await withCliSession(async ({ anchor, workspaceDir }) => {
