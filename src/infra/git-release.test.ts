@@ -5,7 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { pluginProcessRuntimeEntrypoints } from "../plugins/process-runtime.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { writeGitReleaseLauncher } from "./git-release-launcher.js";
 import {
@@ -18,6 +20,7 @@ import {
 import { createGitReleaseDirs, publishGitRelease, settleGitReleaseTrial } from "./git-release.js";
 import { listPackageReleases } from "./package-release-retention.js";
 import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -51,27 +54,66 @@ const startGateway = (prefix: string, env: NodeJS.ProcessEnv = {}) =>
 describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
   "git releases",
   () => {
-    it("loads a bundled plugin's source contract from the selected release (#201874)", async () => {
-      const { prefix } = await setup();
-      const root = (await createGitReleaseDirs(prefix)).releaseRoot;
-      // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
-      await fs.cp(
-        fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
-        path.join(root, "extensions", "deepseek"),
-        { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
-      );
-      await publishGitRelease({ prefix, releaseRoot: root, trial: false });
+    it.each([false, true])(
+      "loads a bundled plugin contract from the selected release (under node_modules: %s) (#201874)",
+      async (underNodeModules) => {
+        const { prefix } = await setup();
+        const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+        const root = underNodeModules
+          ? path.join(path.dirname(releaseRoot), "lib", "node_modules", "openclaw")
+          : releaseRoot;
+        // A release is a worktree of the checkout: bundled plugins keep their TypeScript sources.
+        await fs.cp(
+          fileURLToPath(new URL("../../extensions/deepseek", import.meta.url)),
+          path.join(root, "extensions", "deepseek"),
+          { recursive: true, filter: (source) => path.basename(source) !== "node_modules" },
+        );
+        if (underNodeModules) {
+          const builtRoot = path.join(root, "dist", "extensions", "deepseek");
+          await fs.mkdir(builtRoot, { recursive: true });
+          // The root build emits public artifacts here, outside the plugin's source root.
+          await fs.writeFile(
+            path.join(builtRoot, "web-search-contract-api.js"),
+            'exports.createDeepSeekWebSearchProvider = () => ({ id: "built-deepseek" });\n',
+          );
+        }
+        await publishGitRelease({ prefix, releaseRoot: root, trial: false });
 
-      // The Gateway names its root by the release link, as the MCP web-search request does.
-      const contract = loadPluginPublicArtifactModuleSync<{
-        createDeepSeekWebSearchProvider: unknown;
-      }>({
-        pluginRoot: path.join(gitReleaseSlot(prefix), "extensions", "deepseek"),
-        artifactBasename: "web-search-contract-api.js",
-        origin: "bundled",
-      });
-      expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
-    });
+        // The Gateway names its root by the release link, as the MCP web-search request does.
+        const pluginRoot = path.join(gitReleaseSlot(prefix), "extensions", "deepseek");
+        if (underNodeModules) {
+          // A built Gateway runs on plain Node, without Vitest's tsx hook.
+          const loaderUrl = resolveRuntimeWorkerUrl(
+            pluginProcessRuntimeEntrypoints.publicSurfaceLoader,
+          ).href;
+          const result = spawnNodeEvalSync(
+            `
+            import { loadPluginPublicArtifactModuleSync } from ${JSON.stringify(loaderUrl)};
+            const contract = loadPluginPublicArtifactModuleSync({
+              pluginRoot: ${JSON.stringify(pluginRoot)},
+              artifactBasename: "web-search-contract-api.js",
+              origin: "bundled",
+            });
+            console.log(contract.createDeepSeekWebSearchProvider().id);
+          `,
+            { env: { ...process.env, NODE_OPTIONS: "" } },
+          );
+          expect(result.stderr).toBe("");
+          expect(result.status).toBe(0);
+          expect(result.stdout.trim()).toBe("built-deepseek");
+          return;
+        }
+        const contract = loadPluginPublicArtifactModuleSync<{
+          createDeepSeekWebSearchProvider: () => { id: string };
+        }>({
+          pluginRoot,
+          artifactBasename: "web-search-contract-api.js",
+          origin: "bundled",
+        });
+        expect(contract.createDeepSeekWebSearchProvider).toBeTypeOf("function");
+        expect(contract.createDeepSeekWebSearchProvider().id).toBe("deepseek");
+      },
+    );
 
     it("keeps listing releases built under node_modules after the link moves out", async () => {
       const { prefix } = await setup();
