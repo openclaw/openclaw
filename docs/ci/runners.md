@@ -561,15 +561,16 @@ within the existing 77-row Node cap, even for docs-only or empty change sets.
 The dispatch actor supplies author provenance; both actor and starter must be
 in the rollout list below to allocate Boat runners. It does not change the repository backend.
 
-`OPENCLAW_CI_RUNNER_BACKEND=boat` uses the existing hybrid logical plan. Only
+`OPENCLAW_CI_RUNNER_BACKEND=boat` uses a GitHub-hosted logical plan for ordinary CI. Only
 same-repository first attempts whose source author and starter are each one of
 `davemorin`, `jalehman`, `joshavant`, `steipete`, or `vincentkoc` may allocate Boat
 runners. Other authors, starters, forks, and retries use GitHub-hosted runners.
-For ordinary admitted runs, hybrid remains the base route. Preflight reads the
-configured Boat organization's included start allowance and sends at most 20 of
-the longest eligible Node rows to Boat. Checks, builds and other rows retain
-hybrid routing. Missing credentials, unreadable limits or exhausted headroom
-select zero Boat rows. Explicit qualification dispatches retain their full
+Preflight reads the configured Boat organization's included start allowance and
+sends at most 20 of the longest eligible Node rows to `boat-large` or
+`boat-xlarge`. Each runtime row consumes one start. These rows retain the hosted
+plan's memory floor and use at most four CPUs. Checks, builds, smaller Node rows,
+the prepared-workspace proof, and overflow use GitHub-hosted runners. Missing
+credentials, unreadable limits or exhausted headroom select zero Boat rows. Explicit qualification dispatches retain their full
 Boat route. See [Boat start admission](/ci/capacity#boat-start-admission).
 Source author still means the PR creator or push commit author; an owner merging
 a contributor commit does not change that provenance. Scheduled and ordinary

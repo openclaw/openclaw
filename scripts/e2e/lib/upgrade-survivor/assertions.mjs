@@ -1979,6 +1979,7 @@ function assertSuccessfulUpdateResult(result, expectedVersion) {
     doctorFindings: rejectedDoctorFindings?.slice(0, 8).map((finding) => ({
       checkId: String(finding?.checkId).slice(0, 120),
       severity: String(finding?.severity).slice(0, 16),
+      target: String(finding?.target ?? "").slice(0, 160),
     })),
   };
   const rejectedStepContext =

@@ -31,6 +31,39 @@ function stubImageDecode(decode: () => Promise<void>) {
   return stub;
 }
 
+function openCertifiedShelf() {
+  const fixture = createPage({ templatesEnabled: false });
+  const cards = Array.from({ length: 6 }, (_, index) => ({
+    ...workflowOperator,
+    packageName: `@openclaw/card-${index + 1}`,
+    displayName: `Card ${index + 1}`,
+    iconUrl: `https://clawhub.ai/api/v1/skill-icons/${String(index + 1).repeat(64)}`,
+  }));
+  const original = fixture.request.getMockImplementation()!;
+  fixture.request.mockImplementation((method, params, options) =>
+    method === "templates.catalog.search" &&
+    params &&
+    typeof params === "object" &&
+    "overview" in params
+      ? {
+          entries: [],
+          overview: {
+            featured: [],
+            sections: [
+              {
+                category: "productivity",
+                entries: cards.slice(0, 4),
+                additionalEntries: [...cards.slice(4), { ...workflowOperator, channel: "private" }],
+              },
+            ],
+          },
+        }
+      : original(method, params, options),
+  );
+  fixture.setTemplatesEnabled(true);
+  return fixture;
+}
+
 describe("Templates discovery", () => {
   it.each([
     {
@@ -199,9 +232,99 @@ describe("Templates discovery", () => {
     });
     expect(request).toHaveBeenCalledWith("templates.catalog.search", {
       overview: true,
+      includeCategoryEntries: true,
       limit: 4,
     });
   });
+
+  it("shows the full category without preloading decorative artwork a second time", async () => {
+    const decode = stubImageDecode(async () => {});
+    const { page, request } = createPage({
+      templatesEnabled: true,
+      templateIconUrl: `https://clawhub.ai/api/v1/skill-icons/${"e".repeat(64)}`,
+    });
+    const shelf = '[data-catalog-section="productivity"]';
+    await waitForSolid(() => expect(page.querySelector(shelf)).not.toBeNull());
+    expect(decode).toHaveBeenCalledOnce();
+    page.querySelector<HTMLButtonElement>(shelf + " .plugin-catalog-section__view-all")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector(shelf + " [data-templates-results] img")).not.toBeNull(),
+    );
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", { category: "productivity" });
+    expect(decode).toHaveBeenCalledOnce();
+  });
+
+  it("expands the four visible cards to the complete public shelf without another request or artwork wait", async () => {
+    const decode = stubImageDecode(async () => {});
+    const { page, request } = openCertifiedShelf();
+    const names = () =>
+      [...page.querySelectorAll("[data-templates-entry] h3")].map((node) => node.textContent);
+    await waitForSolid(() => expect(names()).toEqual(["Card 1", "Card 2", "Card 3", "Card 4"]));
+    expect(
+      request.mock.calls.filter(([method]) => method === "templates.catalog.search"),
+    ).toHaveLength(1);
+    expect(decode).toHaveBeenCalledTimes(4);
+    request.mockClear();
+    page.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!.click();
+    flush();
+    expect(page.querySelector("[data-templates-placeholder]")).toBeNull();
+    expect(names()).toEqual(["Card 1", "Card 2", "Card 3", "Card 4", "Card 5", "Card 6"]);
+    expect(page.querySelector("[data-templates-results]")).not.toBeNull();
+    expect(request).not.toHaveBeenCalled();
+    expect(decode).toHaveBeenCalledTimes(4);
+    expect(page.querySelector('.plugin-catalog-chip[aria-pressed="true"]')?.textContent).toBe(
+      "Productivity",
+    );
+
+    const search = page.querySelector<HTMLInputElement>("[data-templates-search]")!;
+    search.value = "workflow";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await waitForSolid(() => expect(names()).toEqual(["Workflow Operator"]));
+    expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+      query: "workflow",
+      category: "productivity",
+    });
+  });
+
+  it.each(["expired shelf", "retired connection", "superseded shelf", "category chip"])(
+    "reads the selected category from the Gateway: %s",
+    async (selection) => {
+      stubImageDecode(async () => {});
+      const { page, request, setPhase } = openCertifiedShelf();
+      await waitForSolid(() =>
+        expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(4),
+      );
+      const viewAll = page.querySelector<HTMLButtonElement>(".plugin-catalog-section__view-all")!;
+      const clickChip = (label: string) =>
+        [...page.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
+          .find((chip) => chip.textContent === label)!
+          .click();
+      if (selection === "expired shelf") {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(Date.now() + 60_000);
+      } else if (selection === "retired connection") {
+        // The old row can still receive a click before Solid flushes the new connection.
+        setPhase("reconnecting");
+        setPhase("connected");
+      } else if (selection === "superseded shelf") {
+        clickChip("Health");
+      }
+      if (selection === "category chip") {
+        clickChip("Productivity");
+      } else {
+        viewAll.click();
+      }
+      await waitForSolid(() =>
+        expect(page.querySelector("[data-templates-results] h3")?.textContent).toBe(
+          "Workflow Operator",
+        ),
+      );
+      expect(request).toHaveBeenCalledWith("templates.catalog.search", {
+        category: "productivity",
+      });
+      expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1);
+    },
+  );
 
   it("lists the category chips in catalog order and filters by the selected slug", async () => {
     const { page, request } = createPage({ templatesEnabled: true });
