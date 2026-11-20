@@ -1,5 +1,5 @@
 import type { SessionWorkspaceStatResult } from "../../../api/types.ts";
-import { markdownFileLinkFromEvent } from "../../../components/markdown-file-links.ts";
+import { markdownFileLinkFromAnchor } from "../../../components/markdown-file-links.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import type {
   SessionWorkspaceHost,
@@ -70,8 +70,7 @@ export async function checkFileLinkAvailability(
       }
       unavailableFileLinks.delete(element);
     }
-    // Resolve the reference exactly as a click on this anchor would.
-    const target = markdownFileLinkFromEvent({ target: anchor } as unknown as Event);
+    const target = markdownFileLinkFromAnchor(anchor);
     if (!target || target.documentRelative) {
       continue;
     }
