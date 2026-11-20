@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import type { HelloOk, SessionsSearchResult } from "../../packages/gateway-protocol/src/index.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
 import { withTranscriptWriteSequence } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
@@ -17,8 +18,10 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions/tr
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { dropPostgresTestSchemas } from "../infra/postgres-sync/schema-cleanup.test-support.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
@@ -32,6 +35,7 @@ it.skipIf(!connection)(
   "exposes replayed PostgreSQL mirrors through authenticated Gateway reads and preserves API writes across restart",
   async ({ signal }) => {
     const prefix = `gw_selection_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const nodeExecutable = resolveTestNodeExecPath();
     const databaseClient = new pg.Client({ connectionString: connection });
     let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -43,6 +47,11 @@ it.skipIf(!connection)(
         instance = await createOpenClawTestInstance({
           name: "postgres-selection",
           signal,
+          entrypoint: resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
+            nodeExecutable,
+          ),
+          gatewayCommandPrefix: [nodeExecutable],
           env: {
             [DSN_ENV]: connection,
             OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
