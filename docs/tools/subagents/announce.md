@@ -72,8 +72,9 @@ with its last error, and the sweeper wakes it again. There is no attempt limit,
 retry ladder or expiry. A permanent refusal stops automatic dispatch and records a visible failure notice
 with captured child results that owe a visible reply. Revoked authority or a changed
 source lifecycle uses this same notice without running a revoked continuation.
-Expiry notices include the
-same results. Private-only handoffs retain identity/status notices without exposing
+Expiry notices include the same results, including when a drain-interrupted child
+reaches its delivery deadline while the requester remains idle. Both idle expiry
+and suspended-delivery retirement record the notice and an operator warning. Private-only handoffs retain identity/status notices without exposing
 their captured answers; an admitted visible-final yield retains its fallback. These
 notices sort children by run ID, cap each result at 2,000 characters, and cap the
 entire notice at 32,000 characters including framing and recovery instructions.
