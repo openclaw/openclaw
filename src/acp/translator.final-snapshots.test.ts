@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayClient } from "../gateway/client.js";
 import { expectOversizedPromptRejected } from "./translator.bridge-test-helpers.js";
 import {
   createChatEvent,
   createPendingPromptHarness,
   DEFAULT_SESSION_KEY,
+  createSessionAgentHarness,
+  promptAgent,
 } from "./translator.prompt-harness.test-support.js";
 
 vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
@@ -70,6 +73,52 @@ describe("acp final chat snapshots", () => {
       { type: "text", text: " world" },
     ]);
   });
+
+  it.each([
+    { committed: "BRAVO", matchesRun: true, chunks: ["BRA", "VO"] },
+    { committed: "rewritten", matchesRun: true, chunks: ["BRA"] },
+    { committed: "BRAVO", matchesRun: false, chunks: ["BRA"] },
+  ])(
+    "recovers only the missing exact-run suffix from a message-less final: $committed/$matchesRun",
+    async ({ committed, matchesRun, chunks }) => {
+      let runId: string | undefined;
+      const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+        if (method === "chat.send") {
+          runId = params?.idempotencyKey as string | undefined;
+          return new Promise<never>(() => {});
+        }
+        if (method === "chat.history" && params?.sessionKey === DEFAULT_SESSION_KEY) {
+          return {
+            sessionId: "committed-transcript",
+            messages: [
+              {
+                role: "assistant",
+                content: [{ type: "text", text: committed }],
+                __openclaw: { runId: matchesRun ? runId : "other-run" },
+              },
+            ],
+          };
+        }
+        return {};
+      }) as GatewayClient["request"];
+      const { agent, sessionId, sessionUpdate } = createSessionAgentHarness(request);
+      const result = promptAgent(agent, sessionId);
+      await vi.waitFor(() => expect(runId).toBeDefined());
+      const send = (payload: Record<string, unknown>) =>
+        agent.handleGatewayEvent(
+          createChatEvent({ sessionKey: DEFAULT_SESSION_KEY, runId, ...payload }),
+        );
+      await send({ state: "delta", message: { content: [{ type: "text", text: "BRA" }] } });
+      await send({ state: "delta", replace: true, deltaText: "", message: { content: [] } });
+      await send({ state: "final" });
+      await expect(result).resolves.toEqual({ stopReason: "end_turn" });
+      expect(
+        sessionUpdate.mock.calls.flatMap(([{ update }]) =>
+          update.sessionUpdate === "agent_message_chunk" ? [update.content.text] : [],
+        ),
+      ).toEqual(chunks);
+    },
+  );
 });
 
 describe("acp prompt size hardening", () => {
