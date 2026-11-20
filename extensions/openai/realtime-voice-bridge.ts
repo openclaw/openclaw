@@ -1,5 +1,6 @@
 import type {
   RealtimeVoiceBridge,
+  RealtimeVoiceResponseOutcome,
   RealtimeVoiceSessionConnection,
   RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
@@ -674,24 +675,36 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       providerTerminated = this.handleCompletedResponse(event, connection);
       this.config.onResponseDone?.(outcome);
       emitServerEvent();
-      // Stale-connection and cancelled responses are billed too, so usage skips acceptsEvent.
-      // Azure bills deployments outside the OpenAI catalog, so its usage stays unattributed.
-      const usage = this.config.azureEndpoint ? undefined : readOpenAIRealtimeUsage(event.response);
-      if (usage) {
-        this.config.onUsage?.({
-          provider: "openai",
-          model: this.config.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
-          ...(outcome.responseId ? { responseId: outcome.responseId } : {}),
-          status: outcome.status,
-          ...usage,
-        });
-      }
     } finally {
+      // Billed usage must survive a throwing terminal observer, so it is reported here.
+      this.reportResponseUsage(event, outcome);
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.
       const canDrain =
         !providerTerminated && this.acceptsEvent(connection) && this.isTransportOpen();
       this.releaseResponseState({ drain: canDrain });
+    }
+  }
+
+  private reportResponseUsage(event: RealtimeEvent, outcome: RealtimeVoiceResponseOutcome): void {
+    // Stale-connection and cancelled responses are billed too, so usage skips acceptsEvent.
+    // Azure bills deployments outside the OpenAI catalog, so its usage stays unattributed.
+    const usage = this.config.azureEndpoint ? undefined : readOpenAIRealtimeUsage(event.response);
+    if (!usage) {
+      return;
+    }
+    try {
+      this.config.onUsage?.({
+        provider: "openai",
+        model: this.config.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
+        ...(outcome.responseId ? { responseId: outcome.responseId } : {}),
+        status: outcome.status,
+        ...usage,
+      });
+    } catch (error) {
+      this.config.logger.warn(
+        `OpenAI realtime usage callback failed; response=${outcome.responseId ?? "unknown"}: ${String(error)}`,
+      );
     }
   }
 

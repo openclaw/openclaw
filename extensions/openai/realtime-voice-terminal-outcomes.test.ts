@@ -28,7 +28,12 @@ const failed = (message: string, details: Record<string, unknown> = {}) =>
   });
 async function capture(
   terminalEvent: Record<string, unknown>,
-  options: { completeFollowup?: boolean; queueFollowup?: boolean; throwCallback?: boolean } = {},
+  options: {
+    completeFollowup?: boolean;
+    queueFollowup?: boolean;
+    throwCallback?: boolean;
+    throwUsage?: boolean;
+  } = {},
 ) {
   const clientEvents: string[] = [];
   const errors: string[] = [];
@@ -81,7 +86,12 @@ async function capture(
         throw new Error("consumer callback failed");
       }
     },
-    onUsage: (usage) => usages.push(usage),
+    onUsage: (usage) => {
+      usages.push(usage);
+      if (options.throwUsage) {
+        throw new Error("usage callback failed");
+      }
+    },
     onToolCall: (tool) => {
       tools.push(tool);
       events.push(`tool:${tool.callId}`);
@@ -200,17 +210,42 @@ describe("OpenAI realtime terminal response ownership", () => {
     );
   });
 
-  it("drains a queued follow-up when the terminal consumer throws", async () => {
-    const captured = await capture(done({ status: "failed", output: [] }), {
-      completeFollowup: true,
-      queueFollowup: true,
-      throwCallback: true,
-    });
+  it("drains a queued follow-up and still reports usage when the terminal consumer throws", async () => {
+    const captured = await capture(
+      done({ status: "failed", output: [], usage: { input_tokens: 120, output_tokens: 30 } }),
+      { completeFollowup: true, queueFollowup: true, throwCallback: true },
+    );
     expect(captured.errors).toEqual([]);
     expect(captured.outcomes).toEqual([
       outcome("failed", { message: "OpenAI realtime voice response failed" }),
       { responseId: "response_2", status: "completed" },
     ]);
+    expect(captured.usages).toEqual([
+      {
+        provider: "openai",
+        model: "gpt-realtime-2.1",
+        responseId,
+        status: "failed",
+        input: { text: 120, audio: 0, image: 0 },
+        cachedInput: { text: 0, audio: 0, image: 0 },
+        output: { text: 30, audio: 0 },
+      },
+    ]);
+    expect(captured.clientEvents.filter((type) => type === "response.create")).toHaveLength(1);
+    expect(captured.connected).toBe(true);
+  });
+
+  it("drains a queued follow-up when the usage consumer throws", async () => {
+    const captured = await capture(
+      done({ status: "completed", output: [], usage: { input_tokens: 120, output_tokens: 30 } }),
+      { completeFollowup: true, queueFollowup: true, throwUsage: true },
+    );
+    expect(captured.errors).toEqual([]);
+    expect(captured.outcomes).toEqual([
+      outcome("completed"),
+      { responseId: "response_2", status: "completed" },
+    ]);
+    expect(captured.usages).toHaveLength(1);
     expect(captured.clientEvents.filter((type) => type === "response.create")).toHaveLength(1);
     expect(captured.connected).toBe(true);
   });
