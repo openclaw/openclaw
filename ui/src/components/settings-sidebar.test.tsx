@@ -9,8 +9,6 @@ import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { AgentSelectElement } from "./agent-select.tsx";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { SettingsAskOpenClaw } from "./settings-ask-openclaw.tsx";
 import { saveIndicatorProps as saveIndicator } from "./settings-save-indicator.test-support.ts";
 import { renderSettingsSidebar as SettingsSidebar } from "./settings-sidebar.tsx";
 import "./tooltip.ts";
@@ -185,11 +183,11 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["OpenClaw", "Moonbase"])(
-    "links Ask %s from the embedded list and follows branding publications",
+    "links Ask %s and follows branding publications",
     (brandName) => {
       const original = currentThemeBranding();
       const onNavigate = vi.fn();
-      render({ presentation: "embed-list", onNavigate });
+      render({ onNavigate });
       try {
         if (brandName === "Moonbase") {
           setCurrentThemeBranding({ ...original, brandName });
@@ -202,37 +200,6 @@ describe("settings sidebar search", () => {
         link?.click();
         expect(onNavigate).toHaveBeenCalledWith("custodian");
       } finally {
-        setCurrentThemeBranding(original);
-        flush();
-      }
-    },
-  );
-
-  it("leaves Ask OpenClaw to the floating button in the full sidebar", () => {
-    render();
-    expect(container.querySelector('.settings-sidebar__item[href="/custodian"]')).toBeNull();
-    expect(labels().slice(0, 3)).toEqual(["Profile", "Appearance", "Notifications"]);
-    expect(labels(".settings-sidebar__group-label")[0]).toBe("Preferences");
-  });
-
-  it.each(["OpenClaw", "Moonbase"])(
-    "opens the Ask %s dock from the floating button",
-    (brandName) => {
-      const original = currentThemeBranding();
-      const toggle = vi.fn();
-      window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggle);
-      mountSolid(() => <SettingsAskOpenClaw />, { container });
-      try {
-        if (brandName === "Moonbase") {
-          setCurrentThemeBranding({ ...original, brandName });
-        }
-        flush();
-        const button = container.querySelector<HTMLButtonElement>(".settings-ask")!;
-        expect(button.textContent?.trim()).toBe(`Ask ${brandName}`);
-        button.click();
-        expect(toggle).toHaveBeenCalledOnce();
-      } finally {
-        window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggle);
         setCurrentThemeBranding(original);
         flush();
       }

@@ -428,11 +428,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       const searchQuery = props.searchQuery;
       const canAdmin = props.canAdmin !== false;
       const nativeDeviceSettings = props.nativeDeviceSettings ?? null;
-      const navigationGroups = visibleSettingsNavigationGroups(
-        canAdmin,
-        nativeDeviceSettings,
-        props.presentation !== "embed-list",
-      );
+      const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
       const normalizedQuery = normalizeLowercaseStringOrEmpty(searchQuery);
       if (!normalizedQuery) {
         return navigationGroups.map((group) => ({

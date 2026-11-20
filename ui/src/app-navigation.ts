@@ -259,10 +259,8 @@ export type SettingsSearchBlock = {
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  {
-    labelKey: "nav.settingsGroupPreferences",
-    routes: ["custodian", "profile", "appearance", "notifications"],
-  },
+  { labelKey: null, routes: ["custodian"] },
+  { labelKey: "nav.settingsGroupPreferences", routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -356,24 +354,17 @@ export function deviceSettingsGroupLabelKey(
   return "nav.settingsGroupThisDevice";
 }
 
-/**
- * `floatingAsk`: the full Settings sidebar offers Ask OpenClaw as a floating button over the
- * page, so its list omits that row; native embeds have no dock and keep it.
- */
 export function visibleSettingsNavigationGroups(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
-  floatingAsk = false,
 ): readonly SettingsNavigationGroup[] {
   return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
     labelKey:
       group.labelKey === "nav.settingsGroupDevice"
         ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
         : group.labelKey,
-    routes: group.routes.filter(
-      (route) =>
-        !(floatingAsk && route === "custodian") &&
-        isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+    routes: group.routes.filter((route) =>
+      isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
     ),
   })).filter((group) => group.routes.length > 0);
 }

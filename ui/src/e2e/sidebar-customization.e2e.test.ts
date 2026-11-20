@@ -1,7 +1,6 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -575,9 +574,7 @@ suite.define(() => {
       await openSettingsFromIdentity();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
-      // The floating Ask OpenClaw button replaces the sidebar row; its page keeps Settings chrome.
-      expect(await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).count()).toBe(0);
-      await evaluateControlUiContext(page, (app) => app.navigate("custodian"));
+      await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))

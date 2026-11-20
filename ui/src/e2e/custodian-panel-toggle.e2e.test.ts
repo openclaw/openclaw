@@ -63,34 +63,6 @@ suite.define(() => {
     });
   });
 
-  it("opens Ask OpenClaw beside Settings from the floating button", async () => {
-    await suite.withPage(contextOptions, async ({ page }) => {
-      await installMockGateway(page, custodianScenario);
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
-      const settingsSidebar = page.locator(".settings-sidebar");
-      await settingsSidebar.getByRole("link", { name: "Appearance", exact: true }).waitFor();
-      expect(await settingsSidebar.getByRole("link", { name: "Ask OpenClaw" }).count()).toBe(0);
-
-      const askOpenClaw = page
-        .locator(".settings-ask-openclaw")
-        .getByRole("button", { name: "Ask OpenClaw", exact: true });
-      await askOpenClaw.click();
-      const panel = page.locator("openclaw-assistant-panel > .assistant-panel");
-      await panel.getByText("Channel repaired.").waitFor();
-      expect(
-        await panel
-          .getByRole("button", { name: "Ask OpenClaw", exact: true })
-          .getAttribute("aria-pressed"),
-      ).toBe("true");
-      // The dock opens beside the page; Settings stays put and the button steps aside.
-      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-      await askOpenClaw.waitFor({ state: "hidden" });
-
-      await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-      await askOpenClaw.waitFor();
-    });
-  });
-
   it("opens the same OpenClaw conversation from Home and the palette", async () => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const { panel } = await openHome(page, custodianScenario);

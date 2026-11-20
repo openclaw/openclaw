@@ -12,9 +12,6 @@ const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
 const SettingsSaveStatus = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSaveStatus",
 });
-const SettingsAskOpenClaw = lazy(() => import("./settings-ask-openclaw.tsx"), {
-  export: "SettingsAskOpenClaw",
-});
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
@@ -36,17 +33,6 @@ export function LazySettingsSaveStatus(
     <Errored fallback={null}>
       <Loading fallback={null}>
         <SettingsSaveStatus host={props.host} />
-      </Loading>
-    </Errored>
-  );
-}
-
-/** The floating Ask OpenClaw button appears with the Settings chunk; it never holds the page. */
-export function LazySettingsAskOpenClaw() {
-  return (
-    <Errored fallback={null}>
-      <Loading fallback={null}>
-        <SettingsAskOpenClaw />
       </Loading>
     </Errored>
   );
@@ -171,7 +157,7 @@ function SettingsSidebarFallback(props: {
 
 function SettingsSidebarSkeleton(props: SettingsSidebarFallbackProps) {
   const groups = () =>
-    visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null, true);
+    visibleSettingsNavigationGroups(props.canAdmin, props.nativeDeviceSettings ?? null);
   return (
     <>
       <div class="settings-sidebar__search" aria-hidden="true">

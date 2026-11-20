@@ -122,36 +122,6 @@
   overflow-wrap: anywhere;
 }
 
-/* Settings' floating Ask OpenClaw slot: placed before its lazy button loads, so
-   it never takes an auto-placed grid cell. It moves aside for open docks. */
-.settings-ask-openclaw {
-  z-index: 2;
-  grid-area: content;
-  align-self: end;
-  justify-self: end;
-  margin-block-end: calc(
-    20px + var(--shell-dock-reserve-bottom) + var(--shell-safe-area-bottom, 0px)
-  );
-  margin-inline-end: calc(24px + var(--shell-dock-reserve-right));
-  pointer-events: none;
-}
-
-.shell--mobile-nav .settings-ask-openclaw {
-  margin-inline-end: calc(16px + var(--shell-dock-reserve-right));
-}
-
-/* A page's last row scrolls clear of the button instead of ending beneath it. */
-.shell--settings-ask .content::after {
-  content: "";
-  display: block;
-  block-size: 56px;
-}
-
-/* The open dock is Ask OpenClaw; its own header closes it. */
-openclaw-assistant-panel:has(> .assistant-panel:not([hidden])) ~ .settings-ask-openclaw {
-  display: none;
-}
-
 .shell--nav-collapsed:not(.shell--mobile-nav) .shell-config-read-only {
   padding-inline-start: var(--shell-chrome-safe-area-left);
 }

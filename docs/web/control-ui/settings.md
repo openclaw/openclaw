@@ -492,7 +492,7 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 
 ## Settings
 
-Inside **Settings**, the dedicated sidebar puts the back arrow, the **Settings** title, and the agent picker on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** floats in the bottom-right corner of every Settings page and opens its dock beside the page.
+Inside **Settings**, the dedicated sidebar puts the back arrow, the **Settings** title, and the agent picker on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** sits above the **Preferences** group.
 
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
@@ -748,7 +748,7 @@ credentials through this page. Files are copied below `memory/imports/` in the
 selected workspace, where the active memory plugin can index them. Sources are
 never changed.
 
-For a narrower conversational path, click **Ask OpenClaw** in Settings and say
+For a narrower conversational path, open **Settings → Ask OpenClaw** and say
 `import memory`. The chat wizard copies only new detected memory into the
 existing default agent workspace; it does not choose another destination agent
 or replace conflicts. It reports each source's confirmed copy count and warns
