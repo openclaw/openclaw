@@ -383,8 +383,9 @@ it.each(["load", "save"] as const)(
     vi.mocked(getResourceProfile).mockReturnValue("lean");
     const entered = Promise.withResolvers<void>(),
       release = Promise.withResolvers<void>(),
+      // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the original receiver via apply below.
+      call = RegistryClient.prototype.call,
       calls = vi.spyOn(RegistryClient.prototype, "call"),
-      call = calls.getMockImplementation()!,
       close = vi.spyOn(RegistryClient.prototype, "close");
     afterTest(() => {
       release.resolve();
@@ -433,8 +434,9 @@ it("lean restart joins old initialization without arming its scheduler", async (
   vi.mocked(getResourceProfile).mockReturnValue("lean");
   const entered = Promise.withResolvers<void>(),
     release = Promise.withResolvers<void>(),
+    // oxlint-disable-next-line typescript/unbound-method -- Forwarded with the original receiver via apply below.
+    call = RegistryClient.prototype.call,
     calls = vi.spyOn(RegistryClient.prototype, "call"),
-    call = calls.getMockImplementation()!,
     start = vi.spyOn(Maintenance.prototype, "start");
   afterTest(() => {
     release.resolve();
