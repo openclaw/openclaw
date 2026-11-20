@@ -16,7 +16,7 @@ struct OnboardingRenderTests {
         let view = OnboardingView(state: state, gatewaySelectionPersister: { true }, dashboardHandoffOpener: { _ in })
         let pages = before ? [(1, "where"), (9, "done")] : [
             (1, "where"), (2, "getting-ready"), (3, "connect-ai"),
-            (4, "find"), (5, "reach"), (9, "done-local"),
+            (4, "find"), (9, "done-local"),
         ]
         for (page, name) in pages {
             try Self.capturePage(

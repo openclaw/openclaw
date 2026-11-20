@@ -129,7 +129,6 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             else { return .signIn }
             self.session = session
             return step
-        case .makeReachable: throw CocoaError(.featureUnsupported)
         }
     }
 
