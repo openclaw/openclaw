@@ -1,5 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
-import { navigationIconData } from "./icon-data-navigation.ts";
+import { navigationFilledIconNames, navigationIconData } from "./icon-data-navigation.ts";
 import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
@@ -709,23 +709,7 @@ export const iconData = {
 
 export type IconName = keyof typeof iconData;
 
-/** Navigation icons swap to these filled forms while their page is current. */
-export const filledIconNames: Partial<Record<IconName, IconName>> = {
-  access: "accessFilled",
-  atSign: "atSignFilled",
-  automations: "automationsFilled",
-  clawrouter: "clawrouterFilled",
-  customize: "customizeFilled",
-  dashboards: "dashboardsFilled",
-  knowledge: "knowledgeFilled",
-  meetings: "meetingsFilled",
-  portals: "portalsFilled",
-  sessions: "sessionsFilled",
-  systems: "systemsFilled",
-  usage: "usageFilled",
-  users: "usersFilled",
-  workboard: "workboardFilled",
-};
+export const filledIconNames: Partial<Record<IconName, IconName>> = navigationFilledIconNames;
 
 export function isIconName(name: string | undefined): name is IconName {
   return Object.hasOwn(iconData, name ?? "");

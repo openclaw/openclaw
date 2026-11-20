@@ -407,7 +407,13 @@ export function readSessionActorProjectionReceipt(params: {
   sessionId: string;
   sessionKey?: string;
 }): SessionTranscriptProjectionReceipt | undefined {
-  return readSessionActorProjectionReceiptFromCells(pool.cells.values(), touch, params);
+  return readSessionActorProjectionReceiptFromCells(
+    params.sessionKey === undefined
+      ? pool.cells.values()
+      : (pool.cellsBySessionKey.get(params.sessionKey) ?? []),
+    touch,
+    params,
+  );
 }
 
 function readCurrentEntryCell(target: FileTarget, admitted?: DatabasePathIdentity) {
@@ -479,7 +485,8 @@ function readCurrentEntryCellForPath(
   admitted?: DatabasePathIdentity,
 ) {
   ensureReplicaSubscription();
-  for (const { target } of sessionActorReplicaCellsForPath(pool.cells.values(), params.path)) {
+  const candidates = pool.cellsBySessionKey.get(params.sessionKey) ?? [];
+  for (const { target } of sessionActorReplicaCellsForPath(candidates, params.path)) {
     const { database, sessionKey } = target;
     if (database.kind === "file" && sessionKey === params.sessionKey) {
       return readCurrentEntryCell({ database, sessionKey }, admitted);

@@ -43,15 +43,21 @@ async function inspectFixture(
 }
 
 it("includes nondefault inspections in the retry command after advisory findings", async () => {
+  const secret = "sk-doctorTargetSecret1234567890";
+  const target = `survivor/model token=${secret} ${"x".repeat(200)}`;
   const observed = await inspectFixture(
     "doctor-advisory-retry-",
     `process.stdout.write(JSON.stringify({
       ok: false, checksRun: 1,
-      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks." }]
+      findings: [{ checkId: "core/doctor/hooks-model", severity: "info", message: "Review hooks.", target: ${JSON.stringify(target)} }]
     })); process.exitCode = 1;`,
     ["core/doctor/hooks-model"],
   );
   expect(observed.status).toBe("ok");
+  const retainedTarget = observed.steps.at(-1)?.doctorLintFindings?.[0]?.target;
+  expect(retainedTarget).toContain("survivor/model");
+  expect(retainedTarget).not.toContain(secret);
+  expect(retainedTarget?.length).toBeLessThanOrEqual(160);
   expect(observed.steps.at(-1)?.deferredInspectionCheckIds).toEqual([]);
   expect(observed.steps.at(-1)?.advisory?.message).toContain(
     "openclaw doctor --lint --all --severity-min info",

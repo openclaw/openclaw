@@ -397,7 +397,10 @@ it.each(["closed claim", "absent", "incognito", "disallowed agent"] as const)(
         f.cfg.gateway!.roles!.definitions.view!.agents = ["guest"];
         await state.writeConfig(f.cfg);
         setRuntimeConfigSnapshot(f.cfg);
-        expect((await f.request("admitted-before-policy-change"))[0]).toBe(true);
+        await expect(f.request("admitted-before-policy-change")).rejects.toThrow(
+          "Your operator role changed",
+        );
+        expect(manager.observe("admitted-before-policy-change")).toBeNull();
         const fresh = await captureGatewayOperatorRunAuthority({
           client: f.owner,
           context: { getRuntimeConfig: () => f.cfg },

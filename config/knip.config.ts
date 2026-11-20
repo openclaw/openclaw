@@ -37,6 +37,7 @@ const repositoryScriptEntries = [
   "scripts/perf/isolated-completion-registry-measure.ts!",
   "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
+  "scripts/perf/session-history-page-reads-measure.ts!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
@@ -586,8 +587,9 @@ const repositoryScriptEntries = [
   "security/opengrep/compile-rules.mjs!",
   // create-blobster/SKILL.md invokes this CLI bridge to render validated Blobster designs.
   "skills/create-blobster/scripts/cli.mjs!",
-  // create-template/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  // create-template/SKILL.md runs inventory.mjs, which calls the bundled CLI bridge.
   "skills/create-template/scripts/cli.mjs!",
+  "skills/create-template/scripts/inventory.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 

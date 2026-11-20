@@ -1,7 +1,7 @@
 import path from "node:path";
 import * as ts from "typescript/ast";
 import { serverFS } from "typescript/fs";
-import { SymbolFlags, type Symbol } from "typescript/sync";
+import { SymbolFlags, type Symbol, type Type } from "typescript/sync";
 import {
   createNativeTypeScriptProject,
   reportNativeTypeScriptPhase,
@@ -1018,6 +1018,7 @@ export function inspectDatabaseWorkerBoundaries(
     );
   };
   const bindingMembers = new Map<ts.Node, Symbol>();
+  const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
   const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
@@ -1056,7 +1057,6 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
     for (const node of references) {
       if (
         ts.isIdentifier(node) &&
@@ -1068,20 +1068,34 @@ export function inspectDatabaseWorkerBoundaries(
         receiverBindings.set(node, node.parent.parent);
       }
     }
-    // Members of one destructuring share a receiver type; query each pattern once.
-    const patterns = [...new Set(receiverBindings.values())];
-    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
-    const bindingTypes = new Map(
-      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    return { file, source, references };
+  });
+  // Members share a receiver type, and both queries are independent across files.
+  // Bound native responses just like the raw-symbol prefetch below.
+  const patterns = [...new Set(receiverBindings.values())];
+  const bindingTypes = new Map<ts.ObjectBindingPattern, Type>();
+  for (let offset = 0; offset < patterns.length; offset += 256) {
+    const batch = patterns.slice(offset, offset + 256);
+    const types = session.api.batch(
+      ...batch.map((pattern) => checker.getTypeAtLocation.gen(pattern)),
     );
-    for (const [node, pattern] of receiverBindings) {
-      const member = bindingTypes.get(pattern)!.getProperty(node.text);
+    for (const [index, pattern] of batch.entries()) {
+      bindingTypes.set(pattern, types[index]!);
+    }
+  }
+  const members = [...receiverBindings];
+  for (let offset = 0; offset < members.length; offset += 256) {
+    const batch = members.slice(offset, offset + 256);
+    const symbols = session.api.batch(
+      ...batch.map(([node, pattern]) => bindingTypes.get(pattern)!.getProperty.gen(node.text)),
+    );
+    for (const [index, [node]] of batch.entries()) {
+      const member = symbols[index];
       if (member) {
         bindingMembers.set(node, member);
       }
     }
-    return { file, source, references };
-  });
+  }
   // Reference discovery is independent across files in this immutable snapshot.
   // Resolved receiver members do not need the raw binding symbol.
   // Shorthand properties use their value-symbol query during caller classification.

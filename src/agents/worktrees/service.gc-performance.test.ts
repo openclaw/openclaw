@@ -823,11 +823,25 @@ describe("worktree Git maintenance", () => {
       const young = path.join(directory, "tmp_pack_young");
       const unrelated = path.join(directory, "operator-note");
       const link = path.join(directory, "tmp_pack_symlink");
-      for (const file of [old, oldIndex, active, young, unrelated]) {
+      const repack = ["pack", "idx", "rev", "bitmap", "mtimes"].map((extension) =>
+        path.join(directory, `.tmp-2147483647-pack-${"a".repeat(40)}.${extension}`),
+      );
+      const liveRepack = path.join(directory, `.tmp-${process.pid}-pack-${"b".repeat(40)}.idx`);
+      const freshRepack = path.join(directory, `.tmp-2147483647-pack-${"c".repeat(40)}.pack`);
+      for (const file of [
+        old,
+        oldIndex,
+        active,
+        young,
+        unrelated,
+        ...repack,
+        liveRepack,
+        freshRepack,
+      ]) {
         await fs.writeFile(file, "retain or reclaim");
       }
       const yesterday = new Date(Date.now() - 48 * 60 * 60_000);
-      for (const file of [old, oldIndex, active, unrelated]) {
+      for (const file of [old, oldIndex, active, unrelated, ...repack, liveRepack]) {
         await fs.utimes(file, yesterday, yesterday);
       }
       await fs.symlink(unrelated, link);
@@ -843,13 +857,16 @@ describe("worktree Git maintenance", () => {
         await fs.access(active);
         await expectMissing(old);
         await expectMissing(oldIndex);
+        for (const file of repack) {
+          await expectMissing(file);
+        }
       } finally {
         await writer.close();
       }
       await service.gc({ retryDeferred: true });
       await expectMissing(old);
       await expectMissing(active);
-      for (const file of [young, unrelated, link]) {
+      for (const file of [young, unrelated, link, liveRepack, freshRepack]) {
         await fs.access(file);
       }
     },
