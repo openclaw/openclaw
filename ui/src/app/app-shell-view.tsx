@@ -3,6 +3,7 @@ import "../lib/toast-host.tsx";
 import { createMemo, createSignal, lazy, onSettled, Show } from "solid-js";
 import { registerModalSurface } from "../components/overlay-registry.ts";
 import {
+  LazySettingsAskOpenClaw,
   LazySettingsSaveStatus,
   LazySettingsSidebar,
 } from "../components/settings-sidebar-lazy.tsx";
@@ -129,7 +130,15 @@ export function ApplicationShell(props: {
   );
   // Single-attribute bindings lack an equality guard; resize-only updates keep inert unchanged.
   const navBackdropInert = createMemo(() => !view().navDrawerOpen);
+  // Settings' floating save status and Ask OpenClaw button sit under the phone drawer.
   const settingsSaveStatusInert = createMemo(() => view().mobileNavLayout && view().navDrawerOpen);
+  // The Ask OpenClaw page itself needs no shortcut to its own dock.
+  const settingsAskVisible = createMemo(
+    () =>
+      view().settingsTakeover &&
+      view().custodianPanelAvailable &&
+      view().activeRoute !== "custodian",
+  );
   const sessionOwner = createMemo(() => view().context.sessions);
   const sessionRows = createMemo(() =>
     projectOwner(sessionOwner(), (sessions) => sessions.state.result?.sessions),
@@ -198,6 +207,7 @@ export function ApplicationShell(props: {
             "shell--embed": view().nativeEmbed,
             "shell--embed-settings": view().embedSettings,
             "shell--settings": view().settingsTakeover,
+            "shell--settings-ask": settingsAskVisible(),
             "shell--home-control":
               view().collapsedControls && view().homePanelAvailable && !view().railAvailable,
             "shell--floating-attention": floatingSidebarAttentionVisible(view().floatingUpdateCard),
@@ -567,6 +577,12 @@ export function ApplicationShell(props: {
             (props.host.shellRevision(), props.host.custodianMinimizeRequestId)
           }
         />
+        {/* Follows the dock so its stylesheet can step aside while the dock is open. */}
+        <Show when={settingsAskVisible()}>
+          <div class="settings-ask-openclaw" inert={settingsSaveStatusInert()}>
+            <LazySettingsAskOpenClaw />
+          </div>
+        </Show>
         <ShellRequestedComponent
           host={props.host}
           component="approvals"

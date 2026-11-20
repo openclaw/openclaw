@@ -43,7 +43,7 @@ xAI Responses.
 
     You can also configure search by talking to
     [OpenClaw](/cli/openclaw): say `configure web search` in `openclaw setup`
-    or in the Control UI's **Settings → Ask OpenClaw** chat. The hosted flow
+    or in the Control UI's **Ask OpenClaw** chat (the floating button in Settings). The hosted flow
     owns provider choice and credential entry — API keys are masked in the
     browser, and the terminal chat hands off to the masked wizard via
     `open search wizard`.
