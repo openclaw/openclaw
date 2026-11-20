@@ -39,6 +39,36 @@ const MSTEAMS_MARKERS = {
   strikethrough: { open: "~~", close: "~~" },
 } as const;
 
+const BLOCK_LINE_RE = /^(?:[ \t]*(?:[-*+]|\d+[.)])[ \t]|#{1,6}[ \t]|[ \t]*$)/u;
+const QUOTE_PREFIX_RE = /^(?:> ?)*/u;
+
+// Teams joins single newlines inside a paragraph or quote, so the "• item" lines the
+// list fallback writes and the author's line breaks ran together on one line. Keep them
+// as Markdown hard breaks (two trailing spaces, which message chunking trims cleanly),
+// except around block starts and block placeholders.
+function keepTeamsLineBreaks(text: string, isBlockLine: (line: string) => boolean): string {
+  const lines = text.split("\n");
+  return lines
+    .map((line, index) => {
+      const next = lines[index + 1];
+      if (next === undefined || isBlockLine(line) || isBlockLine(next)) {
+        return line;
+      }
+      const quote = QUOTE_PREFIX_RE.exec(line)![0];
+      const body = line.slice(quote.length);
+      const nextBody = next.slice(QUOTE_PREFIX_RE.exec(next)![0].length);
+      const sameQuote = quote.trim() === QUOTE_PREFIX_RE.exec(next)![0].trim();
+      return sameQuote &&
+        body.trim() &&
+        !/^#{1,6}[ \t]/u.test(body) &&
+        !/(?: {2}|\\)$/u.test(body) &&
+        !BLOCK_LINE_RE.test(nextBody)
+        ? `${line}  `
+        : line;
+    })
+    .join("\n");
+}
+
 function restoreTokens(text: string, prefix: string, values: readonly string[]): string {
   // Empty value tables can still have matching markers after normalization.
   if (!text.includes(prefix)) {
@@ -351,8 +381,17 @@ export function formatMSTeamsMarkdown(markdown: string, tableMode: MarkdownTable
     },
     MSTEAMS_FORMAT_CAPABILITIES,
   );
+  const blockTokens = [
+    ...codeRegions.flatMap((region, index) =>
+      region.includes("\n") ? [`${tokenPrefix}c${index}${TOKEN_END}`] : [],
+    ),
+    `${tokenPrefix}t`,
+  ];
+  const withLineBreaks = keepTeamsLineBreaks(rendered, (line) =>
+    blockTokens.some((token) => line.includes(token)),
+  );
   return protectedValues.reduce(
     (text, { prefix, values }) => restoreTokens(text, prefix, values),
-    restoreTokens(rendered, `${tokenPrefix}c`, codeRegions),
+    restoreTokens(withLineBreaks, `${tokenPrefix}c`, codeRegions),
   );
 }

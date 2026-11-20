@@ -7,8 +7,12 @@ describe("formatMSTeamsMarkdown", () => {
     [
       "falls task lists back to checkbox text",
       "- [x] shipped\n- [ ] pending",
-      "[x] shipped\n[ ] pending",
+      "[x] shipped  \n[ ] pending",
     ],
+    ["puts each list item on its own line", "Steps:\n- Call\n- Book", "Steps:\n\n• Call  \n• Book"],
+    ["keeps paragraph line breaks", "Status: late\nOwner: Maria", "Status: late  \nOwner: Maria"],
+    ["keeps quoted line breaks", "> one\n> two", "> one  \n> two"],
+    ["does not break before a numbered list", "Steps:\n\n1. Call\n2. Book"],
     ["preserves escaped mention brackets", String.raw`@[Alice \[Ops\]](29:abc)`],
     ["preserves transport-owned images", "![chart](https://example.com/chart_(final).png)"],
     ["preserves nested image opener text", "![plot](https://example.com/a![b].png)"],
