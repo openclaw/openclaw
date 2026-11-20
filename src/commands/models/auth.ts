@@ -295,7 +295,7 @@ async function runProviderAuthMethod(
   const connectionResult = resolveLoginConnectionResult(result, {
     ...params,
     providerId: params.provider.id,
-    priorProfiles: params.existingProfiles ?? store.profiles,
+    priorProfiles: { ...store.profiles, ...params.existingProfiles },
   });
   const resolvedIdentity = resolveReloginProfileIdentity({
     profiles: connectionResult.profiles,

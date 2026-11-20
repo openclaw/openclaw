@@ -48,7 +48,16 @@ vi.mock("../plugins/providers.runtime.js", () => ({
       {
         id: "openai",
         label: "OpenAI",
-        auth: [{ id: "oauth", label: "OAuth", kind: "oauth", run: mocks.runAuth }],
+        auth: [
+          // Like Sign in with ChatGPT, the method matches accounts, so relogin reads local profiles.
+          {
+            id: "oauth",
+            label: "OAuth",
+            kind: "oauth",
+            run: mocks.runAuth,
+            matchesPersonalAccount: () => false,
+          },
+        ],
       },
     ] satisfies ProviderPlugin[],
 }));
@@ -61,7 +70,7 @@ describe("models auth login owner integration", () => {
       { label: "models-auth-login-owner", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
-          agents: { entries: { main: {} } },
+          agents: { ownership: "explicit", entries: { main: {}, coder: {} } },
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
@@ -85,10 +94,10 @@ describe("models auth login owner integration", () => {
     );
   }
 
-  const login = (...extra: string[]) =>
+  const login = (agent = "main", ...extra: string[]) =>
     runRegisteredCli({
       register: registerModelsCli,
-      argv: ["models", "auth", "login", "--provider", "openai", "--agent", "main", ...extra],
+      argv: ["models", "auth", "login", "--provider", "openai", "--agent", agent, ...extra],
     });
   const expectSavedCredential = () =>
     expect(loadPersistedAuthProfileStore()?.profiles[FRESH_PROFILE_ID]).toMatchObject({
@@ -119,11 +128,13 @@ describe("models auth login owner integration", () => {
   });
 
   it.each([
-    { prior: false, runtime: { id: "openclaw" } },
-    { prior: true, runtime: undefined },
+    { prior: false, agent: "main", runtime: { id: "openclaw" } },
+    { prior: true, agent: "main", runtime: undefined },
+    // coder has no OpenAI profile of its own; it inherits main's shared login.
+    { prior: true, agent: "coder", runtime: undefined },
   ])(
-    "pins the login's runtime only on a first provider login (prior: $prior)",
-    async ({ prior, runtime }) => {
+    "pins the login's runtime only on a first provider login (prior: $prior, agent: $agent)",
+    async ({ prior, agent, runtime }) => {
       await withLoginState(async (state) => {
         if (prior) {
           await login();
@@ -134,10 +145,10 @@ describe("models auth login owner integration", () => {
           defaultModel: "openai/gpt-5.5",
           agentRuntimeId: "openclaw",
         });
-        await login("--profile-id", "openai:work");
+        await login(agent, "--profile-id", "openai:work");
 
         const config = JSON.parse(await fs.readFile(state.configPath, "utf8"));
-        expect(config.agents.entries.main.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual(
+        expect(config.agents.entries[agent].models?.["openai/gpt-5.5"]?.agentRuntime).toEqual(
           runtime,
         );
       });

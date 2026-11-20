@@ -7,8 +7,8 @@ import { prepareSetupModelRuntime } from "../../system-agent/setup-model-selecti
 /**
  * What a login may save. A credential-only login keeps only credentials and provider settings,
  * plus the plugin's runtime choice when its caller asks for it. That choice applies only to the
- * agent's first login for the provider, judged from every profile saved before this login: not
- * just the one `--profile-id` names, and not what `--force` left.
+ * agent's first login for the provider, judged from every profile it could use before this login,
+ * inherited ones included: not just the one `--profile-id` names, and not what `--force` left.
  */
 export function resolveLoginConnectionResult(
   result: ProviderAuthResult,
