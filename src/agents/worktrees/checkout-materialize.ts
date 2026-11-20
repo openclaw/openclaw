@@ -171,8 +171,6 @@ export async function prepareClonedWorktreeIndex(
     destination: string;
     destinationIndex: string;
     apfsCloneCompletedAtMs?: number;
-    /** Advancing read-tree owns its new index; refreshing the copied old index is redundant. */
-    refresh?: boolean;
     sourceOnly?: boolean;
     checkoutBudget?: Pick<GitCommandOptions, "timeoutMs" | "killGraceMs">;
   },
@@ -218,9 +216,6 @@ export async function prepareClonedWorktreeIndex(
       },
     );
   });
-  if (params.refresh === false) {
-    return;
-  }
   const gitOptions = {
     idleIoPriority: options.idleIoPriority,
     signal: options.signal,

@@ -1,5 +1,5 @@
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
-import { resolveWorktreeCheckoutPolicy } from "./checkout-policy-key.js";
+import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { resolveGitMetadataPath } from "./git.js";
@@ -31,14 +31,13 @@ export async function isWarmWorktreeClean(
   };
   const output = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, async (git) => {
     if (
-      (
-        await resolveWorktreeCheckoutPolicy({
-          destination: record.path,
-          commonDir: record.commonDir,
-          gitOptions,
-          git,
-        })
-      )?.(record.sourceCommit) !== contentKey
+      (await resolveWorktreeCheckoutKey({
+        destination: record.path,
+        commonDir: record.commonDir,
+        commit: record.sourceCommit,
+        gitOptions,
+        git,
+      })) !== contentKey
     ) {
       return undefined;
     }

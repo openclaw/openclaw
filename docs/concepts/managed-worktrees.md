@@ -139,15 +139,15 @@ checkout recipes in memory for 24 hours, including source-only checkouts used by
 sandboxes. It discovers repositories serially, at most once per repository every
 two minutes, and defers for foreground work or host I/O pressure. Background
 preparation uses the ordinary template single flight and generation retention;
-a create arriving during preparation can clone the builder's validated previous
-source generation and advance its private checkout instead of waiting. This applies
-only to the same checkout policy, with at most 64 changed paths and 4 MiB of old
-and new blob contents, and no attribute or submodule changes. Larger changes,
-unavailable previous generations, and sandbox dependency preparation still join
-the existing build. The background build finishes for later users. Linux Git and
-native clone children use idle I/O priority, and macOS children use background task policy.
+a create arriving during preparation joins that build. Linux Git and native clone
+children use idle I/O priority, and macOS children use background task policy.
 Restarting the Gateway clears these recipes; the next successful create registers
 the repository again. Background work does not extend the 24-hour window.
+
+Sandbox manifest inventories stay compressed between the existing worker and
+template cache. Only a foreground clone decodes the document it consumes. Git
+pack input is read by the execution owner so Gateway preparation keeps using its
+spawn broker instead of spawning pack ingestion on the main thread.
 
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
@@ -479,10 +479,7 @@ Preparation logs include `templateDetails` with the backend, selection or failur
 
 Preparation phases are inclusive. For sandbox dependency preparation, `checkout`,
 `setup`, and a concurrent caller's `mutationWait` are inside `templatePrepare`;
-`templateApply` measures each private clone separately. A managed source checkout
-that advances the previous generation reports `templateDetails.reason=advance-from-previous`
-and `templateAdvance`; its template identity still describes the consumed generation,
-while `requestedSourceCommit` identifies the new target. A warm caller waiting
+`templateApply` measures each private clone separately. A warm caller waiting
 for a build therefore reports preparation time without running a second install.
 For managed source checkouts, `checkout` includes its child phases; do not add it
 to `templateApply`. Sub-phases separate registration metadata and inspection, commit preparation, clone admission estimates, destination preparation, marker replacement, index location/copy/refresh, prompt publication, template release, and warm-slot acquisition/application. The clone-byte estimate is a disk-admission allowance, not measured bytes written.

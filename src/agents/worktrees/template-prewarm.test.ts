@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import {
-  createDeferred,
-  awaitGateBeforeSettlement,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,7 +11,6 @@ import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import { DOCKER_SANDBOX_ENGINE } from "../sandbox/container-engine.js";
 import * as dependencies from "../sandbox/dependency-template.js";
 import { prepareLocalSandboxWorkspace } from "../sandbox/local-workspace.js";
-import * as allocation from "./allocation.js";
 import { observeWorktreeBase, resolveWorktreeBase } from "./base-ref.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
@@ -214,134 +209,44 @@ it.each([false, true])(
   },
 );
 
-it.for([false, true])(
-  "advances the previous generation during background preparation (source-only=%s)",
-  async (sourceOnly, { signal }) => {
-    const f = await fixture();
-    await fs.writeFile(path.join(f.repo, "removed.txt"), "old bytes\n");
-    await fs.writeFile(path.join(f.repo, "renamed.txt"), "retained bytes\n");
-    await git(f.repo, "add", ".");
-    await git(f.repo, "commit", "-m", "advance fixture");
-    await git(f.repo, "push", "origin", "main");
-    await f.service.create({ repoRoot: f.repo, name: "first", provisionIgnoredFiles: !sourceOnly });
-    const prior = (await registry.listTemplatesAsync(process.env))[0]!;
-    await git(f.repo, "rm", "removed.txt");
-    await git(f.repo, "mv", "renamed.txt", "moved.txt");
-    const target = await f.advance("next\n");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const clone = vi.mocked(f.backend.cloneTemplate).getMockImplementation()!;
-    vi.mocked(f.backend.cloneTemplate).mockImplementationOnce(async (...args) => {
-      expect(args[2].idleIoPriority).toBe(true);
-      entered.resolve();
-      await release.promise;
-      await clone(...args);
-    });
-    const pass = f.pass();
-    await awaitGateBeforeSettlement(entered.promise, pass, "background clone did not start");
-    const before = vi.mocked(f.backend.cloneTemplate).mock.calls.length;
-    const creating = f.service.create({
-      repoRoot: f.repo,
-      name: "advancing",
-      provisionIgnoredFiles: !sourceOnly,
-    });
-    try {
-      const created = await withinTest(creating, signal);
-      expect(await git(created.path, "rev-parse", "HEAD")).toBe(target);
-      expect(await git(created.path, "write-tree")).toBe(
-        await git(f.repo, "rev-parse", `${target}^{tree}`),
-      );
-      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("next\n");
-      expect(await fs.readFile(path.join(created.path, "moved.txt"), "utf8")).toBe(
-        "retained bytes\n",
-      );
-      await expect(fs.access(path.join(created.path, "removed.txt"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      expect(await git(prior.path, "rev-parse", "HEAD")).toBe(prior.sourceCommit);
-      expect(await git(prior.path, "status", "--porcelain")).toBe("");
-      expect(await git(created.path, "status", "--porcelain")).toBe("");
-      expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pass, creating]);
+it("joins the background generation when a create arrives during its build", async () => {
+  const f = await fixture();
+  await f.create("first");
+  const target = await f.advance("next\n");
+  const entered = createDeferred();
+  const release = createDeferred();
+  const clone = vi.mocked(f.backend.cloneTemplate).getMockImplementation()!;
+  vi.mocked(f.backend.cloneTemplate).mockImplementationOnce(async (...args) => {
+    expect(args[2].idleIoPriority).toBe(true);
+    entered.resolve();
+    await release.promise;
+    await clone(...args);
+  });
+  // Keep the real implementation; observe the reader miss while publication is held.
+  const attempted = createDeferred();
+  const retain = registry.retainTemplateReaderAsync;
+  const pass = f.pass();
+  await awaitGateBeforeSettlement(entered.promise, pass, "background clone did not start");
+  vi.spyOn(registry, "retainTemplateReaderAsync").mockImplementation(async (...args) => {
+    const result = await retain(...args);
+    if ("selection" in args[1] && !result) {
+      attempted.resolve();
     }
-    const [, created] = await Promise.all([pass, creating]);
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(target);
-    expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
-    expect(vi.mocked(f.backend.cloneTemplate).mock.lastCall?.[2].idleIoPriority).not.toBe(true);
-  },
-);
-
-it.for(["large blob", "repeated blobs", "many paths", "attributes"])(
-  "joins a background generation when the advance changes %s",
-  async (change, { signal }) => {
-    const f = await fixture();
-    await f.create("first");
-    if (change === "large blob") {
-      await fs.writeFile(path.join(f.repo, "large.bin"), Buffer.alloc(4 * 1024 * 1024 + 1));
-    } else if (change === "repeated blobs") {
-      for (let index = 0; index < 3; index++) {
-        await fs.writeFile(path.join(f.repo, `repeated-${index}`), Buffer.alloc(2 * 1024 * 1024));
-      }
-    } else if (change === "many paths") {
-      for (let index = 0; index < 65; index++) {
-        await fs.writeFile(path.join(f.repo, `file-${index}`), "changed");
-      }
-    } else {
-      await fs.writeFile(path.join(f.repo, ".gitattributes"), "*.md text eol=lf\n");
-    }
-    await git(f.repo, "add", ".");
-    const target = await f.advance("next\n");
-    const entered = createDeferred();
-    const release = createDeferred();
-    const clone = vi.mocked(f.backend.cloneTemplate).getMockImplementation()!;
-    const createTemplate = vi.mocked(f.backend.createTemplate).getMockImplementation()!;
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    // Attribute changes rebuild instead of cloning the old generation.
-    if (change === "attributes") {
-      vi.mocked(f.backend.createTemplate).mockImplementationOnce(async (...args) => {
-        await hold();
-        return await createTemplate(...args);
-      });
-    } else {
-      vi.mocked(f.backend.cloneTemplate).mockImplementationOnce(async (...args) => {
-        await hold();
-        return await clone(...args);
-      });
-    }
-    const pass = f.pass();
-    await awaitGateBeforeSettlement(entered.promise, pass, "background build did not start");
-    const waiting = createDeferred();
-    const startWait = allocation.startWorktreeWait;
-    vi.spyOn(allocation, "startWorktreeWait").mockImplementation((...args) => {
-      waiting.resolve();
-      return startWait(...args);
-    });
-    const before = vi.mocked(f.backend.cloneTemplate).mock.calls.length;
-    const creating = f.create("waiting");
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(waiting.promise, creating, "create did not join the build"),
-        signal,
-      );
-      expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length).toBe(before);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pass, creating]);
-    }
-    const [, created] = await Promise.all([pass, creating]);
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(target);
-    expect(await git(created.path, "write-tree")).toBe(
-      await git(f.repo, "rev-parse", `${target}^{tree}`),
-    );
-    expect(await git(created.path, "status", "--porcelain")).toBe("");
-    expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
-  },
-);
+    return result;
+  });
+  const before = vi.mocked(f.backend.cloneTemplate).mock.calls.length;
+  const creating = f.create("joining");
+  try {
+    await awaitGateBeforeSettlement(attempted.promise, creating, "create did not join publication");
+    expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length).toBe(before);
+  } finally {
+    release.resolve();
+  }
+  const [, created] = await Promise.all([pass, creating]);
+  expect(await git(created.path, "rev-parse", "HEAD")).toBe(target);
+  expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
+  expect(vi.mocked(f.backend.cloneTemplate).mock.lastCall?.[2].idleIoPriority).not.toBe(true);
+});
 
 it("rebuilds unchanged files when checkout policy changes before background preparation", async () => {
   const f = await fixture();

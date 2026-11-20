@@ -13,7 +13,7 @@ import {
   WORKTREE_SETUP_HEADROOM_BYTES,
 } from "./capacity.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
-import { resolveWorktreeCheckoutPolicy } from "./checkout-policy-key.js";
+import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { selectWarmWorktree, isWarmWorktreeClean } from "./checkout-pool.js";
 import { resolveWorktreeSourceProfile } from "./checkout-profiles.js";
 import { addManagedWorktree, prepareManagedWorktreeTemplate } from "./checkout.js";
@@ -340,15 +340,16 @@ export async function prepareWarmWorktree(
         beforeRun: options.commitGuard,
         killProcessTree: true,
       };
-      const policy = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, (git) =>
-        resolveWorktreeCheckoutPolicy({
+      const contentKey = await withWorktreeGitConfig(record.path, sourceOnly, gitOptions, (git) =>
+        resolveWorktreeCheckoutKey({
           destination: record.path,
           commonDir: template.commonDir,
+          commit: template.sourceCommit,
           gitOptions,
           git,
         }),
       );
-      if (policy?.(template.sourceCommit) !== template.contentKey) {
+      if (contentKey !== template.contentKey) {
         throw new Error("Warm worktree checkout policy changed during preparation");
       }
     },

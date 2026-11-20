@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { GitCommandOptions } from "../../infra/git-exec.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
-import { resolveWorktreeCheckoutPolicy } from "./checkout-policy-key.js";
+import { resolveWorktreeCheckoutKey } from "./checkout-policy-key.js";
 import { parseGitTreePaths, splitNullBuffer } from "./git-path-inventory.js";
 import { commandError } from "./git.js";
 
@@ -97,7 +97,7 @@ export async function prepareWorktreePromptFiles(
     onMaterializationStart: () => void;
   },
 ): Promise<boolean> {
-  if (!(await resolveWorktreeCheckoutPolicy(options, "prompt"))) {
+  if (!(await resolveWorktreeCheckoutKey(options, "prompt"))) {
     return false;
   }
   // The complete index already serves final checkout. Let Git select only
