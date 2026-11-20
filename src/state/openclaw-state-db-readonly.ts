@@ -5,6 +5,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-lifecycle-errors.js";
+import { hasVerifiedLiveSqliteOwner } from "../infra/sqlite-live-owner.js";
 import { retainSnapshotWork } from "../infra/sqlite-readonly-location-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -274,10 +275,12 @@ function requiresArtifactPreservingSnapshot(pathname: string): boolean {
   if (isStatePostgres() || isLiveStateRead()) {
     return false;
   }
+  // Live owners already hold the WAL family; explicit snapshots select their own source.
   const required =
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
-    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname);
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname) &&
+    !hasVerifiedLiveSqliteOwner(pathname);
   if (required) {
     assertStateFileSnapshotAllowed();
   }
@@ -364,20 +367,15 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     );
     const source = snapshot.readSource();
     if (source) {
-      return {
-        reused: true,
-        value: readRetainedStateSnapshot(snapshot, source, operation),
-      };
+      return { reused: true, value: readRetainedStateSnapshot(snapshot, source, operation) };
     }
   }
   if (
-    isArtifactPreservingStateRead("agent", pathname) &&
-    (requiresArtifactPreservingSnapshot(pathname) ||
-      isUpdateRehearsalPrivateDatabase(pathname, process.env))
+    (isArtifactPreservingStateRead("agent", pathname) &&
+      (requiresArtifactPreservingSnapshot(pathname) ||
+        isUpdateRehearsalPrivateDatabase(pathname, process.env))) ||
+    (isStatePostgres() && !currentAuthority)
   ) {
-    return { reused: false };
-  }
-  if (isStatePostgres() && !currentAuthority) {
     return { reused: false };
   }
   return withCachedOpenClawStateDatabaseReadOnly(
@@ -400,10 +398,8 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
       return maintained.value;
     }
   }
-  // Even read-only SQLite opens can create a missing WAL. The existing worker
-  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
-  // One consistent snapshot per synchronous scope avoids mixed reads and duplicate copies.
-  // Concurrent commits become visible in the next scope; this reader closes at scope end.
+  // Offline snapshots preserve source sidecars and caller-held locks.
+  // One image per synchronous scope avoids mixed reads; later scopes see later commits.
   const readers = synchronousReadSnapshots.current;
   if (readers && requiresArtifactPreservingSnapshot(pathname)) {
     let opened = readers.get(pathname);
