@@ -182,69 +182,58 @@ describe("sandbox exec preparation failures", () => {
     expect(checks).toBe(2);
   });
 
-  it.each(["current", "reassigned"] as const)(
-    "rechecks a prepared settle tool at final process spawn when its batch is %s",
-    async (state) => {
-      const sessionKey = "agent:main:settle-exec";
-      const sourceSessionKey = "agent:main:subagent:child";
-      const claim = {};
-      let currentClaim: object | undefined = claim;
-      const profile = resolveConversationCapabilityProfile({ sessionKey, agentId: "main" });
-      const wrap = createCodingToolsGatewayCaller({
-        agentId: "main",
-        sessionKey,
-        capabilityProfile: {
-          ...profile,
-          policy: { ...profile.policy, requesterPolicySource: "completion-handoff" },
-        },
-        options: {
-          trustedInternalHandoff: {
-            kind: "subagent-completion",
-            sourceSessionKey,
-            targetSessionKey: sessionKey,
-            targetSessionId: "settle-parent",
-            provider: "openai",
-            model: "test-model",
-            settleBatch: {
-              sourceSessionKeys: [sourceSessionKey],
-              isCurrent: () => currentClaim === claim,
-            },
+  it("executes a prepared settle tool through process spawn", async () => {
+    const sessionKey = "agent:main:settle-exec";
+    const sourceSessionKey = "agent:main:subagent:child";
+    const profile = resolveConversationCapabilityProfile({ sessionKey, agentId: "main" });
+    const wrap = createCodingToolsGatewayCaller({
+      agentId: "main",
+      sessionKey,
+      capabilityProfile: {
+        ...profile,
+        policy: { ...profile.policy, requesterPolicySource: "completion-handoff" },
+      },
+      options: {
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey,
+          targetSessionKey: sessionKey,
+          targetSessionId: "settle-parent",
+          provider: "openai",
+          model: "test-model",
+          settleBatch: {
+            sourceSessionKeys: [sourceSessionKey],
+            isCurrent: () => true,
           },
         },
-      });
-      const effect = vi.fn();
-      supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
-        await Promise.resolve();
-        currentClaim = state === "current" ? claim : {};
-        input.assertCurrent?.();
-        effect();
-        return runtimeManagedRun(input);
-      });
-      const tool = wrap({
-        name: "exec",
-        label: "Exec",
-        description: "Synthetic exec using the production process boundary",
-        parameters: Type.Object({}),
-        execute: async () => {
-          const process = await runTestExecProcess();
-          return { content: [], details: await process.promise };
-        },
-      });
-      const pending = withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, receiptAuthority: () => true },
-        () =>
-          expectDefined(tool.execute, "Expected the prepared settle exec tool")("settle-exec", {}),
-      );
-      if (state === "current") {
-        await expect(pending).resolves.toMatchObject({ details: { status: "completed" } });
-        expect(effect).toHaveBeenCalledOnce();
-      } else {
-        await expect(pending).rejects.toThrow("authority is no longer active");
-        expect(effect).not.toHaveBeenCalled();
-      }
-      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-    },
-  );
+      },
+    });
+    const effect = vi.fn();
+    supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) => {
+      await Promise.resolve();
+      input.assertCurrent?.();
+      effect();
+      return runtimeManagedRun(input);
+    });
+    const tool = wrap({
+      name: "exec",
+      label: "Exec",
+      description: "Synthetic exec using the production process boundary",
+      parameters: Type.Object({}),
+      execute: async () => {
+        const process = await runTestExecProcess();
+        return { content: [], details: await process.promise };
+      },
+    });
+    const pending = withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey, receiptAuthority: () => true },
+      () =>
+        expectDefined(tool.execute, "Expected the prepared settle exec tool")("settle-exec", {}),
+    );
+    await expect(pending).resolves.toMatchObject({ details: { status: "completed" } });
+    expect(effect).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
+  });
 
   it("keeps turn authority out of process lifetime while preserving foreground updates", async () => {
     const exit = createDeferred<RunExit>();

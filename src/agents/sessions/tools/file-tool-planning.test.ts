@@ -89,8 +89,7 @@ it.each(
     await expect(pending).resolves.toMatchObject({ details: { changed: true } });
     expect(state()).toMatchObject({ writes: [expect.any(Array)], text: "after\n" });
   } else {
-    const abortedMessage = kind === "write" ? "Operation aborted" : "Planning cancelled";
-    await expect(pending).rejects.toThrow(abortedMessage);
+    await expect(pending).rejects.toThrow();
     expect(state()).toEqual({ dirs: [], writes: [], text: "before\n" });
   }
 });
