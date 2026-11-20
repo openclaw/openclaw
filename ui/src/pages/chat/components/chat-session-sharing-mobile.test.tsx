@@ -310,6 +310,26 @@ it("hides members in Shared and restores them when authoritative visibility chan
   expect(initial.onPublicShareChange).not.toHaveBeenCalled();
 });
 
+it("keeps invited level changes separate from membership and warns before lowering access", async () => {
+  const onMemberAccessChange = vi.fn(async () => ({ status: "success" as const }));
+  const initial = prepared({ onMemberAccessChange });
+  initial.session.visibility = "read-only";
+  initial.state!.result!.members = [
+    { identityId: "member", addedBy: "owner", addedAt: 1, access: "send" },
+  ];
+  initial.state!.result!.permissions = [
+    { identityId: "member", level: "send", options: ["read", "suggest", "send"] },
+  ];
+  const view = sharingFixture(initial);
+  const permission = view.person("send");
+  permission.click();
+  await waitForSolid(() => expect(permission.getAttribute("aria-expanded")).toBe("true"));
+  expect(view.getByText("Lowering access cancels Pat Member’s queued messages")).toBeDefined();
+  view.getByRole("menuitemradio", { name: "Can suggest" }).click();
+  expect(onMemberAccessChange).toHaveBeenCalledExactlyOnceWith("member", "suggest");
+  expect(initial.onMemberChange).not.toHaveBeenCalled();
+});
+
 it("keeps Public confirmed until its owner publishes and preserves membership focus while pending", async () => {
   const confirmation = createDeferred<ChatSessionSharingOutcome>();
   const publish = vi

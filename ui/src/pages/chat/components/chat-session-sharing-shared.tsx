@@ -59,6 +59,7 @@ export type ChatSessionSharingProps = {
   visibilityDisabledReason?: string;
   memberAddDisabledReason?: string;
   memberRemoveDisabledReason?: string;
+  memberAccessDisabledReason?: string;
   publicShareDisabledReason?: string;
   onPublicShareChange?: (enabled: boolean) => ChatSessionSharingAction;
   onCopyPublicLink?: () => ChatSessionSharingAction;
@@ -68,6 +69,10 @@ export type ChatSessionSharingProps = {
   onOpen: () => void;
   onVisibilityChange: (visibility: SessionVisibility) => ChatSessionSharingAction;
   onMemberChange: (identityId: string, member: boolean) => ChatSessionSharingAction;
+  onMemberAccessChange?: (
+    identityId: string,
+    access: SessionMemberPermissionLevel,
+  ) => ChatSessionSharingAction;
 };
 
 export type PreparedChatSessionSharing = Omit<
@@ -127,18 +132,26 @@ function selectChatSessionSharingItem(
   if (!value?.startsWith("permission:")) {
     return;
   }
-  if (props.session.visibility !== "read-only" && props.session.visibility !== "suggest") {
-    return { status: "unavailable" };
-  }
   const separator = value.indexOf(":", "permission:".length);
   const level = value.slice("permission:".length, separator);
   const identityId = value.slice(separator + 1);
-  const permission = props.state?.result?.permissions?.find((row) => row.identityId === identityId);
+  const permission = projectChatSessionSharingRoster(props).find(
+    (row) => row.identity.id === identityId,
+  );
+  const access = permission?.options.find((option) => option === level);
   if (
     !permission ||
+    permission.fixed ||
+    permission.disabledReason ||
     permission.level === level ||
-    !permission.options.some((option) => option === level)
+    !access
   ) {
+    return { status: "unavailable" };
+  }
+  if (permission.invitedAccess) {
+    return props.onMemberAccessChange?.(identityId, access);
+  }
+  if (props.session.visibility !== "read-only" && props.session.visibility !== "suggest") {
     return { status: "unavailable" };
   }
   const member = level === "send";
@@ -353,6 +366,8 @@ export type ChatSessionSharingRosterRow = {
   options: readonly SessionMemberPermissionLevel[];
   controlLabel: string;
   disabledReason?: string;
+  invitedAccess?: boolean;
+  loweringAccessNote?: string;
 };
 
 export function projectChatSessionSharingRoster(
@@ -360,23 +375,41 @@ export function projectChatSessionSharingRoster(
 ): ChatSessionSharingRosterRow[] {
   const result = input.state?.result;
   const identities = new Map(result?.identities.map((identity) => [identity.id, identity]));
+  const invitedMembers = new Set(
+    result?.members
+      .filter((member) => member.access !== undefined)
+      .map((member) => member.identityId),
+  );
+  const invitationOnly =
+    input.session?.visibility !== "read-only" && input.session?.visibility !== "suggest";
   const rows: ChatSessionSharingRosterRow[] = (result?.permissions ?? [])
     .flatMap((permission) => {
       const identity = identities.get(permission.identityId);
-      return identity && identity.id !== result?.owner?.id
+      const invitedAccess = invitedMembers.has(permission.identityId);
+      return identity && identity.id !== result?.owner?.id && (!invitationOnly || invitedAccess)
         ? [
             {
               identity,
               owner: false,
-              fixed: permission.options.length < 2,
+              fixed:
+                permission.options.length < 2 || (invitedAccess && !input.onMemberAccessChange),
               level: permission.level,
               options: permission.options,
+              invitedAccess,
+              loweringAccessNote:
+                invitedAccess && permission.level !== "read"
+                  ? t("chat.sessionSharing.loweringAccessCancelsQueued", {
+                      name: identity.label ?? identity.id,
+                    })
+                  : undefined,
               controlLabel: chatSessionPermissionLabel(permission.level),
               disabledReason: input.state?.loading
                 ? t("common.loading")
-                : permission.level === "send"
-                  ? input.memberRemoveDisabledReason
-                  : input.memberAddDisabledReason,
+                : invitedAccess
+                  ? input.memberAccessDisabledReason
+                  : permission.level === "send"
+                    ? input.memberRemoveDisabledReason
+                    : input.memberAddDisabledReason,
             },
           ]
         : [];

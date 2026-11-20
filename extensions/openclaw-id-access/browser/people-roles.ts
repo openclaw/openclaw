@@ -47,7 +47,11 @@ export function roleOptions(roles: Role[], locale: string) {
     description: !isMemberRole(role.name)
       ? roleText(locale, "invalidRoleName")
       : [
-          roleText(locale, `sessions.${role.sessions}`),
+          role.maxInvitedAccess
+            ? roleText(locale, "invitedAccess", {
+                level: roleText(locale, `invitationLevels.${role.maxInvitedAccess}`),
+              })
+            : roleText(locale, `sessions.${role.sessions}`),
           roleText(
             locale,
             role.sandbox?.ready === false

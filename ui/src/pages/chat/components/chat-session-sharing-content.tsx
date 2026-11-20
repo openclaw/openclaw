@@ -209,6 +209,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           const person = () => row().identity;
           const isCreator = () => row().owner;
           const reason = () => row().disabledReason;
+          const loweringAccessNote = (
+            <p class="chat-pane__sharing-status">{row().loweringAccessNote}</p>
+          );
           const activity = () =>
             personActivityLink(
               creator()?.identity?.type === "profile" ? creator()?.identity?.id : undefined,
@@ -275,13 +278,21 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               }
             },
             get children() {
-              return row().options.map((level) => ({
+              const options: MenuEntry[] = row().options.map((level) => ({
                 id: `permission:${level}:${person().id}`,
                 label: chatSessionPermissionLabel(level),
                 type: "radio" as const,
                 checked: row().level === level,
                 closeOnSelect: false,
               }));
+              if (row().loweringAccessNote) {
+                options.push({
+                  kind: "content",
+                  id: `permission-note:${person().id}`,
+                  content: loweringAccessNote,
+                });
+              }
+              return options;
             },
           };
           return {
@@ -318,8 +329,8 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     { lazy: true },
   );
   const showPermissions = () =>
-    visibility() !== "shared" &&
-    visibility() !== "draft" &&
+    ((visibility() !== "shared" && visibility() !== "draft") ||
+      people().some((row) => row.invitedAccess)) &&
     props.membersAvailable !== false &&
     (!props.state?.error || Boolean(result())) &&
     (!result() ||

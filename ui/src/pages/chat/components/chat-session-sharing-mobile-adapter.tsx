@@ -228,8 +228,8 @@ export function createChatSessionSharingMobileAdapter(
       },
       get permissions() {
         const current = source();
-        return visibility() !== "shared" &&
-          visibility() !== "draft" &&
+        return ((visibility() !== "shared" && visibility() !== "draft") ||
+          rows().some((row) => row.invitedAccess)) &&
           current &&
           current.membersAvailable !== false &&
           (!current.state?.error || Boolean(current.state.result)) &&

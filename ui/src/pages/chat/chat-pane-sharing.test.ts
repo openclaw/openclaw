@@ -3,6 +3,7 @@
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SessionMemberPermissionLevel } from "../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type {
   GatewaySessionRow,
@@ -41,7 +42,10 @@ type SharingPane = TestChatPane & {
   sessionSharingCacheKey: (sessionKey: string) => string;
   mutateSessionSharing: (
     row: GatewaySessionRow,
-    change: { visibility: SessionVisibility } | { identityId: string; member: boolean },
+    change:
+      | { visibility: SessionVisibility }
+      | { identityId: string; member: boolean }
+      | { identityId: string; access: SessionMemberPermissionLevel },
   ) => Promise<ChatSessionSharingOutcome>;
   setSessionPublicShare: (
     row: GatewaySessionRow,
@@ -611,6 +615,33 @@ it("preserves a member sharing refresh failure in the current connection", async
   });
   expect(state.lastError).toBe(failure);
   expect(state.chatError).toBe(state.lastError);
+  expect(sessions.reconcileMutation).toHaveBeenCalledOnce();
+});
+
+it("sets invited access through the advertised method and reconciles its result", async () => {
+  const row = sessionRow();
+  const request = vi.fn(async (method: string) => {
+    if (method === "session.members.setAccess") {
+      return { ok: true };
+    }
+    if (method === "session.members.listEvidence") {
+      return sharingResult(row);
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  const sessions = refreshingSessions();
+  const { pane } = sharingPane(request, sessions);
+  const change = { identityId: "alice", access: "suggest" as const };
+  expect(await pane.mutateSessionSharing(row, change)).toEqual({ status: "unavailable" });
+  expect(request).not.toHaveBeenCalled();
+  setSharingAuthorization(pane, { methods: [...SHARING_METHODS, "session.members.setAccess"] });
+  expect(await pane.mutateSessionSharing(row, change)).toEqual({ status: "success" });
+  expect(request).toHaveBeenCalledWith("session.members.setAccess", {
+    sessionKey: row.key,
+    agentId: "main",
+    identityId: "alice",
+    access: "suggest",
+  });
   expect(sessions.reconcileMutation).toHaveBeenCalledOnce();
 });
 
