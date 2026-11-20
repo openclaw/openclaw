@@ -45,6 +45,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [fal](/providers/fal)
 - [Featherless AI](/providers/featherless)
 - [Fireworks](/providers/fireworks)
+- [FlexAI](/providers/flexai)
 - [GitHub Copilot](/providers/github-copilot)
 - [GMI Cloud](/providers/gmi)
 - [Google (Gemini)](/providers/google)
