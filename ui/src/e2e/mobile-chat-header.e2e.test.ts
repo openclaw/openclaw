@@ -53,6 +53,38 @@ async function installFixture(page: Page, defaultWorkspace = false) {
 }
 
 suite.define(() => {
+  it("uses the same idle icon color for Dashboard and Panels", async () => {
+    await suite.withPage(
+      { viewport: { width: 393, height: 852 }, colorScheme: "light", hasTouch: true },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          sessionKey,
+          featureMethods: ["board.get"],
+          methodResponses: {
+            "sessions.describe": {
+              session: { key: sessionKey, kind: "direct", label: "Main Session", hasBoard: true },
+            },
+            "board.get": {
+              sessionKey,
+              revision: 1,
+              tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+              widgets: [],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
+        const dashboard = header.getByRole("button", { name: "Session dashboard", exact: true });
+        const panels = header.getByRole("button", { name: "Panels", exact: true });
+        await dashboard.waitFor();
+        await panels.waitFor();
+        const iconColor = (button: typeof dashboard) =>
+          button.locator("svg").evaluate((icon) => getComputedStyle(icon).color);
+        expect(await iconColor(dashboard)).toBe(await iconColor(panels));
+      },
+    );
+  });
+
   it("opens native Details while disconnected and after reconnecting", async () => {
     await suite.withPage({ viewport: { width: 320, height: 700 } }, async ({ page }) => {
       const gateway = await installFixture(page);
