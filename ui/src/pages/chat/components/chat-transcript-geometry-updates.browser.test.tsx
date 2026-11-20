@@ -337,7 +337,7 @@ it("keeps the displayed reader still when a predecessor is measured during a pen
     yield refresh.promise;
   })();
   try {
-    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    await new Promise(requestAnimationFrame);
     expect(Math.abs(retained.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
   } finally {
     refresh.resolve();
