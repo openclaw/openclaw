@@ -44,7 +44,9 @@ const trialFile = path.join(prefix, "releases", "${GIT_RELEASE_TRIAL}");
 // Only a Gateway run is a start: "openclaw gateway" or "openclaw gateway run", never another
 // "gateway" subcommand. The Windows task supervisor only starts the Gateway child, through this
 // launcher (it reads the global below), so only the child's starts count. An unknown value flag
-// can make a start look like a subcommand; it is then not counted (accepted).
+// can make a start look like a subcommand; it is then not counted (accepted). The launcher knows
+// only its own state directory: a run for another profile through this install's PATH entry
+// ("openclaw --profile x gateway") counts as this install's start (accepted, Ayaan 2026-11-20).
 const valueFlags = new Set(${JSON.stringify([...ROOT_VALUE_FLAGS, ...GATEWAY_RUN_VALUE_FLAGS, WINDOWS_TASK_SUPERVISOR_CHILD_FLAG])});
 // As the CLI's command-path parser: after "--" every argument is a literal positional.
 const positionals = [];

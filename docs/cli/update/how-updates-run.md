@@ -1591,6 +1591,11 @@ definition unchanged and records an owed `service-definition` step that names
 `openclaw gateway install --force` and `openclaw gateway restart`. The trial ends once the Gateway
 on the new release is ready.
 
+The launcher knows only its own state directory. A Gateway run for another profile started
+through the same `openclaw` on PATH (`openclaw --profile work gateway`) also counts as a start of
+this install: it selects this install's pending release, and two such failed runs during this
+install's trial switch it back to its previous release.
+
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that
 never started, with its trial still armed. When the trial's previous release is shown to
