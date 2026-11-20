@@ -47,9 +47,12 @@ export function deferredCronFailurePrefix(key: string): string {
 
 export function hasDeferredCronFailure(key: string): boolean {
   const storage = getSafeLocalStorage();
+  if (!storage) {
+    return false;
+  }
   const prefix = deferredCronFailurePrefix(key);
   try {
-    for (let index = 0; storage && index < storage.length; index++) {
+    for (let index = 0; index < storage.length; index++) {
       if (storage.key(index)?.startsWith(prefix)) {
         return true;
       }
