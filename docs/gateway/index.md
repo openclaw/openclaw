@@ -480,5 +480,5 @@ Auto provisionally selects lean at or below 2 GiB effective memory or 2 availabl
 CPUs. **Both profiles currently retain the same worker behavior.**
 `openclaw status` reports the running Gateway's decision and live direct-worker
 census; `--json` exposes the same facts under `resources`. See
-[resource profile configuration](/gateway/config-gateway#gatewayresourcesprofile)
+[resource profile configuration](/gateway/config-gateway#gateway.resources.profile)
 for limit detection, overrides and diagnostic coverage.
