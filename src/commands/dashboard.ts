@@ -119,6 +119,7 @@ function printGatewayNotReadyHints(
 }
 
 async function ensureDashboardTargetReady(params: {
+  target: Awaited<ReturnType<typeof resolveDashboardTarget>>;
   runtime: RuntimeEnv;
   yes?: boolean;
   allowRecovery?: boolean;
@@ -126,13 +127,9 @@ async function ensureDashboardTargetReady(params: {
   const { runtime, yes, allowRecovery } = params;
   const gatherStatus = async () => {
     const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
-    // Do not forward the dashboard's resolved URL as a probe override:
-    // gatherDaemonStatus classifies any URL override as diagnostic-only, which
-    // would suppress the documented start/install recovery for the locally
-    // owned Gateway. The status reader resolves the same configured local
-    // endpoint on its own, with config credentials and TLS verification.
     return gatherDaemonStatus({
       rpc: {},
+      dashboardTarget: { port: params.target.port, probeUrl: params.target.probeUrl },
       probe: true,
       requireRpc: false,
       deep: false,
@@ -211,6 +208,7 @@ export async function dashboardCommand(
     try {
       const target = await resolveDashboardTarget();
       const readiness = await ensureDashboardTargetReady({
+        target,
         runtime: quietRuntime,
         allowRecovery: false,
       });
@@ -279,6 +277,7 @@ export async function dashboardCommand(
     return;
   }
   const readiness = await ensureDashboardTargetReady({
+    target: initialTarget,
     runtime,
     yes: options.yes,
   });
@@ -295,6 +294,7 @@ export async function dashboardCommand(
     // Recovery may install or start against a changed config. Prove the final
     // endpoint without triggering a second lifecycle action before URL delivery.
     const finalReadiness = await ensureDashboardTargetReady({
+      target,
       runtime,
       allowRecovery: false,
     });

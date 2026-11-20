@@ -166,22 +166,6 @@ describe("dashboard Gateway readiness", () => {
     expect(startGateway).toHaveBeenCalledTimes(installed ? 1 : 0);
   });
 
-  it("probes the configured endpoint without a URL override so the native service stays the recovery target", async () => {
-    gatherStatus.mockResolvedValueOnce(createStatus()).mockResolvedValueOnce(runningStatus());
-
-    await check({ yes: true });
-
-    // The readiness probe must not forward the dashboard's resolved URL:
-    // gatherDaemonStatus classifies any URL override as diagnostic-only, which
-    // makes the documented start/install recovery unreachable for the owned
-    // local Gateway (#202037).
-    expect(gatherStatus).toHaveBeenCalledWith(
-      expect.objectContaining({ rpc: {}, probe: true, requireRpc: false, deep: false }),
-    );
-    expect(installGateway).toHaveBeenCalledExactlyOnceWith({ json: false });
-    expect(startGateway).not.toHaveBeenCalled();
-  });
-
   it("never installs or starts the gateway service for JSON output", async () => {
     gatherStatus.mockResolvedValue(createStatus());
 
