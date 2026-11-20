@@ -3,6 +3,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   addSessionMember,
+  removeSessionMember,
   setSessionMemberAccess,
 } from "../config/sessions/session-sharing-store.native.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,7 +33,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
       permissionMode: "workspace",
       createdActor: { type: "human", source: "profile", id: "creator" },
     });
-    await addSessionMember(scope, { identityId: profileId, addedBy: "creator", access: "read" });
+    addSessionMember(scope, { identityId: profileId, addedBy: "creator", access: "read" });
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const registry = createGatewayMethodRegistry([]);
     const methods = [
@@ -70,7 +71,7 @@ it("admits only bounded methods for a send invitation with read scope", async ()
     ]) {
       client.connect.scopes = scopes;
       for (const access of ["read", "suggest", "send"] as const) {
-        await setSessionMemberAccess(scope, { identityId: profileId, access });
+        setSessionMemberAccess(scope, { identityId: profileId, access });
         for (const method of methods) {
           const params =
             method === "sessions.patch"
@@ -93,24 +94,36 @@ it("admits only bounded methods for a send invitation with read scope", async ()
             // receive an invitation grant merely by passing the method scope router.
             allowed =
               result.error === null && result.authorization?.participationCeiling !== undefined;
-            if (allowed)
+            if (allowed) {
               expect(
                 result.authorization?.participationCeiling,
-                `${scopes}/${access}/${method}`,
+                `${scopes.join(",")}/${access}/${method}`,
               ).toEqual({
                 kind: "send",
                 profileId,
                 sessionKey: scope.sessionKey,
               });
+            }
             result.authorization?.release?.();
           }
-          expect(allowed, `${scopes}/${access}/${method}`).toBe(
+          expect(allowed, `${scopes.join(",")}/${access}/${method}`).toBe(
             scopes.length > 0 && access === "send" && methods.indexOf(method) < 4,
           );
         }
       }
     }
+    removeSessionMember(scope, profileId);
     client.connect.scopes = ["operator.sessions.read"];
+    const absent = await resolveSessionMutationAuthorizationAsync({
+      client,
+      context,
+      method: "chat.send",
+      requestParams: scope,
+      participationRequired: true,
+    });
+    expect(absent.error).not.toBeNull();
+    absent.authorization?.release?.();
+    addSessionMember(scope, { identityId: profileId, addedBy: "creator", access: "send" });
     for (const patch of [
       { permissionMode: null },
       { permissionMode: "full" },

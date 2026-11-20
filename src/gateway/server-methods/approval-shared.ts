@@ -553,6 +553,7 @@ export async function handleApprovalResolve<
     client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     recordFilter,
+    resolving: true,
   };
   let resolved: ApprovalRecordLookupResult<TPayload>;
   try {

@@ -189,8 +189,8 @@ export async function waitForEmbeddedRunOwnerSettlement(
 export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID = embeddedRunState.activeRunsByRunId;
 export const EMBEDDED_RUN_COMPLETION_CLAIMS = embeddedRunState.completionClaims;
 
-/** Identity-only dispatch must resolve the same participant owner as in-process tools. */
-export function captureActiveEmbeddedRunPersonalToolParticipants(
+/** Identity-only dispatch must resolve the exact registered host authority. */
+function captureActiveEmbeddedRunToolAuthority(
   identity: AgentRuntimeIdentity,
   options?: { allowMissingRegistry?: boolean },
 ) {
@@ -204,6 +204,9 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
   // Session fencing only applies to runs that admitted personal-tool participants.
   if (options?.allowMissingRegistry && !toolAuthority?.personalToolParticipants) {
     return undefined;
+  }
+  if (!toolAuthority) {
+    throw new Error("Embedded run tool authority is no longer active");
   }
   const delegatedAuthority = registration.delegatedAuthority;
   // Message identities use the policy session; their source owns the executing run.
@@ -235,7 +238,41 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
     }
   };
   assertCurrent();
-  return { participants: toolAuthority?.personalToolParticipants, assertCurrent };
+  return { toolAuthority, sessionId: registration.sessionId, assertCurrent };
+}
+
+/** Identity-only dispatch must resolve the same participant owner as in-process tools. */
+export function captureActiveEmbeddedRunPersonalToolParticipants(
+  identity: AgentRuntimeIdentity,
+  options?: { allowMissingRegistry?: boolean },
+) {
+  const captured = captureActiveEmbeddedRunToolAuthority(identity, options);
+  return captured
+    ? {
+        participants: captured.toolAuthority.personalToolParticipants,
+        assertCurrent: captured.assertCurrent,
+      }
+    : undefined;
+}
+
+/** Only a validated registered host run can attest that an exec request was clamped. */
+export function captureActiveEmbeddedRunParticipation(identity: AgentRuntimeIdentity) {
+  // Ordinary and native approvals keep their existing authority checks.
+  if (
+    !ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(identity.operationalRunInstance.runId)?.toolAuthority
+      ?.participationCeiling
+  ) {
+    return undefined;
+  }
+  const captured = captureActiveEmbeddedRunToolAuthority(identity);
+  const ceiling = captured?.toolAuthority.participationCeiling;
+  if (!captured || !ceiling) {
+    return undefined;
+  }
+  if (ceiling.sessionKey !== identity.sessionKey) {
+    throw new Error("Participation approval does not match its admitted session");
+  }
+  return { ceiling, sessionId: captured.sessionId, assertCurrent: captured.assertCurrent };
 }
 
 /** Only an accepted question's exact admitted owner may suppress stale-work recovery. */

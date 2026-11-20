@@ -1,0 +1,99 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { captureActiveEmbeddedRunParticipation } from "../agents/embedded-agent-runner/run-state.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
+import type { ExecApprovalManager, ExecApprovalRecord } from "./exec-approval-manager.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
+import type { GatewayClient } from "./server-methods/types.js";
+import { prepareSessionCreatorProfile } from "./session-creator.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+
+/** Wire run/session/security fields and assigned owners cannot mint this binding. */
+export async function prepareExecApprovalParticipation(
+  identity: AgentRuntimeIdentity | undefined,
+  cfg: OpenClawConfig,
+): Promise<ExecApprovalRecord["participation"]> {
+  const captured = identity && captureActiveEmbeddedRunParticipation(identity);
+  if (!captured || !identity) {
+    return undefined;
+  }
+  const read = await prepareSessionMutationFacts({
+    cfg,
+    agentId: identity.agentId,
+    sessionKey: captured.ceiling.sessionKey,
+  });
+  try {
+    captured.assertCurrent();
+    const target = read.readCurrent(cfg).target;
+    if (
+      !target ||
+      target.canonicalKey !== captured.ceiling.sessionKey ||
+      target.entry.sessionId !== captured.sessionId
+    ) {
+      throw new Error("Participation approval session owner changed");
+    }
+    return Object.freeze({
+      creatorProfileId: sessionCreatorProfileId(target.entry.createdActor),
+      participantProfileId: captured.ceiling.profileId,
+      sessionKey: captured.ceiling.sessionKey,
+    });
+  } finally {
+    read.release();
+  }
+}
+
+/** Undefined preserves ordinary approvals; a bound record admits only its direct creator/admin. */
+export function canResolveParticipationExecApproval(
+  record: Pick<ExecApprovalRecord, "participation"> | null | undefined,
+  client: GatewayClient | null | undefined,
+): boolean | undefined {
+  const binding = record?.participation;
+  if (!binding) {
+    return undefined;
+  }
+  if (!client || client.invalidated) {
+    return false;
+  }
+  if (client.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+  const profileId = client.authenticatedUserProfile?.profileId;
+  if (
+    !profileId ||
+    client.internal?.agentRuntimeIdentity ||
+    client.internal?.approvalRuntime ||
+    client.internal?.syntheticClient
+  ) {
+    return false;
+  }
+  const matchesProfile = prepareSessionCreatorProfile(profileId);
+  const matches = (id: string | undefined) =>
+    matchesProfile(id ? { type: "human", source: "profile", id } : undefined);
+  return !matches(binding.participantProfileId) && matches(binding.creatorProfileId);
+}
+
+/** Narrow alternative for method admission; no prefixes, durable lookup, or source inference. */
+export function authorizeParticipationExecApprovalMethod(params: {
+  method: string;
+  params: unknown;
+  client: GatewayClient | null | undefined;
+  manager: Pick<ExecApprovalManager, "getLiveSnapshot"> | undefined;
+}): boolean | undefined {
+  if (params.method !== "exec.approval.resolve" && params.method !== "approval.resolve") {
+    return undefined;
+  }
+  if (
+    !isRecord(params.params) ||
+    typeof params.params.id !== "string" ||
+    (params.method === "approval.resolve" &&
+      params.params.kind !== undefined &&
+      params.params.kind !== "exec")
+  ) {
+    return undefined;
+  }
+  return canResolveParticipationExecApproval(
+    params.manager?.getLiveSnapshot(params.params.id),
+    params.client,
+  );
+}

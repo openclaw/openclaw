@@ -34,6 +34,7 @@ import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-a
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeCommandSpans } from "../../shared/exec-approval-command-spans.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { prepareExecApprovalParticipation } from "../exec-approval-participation.js";
 import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
   buildCronExecOperationBinding,
@@ -364,6 +365,10 @@ export function createExecApprovalHandlers(
           }
           throw error;
         }
+        record.participation = await prepareExecApprovalParticipation(
+          trustedAgentRuntime,
+          runtimeConfig,
+        );
         bindApprovalRequesterMetadata({ record, client });
         if (trustedAgentRuntime) {
           record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
@@ -503,7 +508,7 @@ export function createExecApprovalHandlers(
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {
-      using authority = createApprovalRequestAuthority(options);
+      using authority = createApprovalRequestAuthority(options, manager);
       const { params, respond, client, context } = options;
       const resolveParams = resolveApprovalDecisionParams({
         rawParams: params,

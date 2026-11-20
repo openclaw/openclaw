@@ -154,7 +154,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         target,
       });
     const participating = participation.authorize({ targetRef, target, policy, error });
-    if (participating) return participating.error;
+    if (participating) {
+      return participating.error;
+    }
     if (
       error ||
       !target ||
@@ -273,9 +275,13 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   const requestedCreateKey = readSessionSharingStringParam(params.requestParams, "key");
   const permitsGeneratedSession = params.method === "sessions.create" && !requestedCreateKey;
   const targetResolution = resolveRequiredSessionMutationTargets(params, talkTargets);
-  if (targetResolution.error) return { error: targetResolution.error };
+  if (targetResolution.error) {
+    return { error: targetResolution.error };
+  }
   const targetRefs = targetResolution.targets;
-  if (!targetRefs) return { error: null };
+  if (!targetRefs) {
+    return { error: null };
+  }
   if (talkSessionTarget && authorizesAgentRun) {
     const cfg = getPolicyConfig();
     const policy = preparedPolicy(cfg);
