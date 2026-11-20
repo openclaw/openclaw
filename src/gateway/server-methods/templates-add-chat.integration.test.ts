@@ -147,6 +147,7 @@ async function withGateway(
     config: () => OpenClawConfig;
     root: string;
     cron: ReturnType<typeof createDeletionCron>["cron"];
+    cronAddCount: () => number;
     events: Array<{ stage: string; agentId: string }>;
     add: (params: Record<string, unknown>, timeZone?: string) => Promise<Parameters<RespondFn>>;
     workspace: (agentId: string) => string;
@@ -199,7 +200,7 @@ async function withGateway(
         },
       );
       const { cron, stop } = createDeletionCron(state);
-      vi.spyOn(cron, "add");
+      const cronAdd = vi.spyOn(cron, "add");
       const events: Array<{ stage: string; agentId: string }> = [];
       let request = 0;
       try {
@@ -208,6 +209,7 @@ async function withGateway(
           config: () => config,
           root: state.path("registry-artifact"),
           cron,
+          cronAddCount: () => cronAdd.mock.calls.length,
           events,
           workspace: (agentId) => config.agents!.entries![agentId]!.workspace!,
           add: async (params, timeZone) => {
@@ -602,7 +604,7 @@ it("creates the Template's agent without a plan and reports dependencies after i
     });
 
     // This release declares no routines, and the referenced plugin is untouched.
-    expect(gateway.cron.add).not.toHaveBeenCalled();
+    expect(gateway.cronAddCount()).toBe(0);
     for (const call of [...Object.values(registry), ...Object.values(probe)]) {
       expect(call).not.toHaveBeenCalled();
     }
@@ -921,7 +923,7 @@ it("retries only the hidden setup after a failed first turn, preserving files an
     expect(await fs.readFile(path.join(workspace, "CLAW.md"))).toEqual(
       await fs.readFile(path.join(gateway.root, "CLAW.md")),
     );
-    expect(gateway.cron.add).not.toHaveBeenCalled();
+    expect(gateway.cronAddCount()).toBe(0);
     expect(greeting.mock.calls[1]![4]).not.toContain("still installing declared");
     expect(greeting.mock.calls[1]![4]).toContain('The Gateway added these servers: ["docs"]');
 
