@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as spawnBroker from "../process/spawn-broker/host.js";
 import type { BrokerResourceAttachment } from "../process/spawn-broker/resource-protocol.js";
+import { readGlobalSingleton } from "../shared/global-singleton.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
@@ -18,7 +19,11 @@ import {
   closeDefaultRetainedNativeWorkerSource,
 } from "./worker-native-lifecycle.js";
 import { nativeWorkerLifecycleEntrypoint } from "./worker-native-lifecycle.runtime.test-support.js";
-import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";
+import {
+  NATIVE_WORKER_LIFETIMES_KEY,
+  type NativeWorkerReply,
+  type NativeWorkerRequest,
+} from "./worker-native-lifecycle.types.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
 const exec = promisify(execFile);
@@ -291,6 +296,12 @@ it("replaces failed retained broker authority after completed source close", asy
   failed = true;
   // Transport loss is not a fabricated native-close receipt for the old claim.
   await expect(resource.close()).rejects.toThrow();
+  // Attachment loss can precede broker IPC disconnect; replacement requires sealed admission.
+  await expect
+    .poll(() => readGlobalSingleton(NATIVE_WORKER_LIFETIMES_KEY))
+    .toMatchObject({
+      defaultBroker: { host: { nativeResourceAdmissionClosed: true } },
+    });
   await closeDefaultRetainedNativeWorkerSource();
   const successor = await captureRetainedNativeWorkerSource({
     runtimeGeneration: undefined,
