@@ -21,6 +21,7 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../../config/runtime-write-application.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
+import { cronDeclarationOwnedBy } from "../../cron/declaration-owner.js";
 import { resolveTimezone } from "../../infra/format-time/format-datetime.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginInstallBatchReload } from "../../plugins/install-runtime-batch.js";
@@ -307,6 +308,18 @@ export async function applyTemplateAddForRequest(
               mode: params.mode,
               source: params.source,
               ...(params.resume ? { resume: true as const } : {}),
+              readSetupAutomationKeys: async ({ agentId, sessionKey }) => {
+                assertCurrent();
+                const jobs = await context.cron.list({ includeDisabled: true });
+                assertCurrent();
+                return new Set(
+                  jobs.flatMap((job) =>
+                    job.declarationKey && cronDeclarationOwnedBy(job, { agentId, sessionKey })
+                      ? [job.declarationKey]
+                      : [],
+                  ),
+                );
+              },
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
               onAgentCreated: async (agent, opening, onModelRequested) => {

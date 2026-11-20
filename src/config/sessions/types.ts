@@ -305,6 +305,8 @@ type SessionEntryCore = SessionEntryProvenance &
     /** Creation is finished; Retry continues only this hidden Template setup turn. */
     templateSetup?: import("../../templates/conversation.js").TemplateSetupOpening & {
       source: { packageName: string; version?: string };
+      /** From the verified manifest, never inferred from the agent's editable workspace. */
+      requiredAutomationIds?: string[];
       /** Avoid replaying the greeting when Retry only needs to report dependency results. */
       openingComplete?: true;
     };

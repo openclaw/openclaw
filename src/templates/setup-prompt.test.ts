@@ -50,6 +50,7 @@ it("creates automations paused, once, in the agent's own conversation", () => {
   expect(prompt).toContain("Create every automation paused (`enabled: false`)");
   expect(prompt).toContain("turn none on in this turn");
   expect(prompt).toContain('{"action":"list","includeDisabled":true}');
+  expect(prompt).toContain('owner.agentId "scout", owner.sessionKey "agent:scout:home"');
   expect(prompt).toContain("do not add or update that one");
   const add = JSON.parse(prompt.split("\n").find((line) => line.startsWith('{"action":"add"'))!);
   const declare = JSON.parse(
