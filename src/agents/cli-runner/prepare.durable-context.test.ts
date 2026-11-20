@@ -62,7 +62,8 @@ describe("CLI durable session context", () => {
     cleanups.push(() => prepared.preparedBackend.cleanup?.());
     expect(prepared.cliHistoryAdmission?.replaysHistory).toBe(true);
     return {
-      appendTranscript: fixture.appendTranscript,
+      appendTranscript: (entry: Parameters<typeof fixture.appendTranscript>[0]) =>
+        fixture.appendTranscript(entry),
       prepare: (overrides: Parameters<typeof fixture.prepare>[0] = {}) =>
         fixture.prepare({
           agentDir,
