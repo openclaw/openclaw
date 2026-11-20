@@ -8,7 +8,10 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
-import { canResolveParticipationExecApproval } from "../exec-approval-participation.js";
+import {
+  canResolveParticipationExecApproval,
+  participationApprovalTurnActor,
+} from "../exec-approval-participation.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import type { OperatorApprovalRecord } from "../operator-approval-store.types.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
@@ -327,6 +330,7 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
   Array<{
     approvalKind?: ChannelApprovalKind;
     id: string;
+    canDecide?: boolean;
     request: TPayload;
     createdAtMs: number;
     expiresAtMs: number;
@@ -345,15 +349,21 @@ export async function listVisiblePendingApprovalRequests<TPayload>(params: {
     .filter(
       (record) =>
         !params.client?.invalidated &&
-        isApprovalRecordVisibleToClient({
-          record,
-          client: params.client ?? null,
-          ...(cfg ? { cfg } : {}),
-          sessionAccess,
-        }),
+        (canResolveParticipationExecApproval(record, params.client) ??
+          isApprovalRecordVisibleToClient({
+            record,
+            client: params.client ?? null,
+            ...(cfg ? { cfg } : {}),
+            sessionAccess,
+          })),
     )
-    .map(({ id, request, createdAtMs, expiresAtMs }) => {
-      const approval = { id, request, createdAtMs, expiresAtMs };
+    .map((record) => {
+      const { id, request, createdAtMs, expiresAtMs } = record;
+      const turnActor = participationApprovalTurnActor(record);
+      const approval = Object.assign(
+        { id, request: turnActor ? { ...request, turnActor } : request, createdAtMs, expiresAtMs },
+        record.participation ? { canDecide: true } : {},
+      );
       return params.approvalKind
         ? Object.assign(approval, { approvalKind: params.approvalKind })
         : approval;

@@ -51,6 +51,7 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   participation?: Readonly<{
     creatorProfileId?: string;
     participantProfileId: string;
+    participantLabel?: string;
     sessionKey: string;
   }>;
   resolvedAtMs?: number;

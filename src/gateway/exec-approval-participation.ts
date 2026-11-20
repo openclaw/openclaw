@@ -2,6 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureActiveEmbeddedRunParticipation } from "../agents/embedded-agent-runner/run-state.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getResidentUserProfileDisplay,
+  readResidentUserProfileId,
+} from "../state/user-profile-list.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "./exec-approval-manager.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -33,9 +37,13 @@ export async function prepareExecApprovalParticipation(
     ) {
       throw new Error("Participation approval session owner changed");
     }
+    const participantId = readResidentUserProfileId(captured.ceiling.profileId);
     return Object.freeze({
       creatorProfileId: sessionCreatorProfileId(target.entry.createdActor),
       participantProfileId: captured.ceiling.profileId,
+      participantLabel:
+        (participantId ? getResidentUserProfileDisplay(participantId).displayName : undefined) ||
+        captured.ceiling.profileId,
       sessionKey: captured.ceiling.sessionKey,
     });
   } finally {
@@ -96,4 +104,38 @@ export function authorizeParticipationExecApprovalMethod(params: {
     params.manager?.getLiveSnapshot(params.params.id),
     params.client,
   );
+}
+
+/** The initiating person can observe waiting status, never the command or reviewer decisions. */
+export function canObserveParticipationExecApproval(
+  record: Pick<ExecApprovalRecord, "participation"> | undefined,
+  client: GatewayClient | null | undefined,
+): boolean {
+  const binding = record?.participation;
+  return Boolean(
+    binding &&
+    client &&
+    !client.invalidated &&
+    (client.connect.role ?? "operator") === "operator" &&
+    !client.internal?.agentRuntimeIdentity &&
+    !client.internal?.approvalRuntime &&
+    !client.internal?.syntheticClient &&
+    prepareSessionCreatorProfile(client.authenticatedUserProfile?.profileId)({
+      type: "human",
+      source: "profile",
+      id: binding.participantProfileId,
+    }),
+  );
+}
+
+export function participationApprovalTurnActor(
+  record: Pick<ExecApprovalRecord<unknown>, "participation"> | null | undefined,
+) {
+  const binding = record?.participation;
+  return binding
+    ? {
+        id: binding.participantProfileId,
+        label: binding.participantLabel || binding.participantProfileId,
+      }
+    : undefined;
 }

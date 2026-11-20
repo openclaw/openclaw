@@ -428,3 +428,13 @@ it("does not admit history after retirement while its runtime is loading", async
     vi.doUnmock("../lib/sessions/session-message-subscriptions.runtime.ts");
   }
 });
+
+it("opts a directly authenticated session creator into early approval replay without reviewer scope", async () => {
+  const connection = await handshake();
+  const subscription = await acceptHello(connection, {
+    role: "operator",
+    scopes: ["operator.sessions.read"],
+    profileActivityViewerId: "creator",
+  });
+  expect(subscription.params.includeApprovals).toBe(true);
+});

@@ -5,7 +5,7 @@ import {
   remainingMonotonicMs,
 } from "../../../../src/shared/monotonic-time.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
+import { canSubscribeSessionApprovals } from "../../app/session-approval-access.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../../lib/gateway-availability.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -314,7 +314,8 @@ async function synchronizeSelectedSessionMessageSubscription(
             agentId: nextSubscriptionAgentId ?? undefined,
             includeLiveToolOutput: includeLiveToolOutput || undefined,
             includeApprovals:
-              state.connected && hasOperatorApprovalsAccess(state.hello?.auth ?? null),
+              state.connected &&
+              canSubscribeSessionApprovals(state.hello, state.client?.instanceId, state.selfUser),
             initialHistory: params ? initialHistory : undefined,
           },
           opts?.beforeHello ? { beforeHello: true } : undefined,
@@ -438,7 +439,7 @@ async function synchronizeSelectedSessionMessageSubscription(
     if (
       opts?.beforeHello &&
       !subscribed.includeApprovals &&
-      hasOperatorApprovalsAccess(state.hello?.auth ?? null)
+      canSubscribeSessionApprovals(state.hello, state.client?.instanceId, state.selfUser)
     ) {
       // Transcript readiness does not wait for the stronger approval capability.
       upgradingApprovals = true;
