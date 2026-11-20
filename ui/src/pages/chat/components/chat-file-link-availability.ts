@@ -47,15 +47,17 @@ export async function checkFileLinkAvailability(
   for (const element of root.querySelectorAll<HTMLElement>(
     "a[data-file-path], span[data-file-path]",
   )) {
-    if (element.closest('[data-chat-streaming="true"]')) {
-      continue;
-    }
+    // Settled links are skipped before any DOM walk, so rescans of retained history stay cheap.
     const previous = unavailableFileLinks.get(element);
     if (previous?.checks === checks) {
       continue;
     }
     const anchor = previous?.anchor ?? element;
-    if (!(anchor instanceof HTMLAnchorElement) || (!previous && seen.has(anchor))) {
+    if (
+      !(anchor instanceof HTMLAnchorElement) ||
+      (!previous && seen.has(anchor)) ||
+      element.closest('[data-chat-streaming="true"]')
+    ) {
       continue;
     }
     seen.add(anchor);
