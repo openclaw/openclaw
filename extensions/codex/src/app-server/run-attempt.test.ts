@@ -7,6 +7,7 @@ import {
   invokeNativeHookRelay,
   nativeHookRelayTesting,
   resolveActiveEmbeddedRunSessionId,
+  type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
@@ -19,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -1088,7 +1088,7 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "sessions-terminal-disconnect.json"),
       "session-terminal-disconnect",
     );
-    const preparedMessages: AssistantMessage[] = [];
+    const preparedMessages: Extract<AgentMessage, { role: "assistant" }>[] = [];
     params.prepareAssistantTranscriptMessage = (message) => {
       preparedMessages.push(structuredClone(message));
       return message;

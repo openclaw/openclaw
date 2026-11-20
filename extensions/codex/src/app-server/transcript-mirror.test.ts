@@ -197,7 +197,13 @@ describe("buildCodexUserPromptMessage", () => {
 
 describe("mirrorTranscript", () => {
   it("hides current memory-maintenance messages without hiding replayed turns", async () => {
-    const prepareAssistantTranscriptMessage = vi.fn((message: AssistantMessage) => message);
+    const prepareSpy = vi.fn<(message: Extract<AgentMessage, { role: "assistant" }>) => void>();
+    const prepareAssistantTranscriptMessage: NonNullable<
+      EmbeddedRunAttemptParams["prepareAssistantTranscriptMessage"]
+    > = (message) => {
+      prepareSpy(message);
+      return message;
+    };
     beforeMessageWrite((event) => {
       const { display: _display, ...message } = (event as { message: Record<string, unknown> })
         .message;
@@ -245,7 +251,7 @@ describe("mirrorTranscript", () => {
     expect(
       persistedMessages.slice(1).every((message) => asOptionalRecord(message)?.display === false),
     ).toBe(true);
-    expect(prepareAssistantTranscriptMessage).not.toHaveBeenCalled();
+    expect(prepareSpy).not.toHaveBeenCalled();
   });
 
   it("preserves mirror identity across redaction from prompt append through final snapshot", async () => {
