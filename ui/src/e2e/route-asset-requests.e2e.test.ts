@@ -9,6 +9,7 @@ import "../../../scripts/lib/control-ui-engine-action-timing.ts";
 import {
   createEnginePageScenarios,
   filterInstalledDiscoverySkills,
+  openInstalledDiscoverySkills,
 } from "../../../scripts/lib/control-ui-engine-page-scenarios.ts";
 import { frames } from "../../../scripts/lib/control-ui-interaction-navigation.ts";
 import {
@@ -124,9 +125,7 @@ suite.define(() => {
     "bounds %s ready-window asset requests at 100 ms from a settled New Session",
     (route) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const reader = controlUiE2eBuiltModuleRequest(
-          "ui/src/pages/skills/skill-reader-dialog.tsx",
-        );
+        const reader = controlUiE2eBuiltModuleRequest("ui/src/pages/skills/skill-detail.tsx");
         const tooltip = controlUiE2eBuiltModuleRequest("ui/src/components/solid/tooltip.tsx");
         let readerRequests = 0;
         let tooltipRequests = 0;
@@ -145,17 +144,19 @@ suite.define(() => {
         }
         const readyAssets = observation.assets.filter((asset) => asset.completedByReady);
         expect(readyAssets.length).toBeGreaterThan(0);
-        expect(
-          readyAssets.length,
-          readyAssets.map((asset) => asset.name).join("\n"),
-        ).toBeLessThanOrEqual(readyWindowRequestLimits[route]);
+        expect
+          .soft(readyAssets.length, readyAssets.map((asset) => asset.name).join("\n"))
+          .toBeLessThanOrEqual(readyWindowRequestLimits[route]);
 
         if (route === "skills" || route === "skill-settings") {
           expect(readerRequests).toBe(0);
         }
         if (route === "skills") {
+          await openInstalledDiscoverySkills(page);
           await filterInstalledDiscoverySkills(page);
-          expect(readerRequests, "Browsing the full inventory must not preload the reader").toBe(0);
+          expect(readerRequests, "Opening the installed list still does not load its reader").toBe(
+            0,
+          );
           const held = await holdModuleResponse(page, reader);
           try {
             await page
@@ -163,12 +164,18 @@ suite.define(() => {
               .click();
             await held.request;
             expect(held.requests()).toBeGreaterThan(0);
-            expect(await page.locator(".skill-reader-dialog").count()).toBe(0);
+            const title = page.getByRole("heading", {
+              level: 1,
+              name: "Data skill 0999",
+              exact: true,
+            });
+            await page.locator('.skill-page[aria-busy="true"]').waitFor({ state: "visible" });
+            expect(await title.count()).toBe(0);
             held.release();
-            const dialog = page.locator("openclaw-modal-dialog .skill-reader-dialog");
-            await dialog.waitFor({ state: "visible" });
-            expect(await dialog.locator(".oc-dialog__title").textContent()).toBe("Data skill 0999");
-            await dialog
+            await title.waitFor({ state: "visible" });
+            expect(new URL(page.url()).pathname).toBe("/skills/installed/data-skill-0999");
+            await page
+              .locator(".skill-page")
               .getByRole("heading", { name: "Data skill 0999 instructions", exact: true })
               .waitFor();
           } finally {

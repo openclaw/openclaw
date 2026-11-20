@@ -51,11 +51,11 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -378,7 +378,7 @@ const workboardCardMenu: PageAction = {
   },
 };
 
-export async function filterInstalledDiscoverySkills(page: Page) {
+export async function openInstalledDiscoverySkills(page: Page) {
   await page.getByRole("button", { name: "Installed skills (1,000)", exact: true }).click();
   const installed = '.skill-discovery [data-catalog-section="installed"]';
   await ready(page, "skills", {
@@ -389,6 +389,9 @@ export async function filterInstalledDiscoverySkills(page: Page) {
       totalSelector: `${installed} [role="listitem"][aria-setsize]`,
     },
   });
+}
+
+export async function filterInstalledDiscoverySkills(page: Page) {
   await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
   await page.waitForFunction(() => {
     const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
@@ -905,7 +908,8 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       minimum: 20,
     },
     action: {
-      label: "Open the 1,000-skill installed shelf and filter to one skill",
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: openInstalledDiscoverySkills,
       run: filterInstalledDiscoverySkills,
     },
   },
@@ -2217,6 +2221,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);

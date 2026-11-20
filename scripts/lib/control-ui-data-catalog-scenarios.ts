@@ -50,9 +50,9 @@ function createDataCatalogInventory(revision = 1, uninstalledIndex?: number) {
   const plugins: PluginCatalogItem[] = Array.from({ length: inventorySize }, (_, index) => ({
     id: `data-plugin-${suffix(index)}`,
     // Browsing measures available plugins alongside a full, separate installed inventory.
-    catalogId: `${uninstalledIndex === undefined ? "data-installed" : "data-catalog"}-${suffix(index)}`,
+    catalogId: `${uninstalledIndex === undefined ? "installed-data-catalog" : "data-catalog"}-${suffix(index)}`,
     name: `Data plugin ${suffix(index)}${index === 0 && revision > 1 ? " updated" : ""}`,
-    packageName: `@synthetic/data-plugin-${suffix(index)}`,
+    packageName: `@synthetic/installed-data-plugin-${suffix(index)}`,
     description: `Synthetic catalog integration ${index} for data-heavy page profiling.`,
     origin: "global",
     kind: ["tool"],

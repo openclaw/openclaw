@@ -1316,6 +1316,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/tools/sessions-tool.batch.test.ts",
   "src/agents/subagents/announce/subagent-announce.requester-settle-cancel.test.ts",
   "src/agents/subagents/completion/subagent-completion-admission.store.test.ts",
+  "src/agents/subagents/completion/subagent-completion-captured-notice.test.ts",
+  "src/agents/subagents/registry/subagent-registry.authority-notice.test.ts",
   "src/commands/doctor-db-bloat.worker.test.ts",
   "src/commands/doctor-device-pairing.worker.test.ts",
   "src/commands/doctor-device-pairing.test.ts",
