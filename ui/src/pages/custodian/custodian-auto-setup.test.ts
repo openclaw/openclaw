@@ -443,6 +443,62 @@ it("uses a Claude Code login the Gateway found with one click", async () => {
   text(page).toContain("You’re all set!");
 });
 
+it.each(["Claude", "Another provider"])(
+  "recovers from a failed Claude Code login using an API key from %s",
+  async (card) => {
+    const modelRef = "anthropic/claude-sonnet";
+    const claudeCode = {
+      kind: "claude-cli",
+      brandId: "anthropic",
+      label: "Claude Code",
+      detail: "installed; login status unverified",
+      modelRef,
+      recommended: false,
+    } satisfies Detection["candidates"][number];
+    const request = setupRequest(
+      () => ({
+        ...detection([claudeCode]),
+        manualProviders: [
+          { ...apiKey, id: "anthropic-api-key", brandId: "anthropic", groupLabel: "Anthropic" },
+        ],
+      }),
+      {
+        "openclaw.setup.activate.start": vi
+          .fn()
+          .mockReturnValueOnce(failed("Claude Code is signed out"))
+          .mockReturnValueOnce(activated(modelRef)),
+      },
+    );
+    const { page } = await mountSetup(request);
+    await openAiStep(page);
+    await click(page, "Claude");
+    await click(page, "Use my Claude Code login");
+    expectRpc(request, "activate.start", expect.objectContaining({ kind: "claude-cli" }));
+    expect(page.querySelector(".custodian-setup details pre")?.textContent).toBe(
+      "Claude Code is signed out",
+    );
+    if (card === "Another provider") {
+      await click(page, "All choices");
+      await click(page, card);
+    }
+    const key = page.querySelector<HTMLInputElement>('.custodian-setup input[name="key"]');
+    expect(key).not.toBeNull();
+    key!.value = "sk-test-claude-recovery";
+    key!.form!.requestSubmit();
+    await settled(page, () => page.store.autoSetup.ready);
+    expectRpc(
+      request,
+      "activate.start",
+      expect.objectContaining({
+        kind: "api-key",
+        authChoice: "anthropic-api-key",
+        apiKey: "sk-test-claude-recovery",
+      }),
+    );
+    text(page).toContain("You’re all set!");
+  },
+);
+
 it("ignores an old Gateway result after connection ownership changes", async () => {
   const pending = createDeferred<Detection>();
   const request = vi.fn(async () => pending.promise);

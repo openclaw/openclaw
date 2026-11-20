@@ -309,8 +309,6 @@ export function ConnectAi(props: {
       (candidate) => candidate.kind === "codex-cli" && candidate.credentials === true,
     );
   const chatgptSignIn = () => authOptions().find(isChatgptSignIn);
-  // Claude is the easiest Claude setup there is: a Claude Code login the Gateway already
-  // has, otherwise a Claude API key.
   const claudeCode = () => candidates().find((candidate) => candidate.kind === "claude-cli");
   const claudeKey = () => {
     const keys = manualProviders().filter(
@@ -381,7 +379,6 @@ export function ConnectAi(props: {
       (candidate) =>
         candidate.kind !== "codex-cli" && candidate.kind !== "claude-cli" && !isLocal(candidate),
     );
-  const otherKeys = () => manualProviders().filter((provider) => provider !== claudeKey());
   const otherSignIns = () => authOptions().filter((option) => !isChatgptSignIn(option));
   const providers = (): ProviderId[] => {
     if (!detection()) {
@@ -391,7 +388,7 @@ export function ConnectAi(props: {
       ...(chatgptLogin() || chatgptSignIn() ? (["chatgpt"] as const) : []),
       ...(claudeCode() || claudeKey() ? (["claude"] as const) : []),
       ...(localWays().length ? (["local"] as const) : []),
-      ...(otherFound().length || otherKeys().length || otherSignIns().length
+      ...(otherFound().length || manualProviders().length || otherSignIns().length
         ? (["other"] as const)
         : []),
     ];
@@ -494,43 +491,41 @@ export function ConnectAi(props: {
     );
   };
   const claudeCard = () => (
-    <Show
-      when={claudeCode()}
-      fallback={
-        <Show when={claudeKey()}>
-          {(provider) => (
-            <>
-              <p class="muted" style={{ "text-align": "center" }}>
-                {t("custodian.autoSetup.claudeKeyBody")}
-              </p>
-              <ProviderForm
-                keys={[provider()]}
-                busy={props.busy()}
-                onConnect={(entry, key) => {
-                  mark();
-                  props.actions.connectKey(entry, key);
-                }}
-              />
-            </>
-          )}
-        </Show>
-      }
-    >
-      {(login) => (
-        <button
-          class="btn primary"
-          style={centered}
-          type="button"
-          disabled={props.busy()}
-          onClick={() => {
-            mark();
-            props.actions.activate(login());
-          }}
-        >
-          {t("custodian.autoSetup.claudeCodeLogin")}
-        </button>
-      )}
-    </Show>
+    <>
+      <Show when={claudeCode()}>
+        {(login) => (
+          <button
+            class="btn primary"
+            style={centered}
+            type="button"
+            disabled={props.busy()}
+            onClick={() => {
+              mark();
+              props.actions.activate(login());
+            }}
+          >
+            {t("custodian.autoSetup.claudeCodeLogin")}
+          </button>
+        )}
+      </Show>
+      <Show when={claudeKey()}>
+        {(provider) => (
+          <>
+            <p class="muted" style={{ "text-align": "center" }}>
+              {t("custodian.autoSetup.claudeKeyBody")}
+            </p>
+            <ProviderForm
+              keys={[provider()]}
+              busy={props.busy()}
+              onConnect={(entry, key) => {
+                mark();
+                props.actions.connectKey(entry, key);
+              }}
+            />
+          </>
+        )}
+      </Show>
+    </>
   );
   const wayRow = (way: Way) =>
     way.href ? (
@@ -575,9 +570,9 @@ export function ConnectAi(props: {
           })
         }
       </For>
-      <Show when={otherKeys().length || otherSignIns().length}>
+      <Show when={manualProviders().length || otherSignIns().length}>
         <ProviderForm
-          keys={otherKeys()}
+          keys={manualProviders()}
           signIns={otherSignIns()}
           busy={props.busy()}
           onConnect={(entry, key) => {

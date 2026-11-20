@@ -159,8 +159,8 @@ page lists one row per provider, and each row opens its own card:
 - **ChatGPT** (first): uses an existing Codex login on the Gateway host when there
   is one, and tests it right away; otherwise, or when that test fails, it offers
   **Sign in with ChatGPT**.
-- **Claude**: uses an existing Claude Code login on the Gateway host, otherwise a
-  Claude API key.
+- **Claude**: use Claude Code on the Gateway host or enter a Claude API key. The
+  API key is also available under **Another provider**.
 - **Run a model locally**: local models the Gateway found, local model servers
   such as LM Studio, and download links for apps such as Ollama.
 - **Another provider**: every other sign-in and API key, plus any other AI the
