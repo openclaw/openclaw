@@ -15,6 +15,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/state-migrations.plugin-doctor-context.postgres.test.ts",
   "src/secrets/runtime-web-provider.postgres.test.ts",
   "src/gateway/server-methods.workshop-contract.test.ts",
+  // A real channel plugin install acquires the host-owned lifecycle lease.
+  "src/cli/channels-add-install.test.ts",
   "src/cli/skills-cli.workshop-contract.test.ts",
   "src/auto-reply/reply/commands.workshop-contract.test.ts",
   // Real fork recap delivery uses the host-owned SQLite broker.
@@ -1278,6 +1280,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/talk/client-voice-session.worker.test.ts",
   "src/tts/tts-summary.selection.test.ts",
   "src/agents/prepared-model-catalog.resources.test.ts",
+  "src/agents/prepared-model-catalog.hosted-metadata.integration.test.ts",
   "src/agents/embedded-agent-runner/compaction-runtime-admission.test.ts",
   "src/media-understanding/image.auth-routing.test.ts",
   "src/media-understanding/image.resources.test.ts",

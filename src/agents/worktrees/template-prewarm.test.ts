@@ -3,10 +3,18 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prewarmLocalWorkspaceTemplates } from "../../gateway/worker-environments/local-workspace-prewarm.js";
+import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
+import { DOCKER_SANDBOX_ENGINE } from "../sandbox/container-engine.js";
+import * as dependencies from "../sandbox/dependency-template.js";
+import { prepareLocalSandboxWorkspace } from "../sandbox/local-workspace.js";
 import { observeWorktreeBase, resolveWorktreeBase } from "./base-ref.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
+import { withWorktreePreparationTiming } from "./preparation-timing.js";
 import { ManagedWorktreeService } from "./service.js";
 import { git, useManagedWorktreeTestRepository } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
@@ -25,7 +33,7 @@ async function fixture() {
   vi.stubEnv("GIT_ATTR_NOSYSTEM", "1");
   await git(repo, "config", "maintenance.auto", "false");
   await git(repo, "config", "gc.auto", "0");
-  const config = {};
+  const config: OpenClawConfig = {};
   setRuntimeConfigSnapshot(config, config);
   const backend = createCopyWorktreeBackend();
   vi.mocked(detectWorktreeFilesystemBackend).mockResolvedValue(backend);
@@ -51,6 +59,7 @@ async function fixture() {
     repo,
     backend,
     service,
+    config,
     advance,
     pass,
     create,
@@ -77,6 +86,126 @@ it.each([false, true])(
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("advanced\n");
     expect(await git(second.path, "status", "--porcelain")).toBe("");
     expect(vi.mocked(f.backend.cloneTemplate).mock.calls.length - before).toBe(1);
+  },
+);
+
+it.each([false, true])(
+  "prepares both create and first-send templates at the new tip (prior sandbox use=%s)",
+  async (priorSandboxUse) => {
+    const f = await fixture();
+    f.config.agents = {
+      defaults: { sandbox: { mode: "all" } },
+      entries: { main: { workspace: f.repo } },
+    };
+    await fs.writeFile(path.join(f.repo, "package.json"), '{"name":"fixture","private":true}\n');
+    await fs.writeFile(path.join(f.repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    await fs.writeFile(path.join(f.repo, ".gitignore"), "node_modules/\n");
+    await git(f.repo, "add", ".");
+    await git(f.repo, "commit", "-m", "sandbox dependency inputs");
+    await git(f.repo, "push", "origin", "main");
+    const sandbox = resolveSandboxConfigForAgent(f.config, "main");
+    // Synthetic guest identity and install output; Git, projection, state and template owners are real.
+    vi.spyOn(dependencies, "resolveSandboxDependencyTemplateIdentity").mockResolvedValue({
+      key: "synthetic-guest-image",
+      image: "synthetic-image",
+      docker: sandbox.docker,
+      engine: DOCKER_SANDBOX_ENGINE,
+    });
+    const install = vi
+      .spyOn(dependencies, "prepareSandboxDependencyTemplate")
+      .mockImplementation(async ({ directory }) => {
+        await fs.mkdir(path.join(directory, "node_modules"), { recursive: true });
+        await fs.writeFile(
+          path.join(directory, "node_modules/.modules.yaml"),
+          'virtualStoreDir: ".pnpm"\n',
+        );
+        await fs.writeFile(
+          path.join(directory, "node_modules/source-derived.txt"),
+          await fs.readFile(path.join(directory, "README.md")),
+        );
+        return { installed: true };
+      });
+    const create = async (name: string) => {
+      const sessionKey = `agent:main:prewarm-${name}`;
+      const worktree = await f.service.create({
+        repoRoot: f.repo,
+        name,
+        ownerKind: "session",
+        ownerId: sessionKey,
+        provisionIgnoredFiles: false,
+      });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: name,
+          updatedAt: Date.now(),
+          worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+        },
+      );
+      return { sessionKey, workspaceDir: worktree.path };
+    };
+    const send = (session: Awaited<ReturnType<typeof create>>) =>
+      withWorktreePreparationTiming("sandbox", () =>
+        prepareLocalSandboxWorkspace({ cfg: f.config, agentId: "main", sandbox, ...session }),
+      );
+    const first = await create("a");
+    if (priorSandboxUse) {
+      using prepared = await send(first);
+      expect(prepared).toBeDefined();
+    }
+    const target = await f.advance("advanced\n");
+    const discovered: string[] = [];
+    using _ = observeWorktreeBase((repo, commit) => {
+      if (repo === f.repo) {
+        discovered.push(commit);
+      }
+    });
+    await f.pass(true);
+    expect(discovered).toEqual([]);
+    await f.pass();
+    await f.pass();
+    expect(discovered).toEqual([target]);
+    const clone = vi.mocked(f.backend.cloneTemplate);
+    const built = vi.mocked(f.backend.createTemplate);
+    clone.mockClear();
+    built.mockClear();
+    install.mockClear();
+    const second = await create("b");
+    expect(await git(second.workspaceDir, "rev-parse", "HEAD")).toBe(target);
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(built).not.toHaveBeenCalled();
+    clone.mockClear();
+    const phases: string[] = [];
+    using prepared = await withDiagnosticsTimelineObserver(
+      (name) => {
+        phases.push(name);
+      },
+      () => send(second),
+    );
+    expect(prepared).toBeDefined();
+    expect(await git(prepared!.workspaceDir, "rev-parse", "HEAD")).toBe(target);
+    expect(await git(prepared!.workspaceDir, "status", "--porcelain")).toBe("");
+    expect(await fs.readFile(path.join(prepared!.workspaceDir, "README.md"), "utf8")).toBe(
+      "advanced\n",
+    );
+    expect(
+      await fs.readFile(
+        path.join(prepared!.workspaceDir, "node_modules/source-derived.txt"),
+        "utf8",
+      ),
+    ).toBe("advanced\n");
+    expect(install).not.toHaveBeenCalled();
+    expect(built).not.toHaveBeenCalled();
+    expect(clone).toHaveBeenCalledTimes(1);
+    expect(phases).toContain("worktree.sandbox");
+    expect(phases.some((name) => name.endsWith(".snapshot"))).toBe(false);
+    // Neither background publication nor a retained sandbox row renews create eligibility.
+    discovered.length = 0;
+    f.tick(24 * 60 * 60_000);
+    await f.pass();
+    expect(discovered).toEqual([]);
+    expect(install).not.toHaveBeenCalled();
+    expect(built).not.toHaveBeenCalled();
   },
 );
 

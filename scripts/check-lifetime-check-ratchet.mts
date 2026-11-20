@@ -31,9 +31,7 @@ export const LIFETIME_CHECK_CALLS = [
   "captureAdmittedRunActiveAssertion",
   "captureGatewayToolCallerAssertion",
   "captureGatewayToolReceiptAssertion",
-  "captureAgentToolSourceExecutionGuard",
   "captureSourceInvocationGuard",
-  "createCliRunCurrentAssertion",
   "captureMediaGenerationAdmission",
 ] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);

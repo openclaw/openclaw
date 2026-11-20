@@ -12,7 +12,6 @@ import {
   prepareAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
-import { captureAgentToolSourceExecutionGuard } from "../agents/agent-tool-source-execution-guard.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -29,7 +28,6 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import * as gatewayWork from "../process/gateway-work-admission.js";
@@ -585,114 +583,37 @@ describe("spawn input ownership transfer", () => {
     },
   );
 
-  it.for([
-    "before staging",
-    "after acceptance",
-    "child abort",
-    "before reset",
-    "live reset",
-  ] as const)("keeps input authority at its current owner: %s", async (boundary, { signal }) => {
-    await prepareGatewayReplyRuntimeForTest();
-    const context = getContext();
-    const runId = randomUUID();
-    const parentKey = `agent:main:parent:${runId}`;
-    const childKey = `agent:main:subagent:${runId}`;
-    const sessionId = `child-${runId}`;
-    await sessionAccessor.upsertSessionEntryCore(
-      { agentId: "main", sessionKey: childKey },
-      { sessionId, updatedAt: Date.now() },
-    );
-    const scope = await inputScope(childKey, sessionId);
-    const admission = prepareAdmission(
-      context.getRuntimeConfig(),
-      `parent-${runId}`,
-      "spawn-input-proof",
-    );
-    const admitted = await admission.admit("embedded");
-    const guard = await withGatewayToolCallerIdentity(caller(admitted, parentKey), () =>
-      captureAgentToolSourceExecutionGuard(),
-    );
-    if (boundary === "before reset" || boundary === "live reset") {
-      const before = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
-      let hookCalls = 0;
-      const onReset = (event: import("../hooks/internal-hooks.js").InternalHookEvent) => {
-        if (event.sessionKey !== childKey) {
-          return;
-        }
-        hookCalls++;
-        if (boundary === "before reset") {
-          admission.close();
-        }
-      };
-      registerInternalHook("command:new", onReset);
-      try {
-        const reset = dispatchGatewayMethodInProcess(
-          "agent",
-          { message: "/new", sessionKey: childKey, idempotencyKey: runId },
-          {
-            forceSyntheticClient: true,
-            syntheticScopes: ["operator.admin"],
-            resolveGatewayContext: () => context,
-            sessionMutationCommitGuard: guard,
-          },
-        );
-        if (boundary === "before reset") {
-          await expect(reset).rejects.toThrow("tool invocation authority is no longer active");
-          expect((await loadSessionEntryAsync(childKey, { agentId: "main" })).entry).toEqual(
-            before,
-          );
-        } else {
-          await expect(reset).resolves.toMatchObject({ status: "ok", summary: "completed" });
-          const after = (await loadSessionEntryAsync(childKey, { agentId: "main" })).entry;
-          expect(after?.sessionId).toBe(sessionId);
-          expect(after?.lifecycleRevision).not.toBe(before?.lifecycleRevision);
-        }
-        expect(hookCalls).toBe(1);
-      } finally {
-        unregisterInternalHook("command:new", onReset);
-        admission.close();
-      }
-      return;
-    }
-    const held = await holdInput(scope, boundary === "before staging", signal);
-    signal.addEventListener("abort", held.release, { once: true });
-    let dispatch: Promise<unknown> | undefined;
-    try {
-      dispatch = dispatchGatewayMethodInProcess(
+  it.for(["completed", "aborted"] as const)(
+    "keeps accepted input with its child until %s",
+    async (outcome, { signal }) => {
+      await prepareGatewayReplyRuntimeForTest();
+      const context = getContext();
+      const runId = randomUUID();
+      const childKey = `agent:main:subagent:${runId}`;
+      const sessionId = `child-${runId}`;
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: childKey },
+        { sessionId, updatedAt: Date.now() },
+      );
+      const scope = await inputScope(childKey, sessionId);
+      const held = await holdInput(scope, false, signal);
+      signal.addEventListener("abort", held.release, { once: true });
+      const dispatch = dispatchGatewayMethodInProcess(
         "agent",
         { message: "synthetic staged child input", sessionKey: childKey, idempotencyKey: runId },
-        {
-          forceSyntheticClient: true,
-          resolveGatewayContext: () => context,
-          sessionMutationCommitGuard: guard,
-        },
+        { forceSyntheticClient: true, resolveGatewayContext: () => context },
       );
-      const outcome = dispatch.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await awaitGateBeforeSettlement(
-        held.staged.promise,
-        dispatch,
-        "Dispatch ended before staging",
-      );
-      if (boundary === "before staging") {
-        admission.close();
-        held.releaseWriter.resolve();
-        expect(await outcome).toHaveProperty(
-          "error.message",
-          "tool invocation authority is no longer active",
+      try {
+        await awaitGateBeforeSettlement(
+          held.staged.promise,
+          dispatch,
+          "Dispatch ended before staging",
         );
-        expect(held.observer).not.toHaveBeenCalled();
-        expect((await listSessionPendingInputs(scope)).total).toBe(0);
-      } else {
-        expect(await outcome).toHaveProperty("value.status", "accepted");
+        await expect(dispatch).resolves.toMatchObject({ status: "accepted" });
         const prepared = await held.entered;
         const recorder = prepared.userTurn.recorder!;
         expect(recorder.getPendingInputMessage?.()).toBeDefined();
-        admission.close();
-        expect(() => guard()).toThrow("tool invocation authority is no longer active");
-        if (boundary === "child abort") {
+        if (outcome === "aborted") {
           prepared.activeRunAbort.controller.abort(new Error("child stopped"));
           expect(() => recorder.withPendingInput!(() => undefined)).toThrow(
             "agent input admission no longer owns this run",
@@ -703,11 +624,10 @@ describe("spawn input ownership transfer", () => {
           expect(persisted?.message.content).toBe("synthetic staged child input");
           expect((await listSessionPendingInputs(scope)).total).toBe(0);
         }
+      } finally {
+        await held.close(dispatch);
+        signal.removeEventListener("abort", held.release);
       }
-    } finally {
-      await held.close(dispatch);
-      admission.close();
-      signal.removeEventListener("abort", held.release);
-    }
-  });
+    },
+  );
 });

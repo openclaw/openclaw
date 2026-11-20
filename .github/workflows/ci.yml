@@ -6864,9 +6864,18 @@ jobs:
           acceleration="$(/usr/bin/timeout --signal=TERM --kill-after=2s 15s emulator -accel-check 2>&1)"
           printf '%s\n' "$acceleration"
           grep -Eiq '\bKVM\b.*\b(available|usable)\b' <<<"$acceleration"
+          gradle_args=(
+            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE"
+            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          )
+          # Keep compilation off the emulator's boot path and reuse those exact APK inputs.
+          node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
+            :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest "${gradle_args[@]}"
           printf 'no\n' | avdmanager create avd --name openclaw-access --package "$SYSTEM_IMAGE" --device pixel_6
           # Bound disposable userdata so the hosted runner can boot after SDK setup.
-          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
+          # The strict 16 KiB image exhausts its default 2560 MiB during instrumentation.
+          /usr/bin/timeout --signal=TERM --kill-after=5s 30m emulator -avd openclaw-access -memory 4096 -partition-size 4096 -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect >"$RUNNER_TEMP/access-emulator.log" 2>&1 &
           emulator_pid=$!
           trust_evidence="$RUNNER_TEMP/android-native-tls-trust"
           mkdir -p "$trust_evidence"
@@ -6921,10 +6930,7 @@ jobs:
             bash scripts/android-native-tls-trust.sh prepare "$trust_evidence"
           ' bash "$trust_evidence" "$EXPECTED_PAGE_SIZE"
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest --info \
-            -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
-            -Pandroid.testInstrumentationRunnerArguments.class=ai.openclaw.app.NativeTransportQualificationSuite \
-            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            :app:connectedPlayDebugAndroidTest --info "${gradle_args[@]}"
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json

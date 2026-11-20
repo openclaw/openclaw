@@ -147,14 +147,15 @@ the repository again. Background work does not extend the 24-hour window.
 On Btrfs, APFS, and ReFS, new private checkouts with a committed `pnpm-lock.yaml`
 can reuse installed dependencies. OpenClaw prepares the dependencies once in a
 disposable sandbox, then clones the prepared checkout for each session. After the
-Gateway is ready, it prepares the default session base for repositories whose
-sandbox templates were used by a session within the last seven days. After each pass, the
-Gateway checks again after one idle minute, fetching the current default base
-through the normal base owner. Existing sandbox template records also select
-recently used project repositories with matching sandbox policies, including
-creator-role-required sandboxes when the agent's sandbox mode is `off`.
-Background preparation does not renew foreground-use recency; unused repositories
-age out under the existing cleanup policy. Background passes
+Gateway is ready, the same idle pass prepares dependency templates for the recent
+source-only checkout recipes described above, even before their first sandbox use.
+It reuses the managed pass's resolved default tip and fetch cooldown. Matching
+sandbox policies include creator-role-required sandboxes when the agent's sandbox
+mode is `off`. After each completed pass, the Gateway checks again after one idle
+minute. Background preparation does not renew the 24-hour eligibility window;
+template generations keep the existing cleanup policy. Background dependency installs
+use `ionice -c 3` inside the Linux guest. Images without `ionice` defer dependency
+installation to the foreground, which keeps normal priority. Background passes
 run serially and defer for foreground work or host I/O pressure; each build keeps
 the existing disk admission and generation retention. Each pass selects the newest
 default base rather than queuing intervening commits. If the base owner publishes
