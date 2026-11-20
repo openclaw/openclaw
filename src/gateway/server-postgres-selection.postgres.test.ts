@@ -31,7 +31,7 @@ const DSN_ENV = "OPENCLAW_PG_SELECTION_DSN";
 it.skipIf(!connection)(
   "exposes replayed PostgreSQL mirrors through authenticated Gateway reads and preserves API writes across restart",
   async ({ signal }) => {
-    const prefix = `pg_selection_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const prefix = `gw_selection_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const databaseClient = new pg.Client({ connectionString: connection });
     let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
