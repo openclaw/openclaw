@@ -68,7 +68,7 @@ type WizardSession = {
   authKind?: ProviderLoginOption["kind"];
   notes: string[];
   reservedWindow?: WindowProxy | null;
-  openedUrl?: string;
+  openedUrl?: string | true;
   externalInputTimer?: ReturnType<typeof setTimeout>;
   externalInputRequest?: Promise<ModelSetupWizardCompletion | null>;
   admitted?: boolean;
@@ -148,6 +148,7 @@ export class ModelSetupWizardRunner {
       client,
       notes: [],
       admitted: true,
+      openedUrl: true,
       retirementGeneration: this.retirementGeneration,
       abortController: new AbortController(),
       startMethod: "openclaw.setup.auth.start",
@@ -479,14 +480,13 @@ export class ModelSetupWizardRunner {
       return null;
     }
     const { client, sessionId, abortController, authChoice } = session;
-    const signal = abortController.signal;
     let nextAnswer = answer;
     let acceptsFirstResult = acceptResult;
     while (true) {
       const result = await client.request<WizardNextResult>(
         "wizard.next",
         { sessionId, ...(nextAnswer ? { answer: nextAnswer } : {}) },
-        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal },
+        { timeoutMs: MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS, signal: abortController.signal },
       );
       if (acceptsFirstResult && !acceptsFirstResult() && !result.done) {
         return null;
@@ -611,7 +611,8 @@ export class ModelSetupWizardRunner {
   }
 
   private openSignInUrl(session: WizardSession, url: string | undefined): void {
-    if (!url || session.openedUrl === url) {
+    // A reload can recover the same sign-in, but only its explicit link should reopen it.
+    if (!url || session.openedUrl === true || session.openedUrl === url) {
       return;
     }
     const safeUrl = resolveSafeExternalUrl(url, window.location.href);

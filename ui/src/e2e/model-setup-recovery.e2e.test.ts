@@ -1,10 +1,12 @@
 // Control UI tests cover local-provider recovery against a mocked Gateway.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 import {
+  activated,
   activationFailure,
   button,
   candidate,
@@ -13,6 +15,7 @@ import {
   expectText,
   makeDetection,
   providerLogin,
+  runningStep,
   runningWizard,
   setupContext,
   setupPages,
@@ -30,6 +33,51 @@ const suite = createControlUiE2eSuite({
 const withPage = setupPages(suite, () => setupContext({ viewport: { height: 900, width: 1280 } }));
 
 suite.define(() => {
+  it("resumes the original browser sign-in after a reload without opening another tab", async () => {
+    await withPage(async ({ page }) => {
+      const url = "https://auth.example.com/authorize";
+      await page.addInitScript((authUrl) => {
+        // Count automatic opens without starting real provider navigation.
+        window.open = (target) => {
+          if (target === authUrl) {
+            const count = Number(sessionStorage.getItem("test-auth-opens") ?? 0);
+            sessionStorage.setItem("test-auth-opens", String(count + 1));
+          }
+          return null;
+        };
+      }, url);
+      const gateway = await installMockGateway(page, {
+        featureMethods: [rpc.detect, rpc.auth, rpc.next],
+        methodResponses: {
+          [rpc.detect]: makeDetection({ authOptions: [providerLogin] }),
+          [rpc.auth]: runningWizard(),
+          [rpc.next]: runningStep("redirect", "text", "Paste the redirect URL", {
+            externalUrl: url,
+          }),
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      await page.locator('[data-auth-choice="provider-login"] button').click();
+      const link = page.getByRole("link", { name: "Reopen browser tab" });
+      await link.waitFor();
+      const readOpens = () => page.evaluate(() => sessionStorage.getItem("test-auth-opens"));
+      expect(await readOpens()).toBe("1");
+      const { params } = await gateway.waitForRequest(rpc.auth);
+      const sessionId = isRecord(params) ? params.sessionId : undefined;
+      expect(sessionId).toEqual(expect.any(String));
+
+      await page.reload();
+      await link.waitFor();
+      expect(await link.getAttribute("href")).toBe(url);
+      expect(await readOpens()).toBe("1");
+      const resumed = await gateway.waitForRequest(rpc.next);
+      expect(resumed.params).toEqual({ sessionId });
+      await gateway.setMethodResponse(rpc.next, activated("fixture/model"));
+      await page.waitForURL((location) => location.pathname === "/custodian");
+      expect(await readOpens()).toBe("1");
+    });
+  });
+
   it.each(["rejected", "uncertain"] as const)(
     "preserves first-run recovery after a terminal %s activation outcome",
     async (outcome) => {

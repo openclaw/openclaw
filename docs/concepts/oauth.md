@@ -48,7 +48,7 @@ Model Setup opens the same picker and connection flow. Choose **Test & use** whe
 you want to verify a model and select it. Plugins that only support full setup
 keep their separate setup action.
 
-OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete.
+OpenClaw's browser callback pages follow your system's light or dark appearance. If a page says **Authorization received**, return to the terminal while OpenClaw finishes the exchange and saves the account. The terminal or Control UI reports when sign-in is complete. If you reload first-run Model Setup while sign-in is still pending, continue in the original browser tab or select **Reopen browser tab**.
 
 ## The token sink (why it exists)
 
