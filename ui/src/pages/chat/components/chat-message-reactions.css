@@ -151,7 +151,7 @@ openclaw-message-reaction-picker .chat-reaction-tab {
 :is(.chat-group-footer, .chat-message-actions-row) > .chat-message-reactions--own {
   --chat-reaction-tab-tone: 10%;
 }
-.chat-message-reactions.chat-message-reactions--own .chat-reaction-tab {
+.chat-message-reactions--own .chat-reaction-tab {
   --chat-reaction-tab-ink: var(--accent);
   color: var(--accent);
 }
