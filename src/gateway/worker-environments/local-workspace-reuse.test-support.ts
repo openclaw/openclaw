@@ -11,6 +11,7 @@ import { requireGit } from "../../agents/worktrees/git.js";
 import { withWorktreePreparationTiming } from "../../agents/worktrees/preparation-timing.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
 import { withDiagnosticsTimelineObserver } from "../../infra/diagnostics-timeline.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { startChatSendDiagnostics } from "../server-methods/chat-send-diagnostics.js";
 import { prepareSandboxCheckpointFixture } from "./local-workspace-incremental.test-support.js";
@@ -377,7 +378,17 @@ export async function proveWarmWorkspaceReuse(owner: LocalWorkspaceOwner) {
   // The first reuse must detect a same-size edit despite the retained initialization identities.
   const source = path.join(first.workspaceDir, "source.txt");
   const before = await fs.stat(source);
-  await writeText(first.workspaceDir, "source.txt", "modified\n");
+  // An independent writer bypasses command finalization and host-write hooks.
+  const background = await runCommandWithTimeout(
+    [
+      process.execPath,
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], 'modified\\n')",
+      source,
+    ],
+    { timeoutMs: 10_000 },
+  );
+  expect(background.code).toBe(0);
   await fs.utimes(source, before.atime, before.mtime);
   using guestEdit = await prepareSandboxCheckpointFixture(owner);
   await expectText(canonical, "source.txt", "modified\n");

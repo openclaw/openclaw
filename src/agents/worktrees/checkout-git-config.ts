@@ -35,9 +35,9 @@ const native: WorktreeGitPolicy = {
 };
 type GitConfigOptions = Pick<
   NonNullable<Parameters<typeof runGit>[2]>,
-  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath"
+  "baseEnv" | "env" | "signal" | "beforeRun" | "stateOwnerPath" | "idleIoPriority"
 >;
-type Guard = Pick<GitConfigOptions, "signal" | "beforeRun" | "env" | "stateOwnerPath">;
+type Guard = Omit<GitConfigOptions, "baseEnv">;
 const sharedDirectories = ["objects", "refs", "logs", "worktrees", "reftable"] as const;
 const sharedFiles = ["packed-refs", "shallow", "info/exclude"] as const;
 
@@ -179,6 +179,7 @@ export async function withWorktreeGitConfig<T>(
       assertActive();
       const guarded = {
         ...options,
+        idleIoPriority: options.idleIoPriority ?? guard.idleIoPriority,
         refMutationDirectory: common,
         stateOwnerPath: options.stateOwnerPath ?? guard.stateOwnerPath,
         beforeRun: composeSessionSourceAssertion([

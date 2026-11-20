@@ -82,26 +82,28 @@ it.each([false, true])(
     for (const key of ["agentId", "ownerId", "involvingMe", "search", "archivedFilter"]) {
       expect(query).not.toHaveProperty(key);
     }
-    expect(f.activity.data?.sessionsResult).toBeNull();
+    expect(f.activity.data?.sessions.status).toBe("loading");
     const result = sessionsResult([{ key: "agent:research:recent", kind: "direct" }], 2);
     f.publish(result);
-    expect(f.activity.data?.sessionsResult).toBeNull();
+    expect(f.activity.data?.sessions.status).toBe("loading");
     if (rejected) {
       f.refresh.reject(new Error("Unavailable"));
     } else {
       f.refresh.resolve();
     }
     await f.refresh.promise.catch(() => undefined);
-    expect(f.activity.data?.sessionsResult).toBe(rejected ? null : result);
+    expect(f.activity.data?.sessions).toEqual(
+      rejected ? { status: "unavailable" } : { status: "ready", result },
+    );
     if (rejected) {
       f.publish(result);
-      expect(f.activity.data?.sessionsResult).toBe(result);
+      expect(f.activity.data?.sessions).toEqual({ status: "ready", result });
     }
     f.publish(null, "Temporarily unavailable");
-    expect(f.activity.data?.sessionsResult).toBe(result);
+    expect(f.activity.data?.sessions).toEqual({ status: "ready", result });
     const empty = sessionsResult([], 3);
     f.publish(empty);
-    expect(f.activity.data?.sessionsResult).toBe(empty);
+    expect(f.activity.data?.sessions).toEqual({ status: "ready", result: empty });
     f.activity.dispose();
     expect(f.dispose).toHaveBeenCalledOnce();
   },
@@ -159,7 +161,10 @@ it.each(["gateway-suspending", "agent-database-inspection-pending"])(
     const loaded = createDeferred();
     const first = observePersonActivityData(context, () => loaded.resolve());
     await loaded.promise;
-    expect(first.data?.sessionsResult?.sessions[0]?.key).toBe("agent:main:initial");
+    expect(first.data?.sessions).toMatchObject({
+      status: "ready",
+      result: { sessions: [{ key: "agent:main:initial" }] },
+    });
     phase = "unavailable";
     const settled = createDeferred();
     const reopened = observePersonActivityData(context, () => settled.resolve());
@@ -170,9 +175,14 @@ it.each(["gateway-suspending", "agent-database-inspection-pending"])(
       vi.useRealTimers();
     });
     await settled.promise;
-    expect(reopened.data?.sessionsResult).toBeNull();
+    expect(reopened.data?.sessions.status).toBe(
+      reason === "gateway-suspending" ? "unavailable" : "loading",
+    );
     phase = "recovered";
     await observe.mock.results.at(-1)?.value.refresh();
-    expect(reopened.data?.sessionsResult?.sessions[0]?.key).toBe("agent:main:recovered");
+    expect(reopened.data?.sessions).toMatchObject({
+      status: "ready",
+      result: { sessions: [{ key: "agent:main:recovered" }] },
+    });
   },
 );

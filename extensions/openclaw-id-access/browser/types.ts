@@ -91,7 +91,7 @@ export type Invite = {
 };
 
 /** Whether a role that requires a sandbox can start one now; null when the Gateway cannot check. */
-export type RoleSandboxReadiness =
+type RoleSandboxReadiness =
   | { ready: true }
   | { ready: null; backend: string }
   | { ready: false; reason: "engine_unavailable"; backend: string }

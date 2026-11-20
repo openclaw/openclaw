@@ -242,7 +242,7 @@ async function createCancellationFixture(cfg: OpenClawConfig, stateDir: string) 
 
 describe("operator access cancellation", () => {
   it.each(["profile", "member", "owner"] as const)(
-    "owns %s run policy cancellation separately from its admitted request",
+    "keeps admitted %s work live and refuses the next start after policy changes",
     cancellationCase(async (f, kind) => {
       const profile = ensureProfileForEmail("run-policy@example.test");
       setUserProfileRole(profile.id, "worker");
@@ -282,7 +282,6 @@ describe("operator access cancellation", () => {
           scopes: ["operator.write"],
         });
         const request = await origin.restore();
-        let releaseHold: (() => void) | undefined;
         try {
           f.context.resolveGatewayContext = () => origin.context;
           const run = await f.register("role-bound-run");
@@ -295,24 +294,23 @@ describe("operator access cancellation", () => {
               scopes: ["operator.write"],
             }),
           );
-          // Queue/child holds retain cancellation even after the accepting caller releases.
-          releaseHold = retained.authority!.retain!();
-          retained.release();
+          retained.armCancellation();
           setUserProfileRole(profile.id, "reader");
           invalidateOperatorRolePolicy(profile.id, { roleOnly: true });
-          expect(retained.authority!.signal?.aborted).toBe(kind !== "owner");
+          expect(retained.authority!.signal?.aborted).not.toBe(true);
+          expect(retained.authority!.assertCurrent).not.toThrow();
           if (kind === "owner") {
-            expect(retained.authority!.assertCurrent).not.toThrow();
             setOpenClawIdTunnelPrincipalLookup(() => undefined);
-            expect(retained.authority!.signal?.aborted).toBe(true);
           }
-          expect(retained.authority!.assertCurrent).toThrow();
+          await f.settle();
+          run.expectCurrent();
+          expect(retained.authority!.signal?.aborted).not.toBe(true);
+          expect(retained.authority!.assertCurrent).not.toThrow();
           expect(request.authority.signal?.aborted).toBe(false);
           expect(request.authority.assertCurrent).not.toThrow();
           expect(request.authority.reauthorize).toThrow();
           await expect(origin.restore()).rejects.toThrow();
         } finally {
-          releaseHold?.();
           request.release();
         }
       } finally {

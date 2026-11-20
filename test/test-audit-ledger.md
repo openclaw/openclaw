@@ -1208,6 +1208,24 @@ byte. Independent preservation review found no gaps. Scoped scripts-test
 typecheck, lint, formatting and both line-cap ratchets pass. These CLI tests use
 local provider fixtures; they do not qualify live Boat provisioning.
 
+### Catalog account-identity duplicate layer
+
+At `ccc83c79dbeaaaedfb56ae981e3f1b99c86bd5c3`, removed the metadata-handoff
+suite's copied account-identity block, private helpers and unused imports:
+three declarations / four expanded cases, 201 test lines. Production and shared
+support are unchanged. The scoped-refresh suite retains the identical credential,
+selected-profile and post-startup cases; its endpoint row retains both the
+changed-provider exclusion and unrelated-provider inclusion. Independent review
+found equivalent harness setup and no assertion transfer needed.
+
+The baseline passes 31 cases and the candidate passes all 27 remaining cases
+across both files. Separate endpoint, credential and selected-profile guard
+mutations fail their keeper assertions; all temporary source bytes were restored.
+A reload-auth predicate mutation survives: the post-startup case checks the final
+reload result, not immediate retention before background reacquisition. Both
+copies share that limitation; no stronger timing coverage is claimed. Targeted
+agents-other typecheck, lint, formatting and all three line-count ratchets pass.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
