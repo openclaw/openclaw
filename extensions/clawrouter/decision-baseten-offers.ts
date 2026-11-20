@@ -67,13 +67,13 @@ export function readBasetenDecisionOffer(offer: ClawRouterCapabilityOffer) {
     !questions ||
     Object.keys(questions).length !== 3 ||
     questions.boolean?.probabilities !== "boolean" ||
-    questions.boolean.abstention !== false ||
+    questions.boolean.abstention ||
     questions.choice?.probabilities !== "provider-defined" ||
-    questions.choice.abstention !== false ||
+    questions.choice.abstention ||
     questions.choice.minOptions !== 2 ||
     questions.choice.maxOptions !== 255 ||
     questions.score?.probabilities !== "provider-defined" ||
-    questions.score.abstention !== false ||
+    questions.score.abstention ||
     questions.score.minOptions !== 2 ||
     questions.score.maxOptions !== 10 ||
     facts.reasoning?.modes.length !== 1 ||
@@ -86,7 +86,7 @@ export function readBasetenDecisionOffer(offer: ClawRouterCapabilityOffer) {
 }
 
 export async function listClawRouterBasetenDecisionModels(
-  context: ProviderAugmentModelCatalogContext,
+  context: Pick<ProviderAugmentModelCatalogContext, "config" | "resolveProviderApiKey">,
 ): Promise<ProviderAugmentModelCatalogContext["entries"]> {
   const auth = context.resolveProviderApiKey?.("clawrouter");
   const apiKey = auth?.discoveryApiKey ?? auth?.apiKey;

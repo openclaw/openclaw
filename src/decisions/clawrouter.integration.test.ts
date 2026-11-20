@@ -298,9 +298,23 @@ function basetenCatalog(routeKind: "native" | "manifest") {
   };
 }
 
-it.each(["native", "manifest"] as const)(
-  "runs catalog-scoped Baseten %s through the actual decision_evaluate consumer",
-  async (routeKind) =>
+it.each(
+  (["native", "manifest"] as const).flatMap((routeKind) =>
+    [
+      "ineligible",
+      "foreign-route",
+      "wrong-protocol",
+      "unknown-model",
+      "stale",
+      "wrong-auth",
+      "missing-usage",
+      "wrong-usage",
+      "reflected-key",
+    ].map((rejection) => ({ routeKind, rejection })),
+  ),
+)(
+  "runs catalog-scoped Baseten $routeKind with isolated $rejection rejection",
+  async ({ routeKind, rejection }) =>
     withOpenClawTestState(
       {
         env: {
@@ -317,7 +331,7 @@ it.each(["native", "manifest"] as const)(
         },
       },
       async (state) => {
-        let offered = basetenCatalog(routeKind);
+        const offered = basetenCatalog(routeKind);
         let output: unknown = basetenResult;
         const catalogAuth: Array<string | undefined> = [];
         const requests: Array<{
@@ -372,13 +386,13 @@ it.each(["native", "manifest"] as const)(
                     },
                   ],
                 },
-                { catalogMode: "static" },
+                { catalogMode: "live" },
               );
               const rows = prepared.snapshot.modelCatalog.entries.filter(
                 (row) => row.provider === "clawrouter" && row.id.startsWith("baseten/"),
               );
-              expect(rows.map((row) => row.id).sort()).toEqual(
-                basetenModels.map((id) => `baseten/${id}`).sort(),
+              expect(rows.map((row) => row.id).toSorted()).toEqual(
+                basetenModels.map((id) => `baseten/${id}`).toSorted(),
               );
               for (const row of rows) {
                 expect(row.api).toBeUndefined();
@@ -482,44 +496,50 @@ it.each(["native", "manifest"] as const)(
                 }),
               ).toMatchObject({ details: { status: "unavailable", reason: "unsupported-input" } });
               expect(requests).toHaveLength(count);
-              for (const mutate of [
-                () => {
+              // Each rejection has a fresh provider owner: previous negative cases must
+              // not open the circuit and conceal the boundary this case exercises.
+              const rejectOffer: Record<string, () => void> = {
+                ineligible: () => {
                   offered.providers[0]!.offers[0]!.eligible = false;
                 },
-                () => {
+                "foreign-route": () => {
                   offered.providers[0]!.offers[0]!.route = "https://foreign.invalid/systemone";
                 },
-                () => {
+                "wrong-protocol": () => {
                   offered.providers[0]!.routes[0]!.requestFormat = "liquid.systemone";
                 },
-                () => {
+                "unknown-model": () => {
                   offered.providers[0]!.models[0]!.upstream = "unqualified-model";
                 },
-                () => {
+                stale: () => {
                   offered.observedAt = "2000-01-01T00:00:00Z";
                 },
-                () => {
+                "wrong-auth": () => {
                   offered.scope.authType = "upstream_key";
                 },
-              ]) {
-                offered = basetenCatalog(routeKind);
-                mutate();
+              };
+              const mutateOffer = rejectOffer[rejection];
+              if (mutateOffer) {
+                mutateOffer();
                 expect(await execute()).toMatchObject({ details: { status: "unavailable" } });
                 expect(requests).toHaveLength(count);
-              }
-              offered = basetenCatalog(routeKind);
-              for (const usage of [undefined, { input_tokens: 11, output_tokens: 2 }]) {
+              } else if (rejection === "reflected-key") {
+                output = { ...basetenResult, model: "synthetic-router-only" };
+                const reflected = await execute();
+                expect(reflected).toMatchObject({
+                  details: { status: "unavailable", reason: "invalid-response" },
+                });
+                expect(JSON.stringify(reflected)).not.toContain("synthetic-router-only");
+              } else {
+                const usage =
+                  rejection === "missing-usage"
+                    ? undefined
+                    : { input_tokens: 11, output_tokens: 2 };
                 output = { ...basetenResult, usage };
                 expect(await execute()).toMatchObject({
                   details: { status: "unavailable", reason: "invalid-response" },
                 });
               }
-              output = { ...basetenResult, model: "synthetic-router-only" };
-              const reflected = await execute();
-              expect(reflected).toMatchObject({
-                details: { status: "unavailable", reason: "invalid-response" },
-              });
-              expect(JSON.stringify(reflected)).not.toContain("synthetic-router-only");
               expect(catalogAuth.length).toBeGreaterThan(1);
               expect(new Set(catalogAuth)).toEqual(new Set(["Bearer synthetic-router-only"]));
               const beforeMissingKey = requests.length;
@@ -535,12 +555,14 @@ it.each(["native", "manifest"] as const)(
                 },
               });
               expect(await execute()).toMatchObject({
-                details: { status: "unavailable", reason: "credentials-unavailable" },
+                details: { status: "unavailable", reason: "unsupported-input" },
               });
               expect(requests).toHaveLength(beforeMissingKey);
             } finally {
               prepareDecisionProviderReload(registry, new Set(["clawrouter"]));
-              for (const record of registry.plugins) await getPluginInstance(record)?.dispose();
+              for (const record of registry.plugins) {
+                await getPluginInstance(record)?.dispose();
+              }
             }
           },
         );

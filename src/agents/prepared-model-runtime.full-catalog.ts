@@ -25,7 +25,9 @@ import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { applyModelServingContextLimit } from "./model-serving-context.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
+import { readPersistedPluginCapabilityModels } from "./plugin-model-catalog-capabilities.js";
 import {
   copyPreparedModelFullCatalogAuth,
   bindPreparedModelRuntimeAuth,
@@ -54,7 +56,7 @@ const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 /** Builds complete inventory before generation-specific runtime capability projection. */
 export async function prepareFullCatalogFacts(
   agentFacts: Parameters<typeof completeConfiguredRuntimeModels>[0] &
-    Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials">,
+    Pick<PreparedModelRuntimeAgentFacts, "templateAuthStorage" | "credentials" | "authStore">,
   pluginGeneration: Pick<
     PreparedModelRuntimePluginGeneration,
     | "pluginMetadataSnapshot"
@@ -105,6 +107,18 @@ export async function prepareFullCatalogFacts(
       authCredentials: agentFacts.credentials,
       config: input.config,
       models: catalogModels,
+      capabilityModels: readPersistedPluginCapabilityModels({
+        catalogs: catalogSource.pluginCatalogs,
+        config: input.config,
+        pluginMetadataSnapshot,
+        resolveProviderAuth: createProviderAuthResolver(
+          env,
+          agentFacts.authStore,
+          input.config,
+          undefined,
+          input.workspaceDir,
+        ),
+      }),
       metadataSnapshot: pluginMetadataSnapshot,
       providerOutcomes: catalogSource.providerOutcomes,
       includeProviderPluginAugmentation: catalogMode === "live",

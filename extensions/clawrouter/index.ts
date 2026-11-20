@@ -604,12 +604,27 @@ export default defineSingleProviderPluginEntry({
           if (!apiKey || !discoveryApiKey) {
             return null;
           }
+          const provider = await buildClawRouterProviderConfig({
+            apiKey,
+            discoveryApiKey,
+            baseUrl: configuredBaseUrl(ctx.config),
+          });
+          const { listClawRouterBasetenDecisionModels } =
+            await import("./decision-baseten-offers.js");
+          const capabilityModels = await listClawRouterBasetenDecisionModels({
+            config: ctx.config,
+            resolveProviderApiKey: () => ({ apiKey, discoveryApiKey }),
+          });
           return {
-            provider: await buildClawRouterProviderConfig({
-              apiKey,
-              discoveryApiKey,
-              baseUrl: configuredBaseUrl(ctx.config),
-            }),
+            provider,
+            outcomes: [
+              {
+                provider: PROVIDER_ID,
+                ...(auth.profileId ? { profileId: auth.profileId } : {}),
+                status: "ready",
+                capabilityModels,
+              },
+            ],
           };
         },
       },
@@ -626,9 +641,7 @@ export default defineSingleProviderPluginEntry({
               }
             : entry,
         );
-        const { listClawRouterBasetenDecisionModels } =
-          await import("./decision-baseten-offers.js");
-        return [...entries, ...(await listClawRouterBasetenDecisionModels(context))];
+        return entries;
       },
       // Live catalog routing also applies to explicitly configured model rows.
       preferRuntimeResolvedModel: () => true,

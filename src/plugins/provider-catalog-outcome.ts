@@ -1,4 +1,5 @@
 import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 
 export type ProviderCatalogOutcome = {
   provider: string;
@@ -24,6 +25,8 @@ export type ProviderCatalogOutcome = {
     baseUrl: string;
     serviceTiers: readonly string[];
   }[];
+  /** Credential-scoped typed rows; never converted to conversational runtime models. */
+  capabilityModels?: readonly ModelCatalogEntry[];
   /** Optional successful discovery order for models already present in the catalog. */
   modelOrder?: readonly string[];
   /**
