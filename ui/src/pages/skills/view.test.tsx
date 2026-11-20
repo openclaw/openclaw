@@ -525,7 +525,7 @@ describe("renderSkills", () => {
         card: { status: "available", content: "# GitHub skill card" },
       },
       onToggle,
-    };
+    } satisfies Parameters<typeof createProps>[0];
     // Before the inventory names it, the dialog can only say it was added.
     render({ ...opened, report: skillReport([]), mutationSkills: [] });
     const { dialog } = await getRenderedModalDialog(container);
