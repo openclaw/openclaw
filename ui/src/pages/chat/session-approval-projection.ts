@@ -1,8 +1,14 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   PendingApprovalSnapshot,
   SessionApprovalEvent,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import {
+  parseApprovalTurnActor,
+  type ApprovalTurnActor,
+  type ExecApprovalRequest,
+} from "../../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../../app/overlays-types.ts";
 import {
   isSessionApprovalEvent,
@@ -34,7 +40,7 @@ function approvalStreamMatchesSession(
 }
 
 function projectPendingApproval(
-  approval: PendingApprovalSnapshot,
+  approval: PendingApprovalSnapshot & { turnActor?: ApprovalTurnActor },
   sessionKey: string,
   sourceSessionKey?: string,
 ): ExecApprovalRequest {
@@ -46,6 +52,7 @@ function projectPendingApproval(
       agentId: presentation.agentId ?? null,
       sessionKey,
       allowedDecisions: presentation.allowedDecisions,
+      ...(approval.turnActor ? { turnActor: approval.turnActor } : {}),
     },
     ...(sourceSessionKey && sourceSessionKey !== sessionKey ? { sourceSessionKey } : {}),
     createdAtMs: approval.createdAtMs,
@@ -84,12 +91,57 @@ function projectPendingApproval(
   };
 }
 
+// Participate's display-only attribution is UI-owned until the protocol adds it.
+// Validate the complete reviewer payload after removing only this known extension.
+function withoutTurnActor(value: unknown): unknown {
+  if (!isRecord(value)) {
+    return value;
+  }
+  const { turnActor: _turnActor, ...approval } = value;
+  return approval;
+}
+
+function readApprovalReplay(value: unknown) {
+  if (!isRecord(value) || !Array.isArray(value.approvals)) {
+    return null;
+  }
+  const actors = value.approvals.map((approval: unknown) =>
+    isRecord(approval) ? parseApprovalTurnActor(approval.turnActor) : undefined,
+  );
+  const replay = { ...value, approvals: value.approvals.map(withoutTurnActor) };
+  return isSessionApprovalReplay(replay)
+    ? {
+        ...replay,
+        approvals: replay.approvals.map((approval, index) =>
+          Object.assign(approval, { turnActor: actors[index] }),
+        ),
+      }
+    : null;
+}
+
+function readApprovalEvent(value: unknown) {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const turnActor = isRecord(value.approval)
+    ? parseApprovalTurnActor(value.approval.turnActor)
+    : undefined;
+  const event = { ...value, approval: withoutTurnActor(value.approval) };
+  if (!isSessionApprovalEvent(event)) {
+    return null;
+  }
+  return event.phase === "pending"
+    ? { ...event, approval: { ...event.approval, turnActor } }
+    : event;
+}
+
 export function projectSessionApprovalReplay(
-  replay: unknown,
+  value: unknown,
   sessionKey: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] {
-  if (!isSessionApprovalReplay(replay)) {
+  const replay = readApprovalReplay(value);
+  if (!replay) {
     return [];
   }
   if (!approvalStreamMatchesSession(replay.sessionKey, sessionKey, selectedAgentId)) {
@@ -102,12 +154,13 @@ export function projectSessionApprovalReplay(
 
 export function reconcileSessionApprovalEvent(
   queue: readonly ExecApprovalRequest[],
-  event: unknown,
+  value: unknown,
   sessionKey?: string,
   selectedAgentId?: string,
   onAcceptedEvent?: (event: SessionApprovalEvent) => void,
 ): ExecApprovalRequest[] | null {
-  if (!isSessionApprovalEvent(event)) {
+  const event = readApprovalEvent(value);
+  if (!event) {
     return null;
   }
   const presentationSessionKey = sessionKey ?? event.sessionKey;
@@ -170,10 +223,10 @@ export function recordSessionApprovalReplay(
   value: unknown,
   agentId?: string,
 ): void {
-  if (!isSessionApprovalReplay(value)) {
+  const replay = readApprovalReplay(value);
+  if (!replay) {
     return;
   }
-  const replay = value;
   if (!approvalStreamMatchesSession(replay.sessionKey, state.sessionKey, agentId)) {
     return;
   }
@@ -191,6 +244,9 @@ export function applySessionApprovalEvent(
   value: unknown,
   agentId?: string,
 ): boolean {
+  if (applyParticipantApprovalEvent(state, value, agentId)) {
+    return true;
+  }
   const queue = reconcileSessionApprovalEvent(
     state.chatSessionApprovalQueue ?? [],
     value,
@@ -215,4 +271,104 @@ export function applySessionApprovalEvent(
   }
   state.chatSessionApprovalQueue = queue;
   return true;
+}
+
+/** Proposed session.approval variant: no reviewer payload or decision capability. */
+export type SessionParticipantApprovalEvent = {
+  phase: "participant";
+  sessionKey: string;
+  updatedAtMs: number;
+  approvalId: string;
+  runId: string;
+  participantId: string;
+  status: "pending" | "terminal";
+  expiresAtMs: number;
+};
+
+export type ParticipantApprovalNotice = Pick<
+  SessionParticipantApprovalEvent,
+  "approvalId" | "runId" | "participantId" | "expiresAtMs"
+>;
+
+type ParticipantApprovalScope = Omit<SessionApprovalReplayState, "complete"> & {
+  generation: number;
+  pending: Map<string, ParticipantApprovalNotice>;
+};
+
+const participantApprovals = new WeakMap<object, ParticipantApprovalScope>();
+
+function participantApprovalScope(state: ApprovalReplayHost, agentId?: string) {
+  const current = participantApprovals.get(state);
+  return current?.client === state.client &&
+    current?.connectionEpoch === state.connectionEpoch &&
+    current?.sessionKey === state.sessionKey &&
+    current?.agentId === (isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined) &&
+    current?.generation === chatHistoryRequests(state).subscriptionGeneration
+    ? current
+    : undefined;
+}
+
+function applyParticipantApprovalEvent(
+  state: ApprovalReplayHost,
+  value: unknown,
+  agentId?: string,
+): boolean {
+  if (
+    !isRecord(value) ||
+    value.phase !== "participant" ||
+    typeof value.sessionKey !== "string" ||
+    !approvalStreamMatchesSession(value.sessionKey, state.sessionKey, agentId) ||
+    (value.status !== "pending" && value.status !== "terminal") ||
+    typeof value.updatedAtMs !== "number" ||
+    !Number.isSafeInteger(value.updatedAtMs) ||
+    value.updatedAtMs < 0 ||
+    typeof value.expiresAtMs !== "number" ||
+    !Number.isSafeInteger(value.expiresAtMs) ||
+    value.expiresAtMs < 0
+  ) {
+    return false;
+  }
+  const approvalId = normalizeOptionalString(value.approvalId);
+  const runId = normalizeOptionalString(value.runId);
+  const participantId = normalizeOptionalString(value.participantId);
+  if (!approvalId || !runId || !participantId) {
+    return false;
+  }
+  const scope = participantApprovalScope(state, agentId) ?? {
+    client: state.client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    agentId: isUiGlobalSessionKey(state.sessionKey) ? agentId : undefined,
+    generation: chatHistoryRequests(state).subscriptionGeneration,
+    pending: new Map<string, ParticipantApprovalNotice>(),
+  };
+  if (value.status === "terminal") {
+    scope.pending.delete(approvalId);
+  } else {
+    scope.pending.set(approvalId, {
+      approvalId,
+      runId,
+      participantId,
+      expiresAtMs: value.expiresAtMs,
+    });
+  }
+  participantApprovals.set(state, scope);
+  return true;
+}
+
+/** Only the initiating participant sees their notice; no full approval is fetched. */
+export function currentParticipantSessionApproval(
+  state: ApprovalReplayHost & { connected?: boolean },
+  agentId: string,
+  participantId: string | null | undefined,
+): ParticipantApprovalNotice | null {
+  if (!participantId || state.connected === false) {
+    return null;
+  }
+  const now = Date.now();
+  return (
+    [...(participantApprovalScope(state, agentId)?.pending.values() ?? [])].find(
+      (approval) => approval.participantId === participantId && approval.expiresAtMs > now,
+    ) ?? null
+  );
 }

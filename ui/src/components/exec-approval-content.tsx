@@ -2,13 +2,32 @@ import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import { approvalHostLabel, summarizeApprovalScopeLabel } from "../app/approval-presentation.ts";
-import type { ExecApprovalRequest, ExecApprovalRequestPayload } from "../app/exec-approval.ts";
+import type {
+  ApprovalTurnActor,
+  ExecApprovalRequest,
+  ExecApprovalRequestPayload,
+} from "../app/exec-approval.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { shortenOpaqueIdRuns } from "../lib/session-display.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { Icon } from "./solid/icon.tsx";
 import { Popover } from "./solid/popover.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+
+export function ApprovalTurnLabel(props: { actor?: ApprovalTurnActor; sidebar?: boolean }) {
+  return (
+    <Show when={props.actor}>
+      {(actor) => (
+        <div
+          class={props.sidebar ? "sidebar-approval-row__message" : "exec-approval-sub"}
+          role="note"
+        >
+          {t("execApproval.requestedDuringTurn", { name: actor().label })}
+        </div>
+      )}
+    </Show>
+  );
+}
 
 function ExecApprovalHost(props: {
   request: ExecApprovalRequestPayload;

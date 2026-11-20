@@ -59,6 +59,21 @@ function createGatewayError(message: string, details?: unknown): Error {
 }
 
 describe("parseExecApprovalRequested", () => {
+  it("keeps bounded turn attribution without treating it as authority", () => {
+    const request = { command: "pwd", turnActor: { id: "profile:pat", label: "Pat", secret: "x" } };
+    const payload = { id: "exec-1", request, createdAtMs: 1000, expiresAtMs: 2000 };
+    expect(parseExecApprovalRequested(payload)?.request.turnActor).toEqual({
+      id: "profile:pat",
+      label: "Pat",
+    });
+    expect(
+      parseExecApprovalRequested({
+        ...payload,
+        request: { ...request, turnActor: { label: "Pat" } },
+      })?.request.turnActor,
+    ).toBeUndefined();
+  });
+
   it("preserves allowed approval decisions", () => {
     const result = parseExecApprovalRequested({
       id: "exec-1",

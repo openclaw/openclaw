@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { chatHistoryRequests } from "./chat-history-state.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { createSessionEventState, emitGatewayEvent } from "./chat-state.test-support.ts";
 import {
+  applySessionApprovalEvent,
+  currentParticipantSessionApproval,
   projectSessionApprovalReplay as project,
   reconcileSessionApprovalEvent as reconcile,
 } from "./session-approval-projection.ts";
@@ -49,6 +54,66 @@ const ancestorProjection = {
 };
 
 describe("session approval projection", () => {
+  it("preserves turn attribution in reviewer events and replay without weakening payload validation", () => {
+    const turnActor = { id: "profile:pat", label: "Pat" };
+    const approval = { ...pendingPluginApproval, turnActor };
+    expect(project({ ...replay(), approvals: [approval] }, host)[0]?.request.turnActor).toEqual(
+      turnActor,
+    );
+    expect(reconcile([], { ...event(), approval }, host)?.[0]?.request.turnActor).toEqual(
+      turnActor,
+    );
+    expect(
+      reconcile([], { ...event(), approval: { ...approval, unexpected: "private" } }, host),
+    ).toBeNull();
+  });
+
+  it("projects only own-turn status, without creating a reviewable approval or retaining private fields", () => {
+    const { state, request } = createSessionEventState({
+      sessionKey: host,
+      chatSessionApprovalQueue: [],
+    });
+    onTestFinished(() => vi.restoreAllMocks());
+    const changed = vi.fn();
+    onTestFinished(chatRunPresentation(state).subscribeNonText(changed));
+    const status = {
+      phase: "participant",
+      sessionKey: host,
+      updatedAtMs: 2_000,
+      approvalId: "approval-1",
+      runId: "run-1",
+      participantId: "profile:pat",
+      status: "pending",
+      expiresAtMs: Date.now() + 60_000,
+    };
+    const own = () => currentParticipantSessionApproval(state, "main", "profile:pat");
+    emitGatewayEvent(state, "session.approval", { ...status, command: "secret", detail: "secret" });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
+    expect(own()).toEqual({
+      approvalId: "approval-1",
+      runId: "run-1",
+      participantId: "profile:pat",
+      expiresAtMs: status.expiresAtMs,
+    });
+    expect(state.chatSessionApprovalQueue).toEqual([]);
+    expect(currentParticipantSessionApproval(state, "main", "profile:other")).toBeNull();
+    expect(currentParticipantSessionApproval(state, "main", null)).toBeNull();
+    expect(applySessionApprovalEvent(state, { ...status, sessionKey: "agent:main:other" })).toBe(
+      false,
+    );
+    expect(applySessionApprovalEvent(state, { ...status, status: "terminal" })).toBe(true);
+    expect(own()).toBeNull();
+    applySessionApprovalEvent(state, { ...status, expiresAtMs: 1 });
+    expect(own()).toBeNull();
+    applySessionApprovalEvent(state, status);
+    state.connectionEpoch++;
+    expect(own()).toBeNull();
+    applySessionApprovalEvent(state, status);
+    chatHistoryRequests(state).subscriptionGeneration++;
+    expect(own()).toBeNull();
+  });
+
   it("projects replay into the subscribed host session", () => {
     const queue = project(
       { ...replay(), approvals: [{ ...pendingPluginApproval, sourceSessionKey }] },
