@@ -3080,3 +3080,5 @@ src/infra/shared-worker-host-endpoint.ts
 src/infra/shared-worker-host.ts
 src/infra/shared-worker-host.worker.ts
 src/infra/sqlite-worker-backend-loader.ts
+packages/worker-runtime/src/worker-task-pool-memory.ts
+src/infra/worker-memory-budget.ts
