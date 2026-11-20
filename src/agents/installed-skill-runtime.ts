@@ -119,7 +119,7 @@ export function prepareInstalledSkillCatalog(params: {
           ? resource?.contentHash
           : skill.contentHash;
       return {
-        ...(params.instructionDelivery ? { instructionDelivery: params.instructionDelivery } : {}),
+        instructionDelivery: params.instructionDelivery,
         catalogRevision: contentHash,
         name: skill.name,
         promptListed: promptListed.has(skill.name),

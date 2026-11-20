@@ -293,7 +293,8 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
                   readInstructions: async (name, location, signal) => {
                     const workerLocation = resources.rewriteReferences(location);
                     const skill = resources.snapshot.resolvedSkills.find(
-                      (skill) => skill.name === name && skill.filePath === workerLocation,
+                      (candidate) =>
+                        candidate.name === name && candidate.filePath === workerLocation,
                     );
                     if (!skill) {
                       return undefined;
