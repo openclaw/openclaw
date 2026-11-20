@@ -20,10 +20,13 @@ These hold for the whole run; keep them after compaction.
    citation points at a current record.
 2. **Read before writing.** Read a record before changing it; edit a body only
    from a complete, fresh read, and reread before each edit.
-3. **Fences:** every write carries a fresh `requestId`, `expectedVaultId`, the
-   record's revision and hash, and the latest `expectedOntologyFingerprint`
-   from your last receipt. A row's 16-character hash prefix fences an annotate,
-   withdraw or supersede; a body edit needs the full read.
+3. **Fences:** for manual claim changes and page writes, use a fresh
+   `requestId` per distinct write and the observed `expectedVaultId`. For
+   `knowledge_annotate`, `knowledge_withdraw` and `knowledge_supersede`, pass
+   the records' revisions and hashes (a 16-character hash prefix is enough);
+   omit `expectedOntologyFingerprint`. For page saves, body edits and section
+   extraction, pass the latest fingerprint and the fences for existing pages.
+   New pages have no prior revision or hash.
 4. **Leave alone by default.** A page with a current State and sections that
    fit its type gets fixes only: broken citations, a stale fact a newer claim
    contradicts. Restructuring or splitting needs a named reason in the report.
