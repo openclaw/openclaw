@@ -173,10 +173,24 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
   it("renders unified discovery with an unfocused search, category sections, and settings navigation", async () => {
     const context = await newContext();
     const page = await context.newPage();
+    const responses = pluginMethodResponses();
     const gateway = await installMockGateway(page, {
       featureMethods: pluginMethods,
       methodResponses: {
-        ...pluginMethodResponses(),
+        ...responses,
+        "plugins.catalog.browse": {
+          cases: [
+            {
+              match: { query: "memory" },
+              response: {
+                items: discoveryResult.items.filter(
+                  (plugin) => plugin.catalog.name === "Memory Plus",
+                ),
+              },
+            },
+            ...responses["plugins.catalog.browse"].cases,
+          ],
+        },
       },
     });
 
@@ -198,7 +212,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
           .slice(0, 3),
       ).toEqual(["All", "Featured", "Trending"]);
       expect(await catalog.locator(".plugin-catalog-section__header h2").allTextContents()).toEqual(
-        expect.arrayContaining(["Featured", "Trending", "Channels", "Memory"]),
+        expect.arrayContaining(["Featured", "Trending", "Channels", "Scheduling"]),
       );
       expect(await gateway.getRequests("plugins.catalog.browse")).toHaveLength(1);
       expect((await gateway.getRequests("plugins.catalog.browse"))[0]?.params).toEqual({
@@ -214,15 +228,19 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         )
         .toBe(4);
       const installedCard = catalog.locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').first();
-      await installedCard.waitFor();
-      expect(await installedCard.getByLabel("Disabled", { exact: true }).count()).toBe(1);
-      expect(await installedCard.getByRole("button", { name: /Install/iu }).count()).toBe(0);
+      expect(await installedCard.count()).toBe(0);
       const availableCard = catalog
         .locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`)
         .first();
       expect(await availableCard.getByRole("button", { name: /Install/iu }).count()).toBe(1);
       expect(await availableCard.getByText(/downloads/u).count()).toBe(0);
       await captureScreenshot(page, "9-unified-plugin-catalog-desktop.png");
+
+      await search.fill("memory");
+      await gateway.waitForRequest("plugins.catalog.browse", { match: { query: "memory" } });
+      await installedCard.waitFor();
+      expect(await installedCard.getByLabel("Disabled", { exact: true }).count()).toBe(1);
+      expect(await installedCard.getByRole("button", { name: /Install/iu }).count()).toBe(0);
 
       await search.fill("matrix");
       await gateway.waitForRequest("plugins.catalog.browse", {
@@ -281,7 +299,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
       expect(
         await detailSidebar
-          .getByRole("link", { name: "openclaw/openclaw", exact: true })
+          .getByRole("link", { name: /^openclaw\/\s*openclaw$/u })
           .getAttribute("href"),
       ).toBe("https://github.com/openclaw/openclaw");
       expect(
@@ -475,7 +493,8 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       "Featured",
       "Trending",
     ]);
-    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(8);
+    expect(await sections.first().locator(".plugin-catalog-card").count()).toBe(7);
+    expect(await sections.first().locator('[data-plugin-id="ch_bWVtb3J5LXBsdXM"]').count()).toBe(0);
     expect(await sections.first().getByRole("button", { name: "View all" }).count()).toBe(1);
     const matrixCard = explore.locator(`[data-plugin-id="${matrixDiscoveryPlugin.id}"]`).first();
     await matrixCard.waitFor();
@@ -542,7 +561,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         categories: ["missing-category"],
       },
     }));
-    const featured = discoveryResult.items.filter((plugin) => plugin.catalog.featured).slice(0, 2);
+    const featured = discoveryResult.items
+      .filter((plugin) => plugin.catalog.featured && !plugin.local.installed)
+      .slice(0, 2);
     const other = {
       ...matrixDiscoveryPlugin,
       id: "ch_b3RoZXI",
