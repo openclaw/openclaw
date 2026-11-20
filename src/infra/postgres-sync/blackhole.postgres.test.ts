@@ -1,11 +1,12 @@
 import { once } from "node:events";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../sqlite-worker-contract.js";
 import { PostgresSyncConnection } from "./connection.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
+import type { BridgeRequest } from "./protocol.js";
 
 const harness = usePostgresTestHarness("blackhole");
 
@@ -128,4 +129,41 @@ describe.skipIf(!harness.connection)("PostgreSQL silent transport loss", () => {
     },
     150_000,
   );
+
+  it("keeps a statement running until shortly before a longer request deadline", async () => {
+    const schema = `${harness.prefix}_deadline`;
+    await harness.client.query(`CREATE SCHEMA "${schema}"`);
+    const anchor = new DatabaseSync(":memory:");
+    // The runtime client bound would be 11s; a maintenance owner sends a longer deadline.
+    const db = withEngineStoreAdmission(
+      () =>
+        new PostgresSyncConnection(harness.connection!, schema, anchor, schema, {
+          statementTimeoutMs: 1000,
+        }),
+    );
+    // Capture the native method; Reflect.apply below preserves each port's receiver.
+    // oxlint-disable-next-line typescript/unbound-method
+    const post = MessagePort.prototype.postMessage;
+    vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+      this: MessagePort,
+      ...args
+    ) {
+      const request = args[0] as Partial<BridgeRequest> | undefined;
+      if (request?.operation === "query") {
+        args[0] = { ...request, deadlineMs: 45_000 };
+      }
+      return Reflect.apply(post, this, args);
+    });
+    try {
+      withEngineStoreAdmission(() => {
+        db.exec("BEGIN; SET LOCAL statement_timeout = '1h'");
+        expect(db.query("SELECT 7 AS value FROM pg_sleep(12)").rows).toEqual([{ value: 7 }]);
+        db.exec("COMMIT");
+      });
+    } finally {
+      vi.restoreAllMocks();
+      withEngineStoreAdmission(() => db.close());
+      anchor.close();
+    }
+  }, 60_000);
 });

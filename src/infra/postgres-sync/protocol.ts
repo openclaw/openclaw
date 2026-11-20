@@ -49,7 +49,11 @@ export type BridgeCommand =
       reconnectIfIdle?: boolean;
       validateIfIdle?: boolean;
     };
-export type BridgeRequest = BridgeCommand & { id: number };
+export type BridgeRequest = BridgeCommand & {
+  id: number;
+  /** Time left before the host resets this connection's I/O service. */
+  deadlineMs: number;
+};
 export type BridgeReply = { id: number } & (
   | { result: PostgresResult }
   | { generation: string; inTransaction: boolean }

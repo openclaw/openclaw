@@ -172,9 +172,6 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       connectionTimeoutMillis: connectTimeoutMs,
       keepAlive: true,
       keepAliveInitialDelayMillis: TRANSPORT_TIMEOUT_MS,
-      // Leave time for the server's statement-timeout reply, but retire a
-      // silent connection before the host's 120s deadline resets its service.
-      query_timeout: statementTimeoutMs + TRANSPORT_TIMEOUT_MS,
       types: {
         // Store decoders own JSON parsing, including malformed legacy payload handling.
         getTypeParser: (oid, format) =>
@@ -267,6 +264,13 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
 
   async function handleRequest(request: BridgeRequest) {
     let reply: BridgeReply;
+    // The host deadline is the statement timeout plus 30s. Ending this client 20s
+    // early leaves time for the server's own timeout reply, and fails only this
+    // connection before the host resets the whole service.
+    const cutoff =
+      request.operation === "query" || request.operation === "recovery-generation"
+        ? setTimeout(() => void client.end().catch(() => {}), request.deadlineMs - 20_000)
+        : undefined;
     try {
       if (request.operation === "connect") {
         await connect(request.schema);
@@ -378,6 +382,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
       }
       reply = { id: request.id, error: details };
     }
+    clearTimeout(cutoff);
     send(reply);
     if (
       request.operation === "close" ||
