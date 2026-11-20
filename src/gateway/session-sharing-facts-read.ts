@@ -9,6 +9,7 @@ import type {
   SessionEntryReadSourcePreparation,
   SessionStoreWorkerReadScope,
 } from "../config/sessions/session-entry-read-runtime.types.js";
+import { sessionMemberAccessFacts } from "../config/sessions/session-member-access-facts.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import { createSessionStoreRegistryMutationFilter } from "../config/sessions/session-store-target-inventory.js";
 import type { observeDiagnosticsTimelinePhases } from "../infra/diagnostics-timeline.js";
@@ -69,6 +70,7 @@ async function readSessionSharingFactsInWorker(
               loaded.sharing?.members ??
               loaded.entries.map(({ sessionKey }) => ({
                 sessionKey,
+                memberAccess: sessionMemberAccessFacts(loaded.members?.[sessionKey] ?? []),
                 identityIds: (loaded.members?.[sessionKey] ?? []).map(
                   (member) => member.identityId,
                 ),
@@ -82,6 +84,7 @@ async function readSessionSharingFactsInWorker(
             placeholders: [],
             members: loaded.entries.map(({ sessionKey }) => ({
               sessionKey,
+              memberAccess: sessionMemberAccessFacts(loaded.members?.[sessionKey] ?? []),
               identityIds: (loaded.members?.[sessionKey] ?? []).map((member) => member.identityId),
             })),
           }
@@ -272,6 +275,8 @@ export function createSessionSharingFactAcquisition(
           retained.initialize({
             entry: entry ? projectSessionSharingEntry(entry) : undefined,
             placeholder: loaded.sharing.placeholders.find((row) => row.sessionKey === sessionKey),
+            memberAccess: loaded.sharing.members.find((row) => row.sessionKey === sessionKey)
+              ?.memberAccess,
             membership: new Set(
               loaded.sharing.members.find((row) => row.sessionKey === sessionKey)?.identityIds,
             ),

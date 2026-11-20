@@ -612,6 +612,7 @@ export async function prepareSessionMutationFacts(
             ...facts!,
             target: { ...facts!.target, entry: current.entry },
             membership: current.membership,
+            memberAccess: current.memberAccess,
           };
         }
         if (
@@ -641,6 +642,8 @@ export async function prepareSessionMutationFacts(
         sourceAgentId: sharing.source.agentId,
         readSource,
         target,
+        memberAccess: sharing.members.find((member) => member.sessionKey === match.key)
+          ?.memberAccess,
         membership: new Set(
           sharing.members.find((member) => member.sessionKey === match.key)?.identityIds,
         ),
@@ -660,6 +663,7 @@ export async function prepareSessionMutationFacts(
             ...facts!,
             target: { ...target, entry: current.entry },
             membership: current.membership,
+            memberAccess: current.memberAccess,
           };
         }
         return facts!;
