@@ -1,10 +1,13 @@
 import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import { buildBootstrapContextForFiles } from "../../agents/embedded-agent-helpers/bootstrap.js";
+import { limitHistoryTurns } from "../../agents/embedded-agent-runner/history.js";
 import { loadAgentIdentityFromWorkspaceAsync } from "../../agents/identity-file.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
+import { readSessionManagerContextAsync } from "../../agents/sessions/session-manager-incognito.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../../agents/workspace-bootstrap-policy.js";
 import { loadWorkspaceBootstrapFiles } from "../../agents/workspace-file-read.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { decisionJsonLimits } from "../../decisions/validation-common.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { resolveReplyCandidateRuntime } from "./agent-runner-runtime.js";
 import { GROUP_PARTICIPATION_GUIDANCE } from "./groups.js";
@@ -59,15 +62,25 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
     operation.abortSignal.throwIfAborted();
     run.operatorAuthority?.assertCurrent();
   };
-  const { readRecentUserAssistantTextForSession } =
-    await import("../../config/sessions/transcript.js");
-  const conversation = await readRecentUserAssistantTextForSession({
-    agentId: run.run.agentId,
-    sessionKey: candidate.sessionKey,
-    storePath: candidate.storePath,
-    limit: 16,
-    includeMessageToolSourceReplies: true,
-  });
+  // Use the generation history owner so native tool calls retain their actual results.
+  const conversation = await readSessionManagerContextAsync(
+    {
+      agentId: run.run.agentId,
+      sessionId: operation.sessionId,
+      sessionKey: candidate.sessionKey,
+      storePath: candidate.storePath,
+    },
+    (messages) => JSON.stringify(limitHistoryTurns(Array.from(messages), 16)),
+    {
+      signal: operation.abortSignal,
+      seed: {
+        maxBytes: decisionJsonLimits.maxBytes,
+        tokenBudget: decisionJsonLimits.maxBytes / 4,
+        beforeAdmittedUser: true,
+        admittedKey: candidate.recorder.message?.idempotencyKey,
+      },
+    },
+  );
   const agentName =
     run.groupParticipation?.agentName ??
     normalizeOptionalString(
@@ -89,7 +102,7 @@ export async function prepareGroupParticipation(params: Params & { operation: Re
           agentId: run.run.agentId,
           agentName: agentName ?? null,
           agentIdentity: agentIdentity ?? null,
-          conversation: conversation.map(({ role, text }) => ({ role, text })),
+          conversation,
           message: run.prompt,
           replyTo: run.groupParticipation?.replyToText ?? null,
         },
