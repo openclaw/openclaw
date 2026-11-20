@@ -44,9 +44,10 @@ extension OnboardingView {
         if state.connectionMode == .remote {
             return "AI access is configured on the remote Gateway. OpenClaw will use that existing setup."
         }
-        return "OpenClaw needs an AI account to think. " +
-            "It reuses what you already have — nothing new to sign up for if " +
-            "Claude Code, Codex, or an API key is on this Mac."
+        // Finding a CLI or key is not a login or plan; activation proves a reply.
+        return "OpenClaw needs an AI model to think. " +
+            "It can reuse Claude Code, Codex, or an API key on this Mac. " +
+            "Choose one, and OpenClaw checks that it replies before using it."
     }
 
     func maybeStartAISetup(for pageIndex: Int) {

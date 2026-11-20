@@ -2,6 +2,7 @@ import type { ModelAuthStatusProvider } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
 import { providerUsageForAccount } from "./model-auth.ts";
+import { formatAgentRuntimeLabel } from "./model-runtime-label.ts";
 
 registerModelControlsEnglish();
 
@@ -36,10 +37,13 @@ export function describeModelProviderAuth(
     const { kind, plan } = provider.nativeAuth;
     return {
       kind,
+      // An unrecognized or unreadable native login names its client, never a login or plan.
       label:
         kind === "subscription"
           ? plan || t("chat.modelControls.subscription")
-          : t(kind === "api" ? "chat.modelControls.api" : "chat.modelControls.nativeLogin"),
+          : kind === "api"
+            ? t("chat.modelControls.api")
+            : formatAgentRuntimeLabel(provider.provider),
     };
   }
   if (missing) {

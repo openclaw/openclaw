@@ -31,8 +31,9 @@ the `anthropic/*` one.
 
 For native login, the web picker's Claude CLI group reads the billing label from
 Claude Code's `claude auth status --json`: a Claude account shows its recognized
-plan or **Subscription**, API authentication shows **API**, and an unrecognized
-login type shows **Native login**. An explicitly selected saved account takes
+plan or **Subscription**, and API authentication shows **API**. When Claude Code
+reports another login type, or its status cannot be read, the group shows only
+**Claude CLI**, without claiming a login or a plan. An explicitly selected saved account takes
 precedence. This does not import a saved account or change who manages login
 and token refresh.
 

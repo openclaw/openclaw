@@ -393,6 +393,42 @@ describe("renderModelSetup", () => {
     expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(savedCandidate);
   });
 
+  it("labels discovery evidence without claiming a ready account or a missing sign-in", () => {
+    const row = (
+      kind: string,
+      label: string,
+      detail: string,
+      credentials: boolean | undefined,
+    ): SystemAgentSetupDetectResult["candidates"][number] => ({
+      kind,
+      label,
+      detail,
+      modelRef: `${kind}/model`,
+      recommended: false,
+      ...(credentials === undefined ? {} : { credentials }),
+    });
+    const container = mount(
+      props({
+        page: {
+          phase: "ready",
+          result: {
+            ...detected,
+            candidates: [
+              row("claude-cli", "Claude Code", "installed; login status unverified", undefined),
+              row("codex-cli", "Codex", "installed; login status unverified", false),
+              row("openai-api-key", "OpenAI API key", "OPENAI_API_KEY set", true),
+              row("provider-auto:ollama", "Ollama", "available locally", true),
+            ],
+          },
+        },
+      }),
+    );
+    const chips = [...container.querySelectorAll(".model-setup__chip")].map(
+      (chip) => chip.textContent,
+    );
+    expect(chips).toEqual(["Detected", "Detected", "Detected", "Detected"]);
+  });
+
   it("renders connection verification progress", () => {
     const container = mount(
       props({
