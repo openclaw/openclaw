@@ -33,6 +33,7 @@ import { isScopelessNodePairingRequest } from "../../node-pairing-auto-approve.j
 import { recordDeviceTokenPeer } from "../../openclaw-id/device-token-binding.js";
 import { approveOpenClawIdNodePairing } from "../../openclaw-id/node-pairing.js";
 import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
+import { ADMIN_SCOPE } from "../../operator-scopes.js";
 import { normalizeChromeExtensionOrigin } from "../../origin-check.js";
 import { broadcastRejectedDevicePairing } from "../../pairing-events.js";
 import { preparePublicationReaderAdmission } from "../../publication-reader.js";
@@ -139,6 +140,23 @@ export async function authorizeGatewayConnectDevice(
     skipLocalBackendSelfPairing,
     controlUiPairingKind,
   } = state;
+  // An OpenClaw ID member connects with exactly its current profile role, which
+  // connect-session applies as the ceiling. Its browser may still send the scopes it
+  // saved under an earlier role, so ask for every operator scope instead: the member
+  // lane can then widen a grant a raised role now allows.
+  if (
+    role === "operator" &&
+    authMethod === "trusted-proxy" &&
+    authResult.openclawId?.kind === "member" &&
+    (state.isBrowserOperatorUi || state.isWebchat)
+  ) {
+    scopes = applyConnectionScopeCap({
+      role,
+      scopes: [ADMIN_SCOPE],
+      upgradeReq: context.handler.upgradeReq,
+    });
+    connectParams.scopes = scopes;
+  }
   const isConnectAuthorizationCurrent = () =>
     resolveGatewayConnectPolicyFailure(context, state) === undefined;
   const failPairingHandshake = (params: {

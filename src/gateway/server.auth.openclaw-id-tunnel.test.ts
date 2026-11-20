@@ -9,6 +9,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vit
 import type { WebSocket } from "ws";
 import { writeConfigFile } from "../config/config.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../infra/device-identity.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
   getPairedDevice,
@@ -181,6 +186,7 @@ async function connectTunnel(
   peerKey: string | undefined,
   options: {
     token?: string;
+    deviceToken?: string;
     bootstrapToken?: string;
     identityPath?: string;
     scopes?: string[];
@@ -197,6 +203,7 @@ async function connectTunnel(
     deviceIdentityPath:
       options.identityPath ?? makeIdentityPath(`openclaw-tunnel-${randomUUID()}.sqlite`),
     ...(options.token ? { token: options.token } : { skipDefaultAuth: true }),
+    ...(options.deviceToken ? { deviceToken: options.deviceToken } : {}),
     ...(options.bootstrapToken ? { bootstrapToken: options.bootstrapToken } : {}),
     browserOrigin: BROWSER_ORIGIN,
   });
@@ -464,6 +471,58 @@ describe("OpenClaw ID tunnel devices on a token-mode Gateway", () => {
         admin?.close();
         await writeConfigFile({ gateway });
       }
+    },
+  );
+
+  // fsn1 2026-11-19: a browser kept asking for the scopes it saved as a viewer, so a
+  // promotion never reached it. Its saved token and scopes are what the Control UI sends.
+  test.each([
+    { from: "viewer", to: "operator", revoked: true },
+    { from: "viewer", to: "operator", revoked: false },
+    { from: "operator", to: "viewer", revoked: true },
+  ] as const)(
+    "a $from browser changed to $to reconnects at the new role (token revoked: $revoked)",
+    async ({ from, to, revoked }) => {
+      const profile = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+        accountId: "acct_view",
+      });
+      await profileWrites.setCanonicalUserProfileRole(profile.id, from);
+      // The grant an earlier build approved: exactly the scopes of the earlier role.
+      const identityPath = makeIdentityPath(`openclaw-tunnel-role-${randomUUID()}.sqlite`);
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+      const deviceId = identity.deviceId;
+      const savedScopes = from === "viewer" ? ["operator.sessions.read"] : PRESETS.operator.scopes;
+      const request = await requestDevicePairing({
+        deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        role: "operator",
+        scopes: savedScopes,
+        clientId: CONTROL_UI_CLIENT.id,
+        clientMode: CONTROL_UI_CLIENT.mode,
+        platform: CONTROL_UI_CLIENT.platform,
+      });
+      await approveDevicePairing(request.request.requestId, { callerScopes: savedScopes });
+      const deviceToken = expectDefined(
+        (await getPairedDevice(deviceId))?.tokens?.operator?.token,
+        "saved token",
+      );
+      await profileWrites.setCanonicalUserProfileRole(profile.id, to, {
+        onCommitted: (id) => invalidateOperatorRolePolicy(id, { roleOnly: true }),
+      });
+      if (revoked) {
+        await revokeDeviceToken({ deviceId, role: "operator" });
+      }
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const again = await connectTunnel(VIEWER_KEY, {
+          identityPath,
+          deviceToken,
+          scopes: savedScopes,
+        });
+        again.ws.close();
+        expect(again.res.ok, JSON.stringify(again.res.error)).toBe(true);
+        expect(grantedScopes(again.res)).toEqual(PRESETS[to].scopes.toSorted());
+      }
+      expect((await listDevicePairing()).pending).toEqual([]);
     },
   );
 
