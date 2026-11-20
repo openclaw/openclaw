@@ -83,7 +83,11 @@ async function answerLoginStep(
   prompter: WizardPrompter,
   signal: AbortSignal,
 ): Promise<unknown> {
-  const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
+  // The gateway lays out multi-line steps (device codes, progress); sanitize per line to keep that layout.
+  const message = (step.message ?? step.title ?? "Continue")
+    .split("\n")
+    .map(sanitizeTerminalText)
+    .join("\n");
   if (step.externalUrl) {
     await prompter.note(sanitizeTerminalText(step.externalUrl), "Open this URL to continue");
   }
