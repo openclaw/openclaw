@@ -229,7 +229,6 @@ async function performPreparedGatewaySessionReset({
     assertReadAuthorized,
   );
   using _ = { [Symbol.dispose]: permissionAuthority.release };
-  assertReadAuthorized();
   const loadResetSession = (assertReadCurrent?: () => void) =>
     withGatewaySessionEntryReadOnly(lookup, async (current) => {
       assertReadCurrent?.();
