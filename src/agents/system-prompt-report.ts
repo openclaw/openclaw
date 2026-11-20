@@ -44,11 +44,14 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
   if (xmlEntries.length > 0) {
     return xmlEntries;
   }
-  // Compact catalogs (`skills_read` sessions) render `- name[: description][ (note)]`; names may contain ":".
-  return Array.from(skillsPrompt.matchAll(/^- (.+?)(?:: | \(|$).*$/gmu), ([line, name = ""]) => ({
-    name: ` ${name.trim() || "(unknown)"}`.slice(1),
-    blockChars: line.length,
-  }));
+  // Compact catalogs (`skills_read` sessions) render one `- "<JSON name>"[: description]` line per skill.
+  return Array.from(
+    skillsPrompt.matchAll(/^- ("(?:[^"\\\n]|\\.)*").*$/gmu),
+    ([line, quoted = '""']) => {
+      const name = (JSON.parse(quoted) as string) || "(unknown)";
+      return { name: ` ${name}`.slice(1), blockChars: line.length };
+    },
+  );
 }
 
 function buildToolSchemaStats(

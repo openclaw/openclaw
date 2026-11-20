@@ -519,9 +519,9 @@ describe("buildAgentSystemPrompt", () => {
     });
     expect(prompt.includes("<available_skills>")).toBe(scenario.listed);
     expect(onRenderedSkillsPrompt).toHaveBeenCalledWith(
-      scenario.listed ? "<available_skills>\n- demo\n</available_skills>" : "",
+      scenario.listed ? '<available_skills>\n- "demo"\n</available_skills>' : "",
     );
-    expect(prompt.includes("- demo") && !prompt.includes("<location>")).toBe(scenario.listed);
+    expect(prompt.includes('- "demo"') && !prompt.includes("<location>")).toBe(scenario.listed);
     if (!scenario.listed) {
       expect(prompt).toContain("For specialized, unfamiliar, or reusable workflows");
       expect(prompt).toContain("search with `skills.search(query)` inside `exec`");
