@@ -1,8 +1,8 @@
 // Raised for OpenClaw ID membership, connected-app ingress principals, and decision/model
 // catalog contracts (2026-11-09..13: 5,249,082 -> 5,315,563 bytes across ~1,500 commits);
 // the cap exists to force a conscious decision on published declaration growth.
-// +20,933 for the #129388 continuation public surface (clean-build growth over upstream 41bdde21).
-export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_340_933;
+// +21,378 for the #129388 continuation public surface (clean-build growth over upstream 1129d4c0).
+export const MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES = 5_341_378;
 // Rolldown can repartition equivalent declaration chunks between clean builds; measured spread is
 // about 29 KiB across hosts. Keep one 64 KiB scheduling window above the intentional size ratchet.
 export const PLUGIN_SDK_DECLARATION_OUTPUT_VARIANCE_BYTES = 64 * 1024;
