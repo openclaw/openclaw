@@ -1,3 +1,4 @@
+import type { ParticipationCeiling } from "../agents/participation-ceiling.js";
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
@@ -36,6 +37,8 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   idempotencyKey?: string;
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
+    /** Host-captured input ceiling; recovery still re-admits the sender. */
+    participationCeiling?: ParticipationCeiling;
     humanMentions?: readonly HumanMention[];
     /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
     humanAddressed?: true;

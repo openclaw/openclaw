@@ -249,6 +249,17 @@ describe("approval authority boundaries", () => {
     }
   });
 
+  it("does not grant a participating requester resolution rights on its own approval", async () => {
+    const { managers, exec, resolve } = createFixture();
+    const pending = await exec("participant-approval");
+    const participant = createClient({ deviceId: "requester-device", scopes: ["operator.read"] });
+    expectNotFound(await resolve(pending.record.id, participant));
+    expect(managers.exec.getLiveSnapshot(pending.record.id)).toBe(pending.record);
+    expect(
+      (await resolve(pending.record.id, createClient({ deviceId: "reviewer" }))).result,
+    ).toMatchObject({ applied: true, approval: { status: "denied" } });
+  });
+
   it("enforces explicit reviewer bindings over requester ownership", async () => {
     const { managers, exec, get, resolve } = createFixture();
     const pending = await exec("reviewer-bound", {

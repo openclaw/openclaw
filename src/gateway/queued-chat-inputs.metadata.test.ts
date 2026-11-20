@@ -44,6 +44,7 @@ import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
+import * as chatRequest from "./server-methods/chat-send-request.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import {
   persistRunningSessionsForRestart,
@@ -125,6 +126,49 @@ async function retireOriginalInputs(fixture: Fixture) {
     assertCurrent() {},
   };
 }
+
+it("restores participation and literal commands from durable restart custody", async () => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  const ceiling = {
+    kind: "send" as const,
+    profileId: created.profile.id,
+    sessionKey: fixture.scope.sessionKey,
+  };
+  const normalize = chatRequest.normalizeChatSendRequest;
+  const stamp = vi
+    .spyOn(chatRequest, "normalizeChatSendRequest")
+    .mockImplementation(async (params) => {
+      const result = await normalize(params);
+      return result.ok
+        ? chatRequest.attachChatSendParticipationCeiling(result.value, ceiling)
+        : result;
+    });
+  fixture.params.message = "/stop";
+  expectStarted(await fixture.send(undefined, {}));
+  stamp.mockRestore();
+  const retained = await retireOriginalInputs(fixture);
+  expect((await readSessionQueuedInputPage(retained.target)).rows).toHaveLength(1);
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    expect(input.replyOptions).toMatchObject({
+      participationCeiling: ceiling,
+      queueModeOverride: "followup",
+    });
+    expect(input.ctx).toMatchObject({
+      CommandInterpretationSuppressed: true,
+      CommandAuthorized: false,
+    });
+    expect(input.ctx.ApprovalReviewerDeviceId).toBeUndefined();
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  expect(fixture.readTranscript().at(-1)).toMatchObject({
+    message: { __openclaw: { participationCeiling: ceiling } },
+  });
+});
 
 it("retains each accepted input's scope ceiling when the same person sends through another source", async () => {
   const created = await createFixture();

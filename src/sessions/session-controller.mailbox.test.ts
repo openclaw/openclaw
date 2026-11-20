@@ -128,6 +128,39 @@ function revocableAuthority(message: string, beforeThrow?: () => void) {
 }
 
 describe("controller mailbox scheduling", () => {
+  it("keeps participating inputs separate from owner collect batches and steering", async () => {
+    const active = activeOperation("participation-predecessor");
+    const runs = [
+      source("owner before"),
+      source("guest first"),
+      source("guest second"),
+      source("owner after"),
+    ];
+    const ceiling = { kind: "send" as const, profileId: "guest", sessionKey: key };
+    runs[1]!.run.participationCeiling = ceiling;
+    runs[2]!.run.participationCeiling = ceiling;
+    const dispatched: typeof runs = [];
+    const dispatch = async (run: ReturnType<typeof source>) => {
+      dispatched.push(run);
+    };
+    const settings = { mode: "collect" as const, debounceMs: 0 };
+    for (const run of runs) {
+      expect(enqueueFollowupRun(key, run, settings, "none", dispatch)).toBe(true);
+      ownedInputs.push(run.controllerInput!);
+    }
+    expect(runs[1]!.controllerInput!.policy.mode).toBe("followup");
+    expect(await inject(runs[1]!.controllerInput!).admit()).toBe(false);
+    active.complete();
+    await runs.at(-1)!.controllerInput!.settlement.promise;
+    await runs.at(-1)!.controllerInput!.claim?.settlement.promise;
+    expect(dispatched).toEqual(runs);
+    expect(dispatched.map((run) => run.prompt)).toEqual([
+      "owner before",
+      "guest first",
+      "guest second",
+      "owner after",
+    ]);
+  });
   it.each([-90_000, 90_000])(
     "preserves the debounce window after a %d ms wall-clock step",
     async (step) => {

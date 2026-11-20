@@ -429,11 +429,10 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
                   thinkingLevelOverride: p.thinking,
                   normalizeThinkingLevelOverride: request.normalizeThinkingLevelOverride,
                   fastModeOverride: p.fastMode,
-                  queueModeOverride: p.queueMode,
+                  queueModeOverride: request.participationCeiling ? "followup" : p.queueMode,
+                  participationCeiling: request.participationCeiling,
                   userTurnTranscriptRecorder: userTurnRecorder,
-                  ...injectionDisposition.replyOptions(
-                    p.queueMode === "steer" && Boolean(messageInjectionTarget),
-                  ),
+                  ...injectionDisposition.replyOptions(Boolean(messageInjectionTarget)),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart,
                   onPreparedAgentRunStart: ({
