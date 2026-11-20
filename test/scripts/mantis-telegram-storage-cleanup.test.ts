@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const defaults = vi.hoisted(() => ({
   mode: "initializing",
   fault: "",
-  networkCommand: "slirp4netns",
+  networkCommand: "slirp4netns" as string | null | undefined,
 }));
 const fixture = vi.hoisted(() => ({ ...defaults, root: "", calls: [] as string[] }));
 const filesystems = (...entries: object[]) => ({ filesystems: entries });
@@ -79,6 +79,7 @@ vi.mock("node:child_process", async (original) => {
         "mkfs.ext4": "",
         "git diff": "",
         "podman rm": "",
+        "podman ps": "",
         "podman info": {
           host: {
             security: { rootless: true },
@@ -158,8 +159,8 @@ describe("interrupted mounted storage initialization", () => {
     await expect(loadStorage()).rejects.toThrow(error);
     expectNoEffects(forbidden, "podman create ");
   });
-  it.each(["slirp4netns", "pasta"])(
-    "verifies the actual rootless networking helper (%s)",
+  it.each([undefined, "slirp4netns", "pasta", null])(
+    "validates the reported rootless networking helper (%s)",
     async (networkCommand) => {
       fixture.mode = "ready";
       fixture.networkCommand = networkCommand;
@@ -168,7 +169,7 @@ describe("interrupted mounted storage initialization", () => {
       for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
         vi.stubEnv(key, value);
       }
-      if (networkCommand === "slirp4netns") {
+      if (networkCommand === undefined || networkCommand === "slirp4netns") {
         expect(() => storage.assertPodmanProofStorage()).not.toThrow();
       } else {
         expect(() => storage.assertPodmanProofStorage()).toThrow(
@@ -177,6 +178,26 @@ describe("interrupted mounted storage initialization", () => {
       }
     },
   );
+  it("rejects a container configuration override before inspecting Podman", async () => {
+    fixture.mode = "ready";
+    process.argv = [process.execPath, "fixture"];
+    const storage = await loadStorage();
+    for (const [key, value] of Object.entries(storage.proofStorageEnvironment())) {
+      vi.stubEnv(key, value);
+    }
+    vi.stubEnv("CONTAINERS_CONF_OVERRIDE", path.join(fixture.root, "other.conf"));
+    expect(() => storage.assertPodmanProofStorage()).toThrow(
+      "Podman storage environment is not bound",
+    );
+    expectNoEffects("podman info");
+  });
+  it("cleans up ready storage when Podman omits the rootless network field", async () => {
+    fixture.mode = "ready";
+    fixture.networkCommand = undefined;
+    await loadStorage();
+    expect(fixture.calls).toContain("remove-storage");
+    expect(fixture.calls).toContain(`sudo umount ${path.join(fixture.root, "volume")}`);
+  });
   it("refuses Web candidate creation before bounded storage is ready", async () => {
     process.argv = [
       process.execPath,

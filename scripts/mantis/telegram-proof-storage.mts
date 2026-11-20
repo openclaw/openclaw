@@ -136,6 +136,8 @@ export function proofStorageEnvironment(rootValue = process.env.MANTIS_PODMAN_RO
   return {
     CONTAINERS_STORAGE_CONF: config,
     CONTAINERS_CONF: containers,
+    // Podman loads this last, so inherited overrides must use the same owned config.
+    CONTAINERS_CONF_OVERRIDE: containers,
     XDG_RUNTIME_DIR: runtime,
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtime}/bus`,
   };
@@ -155,7 +157,9 @@ export function assertPodmanProofStorage() {
   if (
     info.host?.security?.rootless !== true ||
     info.host?.logDriver !== "k8s-file" ||
-    info.host?.rootlessNetworkCmd !== "slirp4netns" ||
+    // Older Podman omits this field; the verified configuration still pins slirp4netns.
+    (info.host?.rootlessNetworkCmd !== undefined &&
+      info.host.rootlessNetworkCmd !== "slirp4netns") ||
     info.store?.graphRoot !== `${mount}/graphroot` ||
     info.store?.runRoot !== `${mount}/runroot`
   ) {
