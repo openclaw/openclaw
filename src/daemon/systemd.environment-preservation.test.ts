@@ -242,3 +242,61 @@ it.skipIf(process.platform === "win32").each([
     expect(rewritten?.managedDefinition?.environment?.PATH).toBe(plan.environment.PATH);
   },
 );
+
+it.skipIf(process.platform === "win32")(
+  "delivers allocator defaults and dotenv overrides before startup across audited reinstall",
+  async () => {
+    const home = await fs.realpath(tempDirs.make("systemd-allocator-"));
+    const stateDir = path.join(home, "state");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: stateDir };
+    const unitPath = resolveSystemdUnitPath(env);
+    const envFilePath = resolveSystemdEnvironmentFilePath({ stateDir });
+    const wrapperPath = path.join(home, "openclaw-wrapper");
+    await fs.mkdir(stateDir, { mode: 0o700 });
+    await fs.mkdir(path.dirname(unitPath), { recursive: true, mode: 0o755 });
+    await fs.writeFile(wrapperPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const programArguments = [wrapperPath, "gateway", "--port", "18789"];
+    await fs.writeFile(unitPath, buildSystemdUnit({ programArguments, environment: env }));
+    mockSystemdManagerSnapshot({ programArguments, fragmentPath: unitPath, environmentFiles: [] });
+    let installed: Awaited<ReturnType<typeof readSystemdServiceExecStart>> = null;
+    for (const expected of ["2", "6", "6"]) {
+      if (expected === "6") {
+        await fs.writeFile(path.join(stateDir, ".env"), "MALLOC_ARENA_MAX=6\n");
+      }
+      const plan = await buildGatewayInstallPlan({
+        env,
+        port: 18789,
+        runtime: "node",
+        runtimePath: "/usr/bin/node",
+        platform: "linux",
+        wrapperPath,
+        authStore: { version: 1, profiles: {} },
+        existingEnvironment: installed?.environment,
+        existingEnvironmentValueSources: installed?.environmentValueSources,
+      });
+      if (installed) {
+        const audit = await auditGatewayServiceConfig({
+          env,
+          command: installed,
+          expectedCommand: plan,
+          expectedServicePath: plan.environment.PATH,
+          platform: "linux",
+        });
+        expect(audit.definitionDrift).toBeUndefined();
+      }
+      await stageSystemdService({ env, stdout: new PassThrough(), ...plan });
+      expect(await fs.readFile(unitPath, "utf8")).toContain(`EnvironmentFile=-${envFilePath}`);
+      expect(await fs.readFile(envFilePath, "utf8")).toContain(`MALLOC_ARENA_MAX=${expected}\n`);
+      mockSystemdManagerSnapshot({
+        programArguments: plan.programArguments,
+        fragmentPath: unitPath,
+        environment: Object.entries(plan.environment).flatMap(([key, value]) =>
+          value === undefined || key === "MALLOC_ARENA_MAX" ? [] : [`${key}=${value}`],
+        ),
+        environmentFiles: [[envFilePath, false]],
+      });
+      installed = await readSystemdServiceExecStart(env);
+      expect(installed?.environment?.MALLOC_ARENA_MAX).toBe(expected);
+    }
+  },
+);
