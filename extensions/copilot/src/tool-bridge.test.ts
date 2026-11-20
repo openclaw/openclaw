@@ -328,7 +328,7 @@ describe("createCopilotToolBridge", () => {
     });
   });
 
-  it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
+  it("keeps session tool definitions while refusing conversation-policy-denied calls", async () => {
     await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
       const result = await createBridge({
         attemptParams: {
@@ -343,11 +343,26 @@ describe("createCopilotToolBridge", () => {
         sessionKey: "agent:agent-1:policy-session",
         workspaceDir,
       });
-      const names = result.promptToolPolicy.apply().tools.map((tool) => tool.name);
-
-      expect(names).toEqual(expect.arrayContaining(["read", "apply_patch"]));
-      for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
-        expect(names).not.toContain(denied);
+      try {
+        const { tools, callableToolNames } = result.promptToolPolicy.apply();
+        expect(tools.map((tool) => tool.name)).toEqual(
+          expect.arrayContaining(["read", "apply_patch", "write"]),
+        );
+        for (const denied of ["exec", "process", "write", "edit", "ask_user"]) {
+          expect(callableToolNames).not.toContain(denied);
+        }
+        const outputPath = path.join(workspaceDir, "denied.txt");
+        await expect(
+          invoke(sdkToolNamed(result, "write"), {
+            path: outputPath,
+            content: "must not be written",
+          }),
+        ).resolves.toMatchObject({
+          textResultForLlm: expect.stringContaining("write is outside the tools this run allows."),
+        });
+        await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        result.cleanup?.();
       }
     });
   });
