@@ -244,11 +244,15 @@ it.each(["EACCES", "EIO"])("scopes extra-path %s errors to the requested file", 
     relPath: string,
     extraPaths: Parameters<typeof readMemoryFile>[0]["extraPaths"] = [extraDir, healthyDir],
   ) => readMemoryFile({ workspaceDir, extraPaths, relPath });
-  for (const relPath of [target, blockedTarget]) {
-    await expect(read(relPath)).rejects.toMatchObject({
-      code,
-      message: `${code}: extra path unreadable`,
+  await expect(read(target)).rejects.toBe(scanError);
+  if (code === "EACCES") {
+    await expect(read(blockedTarget)).rejects.toMatchObject({
+      code: "permission-denied",
+      message: expect.stringContaining(path.basename(blockedTarget)),
+      cause: scanError,
     });
+  } else {
+    await expect(read(blockedTarget)).rejects.toBe(scanError);
   }
   await expect(read(path.join(healthyDir, "note.md"))).resolves.toMatchObject({ text: "healthy" });
   await expect(read(target, [extraDir, target])).resolves.toMatchObject({ text: "secret" });

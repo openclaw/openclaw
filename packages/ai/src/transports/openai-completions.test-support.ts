@@ -1,5 +1,5 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import { expect } from "vitest";
+import { afterAll, beforeAll, expect } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { resolveTestOpenAIProviderCapabilities as resolveTestCapabilities } from "../providers/openai-provider.test-support.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
@@ -20,38 +20,43 @@ export type CapturedStreamEvent = {
   partial?: unknown;
 };
 
-const baseTestHost = getAiTransportHost();
-configureAiTransportHost({
-  ...baseTestHost,
-  buildModelFetch: () => async (input, init) => {
-    const response = await globalThis.fetch(input, init);
-    const contentType = response.headers.get("content-type") ?? "";
-    if (
-      !response.ok ||
-      !response.body ||
-      !contentType.includes("application/json") ||
-      encodedModelRequestBodyStream(init?.body) === false
-    ) {
-      return response;
-    }
-    const headers = new Headers(response.headers);
-    headers.set("content-type", "text/event-stream; charset=utf-8");
-    return new Response(`data: ${await response.text()}\n\ndata: [DONE]\n\n`, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
-    });
-  },
-  resolveOpenAIStrictToolSetting: (_model, options) =>
-    options?.supportsStrictMode ? true : undefined,
-  resolveProviderRequestCapabilities: resolveTestCapabilities,
-  resolveModelRequestTimeoutMs: (model) => {
-    const value = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
-    return typeof value === "number" && Number.isFinite(value) && value > 0
-      ? Math.floor(value)
-      : undefined;
-  },
+let baseTestHost: ReturnType<typeof getAiTransportHost>;
+beforeAll(() => {
+  baseTestHost = getAiTransportHost();
+  configureAiTransportHost({
+    ...baseTestHost,
+    buildModelFetch: () => async (input, init) => {
+      const response = await globalThis.fetch(input, init);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (
+        !response.ok ||
+        !response.body ||
+        !contentType.includes("application/json") ||
+        encodedModelRequestBodyStream(init?.body) === false
+      ) {
+        return response;
+      }
+      const headers = new Headers(response.headers);
+      headers.set("content-type", "text/event-stream; charset=utf-8");
+      return new Response(`data: ${await response.text()}\n\ndata: [DONE]\n\n`, {
+        status: response.status,
+        statusText: response.statusText,
+        headers,
+      });
+    },
+    resolveOpenAIStrictToolSetting: (_model, options) =>
+      options?.supportsStrictMode ? true : undefined,
+    resolveProviderRequestCapabilities: resolveTestCapabilities,
+    resolveModelRequestTimeoutMs: (model) => {
+      const value = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
+      return typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
+    },
+  });
 });
+// The shared worker must not carry this OpenAI-only policy into other providers.
+afterAll(() => configureAiTransportHost(baseTestHost));
 
 export function makeCompletionsModel(overrides: Partial<CompletionsModel> = {}): CompletionsModel {
   const id = overrides.id ?? "test-model";
