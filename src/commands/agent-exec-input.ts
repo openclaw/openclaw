@@ -3,6 +3,7 @@ import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { isAgentProfileSelector, type AgentProfileSelector } from "../config/agent-profile-ids.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeDeep } from "../infra/deep-merge.js";
@@ -22,6 +23,7 @@ export type AgentExecCliOptions = {
   thinking?: string;
   fallback?: string[];
   codeMode?: "direct" | "auto" | "code";
+  agentProfile?: string;
   localModelLean?: boolean;
   authEnvOnly?: boolean;
   timeout?: string;
@@ -74,6 +76,16 @@ export async function resolveAgentExecPrompt(
     throw new Error("Missing prompt. Pass text or use --message-file <path>.");
   }
   return positionalMessage;
+}
+
+function normalizeAgentProfile(value: string | undefined): AgentProfileSelector | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (isAgentProfileSelector(value)) {
+    return value;
+  }
+  throw new Error("--agent-profile must be openclaw/base or openclaw/small.");
 }
 
 /**
@@ -163,9 +175,13 @@ export async function applyExecConfigOverrides(
 export function buildExecRunConfig(params: {
   base: OpenClawConfig;
   cwd: string;
-  opts?: Pick<AgentExecCliOptions, "localModelLean">;
+  opts?: Pick<AgentExecCliOptions, "agentProfile" | "localModelLean">;
 }): OpenClawConfig {
   const opts = params.opts ?? {};
+  // --local-model-lean is a deprecated alias for --agent-profile openclaw/small.
+  const agentProfileId =
+    normalizeAgentProfile(opts.agentProfile) ??
+    (opts.localModelLean ? "openclaw/small" : undefined);
   // Keep state under exec's lock and bind every agent to the requested folder.
   // Per-agent workspaces outrank defaults; ACP cwd can redirect the native harness.
   // Channel binding cwd needs no adjustment because exec matches no channel.
@@ -197,8 +213,14 @@ export function buildExecRunConfig(params: {
       defaults: {
         workspace: params.cwd,
         skipBootstrap: true,
-        ...(opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
+        ...(agentProfileId ? { agentProfileId } : {}),
       },
+      // Per-agent selectors outrank defaults, so the one-shot override pins every entry.
+      ...(agentProfileId && entries
+        ? {
+            entries: Object.fromEntries(Object.keys(entries).map((id) => [id, { agentProfileId }])),
+          }
+        : {}),
     },
     // A one-shot process cannot observe invalidation; a watcher would retain it after the turn.
     skills: { load: { watch: false } },

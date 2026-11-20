@@ -29,6 +29,8 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const sessionAgentId = params.agentId;
   const { bootstrapFiles, contextFiles: injectedFiles } = await resolveBootstrapContextForRun({
+    modelProvider: params.provider,
+    modelId: params.model,
     workspaceDir,
     config: params.cfg,
     sessionKey: params.sessionKey,

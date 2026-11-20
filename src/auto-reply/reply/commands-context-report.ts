@@ -403,11 +403,26 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const contextWindowLabel = session.contextTokens != null ? formatInt(session.contextTokens) : "?";
   const totalsLine = `Session tokens (cached): ${cachedContextUsageTokens != null ? `${formatInt(cachedContextUsageTokens)} total` : "unknown"} / ctx=${contextWindowLabel}`;
   const detailed = sub === "detail" || sub === "deep";
+  const workspaceContextLines = report.workspaceContext
+    ? [
+        `Agent Profile workspace context: ${formatInt(report.workspaceContext.injectedChars)} / ${formatInt(report.workspaceContext.totalMaxChars)} chars; ${formatInt(report.workspaceContext.truncatedChars)} chars removed`,
+        ...(detailed
+          ? [
+              "Agent Profile workspace sections:",
+              ...report.workspaceContext.entries.map((section) => {
+                const causes = section.causes.length > 0 ? ` (${section.causes.join(", ")})` : "";
+                return `- ${section.section}: ${formatInt(section.injectedChars)} / ${formatInt(section.rawChars)} chars${causes}`;
+              }),
+            ]
+          : []),
+      ]
+    : [];
   const lines = [
     detailed ? "🧠 Context breakdown (detailed)" : "🧠 Context breakdown",
     `Workspace: ${workspaceLabel}`,
     `Bootstrap max/file: ${bootstrapMaxLabel}`,
     `Bootstrap max/total: ${bootstrapTotalLabel}`,
+    ...workspaceContextLines,
     sandboxLine,
     systemPromptLine,
     ...(bootstrapWarningLines.length ? ["", ...bootstrapWarningLines] : []),

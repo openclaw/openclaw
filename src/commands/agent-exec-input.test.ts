@@ -85,7 +85,7 @@ describe("agent exec run config layering", () => {
     expect(config.tools?.exec?.host).toBeUndefined();
     expect(config.models?.providers?.custom?.baseUrl).toBe("https://example.invalid");
     expect(config.tools?.codeMode).toEqual({ enabled: true, maxOutputBytes: 4096 });
-    expect(config.agents?.defaults?.experimental?.localModelLean).toBe(true);
+    expect(config.agents?.defaults?.agentProfileId).toBe("openclaw/small");
     expect(config.agents?.entries?.ops?.workspace).toBe("/run/here");
     expect(config.agents?.entries?.ops?.agentDir).toBeUndefined();
     expect(config.agents?.entries?.ops?.model).toBe("openai/gpt-5.6-sol");

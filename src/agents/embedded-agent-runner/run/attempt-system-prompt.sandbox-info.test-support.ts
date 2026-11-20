@@ -6,6 +6,7 @@ import { saveExecApprovals } from "../../../infra/exec-approvals-store.test-supp
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import { resolveAgentProfile } from "../../agent-profiles.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.exec-types.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
@@ -105,6 +106,7 @@ export async function withPromptFixture(
           getProviderRuntimeHandle: () => ({ provider, modelId, prepared: true }),
         }),
         capabilityToolNames: new Set(["exec"]),
+        agentProfile: resolveAgentProfile({ config }),
         effectiveTools: tools,
         isRawModelRun: false,
         modelToolsEnabled: true,
