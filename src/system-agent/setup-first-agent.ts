@@ -12,7 +12,11 @@ import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { resolveSetupInferenceWorkspace, setupInferenceLog } from "./setup-inference-core.js";
 
-/** Publish the verified model and prospective consent through canonical first-agent creation. */
+/**
+ * Publish the verified model and prospective consent through canonical first-agent creation.
+ * Resolves with the published config. Bookkeeping that fails after publication is reported,
+ * not thrown, so setup settles from what is on disk and keeps its recovery path.
+ */
 export async function createSetupFirstAgent(params: {
   config: OpenClawConfig;
   writeSnapshot: ReadConfigFileSnapshotForWriteResult;
@@ -20,29 +24,44 @@ export async function createSetupFirstAgent(params: {
   beforePersistentApply: () => void;
   prepareConfigCommit: (config: OpenClawConfig) => Promise<void>;
   onCommitted: (config: OpenClawConfig) => void;
-}) {
-  const created = await withPluginLifecycleLeaseAsync({}, () =>
-    createAgent({
-      entry: {
-        ...params.config.agents?.entries?.[params.agentId],
-        id: params.agentId,
-        name: params.agentId,
-        workspace: resolveSetupInferenceWorkspace(params.writeSnapshot.snapshot),
-      },
-      bootstrapFirstAgent: true,
-      bootstrapMain: params.agentId === "main",
-      stagedConfig: { config: params.config, writeSnapshot: params.writeSnapshot },
-      transformConfig: transformConfigWithPendingPluginInstalls,
-      deferProactiveJob: true,
-      beforePersistentApply: params.beforePersistentApply,
-      prepareConfigCommit: params.prepareConfigCommit,
-      onCommitted: (result) => params.onCommitted(result.config),
-    }),
-  );
+}): Promise<OpenClawConfig> {
+  let published: OpenClawConfig | undefined;
+  let created: Awaited<ReturnType<typeof createAgent>>;
+  try {
+    created = await withPluginLifecycleLeaseAsync({}, () =>
+      createAgent({
+        entry: {
+          ...params.config.agents?.entries?.[params.agentId],
+          id: params.agentId,
+          name: params.agentId,
+          workspace: resolveSetupInferenceWorkspace(params.writeSnapshot.snapshot),
+        },
+        bootstrapFirstAgent: true,
+        bootstrapMain: params.agentId === "main",
+        stagedConfig: { config: params.config, writeSnapshot: params.writeSnapshot },
+        transformConfig: transformConfigWithPendingPluginInstalls,
+        deferProactiveJob: true,
+        beforePersistentApply: params.beforePersistentApply,
+        prepareConfigCommit: params.prepareConfigCommit,
+        onCommitted: (result) => {
+          published = result.config;
+          params.onCommitted(result.config);
+        },
+      }),
+    );
+  } catch (error) {
+    if (!published) {
+      throw error;
+    }
+    setupInferenceLog.warn(
+      `First agent was created, but follow-up bookkeeping failed: ${formatErrorMessage(error)}`,
+    );
+    return published;
+  }
   if (created.status === "error") {
     throw new Error(created.message);
   }
-  return created;
+  return created.config;
 }
 
 /**

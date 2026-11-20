@@ -562,7 +562,7 @@ async function verifyAndActivateCandidate(
           await ctx.beforePersistentEffect();
           await revalidate(writeSnapshot.snapshot);
           params.onCommitStarted?.(writeSnapshot.snapshot.sourceConfig);
-          const created = await createSetupFirstAgent({
+          const published = await createSetupFirstAgent({
             agentId: routeAgentId,
             config: buildCandidate(writeSnapshot.snapshot.sourceConfig),
             writeSnapshot: {
@@ -583,8 +583,8 @@ async function verifyAndActivateCandidate(
               ctx.effects.configPersisted = true;
             },
           });
-          createdFirstAgent = created.config;
-          return created.config;
+          createdFirstAgent = published;
+          return published;
         }
         const committed = await transform({
           base: "source",

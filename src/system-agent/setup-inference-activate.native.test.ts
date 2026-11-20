@@ -11,6 +11,7 @@ import {
 } from "../config/io.js";
 import { getRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import * as proactive from "../cron/default-proactive-job.js";
+import * as provenance from "../state/agent-provenance.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { describeSetupFirstAgent } from "./setup-first-agent.js";
 import { fixture, modelRef } from "./setup-inference-activate.test-support.js";
@@ -29,6 +30,7 @@ it.each([
   "cancelled",
   "application-failure",
   "job-failure",
+  "bookkeeping-failure",
 ])(
   "couples canonical first-agent creation with host-only Codex activation (%s)",
   async (outcome) => {
@@ -42,6 +44,11 @@ it.each([
     const provision = vi.spyOn(proactive, "provisionDefaultProactiveJob");
     if (outcome === "job-failure") {
       provision.mockRejectedValueOnce(new Error("cron store unavailable"));
+    }
+    if (outcome === "bookkeeping-failure") {
+      vi.spyOn(provenance, "recordAgentProvenance").mockRejectedValueOnce(
+        new Error("provenance store unavailable"),
+      );
     }
     if (outcome === "existing") {
       setup.config.agents!.entries!.main = { name: "Existing agent", workspace: setup.workspace };
