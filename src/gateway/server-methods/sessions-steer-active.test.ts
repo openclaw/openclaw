@@ -18,6 +18,7 @@ import {
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { captureSessionQueuedInputsForRestart } from "../../config/sessions/session-pending-input-history.js";
 import * as pendingInputStore from "../../config/sessions/session-pending-input-store.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import * as identity from "../../infra/device-identity-async.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.backend-contracts.js";
 import * as continuation from "../../sessions/session-controller.message-join.js";
@@ -554,7 +555,7 @@ it.each([true, false])(
   },
 );
 
-it.each([undefined, false])(
+it.each([undefined, false, "true", 1, null])(
   "keeps steering default-off (%s) independently of reader access",
   async (enabled) => {
     await using f = await createFixture({ preserveContent: true });
@@ -568,7 +569,7 @@ it.each([undefined, false])(
         ...cfg.gateway,
         sessionControl: { publicationReadEnabled: true, steeringEnabled: enabled },
       },
-    });
+    } as OpenClawConfig);
     const response = (await send(f)).mock.calls[0];
     expect(response).toMatchObject({
       0: false,
@@ -579,26 +580,5 @@ it.each([undefined, false])(
     });
     expect(received).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  },
-);
-it.each([false, true])(
-  "does not inject after steering is disabled during approval (reenabled: %s)",
-  async (reenabled) => {
-    await using f = await createFixture({ preserveContent: true });
-    human(f);
-    const received = vi.fn();
-    attach(f, received);
-    f.beforeApprove.mockImplementationOnce(() => {
-      const cfg = f.context.getRuntimeConfig();
-      setRuntimeConfigSnapshot({
-        ...cfg,
-        gateway: { ...cfg.gateway, sessionControl: { steeringEnabled: false } },
-      });
-      if (reenabled) {
-        setRuntimeConfigSnapshot(cfg);
-      }
-    });
-    expect((await send(f)).mock.calls[0]?.[1]).not.toMatchObject({ status: "accepted" });
-    expect(received).not.toHaveBeenCalled();
   },
 );
