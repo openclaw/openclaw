@@ -14,6 +14,12 @@
 //    accounted for once, by its own outcome, and no child gets a second outcome.
 // 4. The parent can inspect that row itself: its `subagents` tool and its next turn's runtime
 //    facts show the child ended, and a run snapshot names the restart interruption.
+// 5. A crash is pinned apart from a graceful stop: no root resume input, no graceful-stop wording,
+//    and exactly one interrupted outcome for each delegate the crashed process ran, through its
+//    return mode. Upstream #200807's restart sweeper fails a plain sibling but never adds a second
+//    outcome for the delegate.
+// 6. A restart the delegate's work survives settles nothing early: a delegate the new lifecycle
+//    runs, or one parked in `sessions_yield`, gets no outcome and no terminal settlement.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
@@ -27,6 +33,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
@@ -35,6 +42,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   activateSubagentRegistry,
+  isSubagentRunLive,
   listUnsettledRequesterChildren,
   testing,
 } from "./subagent-registry.test-helpers.js";
@@ -102,47 +110,6 @@ it("1: a graceful shutdown stops an accepted delegate with one outcome of its ow
   expect(fixture.gateway).not.toHaveBeenCalled();
 });
 
-it("2: a crash-restored delegate with no execution owner settles interrupted and owes one outcome, never relaunched", async () => {
-  await writeParentSession();
-  await addRunningChild("crashed-delegate");
-  // A plain (non-continuation) child keeps upstream's restored-history semantics.
-  await addRunningChild("crashed-plain", { drainsContinuationDelegateQueue: undefined });
-  // The process dies here: no shutdown kill, no resume marker.
-  const messages = recordRequesterMessages();
-
-  await restartGateway();
-  await testing.sweepOnceForTests();
-  await fixture.settle();
-
-  const durable = loadSubagentRegistryFromSqlite();
-  expectInterrupted(durable.get("crashed-delegate"));
-  expectInterrupted(subagentRuns.get("crashed-delegate"));
-  // Owed to its requester; retired custody delivers nothing before restart recovery admits it.
-  expect(durable.get("crashed-delegate")?.delivery).toEqual({ status: "pending" });
-  expect(durable.get("crashed-plain")?.execution.status).toBe("running");
-  expect(durable.get("crashed-plain")?.execution.endedAt).toBeUndefined();
-  expect(fixture.announce).not.toHaveBeenCalled();
-
-  await resumeRoots();
-  // No resume marker, so no root resume input: the delegate's own outcome is the requester's
-  // one account of it. The plain child keeps upstream's history and gets none.
-  expect(messages).toEqual([
-    {
-      sessionKey: parent,
-      source: "outcome:crashed-delegate",
-      text: childOutcomeText("crashed-delegate", restartInterruptedStatus),
-    },
-  ]);
-  expect(loadSubagentRegistryFromSqlite().get("crashed-delegate")?.delivery).toMatchObject({
-    status: "delivered",
-  });
-  // Not relaunched or waited on.
-  expect(fixture.gateway).not.toHaveBeenCalled();
-  // The requester no longer counts a dead child as running work it must wait for.
-  const unsettled = await listUnsettledRequesterChildren({ requesterSessionKey: parent });
-  expect(unsettled.map((child) => child.runId)).not.toContain("crashed-delegate");
-});
-
 it("2: a crash-restored delegate whose requester had asked to stop it settles interrupted and quietly", async () => {
   await writeParentSession();
   // The kill owner committed its intent, then the process died before termination.
@@ -188,7 +155,7 @@ it("2: an interrupted delegate's materialized attachments are released", async (
   await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
-it("2: an in-process restart settles the earlier lifecycle's delegate and keeps the current one", async () => {
+it("2: an in-process restart settles the earlier lifecycle's delegate and leaves a pending kill to its owner", async () => {
   await writeParentSession();
   await addRunningChild("earlier-lifecycle");
   const killIntent = {
@@ -199,8 +166,6 @@ it("2: an in-process restart settles the earlier lifecycle's delegate and keeps 
   await addRunningChild("earlier-lifecycle-killing", { killIntent });
   // An in-process restart keeps module state; only the lifecycle generation rotates.
   rotateAgentEventLifecycleGeneration();
-  // A delegate this lifecycle admitted before activation keeps its execution owner.
-  await addRunningChild("current-lifecycle");
   const messages = recordRequesterMessages();
 
   await activateSubagentRegistry(resolveGateway);
@@ -208,8 +173,6 @@ it("2: an in-process restart settles the earlier lifecycle's delegate and keeps 
 
   const durable = loadSubagentRegistryFromSqlite();
   expectInterrupted(durable.get("earlier-lifecycle"));
-  expect(durable.get("current-lifecycle")?.execution.status).toBe("running");
-  expect(durable.get("current-lifecycle")?.execution.endedAt).toBeUndefined();
   // A retained row's pending kill still has its owner: the sweeper's durable kill reconcile.
   expect(durable.get("earlier-lifecycle-killing")).toMatchObject({
     killIntent,
@@ -505,3 +468,171 @@ it.each(RETURN_MODES)(
     expect(fixture.announce).toHaveBeenCalledTimes(2);
   },
 );
+
+const DIRECT_RETURN = {
+  mode: "direct",
+  fields: {},
+  recipient: parent,
+  wakeRecipients: undefined,
+  returnWake: (_runId: string) => undefined,
+  wakes: false,
+} as const;
+
+/** What one delegate's outcome looks like at the delivery seams for its return mode. */
+function deliveredThrough(
+  {
+    mode,
+    recipient,
+    wakeRecipients,
+    returnWake,
+    wakes,
+  }: (typeof RETURN_MODES)[number] | typeof DIRECT_RETURN,
+  runId: string,
+  status: (runId: string) => string,
+) {
+  if (mode === "direct") {
+    return [
+      { sessionKey: parent, source: `outcome:${runId}`, text: childOutcomeText(runId, status) },
+    ];
+  }
+  return [
+    {
+      sessionKey: recipient,
+      source: `return:${runId}`,
+      text: childOutcomeText(runId, status),
+      wakeRecipients,
+      returnWake: returnWake(runId),
+    },
+    ...(wakes
+      ? [{ sessionKey: parent, source: `wake:${runId}`, reason: "silent-wake-enrichment" }]
+      : []),
+  ];
+}
+
+it.each([DIRECT_RETURN, ...RETURN_MODES])(
+  "5: after a crash, a $mode delegate the crashed process ran gets one interrupted outcome on its own route",
+  async (returnMode) => {
+    await writeParentSession();
+    // The crashed process created and ran these, under the lifecycle it held.
+    const earlier = Math.floor(performance.timeOrigin) - 10 * 60_000;
+    const earlierRow = {
+      createdAt: earlier,
+      execution: {
+        status: "running" as const,
+        startedAt: earlier,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      },
+    };
+    const delegate = `crashed-${returnMode.mode}`;
+    const plain = `${delegate}-plain`;
+    await addRunningChild(delegate, { ...returnMode.fields, ...earlierRow });
+    // A plain sibling: upstream #200807's restart sweeper is live and fails it.
+    await addRunningChild(plain, { ...earlierRow, drainsContinuationDelegateQueue: undefined });
+    // The process dies here: no shutdown kill, no resume marker.
+    const messages = recordRequesterMessages();
+    const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+
+    await restartGateway();
+    // Activation settles the delegate before any sweep; retired custody delivers nothing yet.
+    expectInterrupted(loadSubagentRegistryFromSqlite().get(delegate));
+    expect(loadSubagentRegistryFromSqlite().get(delegate)?.delivery).toEqual({ status: "pending" });
+    await testing.sweepOnceForTests();
+    await fixture.settle();
+    expect(messages).toEqual([]);
+    await resumeRoots();
+
+    // One interrupted outcome on the delegate's own route, and no root resume input.
+    const forDelegate = messages.filter(({ source }) => source.endsWith(`:${delegate}`));
+    expect(forDelegate).toEqual(deliveredThrough(returnMode, delegate, restartInterruptedStatus));
+    expect(messages.filter(({ source }) => source === "restart")).toEqual([]);
+    // Neither the graceful stop's wording nor the sweeper's ("The Gateway stopped before...").
+    for (const message of forDelegate) {
+      expect("text" in message ? message.text : "").not.toContain("Gateway stopped");
+    }
+    const durable = loadSubagentRegistryFromSqlite();
+    expect(durable.get(delegate)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: "subagent run interrupted: the Gateway restarted before it ended",
+    });
+    expect(durable.get(delegate)?.delivery).toMatchObject({ status: "delivered" });
+    expect(
+      fixture.announce.mock.calls.filter(([request]) => request.childRunId === delegate),
+    ).toHaveLength(1);
+    // The sweeper settled the plain sibling with its own outcome, and never the delegate.
+    const restartSettles = registryWarn.mock.calls
+      .filter(([message]) => message === "Settling subagent interrupted by Gateway restart")
+      .map(([, meta]) => (meta as { runId?: string }).runId);
+    expect(restartSettles).toEqual([plain]);
+    expect(durable.get(plain)?.execution.outcome).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("did not survive the restart"),
+    });
+    // Never relaunched, and no longer running work its requester waits for.
+    expect(fixture.gateway).not.toHaveBeenCalled();
+    const unsettled = await listUnsettledRequesterChildren({ requesterSessionKey: parent });
+    expect(unsettled.map((child) => child.runId)).not.toContain(delegate);
+  },
+);
+
+it("6: an in-process restart leaves a delegate the new lifecycle is running: no outcome, no terminal state", async () => {
+  await writeParentSession();
+  // An in-process restart keeps module state; only the lifecycle generation rotates.
+  rotateAgentEventLifecycleGeneration();
+  // This lifecycle admitted the delegate before activation, and its run is live.
+  const live = await addRunningChild("live-delegate");
+  const before = loadSubagentRegistryFromSqlite().get("live-delegate");
+  const claim = claimAgentRunContext(
+    live.runId,
+    { sessionKey: live.childSessionKey },
+    { trackOwner: true, ownsContext: true },
+  );
+  const messages = recordRequesterMessages();
+  const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
+  try {
+    await activateSubagentRegistry(resolveGateway);
+    await fixture.settle();
+    await resumeRoots();
+
+    expect(isSubagentRunLive(live)).toBe(true);
+    expect(loadSubagentRegistryFromSqlite().get("live-delegate")).toEqual(before);
+    expect(messages).toEqual([]);
+    expect(fixture.announce).not.toHaveBeenCalled();
+    expect(registryWarn).not.toHaveBeenCalledWith(
+      "Settling subagent interrupted by Gateway restart",
+      expect.anything(),
+    );
+  } finally {
+    releaseAgentRunContext(live.runId, claim);
+  }
+});
+
+it("6: a crash leaves a delegate parked in sessions_yield to its message wait: no outcome, no terminal settlement", async () => {
+  await writeParentSession();
+  const earlier = Math.floor(performance.timeOrigin) - 10 * 60_000;
+  // The crashed process ran it until it yielded, waiting for its requester's next message.
+  await addRunningChild("parked-delegate", {
+    createdAt: earlier,
+    pauseReason: "sessions_yield",
+    waitForMessage: true,
+    execution: {
+      status: "terminal",
+      startedAt: earlier,
+      endedAt: earlier + 1_000,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    },
+  });
+  const before = loadSubagentRegistryFromSqlite().get("parked-delegate");
+  const messages = recordRequesterMessages();
+
+  await restartGateway();
+  await resumeRoots();
+
+  const parked = loadSubagentRegistryFromSqlite().get("parked-delegate");
+  expect(parked).toMatchObject({ pauseReason: "sessions_yield", waitForMessage: true });
+  expect(parked?.execution).toEqual(before?.execution);
+  expect(parked?.endedReason).toBe(before?.endedReason);
+  expect(parked?.delivery).toEqual(before?.delivery);
+  expect(messages).toEqual([]);
+  expect(fixture.announce).not.toHaveBeenCalled();
+  expect(fixture.gateway).not.toHaveBeenCalled();
+});
