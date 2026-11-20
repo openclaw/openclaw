@@ -5,7 +5,6 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
@@ -246,26 +245,6 @@ export async function completePostUpdateMaintenance(
     warnOwedUpdateStep(result, step, recordOwedUpdateStep(run, step));
   }
   await retryOwedSteps(async () => completionFailure);
-  if (result.mode === "git" && readPackageReleaseSlotSync(result.root ?? "")) {
-    // `openclaw` on PATH follows the release link, never the checkout it was installed from.
-    const retarget = await retireStandaloneGitWrapper({
-      previousRoot: params.previousInstallRoot ?? params.root,
-      replacementRoot: result.root,
-      assertCurrent,
-    });
-    if (retarget.error) {
-      defaultRuntime.error(`Warning: ${retarget.error}`);
-      result.steps.push({
-        name: "git-release-cli",
-        command: "point the openclaw wrapper at the release link",
-        cwd: context.root,
-        durationMs: 0,
-        exitCode: 0,
-        advisory: { kind: "recoverable-maintenance", message: retarget.error },
-      });
-    }
-    return undefined;
-  }
   if (!params.installKindChanged || result.mode === "git") {
     return;
   }

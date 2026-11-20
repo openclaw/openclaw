@@ -10,6 +10,8 @@ import {
 export const GIT_RELEASE_LAUNCHER = "openclaw-launcher.mjs";
 /** The trial record the switch writes and the launcher and Gateway settle. */
 export const GIT_RELEASE_TRIAL = ".trial";
+/** Set by the Windows task supervisor for its first child: the supervisor already counted that start. */
+export const GIT_RELEASE_START_COUNTED_ENV = "OPENCLAW_GIT_RELEASE_START_COUNTED";
 
 /**
  * Every Git install updates through releases (on Windows the link is a junction). The layout

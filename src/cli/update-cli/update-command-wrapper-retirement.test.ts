@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createConfigIO } from "../../config/io.js";
 import { gitReleaseSlot } from "../../infra/git-release-paths.js";
 import { createGitReleaseDirs, publishGitRelease } from "../../infra/git-release.js";
 import { pkgQueryResult } from "../../infra/update-freebsd-pkg-ownership.test-support.js";
@@ -11,16 +10,9 @@ import * as exec from "../../process/exec.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import {
   exposeGlobalPackageThroughRelease,
+  resolveGitReleaseCheckout,
   retireStandaloneGitWrapper,
 } from "./update-command-git.js";
-import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
-import { completePostUpdateMaintenance } from "./update-command-post-update-maintenance.js";
-
-// Shell completion belongs to the user's shell, not to this fixture.
-vi.mock("./update-command-service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./update-command-service.js")>()),
-  tryInstallShellCompletion: vi.fn(async () => undefined),
-}));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const installerWrapper = (root: string) =>
@@ -168,26 +160,13 @@ describe("retireStandaloneGitWrapper", () => {
     };
     await publishGitRelease({ prefix, releaseRoot: await release("old"), trial: false });
     const slot = gitReleaseSlot(prefix);
-    vi.stubEnv("PATH", `${base}${path.delimiter}${process.env.PATH ?? ""}`);
-    try {
-      await completePostUpdateMaintenance(
-        finishParams({
-          result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
-          configSnapshot: await createConfigIO({
-            env: { OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json") },
-          }).readConfigFileSnapshot(),
-          opts: { yes: true },
-          root: checkout,
-          previousInstallRoot: checkout,
-          installKindChanged: false,
-        }),
-        { status: "ok", mode: "git", root: slot, steps: [], durationMs: 0 },
-        () => {},
-        { root: slot },
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
+    await expect(
+      retireStandaloneGitWrapper({
+        previousRoot: checkout,
+        replacementRoot: slot,
+        searchDirs: [base],
+      }),
+    ).resolves.toEqual({});
     // A `--no-restart` update leaves the new release pending for the next Gateway start.
     await publishGitRelease({
       prefix,
@@ -203,6 +182,33 @@ describe("retireStandaloneGitWrapper", () => {
     expect(run("--", "gateway", "run")).toBe("new index.js\n");
     expect(run("gateway", "--port", "18789")).toBe("new index.js\n");
     expect(run("--version")).toBe("new entry.js\n");
+  });
+});
+
+describe.skipIf(process.platform === "win32")("resolveGitReleaseCheckout", () => {
+  it("finds the checkout from a release worktree, as a release-driven update starts there", async () => {
+    const base = await fs.realpath(dirs.make("openclaw-release-checkout-"));
+    const checkout = path.join(base, "checkout");
+    const git = (cwd: string, ...args: string[]) =>
+      spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8" });
+    await fs.mkdir(checkout);
+    git(checkout, "init", "-q");
+    git(
+      checkout,
+      "-c",
+      "user.email=t@t",
+      "-c",
+      "user.name=t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "x",
+    );
+    const release = path.join(base, "state", "git-install", "releases", "r1", "openclaw");
+    expect(git(checkout, "worktree", "add", "-q", "--detach", release).status).toBe(0);
+
+    await expect(resolveGitReleaseCheckout(release, release, 10_000)).resolves.toBe(checkout);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MAX,
   WINDOWS_TASK_SUPERVISOR_RESTART_EXIT_CODE_MIN,
 } from "../../daemon/windows-task-supervisor-contract.js";
+import { GIT_RELEASE_START_COUNTED_ENV } from "../../infra/git-release-paths.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getProcessSupervisor, type ManagedRun } from "../../process/supervisor/index.js";
@@ -31,6 +32,7 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
   let managed: ManagedRun | null = null;
   let cancelled = false;
   let crashRestarts = 0;
+  let childSpawned = false;
   let terminalExitCode: number | undefined;
   const cancel = () => {
     cancelled = true;
@@ -48,6 +50,8 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
     }
     while (true) {
       const startedAt = performance.now();
+      const firstChild = !childSpawned;
+      childSpawned = true;
       stderr = "";
       // A private outcome distinguishes planned handoffs from bounded crash recovery.
       const restartExitCode = randomInt(
@@ -81,6 +85,10 @@ export async function runWindowsGatewayTaskSupervisor(): Promise<void> {
       managed = await supervisor.spawn({
         mode: "anchored-shell",
         command,
+        // The release launcher counted this supervisor's start; its first child is that start.
+        ...(typeof releaseLauncher === "string" && firstChild
+          ? { env: { ...process.env, [GIT_RELEASE_START_COUNTED_ENV]: "1" } }
+          : {}),
         scopeKey: `gateway-task-supervisor:${process.pid}`,
         captureOutput: false,
         onStderr: (chunk) => {

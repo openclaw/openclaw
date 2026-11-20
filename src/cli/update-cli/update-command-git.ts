@@ -47,7 +47,7 @@ import { readOriginalUpdateRecovery } from "./update-command-recovery.js";
 /**
  * The installer's `openclaw` wrapper for a checkout: retired after a switch to a package,
  * or pointed at the launcher beside `replacementRoot` (the release link) once a Git install runs
- * from releases. A wrapper already pointed at the launcher beside `previousRoot` is recognized too.
+ * from releases. `previousRoot` is the checkout the installer wrote the wrapper for.
  */
 export async function retireStandaloneGitWrapper(params: {
   previousRoot: string;
@@ -60,11 +60,7 @@ export async function retireStandaloneGitWrapper(params: {
   const wrapperName = platform === "win32" ? "openclaw.cmd" : "openclaw";
   const searchDirs = params.searchDirs ?? (process.env.PATH ?? "").split(path.delimiter);
   const pathApi = platform === "win32" ? path.win32 : path;
-  // The checkout's entry, or the launcher beside a release link.
-  const expectedEntries = [
-    pathApi.join(params.previousRoot, "dist", "entry.js"),
-    pathApi.join(pathApi.dirname(params.previousRoot), GIT_RELEASE_LAUNCHER),
-  ];
+  const expectedEntries = [pathApi.join(params.previousRoot, "dist", "entry.js")];
   const seen = new Set<string>();
 
   for (const directory of searchDirs) {
@@ -448,18 +444,33 @@ export async function updateGitInstall(params: {
     },
   });
   const steps = [...cloneSteps, ...result.steps];
-  const packageRoot =
-    installTarget?.packageRoot ??
-    (result.status === "ok" ? await findGlobalPackageLinkedTo(gitRoot, effectiveTimeout) : null);
-  if (packageRoot && result.status === "ok" && result.root) {
-    // `openclaw` on PATH resolves through the global package path; it now runs the release.
-    const warning = await exposeGlobalPackageThroughRelease(packageRoot, result.root, gitRoot);
-    if (warning) {
+  if (result.status === "ok" && result.root) {
+    // `openclaw` on PATH resolves through the npm package path or the installer's wrapper, both
+    // written for the checkout; they now run the release. A release-driven update (the Control
+    // UI, or `openclaw` started from a release) names the release link as its root, so the
+    // checkout comes from the release's Git common directory.
+    const checkoutRoot = await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout);
+    const packageRoot =
+      installTarget?.packageRoot ??
+      (await findGlobalPackageLinkedTo(checkoutRoot, effectiveTimeout));
+    const warnings = [
+      packageRoot
+        ? await exposeGlobalPackageThroughRelease(packageRoot, result.root, checkoutRoot)
+        : undefined,
+      (
+        await retireStandaloneGitWrapper({
+          previousRoot: checkoutRoot,
+          replacementRoot: result.root,
+          assertCurrent,
+        })
+      ).error,
+    ].filter((warning): warning is string => Boolean(warning));
+    for (const warning of warnings) {
       defaultRuntime.error(`Warning: ${warning}`);
       steps.push({
         name: "git-release-cli",
-        command: "link the global package to the release",
-        cwd: packageRoot,
+        command: "point `openclaw` on PATH at the release launcher",
+        cwd: checkoutRoot,
         durationMs: 0,
         exitCode: 0,
         advisory: { kind: "recoverable-maintenance", message: warning },
@@ -472,6 +483,20 @@ export async function updateGitInstall(params: {
     steps,
     durationMs: Date.now() - params.startedAt,
   };
+}
+
+/** The checkout a release is a worktree of. */
+export async function resolveGitReleaseCheckout(
+  release: string,
+  fallback: string,
+  timeoutMs: number,
+) {
+  const res = await runCommandWithTimeout(
+    ["git", "-C", release, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+    { timeoutMs },
+  ).catch(() => null);
+  const commonDir = res?.code === 0 ? res.stdout.trim() : "";
+  return path.basename(commonDir) === ".git" ? path.dirname(commonDir) : fallback;
 }
 
 /** npm's global package when an earlier switch to Git linked it to this checkout. */
