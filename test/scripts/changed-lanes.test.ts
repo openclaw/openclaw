@@ -759,7 +759,7 @@ describe("scripts/changed-lanes", () => {
     },
   ])(
     "fails real changed-check lint for $name and passes after repair",
-    ({ count, extension, otherPaths, fallback = false }) => {
+    ({ count, extension, otherPaths, fallback }) => {
       const { dir, run, runRootTestLint } = createRootTestLintFixture();
       const targets = Array.from(
         { length: count },

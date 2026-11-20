@@ -2307,7 +2307,7 @@ describe("ci workflow guards", () => {
           },
         });
         expect(manifest.status, manifest.output).toBe(0);
-        expect(JSON.parse(manifest.outputs.changed_root_test_paths_json)).toEqual(roots);
+        expect(readJsonOutput(manifest.outputs, "changed_root_test_paths_json")).toEqual(roots);
         const workflow = readCiWorkflow();
         const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
           eventName,

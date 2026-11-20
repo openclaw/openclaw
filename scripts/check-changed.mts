@@ -550,9 +550,15 @@ export function createChangedCheckPlan(
   // Dedicated CI rows already own their commands; central discovery is discarded.
   if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
     const lintEnv = createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext);
-    return {
-      delegatedTypeGraphs: [],
-      commands: [
+    const lintCommands = createCiLintCommands(
+      options.lintSelection,
+      options.lintThreads ?? 1,
+      lintEnv,
+    );
+    // Stripe/group rows leave root discovery to the central row. An otherwise
+    // empty selection can own the explicit root-only fallback.
+    if (lintCommands.length === 0) {
+      lintCommands.push(
         ...createRootTestLintCommands(
           options.lintSelection.rootTestFiles ?? [],
           lintEnv,
@@ -561,8 +567,11 @@ export function createChangedCheckPlan(
           ...command,
           args: [...command.args, `--threads=${options.lintThreads ?? 1}`],
         })),
-        ...createCiLintCommands(options.lintSelection, options.lintThreads ?? 1, lintEnv),
-      ],
+      );
+    }
+    return {
+      delegatedTypeGraphs: [],
+      commands: lintCommands,
       summary: result.docsOnly
         ? "docs-only"
         : lanes.releaseMetadata
