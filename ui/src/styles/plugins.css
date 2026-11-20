@@ -2433,7 +2433,6 @@
   color: var(--muted);
   font: inherit;
   font-size: 13.5px;
-  cursor: pointer;
 }
 
 .plugin-catalog-detail__readme-toggle[hidden] {
