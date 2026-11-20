@@ -2420,7 +2420,6 @@
 ["src/cli/capability-cli.test.ts","../image-generation/runtime.js","d57a7077e1f3e7e4c1088d7d2350b0e7883f46edfb525f493896bc91c62eea1e",1]
 ["src/cli/capability-cli.test.ts","../media-understanding/local-audio.js","eed4acd8e4a2c9ec9452f254cff76bdb84294af893a78d33c3d8c7ec69edd984",1]
 ["src/cli/capability-cli.test.ts","../media-understanding/provider-registry.js","effa4d367c5f063b9effa1fbdb9d168db927cf60a98bdc87351e6fc1b8e457a3",1]
-["src/cli/capability-cli.test.ts","../media-understanding/runtime.js","472e991330a270c78bc0110dfdda1d61bebf5a53d474f00a343dd25f64adf915",1]
 ["src/cli/capability-cli.test.ts","../plugin-sdk/memory-core-bundled-runtime.js","d916313fd2247501b78ad01bc16e388fba546015a7c3dfbbc77b31ebd873b5ee",1]
 ["src/cli/capability-cli.test.ts","../plugins/embedding-provider-runtime.js","481e319825054a9b76a3f5214ed8ecc8198e30959bddd3a4f03cb10ef84e968b",1]
 ["src/cli/capability-cli.test.ts","../plugins/memory-embedding-provider-runtime.js","a22d91bbaf941e516781fce0a06375ec22f6d000b5277d23ee5f412e4b028bfa",1]

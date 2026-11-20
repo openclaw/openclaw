@@ -191,6 +191,7 @@ export async function runSetupInferenceTurn(params: {
         // instead of spending the chat turn's ~90 s backoff ladder on 5xx/429/overload.
         retryTransientErrors: false,
         preparedModelRuntimeMode: "isolated-read-only",
+        refreshModelCatalog: !harness || harness === "openclaw",
         ...(harness === "codex" ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(harness ? { agentHarnessRuntimeOverride: harness } : {}),
         lane: `session:probe-setup-inference:${route.provider}`,

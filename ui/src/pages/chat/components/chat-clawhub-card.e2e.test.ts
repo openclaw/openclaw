@@ -215,8 +215,10 @@ describeControlUiE2e("Chat plugin installation status", () => {
           });
           expect(metrics.padding).toBeLessThanOrEqual(16);
           expect(metrics.buttonPadding).toBeLessThanOrEqual(12);
-          expect(metrics.buttonHeight).toBeGreaterThanOrEqual(32);
-          expect(metrics.buttonHeight).toBeLessThanOrEqual(34);
+          // Browser geometry can round CSS dimensions a few millionths below their size.
+          const buttonHeightRoundingTolerancePx = 0.01;
+          expect(metrics.buttonHeight).toBeGreaterThanOrEqual(32 - buttonHeightRoundingTolerancePx);
+          expect(metrics.buttonHeight).toBeLessThanOrEqual(34 + buttonHeightRoundingTolerancePx);
           expect(metrics.authorGap).toBeGreaterThanOrEqual(0);
           expect(metrics.authorGap).toBeLessThanOrEqual(4);
           expect(metrics.sameLine).toBe(true);
