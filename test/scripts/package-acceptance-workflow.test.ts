@@ -10780,6 +10780,25 @@ describe("package artifact reuse", () => {
     expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
 
+  it("installs Muse before the selected native L-N live suite", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const install = workflowStep(job, "Install Muse CLI for native live tests");
+    expect(install.if).toBe(
+      "steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-extensions-l-n'",
+    );
+    expect(install.shell).toBe("bash");
+    expect(install.run).toContain("https://dev.meta.ai/install.sh");
+    expect(install.run).toContain('bash "$RUNNER_TEMP/muse-install.sh"');
+    expect(install.run).toContain('export MUSE_INSTALL_DIR="$RUNNER_TEMP/muse/bin"');
+    expect(install.run).toContain("export MUSE_NO_MODIFY_PATH=1");
+    expect(install.run).toContain('export PATH="$MUSE_INSTALL_DIR:$PATH"');
+    expect(install.run).toContain('echo "$MUSE_INSTALL_DIR" >> "$GITHUB_PATH"');
+    expect(install.run).toContain("muse --version");
+    const names = job.steps?.map((step) => step.name) ?? [];
+    expect(names.indexOf(install.name)).toBeGreaterThan(names.indexOf("Setup Node environment"));
+    expect(names.indexOf(install.name)).toBeLessThan(names.indexOf("Run ${{ matrix.label }}"));
+  });
+
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
     const nativeLiveJob = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");

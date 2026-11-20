@@ -4726,6 +4726,19 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Install Muse CLI for native live tests
+        if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-extensions-l-n'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export MUSE_INSTALL_DIR="$RUNNER_TEMP/muse/bin"
+          export MUSE_NO_MODIFY_PATH=1
+          curl -fsSL https://dev.meta.ai/install.sh -o "$RUNNER_TEMP/muse-install.sh"
+          bash "$RUNNER_TEMP/muse-install.sh"
+          export PATH="$MUSE_INSTALL_DIR:$PATH"
+          echo "$MUSE_INSTALL_DIR" >> "$GITHUB_PATH"
+          muse --version
+
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
