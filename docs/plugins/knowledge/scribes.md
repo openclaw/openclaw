@@ -125,9 +125,9 @@ bot token for channels the bot is in, and the user token only for channels
 found through it when that option is on. A direct message is read with the
 token whose listing returned it. Archived channels are skipped. Each channel is
 one source in Knowledge, keyed `slack:<team>/<channel>`, with retained snapshot manifests, so later runs
-reconcile edited messages instead of saving them twice. A message missing from
-a later read is never treated as deleted unless that read covered the whole
-interval.
+reconcile edited messages instead of saving them twice. Every snapshot
+is recorded as partial, because Slack reads can't prove that every thread reply
+was seen, so a message missing from a later read is never treated as deleted.
 
 Each run re-reads the last 3 days of a channel, so edits within that window
 are reconciled; older edits are not. Slack doesn't resurface an old thread when

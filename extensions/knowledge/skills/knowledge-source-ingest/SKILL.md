@@ -59,7 +59,7 @@ Save each Slack `read` result as JSON, then:
     node scripts/slack-read-normalize.mjs --team T0123 --channel C0456 \
       --input history-1.json --input thread-1.json --output messages.jsonl
     node scripts/source-manifest.mjs snapshot --provider slack \
-      --source-key slack:T0123/C0456 ...
+      --source-key slack:T0123/C0456 --completeness partial ...
 
 Do not include credentials, archive paths, or raw private content in Knowledge page prose. No scheduler, connector daemon, or plugin-owned ingestion job is created; the skill and scripts support an authorized agent-run workflow.
 

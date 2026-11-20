@@ -85,13 +85,12 @@ direct messages and group DMs are included.
 7. **Snapshot and plan.** Follow steps 1, 3 and 4 of the procedure: find the
    canonical source page and prior snapshots by `slack:<team>/<channel>`, run
    `scripts/source-manifest.mjs snapshot` over the normalized JSONL for the
-   interval read, and `plan` it against overlapping prior manifests. Mark a
-   snapshot `complete` only when every history page was read to
-   `hasMore: false` for the declared interval and every checkpointed thread was
-   read in this run; otherwise `partial`. Thread replies under roots without a
-   checkpoint line are never covered. Never
-   treat a missing message as deleted unless the current snapshot is complete;
-   `read` cannot see deleted messages, so absence is weak evidence even then.
+   interval read (`--completeness partial`), and `plan` it against
+   overlapping prior manifests. Learn from Slack snapshots are always
+   `partial`: thread reads start at different points than the history read,
+   and replies under roots without a checkpoint line are never read, so Slack
+   reads can't prove a message is gone. A missing message is never treated as
+   deleted.
 8. **Ingest.** Run step 5 of the procedure: ingest the substantive
    discussions (decisions, commitments, plans, project news, introductions)
    through `knowledge-ingest`, with `knowledge-entities` for the people,
