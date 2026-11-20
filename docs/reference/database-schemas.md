@@ -224,6 +224,8 @@ On Linux, transcript and shared-state SQLite readers sample `/proc/thread-self/i
 and completion. An operation that incurs at least 64 MiB of kernel-accounted
 storage reads emits one `heavy SQLite reader operation` warning through the
 existing logger, including `operation`, `readBytes`, `elapsedMs`, and worker IDs.
+`workerScript` names the bundled script, and Linux `nativeThreadId`, when available,
+matches the task under `/proc/<pid>/task/`; Node's `threadId` is a separate identity.
 The context retains the last transaction's existing session/row diagnostics,
 the outer `readerOperation`, and the agent ID for transcript workers. Nested
 owners share the outer measurement rather than counting the bytes twice.
