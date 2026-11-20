@@ -76,8 +76,9 @@ function contentText(value: unknown): string {
     .join("\n");
 }
 
-function catalogSkills(instructions: string): CatalogSkill[] {
-  const catalog = [...instructions.matchAll(/<available_skills>([\s\S]*?)<\/available_skills>/gu)]
+function catalogSkills(instructions: string, blocks: "all" | "newest" = "all"): CatalogSkill[] {
+  const matches = [...instructions.matchAll(/<available_skills>([\s\S]*?)<\/available_skills>/gu)];
+  const catalog = (blocks === "newest" ? matches.slice(-1) : matches)
     .map((match) => match[1])
     .join("\n");
   return [...catalog.matchAll(/^- ("(?:\\.|[^"\\])*")/gmu)].map((match) => ({
@@ -403,13 +404,14 @@ export async function startSkillLibraryWireProvider() {
       const [, marker, skillName] = match;
       const observation = observations.get(marker!) ?? { catalogs: [] };
       observations.set(marker!, observation);
+      // A pinned session sends a later catalog as a "System prompt update" on a user message.
       const instructions = [
         body.instructions ?? "",
         ...input
-          .filter((item) => item.role === "system" || item.role === "developer")
+          .filter((item) => ["system", "developer", "user"].includes(String(item.role)))
           .map((item) => contentText(item.content)),
       ].join("\n");
-      const catalog = catalogSkills(instructions);
+      const catalog = catalogSkills(instructions, "newest");
       observation.catalogs.push(catalog);
       if (!skillName) {
         reply(response, `CATALOG-OBSERVED:${marker}`);
