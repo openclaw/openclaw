@@ -388,6 +388,10 @@ export const validateSessionsFilesPreviewParams = createProtocolValidator(
   S.SessionsFilesPreviewParamsSchema,
   Checks.isSessionsFilesPreviewParams,
 );
+export const validateSessionsFilesStatParams = createProtocolValidator(
+  S.SessionsFilesStatParamsSchema,
+  Checks.isSessionsFilesStatParams,
+);
 export const validateSessionsFilesPreviewReleaseParams = createProtocolValidator(
   S.SessionsFilesPreviewReleaseParamsSchema,
   Checks.isSessionsFilesPreviewReleaseParams,

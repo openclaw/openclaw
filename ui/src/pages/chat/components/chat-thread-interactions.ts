@@ -40,6 +40,7 @@ import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.t
 import type { createAsyncQuestionPresentation } from "./chat-async-question.ts";
 import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
+import type { FileLinkStat } from "./chat-file-link-availability.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import { getMessageActionElements } from "./chat-message-action-elements.ts";
 import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
@@ -209,6 +210,8 @@ export type ChatThreadProps = Omit<
     onOpenSidebar?: (content: SidebarContent) => void;
     onOpenWorkspaceFile?: (target: MarkdownFileLinkTarget) => void;
     onOpenManagedArtifact?: (href: string) => boolean;
+    /** Checks which transcript file links the Gateway can open; others render as text. */
+    statWorkspaceFileLinks?: FileLinkStat | null;
     onOpenSessionLink?: (target: SessionLinkTarget) => void;
     onNavigate?: (routeId: "cron", options: { search: string }) => void;
     onHistoryIntent?: (event: Event) => void;

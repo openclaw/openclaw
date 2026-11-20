@@ -9,6 +9,7 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
+  SessionWorkspaceStatResult,
 } from "../../api/types.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "./session-key.ts";
 import { buildSessionRequestParams } from "./session-requests.ts";
@@ -77,6 +78,18 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     requestCurrent<SessionWorkspaceGetResult>("sessions.files.get", {
       sessionKey: key,
       path,
+      ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
+      ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
+    });
+
+  const statFiles = (
+    key: string,
+    paths: string[],
+    options: { agentId?: string | null; messageEntryId?: string } = {},
+  ) =>
+    requestCurrent<SessionWorkspaceStatResult>("sessions.files.stat", {
+      sessionKey: key,
+      paths,
       ...(options.messageEntryId ? { messageEntryId: options.messageEntryId } : {}),
       ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
     });
@@ -185,6 +198,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     listFiles,
     rewind,
     setFile,
+    statFiles,
     async subscribeMessages(
       key: string,
       options: GatewaySessionMessageSubscriptionOptions = {},

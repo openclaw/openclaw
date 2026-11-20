@@ -45,6 +45,7 @@ import { retainLinkFaviconCache } from "../link-favicon-cache.ts";
 import { splitChatConstruction, yieldChatTask } from "../yield-chat-task.ts";
 import { ChatConversationLoading } from "./chat-conversation-loading.tsx";
 import { ChatConversationMobile } from "./chat-conversation-presentation.ts";
+import { observeFileLinkAvailability } from "./chat-file-link-availability.ts";
 import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { watchChatSearchHighlight } from "./chat-search-highlight.ts";
@@ -319,6 +320,13 @@ function ChatThreadContent(
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
+  const fileLinkAvailabilityRef = elementRef<HTMLElement>((element) =>
+    observeFileLinkAvailability(
+      element,
+      (request) => input.props.statWorkspaceFileLinks?.(request) ?? Promise.resolve(null),
+      () => input.props.sessionKey,
+    ),
+  );
   // The supplement takes the header only once the transcript has no earlier page,
   // so its controls never stack under the history boundary.
   const headerContent = (
@@ -423,6 +431,7 @@ function ChatThreadContent(
           }),
           markdownRef,
           prefetchRef,
+          fileLinkAvailabilityRef,
           elementRef(input.props.onScrollPortRef),
         ]}
         class={[

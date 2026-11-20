@@ -1233,6 +1233,20 @@
   font-size: inherit;
 }
 
+/* The Gateway reported that it cannot open this path, such as a file on another
+   host or one that no longer exists. Keep the glyph and hover path so the reference
+   stays readable and copyable, but drop every link affordance. */
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-unavailable],
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-unavailable] > code {
+  color: inherit;
+  cursor: auto;
+  text-decoration: none;
+}
+
+:is(.chat-text, .sidebar-markdown) a.markdown-file-link[data-file-unavailable]::before {
+  opacity: 0.55;
+}
+
 .chat-text :where(pre) {
   background: var(--inline-code-bg, var(--bg-muted));
   border: 1px solid var(--chat-outline);

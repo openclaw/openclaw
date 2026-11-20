@@ -232,6 +232,54 @@ it.each<[string, Partial<InternalSessionEntry>?, OpenClawConfig?]>([
   },
 );
 
+it("stats only the references a preview would open", async () => {
+  const outsidePath = outsideFile("outside\n");
+  fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "src/readme.md"), "# Read me\n");
+  fs.mkdirSync(path.join(workspaceRoot, "a"), { recursive: true });
+  fs.mkdirSync(path.join(workspaceRoot, "b"), { recursive: true });
+  fs.writeFileSync(path.join(workspaceRoot, "a/twin.ts"), "");
+  fs.writeFileSync(path.join(workspaceRoot, "b/twin.ts"), "");
+  const fixture = prepareHostFileRead({ permissionMode: "full" });
+  const paths = [
+    "readme.md",
+    "twin.ts",
+    "src/readme.md",
+    "./src/readme.md",
+    outsidePath,
+    `${outsidePath}.missing`,
+    "src/absent.md",
+    "src",
+    "src/readme.md",
+  ];
+
+  const full = await fixture.files.ok("stat", { paths });
+  expect(full).toEqual({
+    sessionKey,
+    files: [
+      { path: "readme.md", status: "file" },
+      { path: "twin.ts", status: "missing" },
+      { path: "src/readme.md", status: "file" },
+      { path: "./src/readme.md", status: "file" },
+      { path: outsidePath, status: "file" },
+      { path: `${outsidePath}.missing`, status: "missing" },
+      { path: "src/absent.md", status: "missing" },
+      { path: "src", status: "missing" },
+    ],
+  });
+  for (const file of full.files.filter((entry) => entry.path.includes("/"))) {
+    const preview = await fixture.files.request("get", file.path);
+    expect(preview[0]?.ok).toBe(file.status === "file");
+  }
+
+  fixture.entry.permissionMode = "read-only";
+  const contained = await fixture.files.ok("stat", { paths: [outsidePath, "src/readme.md"] });
+  expect(contained.files).toEqual([
+    { path: outsidePath, status: "missing" },
+    { path: "src/readme.md", status: "file" },
+  ]);
+});
+
 it("canonicalizes host previews and lists outside touched-file metadata without edit tokens", async () => {
   const outsidePath = outsideFile("outside\n");
   const aliasPath = path.join(path.dirname(outsidePath), "alias.txt");

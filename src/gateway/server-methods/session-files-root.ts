@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionFileWorkspaceChangedError } from "../session-mutation-authorization-error.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
@@ -17,7 +18,7 @@ import { sessionFileWorkspaceMatches } from "./session-file-read-authority.js";
 import { prepareSessionFileReadPath } from "./session-file-read.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { loadSessionTouchedFiles } from "./session-touched-files.js";
-import type { GatewayRequestContext } from "./types.js";
+import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { resolveFileRoot, type LoadedSessionFiles } from "./workspace-files.js";
 
 async function loadSessionFileRoot(loaded: GatewaySessionEntryRead, messageEntryId?: string) {
@@ -197,4 +198,22 @@ export async function loadSessionFiles(
       return a.path.localeCompare(b.path);
     }),
   };
+}
+
+export function requireSessionFilesAgentId(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+  respond: RespondFn;
+}): string | undefined {
+  const requestedAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.sessionKey,
+    params.agentId,
+  );
+  if (!requestedAgent.ok) {
+    params.respond(false, undefined, requestedAgent.error);
+    return undefined;
+  }
+  return requestedAgent.agentId;
 }

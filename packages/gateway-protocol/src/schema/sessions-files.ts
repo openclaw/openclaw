@@ -4,6 +4,8 @@ import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../canvas-limits.js";
 import {
   SESSIONS_FILES_ASSETS_MAX_REFS,
   SESSIONS_FILES_ASSET_REF_MAX_CHARS,
+  SESSIONS_FILES_STAT_MAX_PATHS,
+  SESSIONS_FILES_STAT_PATH_MAX_CHARS,
 } from "../session-limits.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
@@ -99,6 +101,34 @@ export const SessionsFilesGetResultSchema = closedObject({
   source: Type.Optional(SessionFileSourceSchema),
   root: Type.Optional(NonEmptyString),
   file: SessionFileEntrySchema,
+});
+
+const sessionFileStatPathSchema = Type.String({
+  minLength: 1,
+  maxLength: SESSIONS_FILES_STAT_PATH_MAX_CHARS,
+});
+
+/** Checks which transcript file references `sessions.files.get` would open, without reading them. */
+export const SessionsFilesStatParamsSchema = closedObject({
+  sessionKey: NonEmptyString,
+  agentId: Type.Optional(NonEmptyString),
+  messageEntryId: Type.Optional(NonEmptyString),
+  paths: Type.Array(sessionFileStatPathSchema, {
+    minItems: 1,
+    maxItems: SESSIONS_FILES_STAT_MAX_PATHS,
+  }),
+});
+
+/** `unknown` means the Gateway cannot answer without reading the file; clients keep the link. */
+export const SessionsFilesStatResultSchema = closedObject({
+  sessionKey: NonEmptyString,
+  files: Type.Array(
+    closedObject({
+      path: sessionFileStatPathSchema,
+      status: stringLiteralUnion(["file", "missing", "unknown"]),
+    }),
+    { maxItems: SESSIONS_FILES_STAT_MAX_PATHS },
+  ),
 });
 
 /** Original bytes use a connection-bound HTTP grant, independent of preview limits. */
@@ -206,6 +236,8 @@ export type SessionsFilesGetParams = Static<typeof SessionsFilesGetParamsSchema>
 export type SessionsFilesDownloadParams = Static<typeof SessionsFilesDownloadParamsSchema>;
 export type SessionsFilesDownloadResult = Static<typeof SessionsFilesDownloadResultSchema>;
 export type SessionsFilesGetResult = Static<typeof SessionsFilesGetResultSchema>;
+export type SessionsFilesStatParams = Static<typeof SessionsFilesStatParamsSchema>;
+export type SessionsFilesStatResult = Static<typeof SessionsFilesStatResultSchema>;
 export type SessionsFilesAssetsParams = Static<typeof SessionsFilesAssetsParamsSchema>;
 export type SessionsFilesAssetsResult = Static<typeof SessionsFilesAssetsResultSchema>;
 export type SessionsFilesPreviewParams = Static<typeof SessionsFilesPreviewParamsSchema>;

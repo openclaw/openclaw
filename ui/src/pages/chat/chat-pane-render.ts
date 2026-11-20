@@ -56,6 +56,7 @@ import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.t
 import type { ChatProps } from "./chat-view.tsx";
 import {
   openSessionWorkspaceFile,
+  statSessionWorkspaceFileLinks,
   openSessionWorkspaceManagedArtifact,
 } from "./components/chat-session-workspace.ts";
 import { chatFailureRunId, hasAbortableSessionRun, hasDirectSessionRun } from "./run-lifecycle.ts";
@@ -576,6 +577,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       onOpenSessionDiff: sessionWorkspace.onOpenDiff,
       githubPublication: this.publication.binding?.view(),
       onOpenWorkspaceFile: (target) => void openSessionWorkspaceFile(state, target),
+      statWorkspaceFileLinks: (request) => statSessionWorkspaceFileLinks(state, request),
       onFindWorkspaceFile: state.connected && !catalog ? onFindWorkspaceFile : undefined,
       onOpenManagedArtifact: (href) => openSessionWorkspaceManagedArtifact(state, href),
       onOpenSessionLink: (target) => navigateMarkdownSession(this.context, target),

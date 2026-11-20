@@ -11,11 +11,13 @@ import { patchSettings } from "../../../app/settings.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { showToast } from "../../../lib/toast.ts";
+import type { FileLinkStatRequest } from "./chat-file-link-availability.ts";
 import { isManagedOutgoingMediaSource } from "./chat-message-attachment-availability.ts";
 import type { WorkspaceFileSearchTarget } from "./chat-message-media-actions.ts";
 import { resolveSessionWorkspaceDiff } from "./chat-session-workspace-diff.ts";
@@ -196,6 +198,26 @@ export function openSessionWorkspaceFile(
     disposition,
     messageEntryId: source?.messageEntryId ?? target.messageEntryId,
     relativeTo: document,
+  });
+}
+
+/** Asks the Gateway which transcript file links `openSessionWorkspaceFile` would open. */
+export function statSessionWorkspaceFileLinks(
+  state: SessionWorkspaceHost,
+  request: FileLinkStatRequest,
+) {
+  if (isGatewayMethodAdvertised(state, "sessions.files.stat") !== true) {
+    return Promise.resolve(null);
+  }
+  const workspace = getSessionWorkspace(state);
+  // Matches openFile's owner resolution for a link without a containing document.
+  const sessionKey = request.sessionKey ?? workspace.sessionKey;
+  const agentId = request.sessionKey
+    ? parseAgentSessionKey(request.sessionKey)?.agentId
+    : workspace.agentId;
+  return state.sessions.statFiles(sessionKey, request.paths, {
+    agentId,
+    messageEntryId: request.messageEntryId,
   });
 }
 
