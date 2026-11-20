@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -107,7 +108,7 @@ describe.skipIf(process.platform === "win32")("database port Doctor contract pre
   it.each([
     { status: "healthy", source: "module.exports = {};" },
     { status: "unavailable", source: 'throw new Error("fixture contract load failed");' },
-  ])("handles an undeclared plugin with a $status contract", async ({ status, source }) => {
+  ])("handles the $status Doctor contract of an undeclared plugin", async ({ status, source }) => {
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
@@ -121,9 +122,21 @@ describe.skipIf(process.platform === "win32")("database port Doctor contract pre
         await state.writeText(`${root}/doctor-contract-api.cjs`, source);
         await state.writeConfig({ database: { engine: "sqlite", postgres } });
 
+        const runPort = async (options: DatabasePortOptions) => {
+          const cache = createPluginCache();
+          try {
+            return await withPluginCache(cache, () => doctorDatabasePort(options));
+          } finally {
+            // Captured plugin code must retire before the fixture removes its state directory.
+            const { failures } = await retirePluginCache(cache, undefined, {
+              waitForSettlement: true,
+            });
+            expect(failures).toEqual([]);
+          }
+        };
         if (status === "healthy") {
           await expect(
-            doctorDatabasePort({ family: "state", to: "postgres", dryRun: true }),
+            runPort({ family: "state", to: "postgres", dryRun: true }),
           ).resolves.toMatchObject({ phase: "preflight", stores: [] });
           return;
         }
@@ -133,7 +146,7 @@ describe.skipIf(process.platform === "win32")("database port Doctor contract pre
         const database = state.statePath("state", "openclaw.sqlite");
         const before = await fs.readFile(database);
         const configBefore = await fs.readFile(state.configPath);
-        const port = doctorDatabasePort({ family: "state", to: "postgres" });
+        const port = runPort({ family: "state", to: "postgres" });
         await expect(port).rejects.toBeInstanceOf(DatabasePortError);
         await expect(port).rejects.toThrow(
           /plugin "port-fixture": .*fixture contract load failed.*Fix or remove each named plugin.*retry/s,
