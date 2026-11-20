@@ -651,7 +651,7 @@ export function bootstrapApplication(
           if (pendingNavigation) {
             history[pendingNavigation.mode](pendingNavigation.location);
           }
-          await startApplicationRouter(router, history, basePath, context);
+          await startApplicationRouter(router, history, basePath, context, applicationLocation);
           return stopRouter;
         });
       }

@@ -11,12 +11,13 @@ import {
   templateRouteSource,
   type TemplateDetailRead,
 } from "./detail-read.ts";
+import { prepareConnectingDocument } from "./document-detail.ts";
 import { templateDraftTargetFromSearch } from "./draft-navigation.ts";
 
 export type TemplatesRouteData = {
   location: RouteLocation;
   basePath: string;
-  initialDetail?: TemplateDetailRead;
+  takeInitialDetail?: () => TemplateDetailRead | undefined;
 };
 
 export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRouteData>(
@@ -36,25 +37,33 @@ export const page = defineSolidPage<"templates", ApplicationContext, TemplatesRo
     // Returning to a release needs a fresh access check, not a cached loader receipt.
     gcTime: 0,
     loader: async (context, options) => {
+      const location = restoreBridgedRouteLocation(options.location, INTERNAL_TEMPLATES_PATH_PARAM);
+      const data: TemplatesRouteData = { location, basePath: context.basePath };
+      const foreground = () =>
+        options.cause === "navigation" && options.shouldRun() && !options.signal.aborted;
+      const source =
+        foreground() && !templateDraftTargetFromSearch(location.search)
+          ? templateRouteSource(location, context.basePath)
+          : null;
+      const releaseDocument = source
+        ? prepareConnectingDocument(context, options, data, source)
+        : undefined;
       if (isTemplatesAvailable(context.runtimeConfig.state) === null) {
         await context.runtimeConfig.ensureDisplayLoaded();
       }
       if (isTemplatesAvailable(context.runtimeConfig.state) === false) {
         return notFound();
       }
-      const location = restoreBridgedRouteLocation(options.location, INTERNAL_TEMPLATES_PATH_PARAM);
-      const data: TemplatesRouteData = { location, basePath: context.basePath };
-      // Start the admitted foreground read alongside the lazy renderer, never on a hover or draft link.
-      if (
-        options.cause === "navigation" &&
-        options.shouldRun() &&
-        !options.signal.aborted &&
-        isTemplatesAvailable(context.runtimeConfig.state) === true &&
-        !templateDraftTargetFromSearch(location.search)
+      if (releaseDocument) {
+        releaseDocument();
+      } else if (
+        source &&
+        foreground() &&
+        isTemplatesAvailable(context.runtimeConfig.state) === true
       ) {
-        const source = templateRouteSource(location, context.basePath);
-        if (source) {
-          data.initialDetail = beginTemplateDetailRead(context.gateway, source);
+        const read = beginTemplateDetailRead(context.gateway, source);
+        if (read) {
+          data.takeInitialDetail = () => read;
         }
       }
       return data;

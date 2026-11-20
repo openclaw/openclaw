@@ -29,6 +29,12 @@ export type TemplateDetailRead = {
 // goes back to the Gateway for its current access disposition (including pinned releases).
 const pending = new WeakMap<Gateway, TemplateDetailRead>();
 
+export function retireTemplateDetailRead(read: TemplateDetailRead) {
+  if (pending.get(read.gateway) === read) {
+    pending.delete(read.gateway);
+  }
+}
+
 export function beginTemplateDetailRead(
   gateway: Gateway,
   source: Source,
@@ -64,11 +70,7 @@ export function beginTemplateDetailRead(
     result: readTemplateDetail(client, source),
   };
   pending.set(gateway, read);
-  const done = () => {
-    if (pending.get(gateway) === read) {
-      pending.delete(gateway);
-    }
-  };
+  const done = () => retireTemplateDetailRead(read);
   // Abandoned navigations observe failures without swallowing them for the view.
   void read.result.then(done, done);
   return read;

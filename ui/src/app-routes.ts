@@ -68,6 +68,7 @@ import { page as sessionsPage } from "./pages/sessions/route.ts";
 import { page as skillWorkshopPage } from "./pages/skill-workshop/route.ts";
 import { pages as skillsPages } from "./pages/skills/route.ts";
 import { page as systemsPage } from "./pages/systems/route.ts";
+import { startTemplateDocument } from "./pages/templates/document-detail.ts";
 import { page as clawsPage } from "./pages/templates/route.ts";
 import { page as terminalPage } from "./pages/terminal/route.tsx";
 import { page as usagePage } from "./pages/usage/route.tsx";
@@ -252,6 +253,7 @@ export async function startApplicationRouter(
   history: RouterHistory,
   basePath: string,
   context: ApplicationContext,
+  documentLocation?: RouteLocation,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();
@@ -488,9 +490,31 @@ export async function startApplicationRouter(
       };
     },
   };
-  await tolerateRouteNotFound(router.start(applicationHistory, basePath, context));
+  const start = () => router.start(applicationHistory, basePath, context);
+  const directTemplate =
+    initialDynamicRoute?.[0] === "templates" &&
+    (!documentLocation || sameRouteLocation(documentLocation, location));
+  const started = directTemplate
+    ? startTemplateDocument(
+        context,
+        location,
+        () => sameRouteLocation(history.location(), location),
+        start,
+      )
+    : start();
+  // Startup can finish after stop() or a replacement navigation. A matching URL
+  // alone cannot authorize the bridge to restart a retired document loader.
+  const initialMatch = directTemplate
+    ? router.getState().pendingMatches[0]?.abortController
+    : undefined;
+  await tolerateRouteNotFound(started);
   if (
     initialDynamicRoute &&
+    (!directTemplate ||
+      (initialMatch &&
+        router.getState().matches[0]?.abortController === initialMatch &&
+        !initialMatch.signal.aborted &&
+        router.getState().pendingMatches.length === 0)) &&
     !context.lifecycleAbortSignal?.aborted &&
     sameRouteLocation(history.location(), location)
   ) {

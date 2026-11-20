@@ -121,11 +121,11 @@ class TemplatesCatalogModel {
         this.cancelDetailRead = () => resolve(this.detail);
         const data = this.props.routeData;
         const read = beginTemplateDetailRead(this.context.gateway, source, {
-          prepared: data?.initialDetail,
+          prepared: data?.takeInitialDetail?.(),
           fresh: !initial,
         });
         if (data) {
-          data.initialDetail = undefined;
+          data.takeInitialDetail = undefined;
         }
         if (!read) {
           reject(new UserFacingError(t("templatesCatalog.unavailable")));

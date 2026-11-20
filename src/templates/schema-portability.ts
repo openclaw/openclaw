@@ -4,17 +4,14 @@ import {
   isRenderableAvatarImageDataUrl,
 } from "../shared/avatar-limits.js";
 import { isSupportedLocalAvatarExtension } from "../shared/avatar-policy.js";
+import { isExactSemVer } from "./exact-version.js";
 
-const EXACT_VERSION_PATTERN =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+export { isExactSemVer };
+
 const PACKAGE_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const WINDOWS_INVALID_PATH_CHARS = /[<>:"|?*]/;
 const WINDOWS_RESERVED_PATH_SEGMENT = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 const BASE64_PAYLOAD_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
-export function isExactSemVer(value: string): boolean {
-  return EXACT_VERSION_PATTERN.test(value);
-}
 
 export function isCanonicalClawHubPackageName(value: string): boolean {
   return PACKAGE_NAME_PATTERN.test(value);
