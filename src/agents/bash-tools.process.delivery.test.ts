@@ -347,7 +347,14 @@ test("composes lazy process actions through generated declarations and JavaScrip
   const result = await run(`${composition}\nreturn await consume();`);
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",
-    value: [{ id: "typed-process", lines: 2, output: "FIRST\nSECOND" }],
+    value: [
+      {
+        id: "typed-process",
+        lines: 2,
+        output:
+          "FIRST\nSECOND\n\nAUTOMATIC COMPLETION WAKE IS UNAVAILABLE AFTER ENDING THIS TURN. IF THE TASK NEEDS THIS RESULT, USE POLL WITH A TIMEOUT TO COLLECT IT BEFORE ENDING THE TURN, UNLESS ANOTHER CONTINUATION IS ALREADY ARRANGED.",
+      },
+    ],
   });
 });
 
