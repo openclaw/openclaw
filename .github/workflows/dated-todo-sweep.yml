@@ -52,7 +52,7 @@ jobs:
         run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
       - name: Run Codex dated TODO sweep
-        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
         env:
           DATED_TODO_SWEEP_DATE: ${{ steps.sweep-date.outputs.date }}
         with:

@@ -88,7 +88,7 @@ jobs:
           echo "guidance-main-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Run release-validation campaign skill
-        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
+        uses: openai/codex-action@306c6a196a99dcc6582530c396a19d2672d5e9ec # v1.14
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VALIDATION_ARTIFACT_PATH: .artifacts/release-validation-campaign.json
