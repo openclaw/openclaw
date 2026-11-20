@@ -9,10 +9,6 @@ import { findExistingAncestor, root as fsRoot, FsSafeError } from "../infra/fs-s
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { clampNumber } from "../utils.js";
 import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "./agent-tool-source-execution-guard.js";
-import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
   getToolParamsRecord,
@@ -686,7 +682,6 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 type HostWorkspaceMutationOptions = {
   containmentRoot?: string;
   workspaceOnly?: boolean;
-  abortSignal?: AbortSignal;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
 };
 
@@ -917,7 +912,6 @@ function createHostMutationOperations(
   root: string,
   options?: {
     workspaceOnly?: boolean;
-    abortSignal?: AbortSignal;
     memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   },
 ) {
@@ -929,14 +923,9 @@ function createHostMutationOperations(
       {
         mkdir: async (dir: string) => {
           const resolved = resolveHostPath(dir);
-          const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            assertCurrent();
-            await fs.mkdir(resolved, { recursive: true });
-          });
+          await fs.mkdir(resolved, { recursive: true });
         },
-        writeFile: (filePath: string, content: string) =>
-          writeHostFile(filePath, content, options?.abortSignal),
+        writeFile: (filePath: string, content: string) => writeHostFile(filePath, content),
         readFile: async (absolutePath: string) => fs.readFile(resolveHostPath(absolutePath)),
         statFile: (absolutePath: string) => statHostFile(resolveHostPath(absolutePath)),
         access: async (absolutePath: string) => {
@@ -963,7 +952,6 @@ function createHostMutationOperations(
   return withMemoryWriteProvenance(
     {
       mkdir: async (dir: string) => {
-        const assertCurrent = captureAgentToolSourceExecutionGuard(options?.abortSignal);
         const selectedRoot = await resolveHostRootAsync(root, dir);
         const relative = toRelativeWorkspacePath(selectedRoot, dir, { allowRoot: true });
         // mkdir receives the file's parent, including directory links to the root itself.
@@ -976,11 +964,7 @@ function createHostMutationOperations(
         if (ancestor && ancestor !== resolved.rootCanonicalPath) {
           const ancestorRoot = await fsRoot(ancestor);
           // mkdir requires a relative path; the prefix preserves literal tilde names.
-          await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-            await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`, {
-              assertBeforeMutation: assertCurrent,
-            });
-          });
+          await ancestorRoot.mkdir(`./${path.relative(ancestor, resolved.rootCanonicalPath)}`);
         }
         const rootHandle = await getRoot(selectedRoot);
         const canonicalRelative = toRelativeWorkspacePath(
@@ -991,20 +975,17 @@ function createHostMutationOperations(
         const mutationOptions = {
           mutationSymlinks: "reject" as const,
           assertBeforeMutation: () => {
-            assertCurrent();
             toRelativeWorkspacePath(resolveHostWorkspaceRoot(root, dir), dir, { allowRoot: true });
           },
         };
-        await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          if (canonicalRelative) {
-            await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
-          } else {
-            await rootHandle.ensureRoot(mutationOptions);
-          }
-        });
+        if (canonicalRelative) {
+          await rootHandle.mkdir(`./${canonicalRelative}`, mutationOptions);
+        } else {
+          await rootHandle.ensureRoot(mutationOptions);
+        }
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
+        writeHostWorkspaceFile(root, getRoot, absolutePath, content),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
         const selectedRoot = await resolveHostRootAsync(root, absolutePath);

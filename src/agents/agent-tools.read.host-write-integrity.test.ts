@@ -3,15 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
-import {
-  afterFileRead,
-  asSource,
-  hostFileTools,
-  interceptOpen,
-} from "./agent-tools.mutation.test-support.js";
+import { hostFileTools, interceptOpen } from "./agent-tools.mutation.test-support.js";
 import type { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
-import { createApplyPatchTool } from "./apply-patch.js";
 
 describe("unrestricted host tool writes", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -40,69 +33,6 @@ describe("unrestricted host tool writes", () => {
       ? tools.write(filePath, content)
       : tools.edit(filePath, "original", "replacement");
   }
-
-  it.each([
-    { kind: "write", authority: "aborted" },
-    { kind: "edit", authority: "revoked" },
-    { kind: "apply_patch", authority: "budget-revoked" },
-    { kind: "apply_patch", authority: "active" },
-  ] as const)(
-    "checks $authority authority for $kind after asynchronous file preparation",
-    async ({ kind, authority }) => {
-      const filePath = await createFile("original content\n");
-      const generation = new AbortController();
-      const originalClaim = {};
-      let currentClaim: object | undefined = originalClaim;
-      let budgetCurrent = true;
-      const budget = createAgentToolExecutionBudget({
-        signal: generation.signal,
-        abort: (error) => generation.abort(error),
-        isCurrent: () => budgetCurrent,
-      });
-      let prepared = false;
-      afterFileRead(filePath, () => {
-        prepared = true;
-        if (authority === "aborted") {
-          generation.abort(new Error("Permission change"));
-        } else if (authority === "revoked") {
-          currentClaim = undefined;
-        } else if (authority === "budget-revoked") {
-          budgetCurrent = false;
-        }
-      });
-      const options = { workspaceOnly: false, abortSignal: generation.signal };
-      const execute = () => {
-        if (kind === "apply_patch") {
-          return createApplyPatchTool({ cwd: tempDir, ...options }).execute("permission-write", {
-            input: `*** Begin Patch\n*** Update File: ${filePath}\n@@\n-original content\n+replacement content\n*** End Patch`,
-          });
-        }
-        return mutate(kind, filePath, "replacement content\n", options);
-      };
-
-      const pending = budget.run(() =>
-        asSource("source-file-authority", () => currentClaim === originalClaim, execute),
-      );
-      if (authority === "active") {
-        await expect(pending).resolves.toBeDefined();
-      } else {
-        await expect(pending).rejects.toThrow(
-          authority === "aborted"
-            ? "Permission change"
-            : authority === "budget-revoked"
-              ? "execution scope is no longer active"
-              : "authority is no longer active",
-        );
-      }
-      expect(prepared).toBe(true);
-      expect(generation.signal.aborted).toBe(
-        authority === "aborted" || authority === "budget-revoked",
-      );
-      expect(await fs.readFile(filePath, "utf8")).toBe(
-        authority === "active" ? "replacement content\n" : "original content\n",
-      );
-    },
-  );
 
   function failWrites(filePath: string, originalByteLength: number, prefix = false) {
     interceptOpen(filePath, (handle) => {

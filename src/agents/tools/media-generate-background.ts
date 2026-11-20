@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../config/config.js";
-import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import type { CapabilityProviderFor } from "../../plugins/capability-provider-runtime.js";
@@ -8,10 +7,6 @@ import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
-import {
-  captureAgentToolSourceExecutionGuard,
-  runWithAgentToolSourceExecutionScope,
-} from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { updateMediaGenerationOperation } from "../media-generation-activity.js";
@@ -215,7 +210,6 @@ export async function prepareMediaGenerationTask<
   >;
 }) {
   const { cfg, generationLabel, model, options, signal } = params;
-  const assertSourceCurrent = captureAgentToolSourceExecutionGuard(signal);
   const explicitModelConfig = hasToolModelConfig(
     coerceToolModelConfig(cfg.agents?.defaults?.mediaModels?.[generationLabel]),
   );
@@ -283,10 +277,7 @@ export async function prepareMediaGenerationTask<
     requesterRunSessionKey: options?.requesterRunSessionKey,
     generationLabel: params.generationLabel,
     resources,
-    assertAdmissionCurrent: composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
-      assertSource();
-      resources?.assertOpen();
-    }),
+    assertAdmissionCurrent: resources ? () => resources.assertOpen() : undefined,
   });
 }
 
@@ -322,6 +313,7 @@ export async function runMediaGenerationTask(params: {
         resourcesTransferred = true;
         let executed: Awaited<ReturnType<typeof params.run>>;
         try {
+          assertAdmissionCurrent();
           executed = await resources.run(() => params.run(handle));
         } catch (error) {
           return rethrowAfterMediaCleanup(
@@ -333,7 +325,10 @@ export async function runMediaGenerationTask(params: {
         await resources.release();
         return executed;
       }
-    : params.run;
+    : async (handle: MediaGenerationTaskHandle | null) => {
+        assertAdmissionCurrent();
+        return params.run(handle);
+      };
   try {
     const { generationLabel, lifecycle } = params;
     const toolName = `${generationLabel}_generate`;
@@ -354,23 +349,12 @@ export async function runMediaGenerationTask(params: {
       lifecycle.failTaskRun({ handle });
       throw new ToolInputError("Review-before-delivery requires a durable chat session.");
     }
-    const admitExecution = async <T>(start: () => T): Promise<{ execution: T }> => {
-      try {
-        return await runWithAgentToolSourceExecutionScope(assertAdmissionCurrent, async () => {
-          assertAdmissionCurrent();
-          return { execution: start() };
-        });
-      } catch (error) {
-        lifecycle.failTaskRun({ handle });
-        throw error;
-      }
-    };
 
     if (handle?.detach) {
       updateMediaGenerationOperation(handle.runId, {
         requestKey: params.requestKey,
       });
-      await admitExecution(() =>
+      try {
         scheduleMediaGenerationTaskCompletion({
           lifecycle,
           handle,
@@ -379,8 +363,11 @@ export async function runMediaGenerationTask(params: {
           toolName: `${title} generation`,
           onWakeFailure: params.onFailure,
           run: () => run(handle),
-        }),
-      );
+        });
+      } catch (error) {
+        lifecycle.failTaskRun({ handle });
+        throw error;
+      }
       resourcesTransferred = true;
       return {
         content: [
@@ -411,8 +398,7 @@ export async function runMediaGenerationTask(params: {
     }
 
     try {
-      const { execution } = await admitExecution(() => run(handle));
-      const executed = await execution;
+      const executed = await run(handle);
       lifecycle.completeTaskRun({
         handle,
         count: executed.count,

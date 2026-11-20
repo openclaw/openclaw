@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
-import { asSource, seedFile } from "./agent-tools.mutation.test-support.js";
+import { seedFile } from "./agent-tools.mutation.test-support.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -68,29 +68,6 @@ describe.each(["host", "sandbox"] as const)("%s append", (backend) => {
     await write(tool, content);
     expect(await read()).toBe(saved + content);
   });
-});
-
-it("rechecks source authority after provenance work before appending", async () => {
-  await seed("seed\n");
-  const originalClaim = {};
-  let claim = originalClaim;
-  const wrapped = wrap({
-    memoryWriteProvenance: {
-      classifies: async () => true,
-      write: async ({ commit }) => {
-        claim = {};
-        await commit();
-      },
-      clearAfterDelete: async () => {},
-    },
-  });
-  const pending = asSource(
-    "memory-flush-authority",
-    () => claim === originalClaim,
-    () => write(wrapped, "hello"),
-  );
-  await expect(pending).rejects.toThrow("authority is no longer active");
-  expect(await read()).toBe("seed\n");
 });
 
 it("returns the write schema only for the allowed file", async () => {

@@ -18,12 +18,10 @@ import {
 import { inspectors } from "../infra/gateway-suspend-coordinator.test-support.js";
 import { sanitizeHostExecEnv, setGatewayCredentialEnvKeys } from "../infra/host-env-security.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
-import { createAgentToolExecutionBudget } from "./agent-tool-source-execution-guard.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import {
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
-  listRunningSessions,
   markBackgrounded,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -157,36 +155,6 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
 }
 
 describe("sandbox exec preparation failures", () => {
-  it("rechecks the admitting repair authority after deferred supervisor work", async () => {
-    let current = true;
-    const controller = new AbortController();
-    const budget = createAgentToolExecutionBudget({
-      signal: controller.signal,
-      abort: (error) => controller.abort(error),
-      isCurrent: () => current,
-    });
-    const childEffect = vi.fn();
-    supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
-      await Promise.resolve();
-      current = false;
-      input.assertCurrent?.();
-      childEffect();
-      return runtimeManagedRun(input);
-    });
-    await expect(
-      budget.run(() =>
-        runTestExecProcess({
-          beforeSpawn: async () => {
-            await Promise.resolve();
-            return undefined;
-          },
-        }),
-      ),
-    ).rejects.toThrow("execution scope is no longer active");
-    expect(childEffect).not.toHaveBeenCalled();
-    expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-  });
-
   it("does not start PTY fallback after cancellation during final admission", async () => {
     const controller = new AbortController();
     let checks = 0;
@@ -213,58 +181,6 @@ describe("sandbox exec preparation failures", () => {
     expect(supervisorMock.spawn).toHaveBeenCalledOnce();
     expect(checks).toBe(2);
   });
-
-  it.each([
-    { mode: "PTY fallback", loseAt: 2 },
-    { mode: "PTY construction", loseAt: -1 },
-  ])(
-    "checks revoked source authority before $mode admission without polling",
-    async ({ loseAt }) => {
-      const originalClaim = {};
-      let currentClaim: object | undefined = originalClaim;
-      let checks = 0;
-      const generation = new AbortController();
-      const warnings: string[] = [];
-      supervisorMock.spawn.mockImplementation(async (input: SpawnInput) => {
-        // The real supervisor preserves this callback across queued construction.
-        await Promise.resolve();
-        if (loseAt === -1) {
-          currentClaim = undefined;
-        }
-        input.assertCurrent?.();
-        if (input.mode === "pty") {
-          throw new Error("PTY unavailable");
-        }
-        return runtimeManagedRun(input);
-      });
-      const pending = withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:source-exec-authority",
-          receiptAuthority: () => currentClaim === originalClaim,
-        },
-        () =>
-          runTestExecProcess({
-            usePty: true,
-            warnings,
-            startupSignal: generation.signal,
-            beforeSpawn: async () => {
-              if (++checks === loseAt) {
-                currentClaim = undefined;
-              }
-              return undefined;
-            },
-          }),
-      );
-      await expect(pending).rejects.toThrow("authority is no longer active");
-      expect(generation.signal.aborted).toBe(false);
-      expect(supervisorMock.spawn).toHaveBeenCalledOnce();
-      expect(warnings).toEqual(
-        loseAt !== -1 ? [expect.stringContaining("retrying without PTY")] : [],
-      );
-      expect(listRunningSessions()).toHaveLength(0);
-    },
-  );
 
   it.each(["current", "reassigned"] as const)(
     "rechecks a prepared settle tool at final process spawn when its batch is %s",

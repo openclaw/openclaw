@@ -16,7 +16,6 @@ import {
   mergeAcceptedSessionSpawnsForRun,
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
-import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -192,7 +191,6 @@ export function createSessionsSpawnTool(
           signal && opts?.signal
             ? AbortSignal.any([signal, opts.signal])
             : (signal ?? opts?.signal);
-        const assertSourceExecution = captureAgentToolSourceExecutionGuard(executionSignal);
         // A retained owner bit is rechecked per call: a requester who stopped being an
         // owner spawns as a non-owner, and one revoked mid-call refuses the commit.
         let senderIsOwner = opts?.senderIsOwner;
@@ -206,7 +204,6 @@ export function createSessionsSpawnTool(
           }
         }
         const assertSourceActive = composeSessionSourceAssertion([
-          assertSourceExecution,
           operatorSelection.assertCurrent,
           assertSenderOwner,
         ]);
