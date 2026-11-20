@@ -303,6 +303,9 @@ export async function runTelegramDispatchTurn(turn: Turn) {
                 return await turn.progressCompositor.getVisibleAuthoredText();
               }
               await stream.flush();
+              if (turn.activeAnswerDraftIsToolProgressOnly) {
+                return undefined;
+              }
               return stream.lastDeliveredText() || undefined;
             },
             commentaryPayloadsEnabled: turn.progressPreambleEnabled,

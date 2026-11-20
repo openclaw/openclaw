@@ -137,6 +137,24 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     },
   );
 
+  it.each([undefined, "Checking the report with delegated reviewers."])(
+    "offers only authored text from a partial draft after tool progress (%s)",
+    async (authoredText) => {
+      await dispatch(
+        async (options) => {
+          await startTool(options, "delegate");
+          expect(texts()).not.toHaveLength(0);
+          if (authoredText) {
+            await options?.onPartialReply?.({ text: authoredText });
+          }
+          expect(await options?.getVisibleProgressText?.()).toBe(authoredText);
+        },
+        { mode: "partial", finalReply: { text: "Finished checking the report." } },
+      );
+      expect(texts()).toEqual(["Finished checking the report."]);
+    },
+  );
+
   it("reports an owner rejection silently without claiming a network failure", async () => {
     await dispatch(async () => {}, {
       mode: "off",
