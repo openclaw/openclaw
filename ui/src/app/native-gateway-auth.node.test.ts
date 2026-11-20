@@ -519,11 +519,16 @@ describe("native authenticated Control UI", () => {
     expect(wsInstances).toHaveLength(10);
     // The refused document keeps its recovery path, once per five minutes.
     expect(gateway!.snapshot.phase).toBe("connecting");
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Page activation replaces the client: one immediate attempt, not a new fast budget.
+    gateway!.connect();
+    await expectRejected(currentSocket("activated", signedAt + 10));
+    expect(wsInstances).toHaveLength(11);
     await vi.advanceTimersByTimeAsync(5 * 60_000 - 1);
-    expect(wsInstances).toHaveLength(10);
+    expect(wsInstances).toHaveLength(11);
     authorizeWith("recovered-native-grant");
     await vi.advanceTimersByTimeAsync(1);
-    const recovered = currentSocket("recovered", signedAt + 10);
+    const recovered = currentSocket("recovered", signedAt + 11);
     const frame = await recovered.connect.promise;
     recovered.hello(frame.id);
     await vi.advanceTimersByTimeAsync(0);
@@ -533,9 +538,9 @@ describe("native authenticated Control UI", () => {
     bridge.postMessage.mockImplementation(refuse("Native grant unavailable"));
     recovered.emitClose(1006, "");
     await vi.advanceTimersByTimeAsync(800);
-    await expectRejected(currentSocket("after-grant", signedAt + 11));
+    await expectRejected(currentSocket("after-grant", signedAt + 12));
     await vi.advanceTimersByTimeAsync(1_360);
-    expect(wsInstances).toHaveLength(13);
+    expect(wsInstances).toHaveLength(14);
   });
 
   it("preserves the shipped iOS nonpersistent identity handoff", async () => {
