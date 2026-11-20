@@ -60,6 +60,9 @@ export function isSubagentSessionFromEntry(
   entry: Pick<SessionEntry, "spawnDepth" | "spawnedBy" | "parentSessionKey"> | null | undefined,
   acpMeta?: unknown,
 ): boolean {
+  if (entry?.createdIndependently === true) {
+    return false;
+  }
   const spawnDepth = normalizeSpawnDepth(entry?.spawnDepth);
   return (
     (spawnDepth === undefined
