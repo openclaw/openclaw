@@ -61,9 +61,9 @@ distinguish category filters from categories with published entries. Discovery
 is read-only; the `plugins` tool searches plugins, not Templates.
 
 When asked to install a Template, select its published release in **Pages →
-Templates → Add**. The page requires **Settings → Labs → Templates**; public
-registry reads do not. Explain that prerequisite if disabled. Review workspace
-files, skills/plugins, MCP servers, and automations, and complete required
+Templates → Add**. If the Gateway operator has disabled Templates, you can still
+read the public registry, but cannot add a Template on that Gateway. Review
+workspace files, skills/plugins, MCP servers, and automations, and complete required
 trust/capability consent. Verify the new agent and report any remaining setup.
 
 For a reviewed local package, use `openclaw templates inspect <path>`, then

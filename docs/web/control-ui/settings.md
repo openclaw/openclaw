@@ -671,10 +671,12 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
-## Templates (Labs)
+<a id="templates-labs" />
 
-Enable **Settings → Labs → Templates** to browse official Template packages from
-ClawHub on the **Templates** page. Search the catalog, review the files and
+## Templates
+
+Open **Pages → Templates** to browse official and community Templates from
+ClawHub. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
 Opening a catalog entry keeps the selected published version in its detail link,
 so the files you review and the agent you add use the same release. A detail link
@@ -684,8 +686,8 @@ installed Template to update or remove. Delete the agent through normal agent
 controls; shared plugins and MCP servers remain installed. See
 [Templates](/cli/templates) for the package contract and local-source CLI commands.
 
-Turning the Labs switch off hides Template discovery and Add. Existing agents keep
-running.
+To disable discovery and new Add operations for a Gateway, set
+`gateway.controlUi.experimental.templates` to `false`. Existing agents keep running.
 
 ## Speech bubbles
 

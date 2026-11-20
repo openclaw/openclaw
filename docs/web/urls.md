@@ -586,7 +586,7 @@ no route-specific URL parameters.
 | Apps                | `/apps`                                        | -                         | -                                                                                 |
 | Portals             | `/portals`                                     | -                         | -                                                                                 |
 | Agents              | `/settings/agents`                             | -                         | `/settings/agents/<agentId>[/<panel>]`                                            |
-| Templates           | `/templates`                                   | -                         | `/templates/packages/<encoded-package>`; requires the Templates Labs toggle       |
+| Templates           | `/templates`                                   | -                         | `/templates/packages/<encoded-package>`                                           |
 | Channels            | `/settings/channels`                           | `/channels`               | Shared settings parameters below                                                  |
 | Connection          | `/settings/connection`                         | -                         | Shared settings parameters below                                                  |
 | Legacy General      | `/settings/general`                            | `/config`                 | Redirects to Appearance → Language                                                |
