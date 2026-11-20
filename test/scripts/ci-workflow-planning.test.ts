@@ -14008,6 +14008,8 @@ describe("ci workflow guards", () => {
       const normalEnv = {
         CI: "true",
         GITHUB_ACTIONS: "true",
+        // This policy matrix owns selection independently of the enclosing runtime job.
+        OPENCLAW_CI_TEST_RUNTIME: "",
         OPENCLAW_CI_TEST_RUNTIME_POLICY: policy,
         OPENCLAW_VITEST_INCLUDE_FILE: "",
         OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "",
