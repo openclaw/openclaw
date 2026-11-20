@@ -550,6 +550,14 @@ if (args[0] === 'run' && process.env.CHECK_WRITABLE_PREFIX === '1') {
   const mode = fs.statSync(mount.slice(0, -':/npm-global'.length)).mode & 0o007;
   if (mode !== 0o007) throw new Error('npm prefix is inaccessible to the container user: ' + mode);
 }
+if (args[0] === 'run' && process.env.CHECK_WRITABLE_OUTPUT === '1') {
+  const suffix = ':/app/.artifacts/qa-e2e/npm-telegram-live-output';
+  const mount = args.find(arg => arg.endsWith(suffix));
+  if (mount) {
+    const mode = fs.statSync(mount.slice(0, -suffix.length)).mode & 0o007;
+    if (mode !== 0o007) throw new Error('artifact output is inaccessible to the container user: ' + mode);
+  }
+}
 fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
 `,
   );
@@ -576,8 +584,8 @@ fs.appendFileSync(process.env.DOCKER_CALLS, JSON.stringify(args) + '\\n');
   return { root, candidate, result, runs };
 }
 
-it("makes the disposable npm prefix writable to the container user", () => {
-  const { result } = captureDocker({ CHECK_WRITABLE_PREFIX: "1" });
+it.each(["PREFIX", "OUTPUT"])("makes the mounted %s writable to the container user", (mount) => {
+  const { result } = captureDocker({ [`CHECK_WRITABLE_${mount}`]: "1" });
   expect(result.status, result.stderr).toBe(0);
 });
 
