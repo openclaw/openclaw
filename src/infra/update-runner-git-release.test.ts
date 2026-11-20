@@ -693,13 +693,18 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
         });
       };
       target.runtimeVerified = false;
+      // A newer commit at the same version: the fixture's `--version` answers 1.0.0.
+      await fs.writeFile(path.join(checkout, "next.txt"), "next");
+      await git(checkout, "add", ".");
+      await git(checkout, "commit", "-qm", "next");
+      target.revision = await git(checkout, "rev-parse", "HEAD");
       const result = await convert(legacy, {
         deferReleaseActivation,
         inspectGitTarget: revalidate,
         beforeGitMutation: revalidate,
       });
 
-      expect(result.status, JSON.stringify(result.steps)).toBe("ok");
+      expect(result.status, `${result.reason}: ${JSON.stringify(result.steps)}`).toBe("ok");
       expect(target.conversionTargets).toEqual([serving]);
       const served = await fs.realpath(gitReleaseSlot(prefix));
       expect(served.split(path.sep)).not.toContain("node_modules");
@@ -722,7 +727,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
   );
 
   it("leaves the legacy slot selected when conversion fails before activation", async () => {
-    const { dir, checkout, serving } = await checkoutWithTwoCommits();
+    const { dir, checkout, serving, pulled } = await checkoutWithTwoCommits();
     const prefix = path.join(dir, "state", "git-install");
     // Main builds since #199706 kept the link and its releases under lib/node_modules.
     const legacy = path.join(prefix, "lib", "node_modules", "openclaw");
@@ -740,6 +745,7 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     await fs.symlink(path.relative(path.dirname(legacy), legacyRelease), legacy);
 
     target.runtimeVerified = false;
+    target.revision = await pulled();
     target.targetFails = true;
     const result = await convert(legacy);
 
