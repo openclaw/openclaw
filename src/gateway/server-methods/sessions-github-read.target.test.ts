@@ -66,10 +66,19 @@ afterEach(() => vi.restoreAllMocks());
 async function registerWorktree(origin?: string, bare = false) {
   let root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");
-  await git(root, "config", "user.name", "Publication Fixture");
-  await git(root, "config", "user.email", "publication@example.invalid");
-  await git(root, "config", "commit.gpgsign", "false");
-  await git(root, "commit", "--allow-empty", "-m", "fixture");
+  await git(
+    root,
+    "-c",
+    "user.name=Publication Fixture",
+    "-c",
+    "user.email=publication@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "fixture",
+  );
   if (bare) {
     const repository = `${root}/bare.git`;
     const checkout = `${root}/checkout`;

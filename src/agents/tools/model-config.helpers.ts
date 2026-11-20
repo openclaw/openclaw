@@ -81,7 +81,6 @@ export function hasAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
@@ -328,7 +327,6 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
   resolveCodexMediaRoute?: () => { model: string } | undefined;
@@ -401,7 +399,6 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean | undefined;
@@ -425,7 +422,6 @@ export function buildToolModelConfigFromCandidates(params: {
         provider,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
         authStore: params.authStore,
       });
     if (!provider || !providerConfigured) {

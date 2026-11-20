@@ -35,7 +35,7 @@ import {
 import { sanitizeChatSendMessageInput } from "./chat-input-sanitize.js";
 import { errorShapeFromError } from "./error-shape.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
-import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
+import { isOperatorRoleEnforcedFor, operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import {
   captureGatewayOperatorRunAuthority,
@@ -180,15 +180,16 @@ async function prepareSessionPrincipalRunAccess(params: {
       // authenticated source for this session supplies it.
       scopes =
         recorded &&
-        (recorded.authority.openclawIdPrincipal?.kind === "member" ||
+        (operatorRoleSubject(profile).openclawIdMember ||
           recorded.authority.openclawIdPrincipal?.kind === "owner" ||
-          !isNamedOperatorRoleEnforcementEnabled(cfg))
+          !isOperatorRoleEnforcedFor(cfg, operatorRoleSubject(profile)))
           ? currentRecordedScopes(recorded.authority)
           : resolveOperatorRolePolicyForAssignment(
               params.profileId,
               profile.assignedRole,
               cfg,
               profile.githubLogin ?? null,
+              operatorRoleSubject(profile),
             )?.scopes;
     }
     if (scopes && preserveRecordedSource && recorded) {
@@ -219,7 +220,13 @@ async function prepareSessionPrincipalRunAccess(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
-        memberOnly: !preserveRecordedSource && isNamedOperatorRoleEnforcementEnabled(getConfig()),
+        memberOnly:
+          !preserveRecordedSource &&
+          isOperatorRoleEnforcedFor(
+            getConfig(),
+            operatorRoleSubject(identity.readCurrentProfile()),
+          ) &&
+          !operatorRoleSubject(identity.readCurrentProfile()).openclawIdMember,
         assertCurrent: () => params.assertCurrent?.(),
       });
     }

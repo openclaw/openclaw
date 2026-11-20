@@ -40,7 +40,7 @@ function collectCurrentImageAttachments(ctx: MsgContext): MediaAttachment[] {
   const hydrationSuppressedIndexes = new Set(
     (ctx.media ?? []).flatMap((fact, index) => (fact.hydrationSuppressed === true ? [index] : [])),
   );
-  return normalizeAttachments(ctx).filter(
+  return normalizeAttachments(ctx.media).filter(
     (attachment) =>
       !hydrationSuppressedIndexes.has(attachment.index) &&
       normalizeOptionalString(attachment.path) !== undefined &&

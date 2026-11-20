@@ -56,26 +56,26 @@ type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
 
-export async function recordRequiredCompletionFailure(
+export async function recordRequiredCompletionNotice(
   entry: SubagentRunRecord,
   reason: string,
   batch: readonly SubagentRunRecord[] = [entry],
+  kind: "failed" | "delayed" = "failed",
 ): Promise<void> {
   const wake = entry.requesterSettleWake;
   if (
     subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
-    !wake?.requesterYieldBatch
+    (kind === "delayed" || !wake?.requesterYieldBatch)
   ) {
     return;
   }
-  subagentRegistryLog.warn("Subagent completion delivery failed", {
+  subagentRegistryLog.warn(`Subagent completion delivery ${kind}`, {
     runId: entry.runId,
     requesterSessionKey: entry.requesterSessionKey,
     reason,
   });
   if (
     entry.expectsCompletionMessage !== true ||
-    (entry.completionTarget !== "parent" && !wake?.requesterYieldBatch) ||
     entry.execution.status !== "terminal" ||
     entry.pauseReason === "sessions_yield"
   ) {
@@ -96,7 +96,7 @@ export async function recordRequiredCompletionFailure(
           }:delivery-failure`,
         ))
       : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
-  // This records a failed obligation, without borrowing its retired execution authority.
+  // Report delivery state without borrowing its retired execution authority.
   // Address the current chat, including a compaction successor; deletion and Stop get no notice.
   const requester = {
     agentId: entry.requesterAgentId,
@@ -107,6 +107,7 @@ export async function recordRequiredCompletionFailure(
   if (!current?.sessionId || current.status === "killed") {
     return;
   }
+  const customType = kind === "delayed" ? "subagent-delivery-delayed" : "run-failed-before-reply";
   const result = await runWithoutOwnedSessionTranscriptWrites(() =>
     appendSessionTranscriptReport(
       {
@@ -116,18 +117,21 @@ export async function recordRequiredCompletionFailure(
       },
       {
         kind: "custom",
-        customTypes: ["run-failed-before-reply"],
+        customTypes: [customType],
         selectReport: (latest) =>
           isRecord(latest?.details) && latest.details.runId === runId
             ? undefined
             : {
-                customType: "run-failed-before-reply",
+                customType,
                 display: true,
                 excludeFromContext: true,
-                content: expectDefined(
-                  renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
-                  "child completion failure notice",
-                ),
+                content:
+                  kind === "delayed"
+                    ? "Automatic delivery of a child result timed out. The result is still saved and may still arrive automatically."
+                    : expectDefined(
+                        renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed"),
+                        "child completion failure notice",
+                      ),
                 details: { runId, childRunId: entry.runId, error: reason },
               },
       },
@@ -511,11 +515,13 @@ export async function blockSubagentCompletionDelivery(
       },
     },
   );
-  if (
-    result.applied &&
-    (params.suspendedReason === "permanent_failure" || params.disposition === "permanent_failure")
-  ) {
-    await recordRequiredCompletionFailure(params.subagent, params.reason, params.requesterBatch);
+  if (result.applied && (params.suspendedReason || params.disposition === "permanent_failure")) {
+    await recordRequiredCompletionNotice(
+      params.subagent,
+      params.reason,
+      params.requesterBatch,
+      params.suspendedReason === "expiry" ? "delayed" : "failed",
+    );
   }
   return result.applied === true;
 }
@@ -660,7 +666,7 @@ export async function mutateRequesterCompletionBatch(
     !params.operation.outcome.delivered
   ) {
     for (const entry of params.entries) {
-      await recordRequiredCompletionFailure(
+      await recordRequiredCompletionNotice(
         entry,
         params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
         params.entries,

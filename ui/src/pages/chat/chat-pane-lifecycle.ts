@@ -15,6 +15,7 @@ import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation-event.ts";
 import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
+import { isConversationConfigChange } from "../../lib/config-change.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -481,11 +482,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           }
         }
         if (state) {
-          if (event.event === "config.changed") {
+          if (isConversationConfigChange(event)) {
             this.invalidateSessionSharing(undefined);
             state.mediaPolicyEpoch = (state.mediaPolicyEpoch ?? 0) + 1;
           }
-          if (event.event === "config.changed" || event.event === "agent.identity.changed") {
+          if (isConversationConfigChange(event) || event.event === "agent.identity.changed") {
             chatAvatars.invalidateChatAvatarCache(state);
             void chatAvatars.refreshChatAvatar(state);
             void chatAvatars.refreshSenderAgentAvatars(state);

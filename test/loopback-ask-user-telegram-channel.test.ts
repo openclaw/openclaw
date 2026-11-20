@@ -10,7 +10,6 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../src/agents/cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "../src/agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../src/agents/cli-runner/prepare.js";
 import * as prepareDeps from "../src/agents/cli-runner/prepare.test-support.js";
 import { claimPendingAgentQuestionAnswerFromCaller } from "../src/agents/harness/gateway-question.js";
@@ -193,9 +192,8 @@ it("publishes the prompt through Bot API and completes after the answer", async 
             context.preparedBackend.env?.OPENCLAW_MCP_TOKEN,
             "prepared CLI grant",
           );
-          context.preparedBackend.mcpClientGrantCapture?.activate(
-            captureKey,
-            createCliRunCurrentAssertion(context.params),
+          context.preparedBackend.mcpClientGrantCapture?.activate(captureKey, () =>
+            context?.params.abortSignal?.throwIfAborted(),
           );
           expect(
             resolveMcpLoopbackClientGrant({
