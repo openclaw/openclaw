@@ -339,12 +339,11 @@ describe("resolveProviderHttpRequestConfig", () => {
       baseUrl: "https://api.openai.com/v1",
       allowPrivateNetwork: false,
     });
-    expect(Object.fromEntries(resolved.headers)).toMatchObject({
+    expect(Object.fromEntries(resolved.headers)).toEqual({
       authorization: "Bearer override",
       "x-default": "1",
       "user-agent": `openclaw/${VERSION}`,
       originator: "openclaw",
-      version: VERSION,
     });
   });
 
