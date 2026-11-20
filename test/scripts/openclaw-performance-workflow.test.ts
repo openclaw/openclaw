@@ -210,6 +210,23 @@ function runCandidateTrustClassification({
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("routes memory-cap dispatches to the delegated mock Gateway benchmark", () => {
+    const job = "gateway_concurrency";
+    const workflow = readWorkflow();
+    expect(workflow.jobs?.[job]?.if).toContain("inputs.mode == 'gateway-memory-caps'");
+    expect(workflow.jobs?.kova?.if).toContain("inputs.mode == 'kova'");
+    expect(findStep("Set up Gateway concurrency environment", job).with?.["semantic-checks"]).toBe(
+      "${{ inputs.mode == 'gateway-memory-caps' }}",
+    );
+    const caps = findStep("Run Gateway under 2 and 4 GiB caps", job);
+    expect(caps.if).toBe("${{ inputs.mode == 'gateway-memory-caps' }}");
+    expect(caps.run).toContain("for cap in 2 4");
+    expect(caps.run).toContain('--gateway-memory-gib "$cap"');
+    expect(findStep("Run live Gateway concurrency", job).if).toContain(
+      "inputs.mode == 'gateway-concurrency'",
+    );
+  });
+
   it("keeps Vitest pair benchmarking opt-in and exact-head bound", () => {
     const workflow = readWorkflow();
     const inputs = workflow.on?.workflow_dispatch?.inputs;
@@ -226,7 +243,7 @@ describe("OpenClaw performance workflow", () => {
       default: "kova",
       required: false,
       type: "choice",
-      options: ["kova", "vitest-pair", "gateway-concurrency"],
+      options: ["kova", "vitest-pair", "gateway-concurrency", "gateway-memory-caps"],
     });
     expect(inputs?.baseline_ref).toMatchObject({
       default: "",
@@ -894,7 +911,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(publisher?.needs).toEqual(["resolve_target", "kova", "source_performance"]);
     expect(publisher?.if).toBe(
-      "${{ always() && (github.event_name == 'schedule' || (inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency')) && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
+      "${{ always() && (github.event_name == 'schedule' || inputs.mode == 'kova') && needs.resolve_target.outputs.secret_eligible == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.publish_reports == true)) && needs.resolve_target.result == 'success' && needs.kova.result != 'cancelled' && needs.source_performance.result != 'cancelled' }}",
     );
     expect(evaluateWorkflowRunner(publisher?.["runs-on"])).toBe("ubuntu-24.04");
     expect(publisher?.permissions?.actions).toBe("read");
@@ -936,7 +953,7 @@ describe("OpenClaw performance workflow", () => {
 
     expect(guard?.needs).toEqual(["resolve_target", "kova", "publish"]);
     expect(guard?.if).toBe(
-      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode != 'vitest-pair' && inputs.mode != 'gateway-concurrency' && inputs.publish_reports != true }}",
+      "${{ always() && github.event_name == 'workflow_dispatch' && inputs.mode == 'kova' && inputs.publish_reports != true }}",
     );
     expect(guard?.permissions?.contents).toBe("read");
     expect(verify.env?.PUBLISH_RESULT).toBe("${{ needs.publish.result }}");

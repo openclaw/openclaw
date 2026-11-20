@@ -28,6 +28,11 @@ identities, host topology, kernel, and observed affinity with each campaign.
 
 ## Memory capacity
 
+Run **OpenClaw Performance** with mode `gateway-memory-caps` to exercise both
+limits against the same build and Linux runner. The hosted lane uses four
+connected clients, two active clients, and a mock provider. The workflow
+artifact contains a JSON result and log for each cap, including failed runs.
+
 Use `--gateway-memory-gib 2` and `--gateway-memory-gib 4` in separate runs on a
 delegated parent with the v2 memory controller enabled. The limit applies before
 the Gateway starts. Its descendants inherit the limit, and the controller,
