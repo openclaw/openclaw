@@ -30,6 +30,8 @@ jobs:
     name: Auto-fix common failures
     needs: validate
     if: ${{ needs.validate.result == 'failure' }}
+    outputs:
+      healed: ${{ steps.heal.outputs.healed }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -72,9 +74,9 @@ jobs:
   redeploy:
     name: Re-deploy to production
     needs: [validate, heal]
-    if: >
-      ${{ needs.validate.result == 'success' ||
-        (needs.heal.result == 'success' && needs.heal.outputs.healed == 'true') }}
+    if: >-
+      ${{ !cancelled() && (needs.validate.result == 'success' ||
+        (needs.heal.result == 'success' && needs.heal.outputs.healed == 'true')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
