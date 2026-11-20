@@ -334,84 +334,64 @@ it("tracks a missing requester inline", async () => {
   });
 });
 
-it.each([
-  ["lookup", "invocation"],
-  ["lookup", "cancellation"],
-  ["lookup", "generation"],
-  ["admission", "invocation"],
-  ["admission", "cancellation"],
-  ["admission", "generation"],
-] as const)("refuses provider work after %s %s revocation", async (phase, revocation) => {
-  await withOpenClawTestState({ prefix: "media-admission-" }, async (state) => {
-    await requester(state, sessionKey, sessionId, null);
-    const lookup = createEnteredGate();
-    const read = entryReader.withSessionEntryReadOnlyInWorker;
-    vi.spyOn(entryReader, "readSessionEntryReadOnlyInWorker").mockImplementation(
-      (scope, assertCurrent = () => {}) =>
-        read(scope, assertCurrent, async (result) => {
-          await lookup.wait();
-          if (!result.ok) {
-            throw result.error;
-          }
-          return result.value;
-        }),
-    );
-    let current = true;
-    const controller = new AbortController();
-    const revoke = () => {
-      if (revocation === "cancellation") {
-        controller.abort(new Error("request cancelled"));
-      } else if (revocation === "generation") {
-        rotateAgentEventLifecycleGeneration();
-      } else {
-        current = false;
-      }
-    };
-    if (phase === "admission") {
-      const create = imageGenerationTaskLifecycle.createTaskRun;
-      vi.spyOn(imageGenerationTaskLifecycle, "createTaskRun").mockImplementationOnce(
-        async (params) => {
-          const handle = await create(params);
-          revoke();
-          return handle;
-        },
+it.each(["invocation", "cancellation", "generation"] as const)(
+  "refuses provider work after lookup %s revocation",
+  async (revocation) => {
+    await withOpenClawTestState({ prefix: "media-admission-" }, async (state) => {
+      await requester(state, sessionKey, sessionId, null);
+      const lookup = createEnteredGate();
+      const read = entryReader.withSessionEntryReadOnlyInWorker;
+      vi.spyOn(entryReader, "readSessionEntryReadOnlyInWorker").mockImplementation(
+        (scope, assertCurrent = () => {}) =>
+          read(scope, assertCurrent, async (result) => {
+            await lookup.wait();
+            if (!result.ok) {
+              throw result.error;
+            }
+            return result.value;
+          }),
       );
-    }
-    const run = vi.fn();
-    const schedule = vi.fn();
-    const release = vi.fn(async () => {});
-    const pending = withGatewayToolCallerIdentity(
-      {
-        agentId: "main",
-        sessionKey,
-        operationalRunInstance: { runId: "run", instanceId: "instance" },
-        receiptAuthority: () => current,
-        approvalSignals: [controller.signal],
-      },
-      () =>
-        runTask({
-          scheduleBackgroundWork: schedule,
-          resources: { run: async (work) => work(), release },
-          run,
-        }),
-    ).catch((error: unknown) => error);
-    await lookup.entered;
-    if (phase === "lookup") {
+      let current = true;
+      const controller = new AbortController();
+      const revoke = () => {
+        if (revocation === "cancellation") {
+          controller.abort(new Error("request cancelled"));
+        } else if (revocation === "generation") {
+          rotateAgentEventLifecycleGeneration();
+        } else {
+          current = false;
+        }
+      };
+      const run = vi.fn();
+      const schedule = vi.fn();
+      const release = vi.fn(async () => {});
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey,
+          operationalRunInstance: { runId: "run", instanceId: "instance" },
+          receiptAuthority: () => current,
+          approvalSignals: [controller.signal],
+        },
+        () =>
+          runTask({
+            scheduleBackgroundWork: schedule,
+            resources: { run: async (work) => work(), release },
+            run,
+          }),
+      ).catch((error: unknown) => error);
+      await lookup.entered;
       revoke();
-    }
-    lookup.release();
-    expect(await pending).toBeInstanceOf(Error);
-    expect(run).not.toHaveBeenCalled();
-    expect(schedule).not.toHaveBeenCalled();
-    expect(release).toHaveBeenCalledOnce();
-    expect(listMediaGenerationOperations(sessionKey, "main")).toEqual(
-      phase === "admission" && revocation !== "generation"
-        ? [expect.objectContaining({ status: "failed" })]
-        : [],
-    );
-    expect(hasPending(sessionKey, "main")).toBe(false);
-  });
-});
+      lookup.release();
+      expect(await pending).toBeInstanceOf(Error);
+      expect(run).not.toHaveBeenCalled();
+      expect(schedule).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledOnce();
+      expect(listMediaGenerationOperations(sessionKey, "main")).toEqual([]);
+      expect(hasPending(sessionKey, "main")).toBe(false);
+    });
+  },
+);
 it.each([
   ["current", 3, 2],
   ["reset-before-staging", 0, undefined],

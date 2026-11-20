@@ -23,7 +23,10 @@ after any device safe-area inset, including in landscape. Swipes farther inside
 the content stay with that content, such as a 3D viewer’s orbit controls.
 A deliberate edge swipe opens the full drawer while your finger is still down,
 rather than holding a partly clipped sidebar over the conversation. Short drags
-and vertical scrolling leave navigation closed. Tap outside the drawer to close it.
+and vertical scrolling leave navigation closed. In the mobile browser, opening
+**Automations**, **Customize**, **Systems**, or **Workboard** from the rail or
+**Pages** keeps the drawer open so you can use that section's list. Tap outside
+the drawer to close it and see the page underneath.
 
 To work directly in a folder on a paired device, select that specific device,
 then choose **Existing folder on** _device_ in the workspace picker. Admins

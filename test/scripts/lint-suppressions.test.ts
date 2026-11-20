@@ -297,7 +297,6 @@ describe("production lint suppressions", () => {
         "src/agents/embedded-agent-runner/run/attempt-system-prompt-prepare.ts|unicorn/no-array-sort|2",
         // Stream wrappers preserve the original source iterator's rejection value.
         "src/agents/embedded-agent-runner/run/stream-wrapper.ts|typescript/prefer-promise-reject-errors|1",
-        "src/agents/embedded-agent-runner/session-prompt-state.ts|unicorn/no-array-sort|1",
         "src/agents/embedded-agent-runner/tool-name-allowlist.ts|unicorn/no-array-sort|1",
         "src/agents/harness-runtimes.ts|unicorn/no-array-sort|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|3",

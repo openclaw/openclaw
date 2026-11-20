@@ -8,7 +8,6 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE } from "../failover/error.js";
 import { runCliCleanup } from "./cleanup.js";
-import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError } from "./exit-error.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -98,8 +97,7 @@ export async function restartCliLiveSession(
   context: PreparedCliRunContext,
   signal = context.params.abortSignal,
 ): Promise<void> {
-  const assertActive = createCliRunCurrentAssertion(context.params, signal);
-  assertActive();
+  signal?.throwIfAborted();
   const key = buildCliLiveSessionKey(context);
   const record = liveSessions.get(key);
   const pendingCleanup = retiredSessionCleanup.get(key);
@@ -107,7 +105,7 @@ export async function restartCliLiveSession(
     context.params,
     "cli-live-session-close",
     async () => {
-      assertActive();
+      signal?.throwIfAborted();
       await context.preparedBackend.closeLiveSession?.("restart");
       await pendingCleanup;
     },
@@ -119,13 +117,13 @@ export async function restartCliLiveSession(
       "cli-live-session-restart",
       () => {
         // One-shot cleanup schedules this callback; fence the actual close.
-        assertActive();
+        signal?.throwIfAborted();
         return closeRecord(record, "restart");
       },
       "required",
     );
   }
-  assertActive();
+  signal?.throwIfAborted();
 }
 
 async function closeRecord(
@@ -366,9 +364,8 @@ export function createCliLiveSessionCapability(params: {
       },
       { code },
     );
-  const assertActive = createCliRunCurrentAssertion(params.context.params, params.abortSignal);
   const requireRegisteredRecord = (handle: CliBackendLiveSessionHandle) => {
-    assertActive();
+    params.abortSignal?.throwIfAborted();
     const record = liveSessions.get(ownerKey);
     if (handle.fingerprint !== fingerprint || record?.handle !== handle) {
       throw new Error("CLI live session no longer belongs to this admitted run.");
@@ -382,7 +379,7 @@ export function createCliLiveSessionCapability(params: {
   return Object.freeze({
     fingerprint,
     current: () => {
-      assertActive();
+      params.abortSignal?.throwIfAborted();
       const handle = liveSessions.get(ownerKey)?.handle;
       if (params.requiredGeneration && handle?.generation !== params.requiredGeneration) {
         throw requiredSessionError(
@@ -395,14 +392,14 @@ export function createCliLiveSessionCapability(params: {
       return handle;
     },
     restart: async () => {
-      assertActive();
+      params.abortSignal?.throwIfAborted();
       if (params.requiredGeneration) {
         throw requiredSessionError("cli_live_session_changed");
       }
       await restartCliLiveSession(params.context, params.abortSignal);
     },
     register: (handle) => {
-      assertActive();
+      params.abortSignal?.throwIfAborted();
       if (retiredSessionCleanup.has(ownerKey)) {
         throw new Error("Previous CLI live session cleanup has not settled.");
       }

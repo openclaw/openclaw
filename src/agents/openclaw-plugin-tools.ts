@@ -405,7 +405,6 @@ function* resolveOpenClawPluginToolSteps(
               provider: providerId,
               cfg: availabilityConfig,
               workspaceDir: pluginToolInputs.context.workspaceDir,
-              agentDir: params.options?.agentDir,
               authStore: authProfileStore,
               runtimeLookup: availabilityRuntimeLookup,
             })

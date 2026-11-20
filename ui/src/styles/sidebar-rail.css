@@ -1,3 +1,9 @@
+.shell--navigation-rail,
+.sidebar--rail {
+  --rail-radius: calc(18px * var(--openclaw-corner-radius-scale));
+  --rail-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
+}
+
 .sidebar.sidebar--rail {
   flex-direction: row;
   overflow: visible;
@@ -49,17 +55,15 @@
    the straight divider. The content side keeps its square edge and the shell's divider. */
 .sidebar--rail .sidebar-shell {
   --sidebar-pad-x: 8px;
-  --sidebar-panel-radius: calc(18px * var(--openclaw-corner-radius-scale));
   min-width: 0;
   overflow: hidden;
-  --sidebar-panel-hairline: color-mix(in srgb, var(--text) 4.5%, transparent);
   background: var(--sidebar-bg);
   /* The hairline is drawn inside the panel so it moves nothing; the page side has none. */
   box-shadow:
-    inset 1px 1px 0 var(--sidebar-panel-hairline),
-    inset 0 -1px 0 var(--sidebar-panel-hairline);
-  border-start-start-radius: var(--sidebar-panel-radius);
-  border-end-start-radius: var(--sidebar-panel-radius);
+    inset 1px 1px 0 var(--rail-hairline),
+    inset 0 -1px 0 var(--rail-hairline);
+  border-start-start-radius: var(--rail-radius);
+  border-end-start-radius: var(--rail-radius);
   corner-shape: superellipse(1.5);
 }
 
@@ -74,32 +78,56 @@
   border-inline-end-color: transparent;
 }
 
+/* When the panel is hidden, the workspace takes over its rounded edge beside the rail.
+   Paint only the seam, below sidebar peeks, without clipping the workspace itself. */
+:where(html:not(.openclaw-native-macos, .openclaw-native-desktop))
+  .shell--navigation-rail.shell--nav-collapsed:not(.shell--mobile-nav) {
+  .sidebar-rail {
+    border-inline-end-color: transparent;
+  }
+
+  &::after {
+    grid-area: 1 / 2 / -1;
+    justify-self: start;
+    z-index: 9;
+    inline-size: var(--rail-radius);
+    border-inline-start: 1px solid var(--rail-hairline);
+    border-start-start-radius: var(--rail-radius);
+    border-end-start-radius: var(--rail-radius);
+    corner-shape: superellipse(1.5);
+    box-shadow: 0 0 0 var(--rail-radius) var(--sidebar-rail-surface, var(--sidebar-bg));
+    clip-path: inset(0);
+    content: "";
+    pointer-events: none;
+  }
+}
+
 /* Preserve title space beside the rail, row insets, and the 44px menu target. */
 .shell--mobile-nav .sidebar--rail .sidebar-shell {
   --sidebar-pad-x: 6px;
 }
 
 .sidebar-rail {
-  --sidebar-rail-background: var(--sidebar-rail-surface, var(--sidebar-bg));
+  --rail-background: var(--sidebar-rail-surface, var(--sidebar-bg));
   /* Badge cutouts need the opaque result, not a second translucent layer. */
-  --sidebar-rail-hover-surface: color-mix(
+  --rail-hover-surface: color-mix(
     in srgb,
     var(--text) var(--surface-hover-amount),
-    var(--sidebar-rail-background)
+    var(--rail-background)
   );
   --sidebar-rail-selected-surface: color-mix(
     in srgb,
     var(--text) var(--surface-selected-amount),
-    var(--sidebar-rail-background)
+    var(--rail-background)
   );
-  --sidebar-rail-selected-hover-surface: color-mix(
+  --rail-selected-hover-surface: color-mix(
     in srgb,
     var(--text) var(--surface-selected-hover-amount),
-    var(--sidebar-rail-background)
+    var(--rail-background)
   );
-  --sidebar-rail-control-size: 36px;
-  --sidebar-rail-glyph-size: 19px;
-  --sidebar-rail-item-gap: 8px;
+  --rail-control-size: 36px;
+  --rail-glyph-size: 19px;
+  --rail-item-gap: 8px;
   flex: 0 0 var(--shell-nav-rail-width, 52px);
   min-width: 0;
   min-height: 0;
@@ -115,13 +143,13 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--sidebar-rail-item-gap);
+  gap: var(--rail-item-gap);
 }
 
 .sidebar-rail__pins {
   flex: 1 1 0;
   align-self: stretch;
-  min-height: var(--sidebar-rail-control-size);
+  min-height: var(--rail-control-size);
   padding: 2px;
   margin: -2px;
   overflow: auto;
@@ -158,11 +186,11 @@
 }
 
 .sidebar-rail__pin.sidebar-zone-entry--drop-before::before {
-  top: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
+  top: calc(var(--rail-item-gap) / -2 - 1px);
 }
 
 .sidebar-rail__pin.sidebar-zone-entry--drop-after::before {
-  bottom: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
+  bottom: calc(var(--rail-item-gap) / -2 - 1px);
 }
 
 .sidebar-rail__monogram {
@@ -187,15 +215,15 @@
 .sidebar-rail .sidebar-agent-card__main,
 .sidebar-rail .sidebar-workspace-header__main,
 .sidebar-rail .sidebar-identity-card {
-  --sidebar-rail-control-surface: var(--sidebar-rail-background);
+  --rail-control-surface: var(--rail-background);
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 var(--sidebar-rail-control-size);
-  width: var(--sidebar-rail-control-size);
-  min-width: var(--sidebar-rail-control-size);
-  height: var(--sidebar-rail-control-size);
-  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--rail-control-size);
+  width: var(--rail-control-size);
+  min-width: var(--rail-control-size);
+  height: var(--rail-control-size);
+  min-height: var(--rail-control-size);
   padding: 0;
   margin: 0;
   border: 0;
@@ -210,12 +238,12 @@
 
   &:not(:disabled, [aria-disabled="true"]) {
     &[aria-expanded="true"] {
-      --sidebar-rail-control-surface: color-mix(
+      --rail-control-surface: color-mix(
         in srgb,
-        var(--sidebar-rail-hover-surface) 60%,
-        var(--sidebar-rail-background)
+        var(--rail-hover-surface) 60%,
+        var(--rail-background)
       );
-      background: var(--sidebar-rail-control-surface);
+      background: var(--rail-control-surface);
       color: var(--text-strong);
     }
 
@@ -225,8 +253,8 @@
       &[aria-current="page"],
       &[aria-pressed="true"],
       &.nav-item--active {
-        --sidebar-rail-control-surface: var(--sidebar-rail-hover-surface);
-        background: var(--sidebar-rail-control-surface);
+        --rail-control-surface: var(--rail-hover-surface);
+        background: var(--rail-control-surface);
         color: var(--text-strong);
       }
     }
@@ -234,18 +262,18 @@
     &[aria-current="page"],
     &[aria-pressed="true"],
     &.nav-item--active {
-      --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+      --rail-control-surface: var(--sidebar-rail-selected-surface);
     }
 
     &[aria-current="page"]:hover,
     &[aria-pressed="true"]:hover,
     &.nav-item--active:hover {
-      --sidebar-rail-control-surface: var(--sidebar-rail-selected-hover-surface);
+      --rail-control-surface: var(--rail-selected-hover-surface);
     }
 
     &:active {
-      --sidebar-rail-control-surface: var(--panel-hover);
-      background: var(--sidebar-rail-control-surface);
+      --rail-control-surface: var(--panel-hover);
+      background: var(--rail-control-surface);
       color: var(--text-strong);
     }
   }
@@ -282,15 +310,15 @@
     .session-glyph__icon,
     .session-glyph__icon > *
   ) {
-  width: var(--sidebar-rail-glyph-size);
-  height: var(--sidebar-rail-glyph-size);
+  width: var(--rail-glyph-size);
+  height: var(--rail-glyph-size);
 }
 
 /* Include Home's wrapper so its inherited resting ink is not dimmed twice. */
 .sidebar-rail :is(.nav-item, .sidebar-footer-bar__home) .nav-item__icon {
-  width: var(--sidebar-rail-glyph-size);
-  height: var(--sidebar-rail-glyph-size);
-  flex: 0 0 var(--sidebar-rail-glyph-size);
+  width: var(--rail-glyph-size);
+  height: var(--rail-glyph-size);
+  flex: 0 0 var(--rail-glyph-size);
   opacity: 1;
   color: inherit;
 }
@@ -319,8 +347,8 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  width: var(--sidebar-rail-control-size);
-  gap: var(--sidebar-rail-item-gap);
+  width: var(--rail-control-size);
+  gap: var(--rail-item-gap);
   padding: 0;
   border: 0;
 }
@@ -332,14 +360,14 @@
   transform: none;
   display: flex;
   flex-direction: column;
-  gap: var(--sidebar-rail-item-gap);
+  gap: var(--rail-item-gap);
 }
 
 .sidebar-rail .sidebar-identity-anchor {
-  width: var(--sidebar-rail-control-size);
-  height: var(--sidebar-rail-control-size);
-  min-height: var(--sidebar-rail-control-size);
-  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--rail-control-size);
+  height: var(--rail-control-size);
+  min-height: var(--rail-control-size);
+  flex: 0 0 var(--rail-control-size);
 }
 
 .sidebar-rail :is(.sidebar-identity-card__avatar, .sidebar-identity-card .viewer-avatar--footer) {
@@ -354,7 +382,7 @@
 .sidebar-rail .sidebar-identity-card__status {
   width: 12px;
   height: 12px;
-  border-color: var(--sidebar-rail-control-surface);
+  border-color: var(--rail-control-surface);
 }
 
 .sidebar-rail .sidebar-issues-button__count {
@@ -368,7 +396,7 @@
   height: 8px;
   top: -2px;
   right: -2px;
-  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+  box-shadow: 0 0 0 2px var(--rail-control-surface);
 }
 
 .sidebar-rail .sidebar-agent-card__menu-unread {
@@ -377,7 +405,7 @@
   top: 3px;
   right: 3px;
   left: auto;
-  box-shadow: 0 0 0 2px var(--sidebar-rail-control-surface);
+  box-shadow: 0 0 0 2px var(--rail-control-surface);
 }
 
 .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
@@ -397,7 +425,7 @@
   padding: 1px;
   border-radius: var(--radius-sm);
   align-items: center;
-  background: var(--sidebar-rail-control-surface);
+  background: var(--rail-control-surface);
 }
 
 .sidebar-footer-bar__home .session-row-badge > i {
@@ -413,10 +441,10 @@
 .sidebar-rail__pin {
   display: flex;
   position: relative;
-  width: var(--sidebar-rail-control-size);
-  height: var(--sidebar-rail-control-size);
-  min-height: var(--sidebar-rail-control-size);
-  flex: 0 0 var(--sidebar-rail-control-size);
+  width: var(--rail-control-size);
+  height: var(--rail-control-size);
+  min-height: var(--rail-control-size);
+  flex: 0 0 var(--rail-control-size);
   -webkit-touch-callout: none;
   user-select: none;
 }
@@ -438,7 +466,7 @@
 
 /* Match the 44px session toolbar centerline without changing drawer or native clearance. */
 .shell:not(.shell--mobile-nav) .sidebar-rail {
-  padding-top: calc((44px - var(--sidebar-rail-control-size)) / 2);
+  padding-top: calc((44px - var(--rail-control-size)) / 2);
 }
 
 html.openclaw-native-macos,
@@ -477,7 +505,7 @@ html.openclaw-native-desktop[data-native-platform="macos"] {
 html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
-  padding-top: calc((var(--rail-header-height) - var(--sidebar-rail-control-size)) / 2);
+  padding-top: calc((var(--rail-header-height) - var(--rail-control-size)) / 2);
 }
 
 /* In Settings, non-Mac native history controls occupy the rail's usual top row. */
@@ -495,9 +523,9 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 /* One 40px step for every control; blocks add a fixed 8px beyond the step. */
 .shell--mobile-nav .sidebar-rail {
-  --sidebar-rail-control-size: 36px;
-  --sidebar-rail-item-gap: 4px;
-  --sidebar-rail-block-gap: 8px;
+  --rail-control-size: 36px;
+  --rail-item-gap: 4px;
+  --rail-block-gap: 8px;
   flex-basis: calc(48px + var(--shell-divider-size));
   align-items: flex-start;
   padding-block: 12px;
@@ -522,13 +550,13 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 .shell--mobile-nav .sidebar-rail__pins {
   align-self: flex-start;
-  width: calc(var(--sidebar-rail-control-size) + 4px);
+  width: calc(var(--rail-control-size) + 4px);
   min-height: 0;
-  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap) - 2px);
+  margin-block-start: calc(var(--rail-block-gap) - var(--rail-item-gap) - 2px);
 }
 
 .shell--mobile-nav .sidebar-rail__bottom {
-  margin-block-start: calc(var(--sidebar-rail-block-gap) - var(--sidebar-rail-item-gap));
+  margin-block-start: calc(var(--rail-block-gap) - var(--rail-item-gap));
 }
 
 .shell--mobile-nav .sidebar-rail .sidebar-footer-bar__home .session-glyph__ring {
@@ -537,7 +565,7 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
 
 @media (hover: none), (pointer: coarse) {
   .shell:not(.shell--mobile-nav) .sidebar-rail {
-    --sidebar-rail-control-size: 38px;
+    --rail-control-size: 38px;
     flex-basis: 52px;
   }
 }
@@ -594,10 +622,10 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 /* Keep identity and command access in the persistent rail. */
 .sidebar-rail .sidebar-agent-card--rail,
 .sidebar-rail .sidebar-workspace-header--rail {
-  flex: 0 0 var(--sidebar-rail-control-size);
-  width: var(--sidebar-rail-control-size);
-  height: var(--sidebar-rail-control-size);
-  min-height: var(--sidebar-rail-control-size);
+  flex: 0 0 var(--rail-control-size);
+  width: var(--rail-control-size);
+  height: var(--rail-control-size);
+  min-height: var(--rail-control-size);
   padding: 0;
 }
 

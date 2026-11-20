@@ -71,11 +71,10 @@ export function servingGitReleaseSlot(prefix: string): string {
 
 /** The release link's prefix when `entrypoint` starts through it, for the launcher. */
 export function resolveGitReleaseLauncherForEntrypoint(entrypoint: string): string | null {
-  const slot = path.dirname(path.dirname(path.resolve(entrypoint)));
-  const prefix = path.dirname(slot);
-  return gitReleaseSlot(prefix) === slot && readPackageReleaseSlotSync(slot)
-    ? path.join(prefix, GIT_RELEASE_LAUNCHER)
-    : null;
+  const packagePath = path.dirname(path.dirname(path.resolve(entrypoint)));
+  const slot =
+    path.basename(packagePath) === "openclaw" ? readPackageReleaseSlotSync(packagePath) : null;
+  return slot ? path.join(slot.prefix, GIT_RELEASE_LAUNCHER) : null;
 }
 
 /** The launcher's release entry, so service ownership reads the release it starts. */

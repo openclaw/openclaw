@@ -164,6 +164,10 @@ openclaw channels add --channel telegram --use-env
 
 See [CLI automation](/start/wizard-cli-automation) for additional non-interactive provider and Gateway options. Container deployments should also follow the [Docker headless bootstrap](/install/docker#headless-bootstrap) environment guidance.
 
+If non-interactive `channels add` cannot install a required channel plugin, it
+reports the installation problem, exits nonzero, and leaves channel configuration
+unchanged. Verify the install source or install the plugin manually before retrying.
+
 <Tip>
 `openclaw channels add telegram --help` or `openclaw channels add --channel telegram --help` shows only Telegram's setup flags. `openclaw channels add --help` shows only the shared command envelope.
 </Tip>

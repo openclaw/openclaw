@@ -9,9 +9,11 @@ import * as sessionMembers from "../config/sessions/session-sharing-store.native
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
@@ -188,16 +190,17 @@ test.each(
     (["sessions.create", "sessions.reset"] as const).map((method) => ({ defaultRole, method })),
   ),
 )(
-  "ID member $method keeps its agent ceiling with named-role default $defaultRole",
+  "ID member $method keeps its profile agent ceiling with named-role default $defaultRole",
   async ({ defaultRole, method }) => {
     const { storePath } = await createSessionStoreDir();
-    const profile = ensureProfileForEmail("linked-admin-session-creator@example.test");
-    setUserProfileRole(profile.id, "admin");
+    const profile = ensureProfileForEmail("linked-member-session-creator@example.test");
+    setUserProfileRole(profile.id, "member");
     const cfg: OpenClawConfig = {
       ...getRuntimeConfig(),
       session: { ...getRuntimeConfig().session, store: storePath },
       gateway: {
         ...getRuntimeConfig().gateway,
+        openclawId: { enabled: true },
         roles: {
           default: defaultRole,
           definitions: {
@@ -216,12 +219,17 @@ test.each(
       kind: "member",
       peerKey: `iroh:${"ab".repeat(32)}`,
       accountId: "linked-member",
-      role: "member",
+      role: "admin",
     };
+    linkOpenClawIdUserProfile(
+      { profileId: profile.id, accountId: principal.accountId, email: null },
+      {},
+    );
+    setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
     setOpenClawIdTunnelPrincipalLookup(() => principal);
     const localClient = {
       connect: gatewayConnect(["operator.read", "operator.write"]),
-      authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
+      authenticatedUserProfile: gatewayProfile(profile.id),
     };
     const memberClient = { ...localClient, internal: { openclawIdPrincipal: principal } };
     const context = { getRuntimeConfig: () => cfg };
@@ -249,8 +257,19 @@ test.each(
           context,
         },
       );
-      expect(local.ok, JSON.stringify(local.error)).toBe(true);
+      expect(local).toMatchObject({
+        ok: false,
+        error: { code: "FORBIDDEN", message: expect.stringContaining('agent "main"') },
+      });
+      expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
 
+      await writeSessionStore({
+        entries: {
+          [key]: sessionStoreEntry("existing-member-session", {
+            createdActor: { type: "human", source: "profile", id: profile.id },
+          }),
+        },
+      });
       const existing = await directSessionReq(method, { key }, { client: memberClient, context });
       expect(existing.ok, JSON.stringify(existing.error)).toBe(true);
 
@@ -270,6 +289,7 @@ test.each(
       ).toBeDefined();
     } finally {
       setOpenClawIdTunnelPrincipalLookup(undefined);
+      setOpenClawIdMemberAccountLookup(undefined);
     }
   },
 );

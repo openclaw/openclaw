@@ -653,9 +653,9 @@ it("keeps captured role facts when a supplied source callback mutates and restor
     expect(captured.authority.readCurrentRoleFacts?.().assignedRole).toBeNull();
   }));
 
-it("keeps admitted membership authority after a downgrade and refuses a fresh capture", async () => {
+it("uses the profile grant independently of membership role labels", async () => {
   await withOperator(
-    async ({ client, context }) => {
+    async ({ profile, client, context }) => {
       const cfg: OpenClawConfig = {
         gateway: {
           roles: {
@@ -670,6 +670,7 @@ it("keeps admitted membership authority after a downgrade and refuses a fresh ca
         ...cfg.gateway!.roles!.definitions,
         ...MEMBER_ROLE_PRESETS,
       };
+      setUserProfileRole(profile.id, "operator");
       setRuntimeConfigSnapshot(cfg);
       context.getRuntimeConfig = () => cfg;
       const admitted: OpenClawIdTunnelPrincipal = {
@@ -699,7 +700,9 @@ it("keeps admitted membership authority after a downgrade and refuses a fresh ca
           current = { ...admitted, role: "viewer" };
           expect(() => accepted.authority.assertCurrent()).not.toThrow();
           expect(resolveOperatorRolePolicy(retained, cfg)?.scopes).toContain("operator.write");
-          await expect(capture({ client, context })).rejects.toThrow(/authority|membership|role/i);
+          const fresh = await capture({ client, context });
+          fresh.authority.assertCurrent();
+          fresh.release();
         } finally {
           accepted.release();
         }
