@@ -436,9 +436,9 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             ownedAdapter?.dispose();
           }
         })
-        .then(async (outcome) => {
+        .then((outcome) => {
           if (hostExec) {
-            await releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
+            void releaseAgentExecCgroupScope(input.executionScopeKey ?? scopeKey);
           }
           return outcome;
         });

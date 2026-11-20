@@ -112,7 +112,7 @@ afterEach(async () => {
   }
 });
 
-it("reclaims the empty session cgroup before removing it after exec extinction", async () => {
+it("reclaims after exec extinction without blocking completion or shutdown", async ({ signal }) => {
   vi.useFakeTimers();
   await initializeGatewayExecCgroup("/state");
   const directory = getAgentExecCgroup("completed-session")!;
@@ -120,11 +120,16 @@ it("reclaims the empty session cgroup before removing it after exec extinction",
   fixture.files[`${directory}/cgroup.events`] = "populated 0\nfrozen 0\n";
   fixture.files[`${directory}/memory.current`] = "19219978649";
   const operations: string[] = [];
-  const write = fixture.write.getMockImplementation()!;
-  fixture.write.mockImplementation((file, value) => {
-    write(file, value);
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, value) => {
     if (file === `${directory}/memory.reclaim`) {
+      if (typeof value !== "string") {
+        throw new Error("Expected a byte count");
+      }
       operations.push(`reclaim ${value}`);
+      entered.resolve();
+      await release.promise;
       fixture.files[`${directory}/memory.current`] = "0";
     }
   });
@@ -144,10 +149,17 @@ it("reclaims the empty session cgroup before removing it after exec extinction",
   });
   expect(operations).toEqual([]);
   adapter.settle(0);
-  await run.wait();
-  await vi.runAllTimersAsync();
-  await run.waitForExtinction?.();
-  await supervisor.shutdown();
+  try {
+    await withinTest(entered.promise, signal);
+    await withinTest(
+      Promise.all([run.wait(), run.waitForExtinction?.(), supervisor.shutdown()]),
+      signal,
+    );
+    expect(operations).toEqual(["reclaim 19219978649"]);
+  } finally {
+    release.resolve();
+    await vi.runAllTimersAsync();
+  }
   expect(operations).toEqual(["reclaim 19219978649", "remove"]);
 });
 
