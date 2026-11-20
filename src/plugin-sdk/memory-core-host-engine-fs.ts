@@ -7,6 +7,7 @@ export {
   listMemoryFiles,
   matchesExtraMemoryPathEntry,
   normalizeExtraMemoryPathEntries,
+  shouldSkipConfiguredMemorySearchPath,
 } from "../../packages/memory-host-sdk/src/host/internal.js";
 export { classifyMemoryMultimodalPath } from "../../packages/memory-host-sdk/src/host/multimodal.js";
 export { readMemoryFile } from "../../packages/memory-host-sdk/src/host/read-file.js";

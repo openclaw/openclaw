@@ -35,7 +35,9 @@ type MemorySourceInspection = {
 /** Resolve exactly the entries eligible for indexing, including validated multimodal files. */
 export async function resolveMemorySourceFileEntries(params: {
   workspaceDir: string;
-  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
+  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal"> & {
+    excludePaths?: readonly string[];
+  };
   concurrency: number;
   onSkippedSymlinkRoot?: (root: string) => void;
   files?: MemoryWorkspaceFiles;
@@ -45,6 +47,7 @@ export async function resolveMemorySourceFileEntries(params: {
     params.settings.extraPaths,
     params.settings.multimodal,
     params.onSkippedSymlinkRoot,
+    params.settings.excludePaths,
   );
   return (
     await runWithConcurrency(
@@ -64,7 +67,9 @@ export async function resolveMemorySourceFileEntries(params: {
 export async function inspectMemorySourceState(params: {
   readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
   workspaceDir: string;
-  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
+  settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal"> & {
+    excludePaths?: readonly string[];
+  };
   concurrency: number;
   files?: MemoryWorkspaceFiles;
 }): Promise<MemorySourceInspection> {
