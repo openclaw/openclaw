@@ -247,21 +247,27 @@ if (trial && counts) {
     writeTrial({ ...trial, attempts: trial.attempts + 1 });
   }
 }
-// A supervisor on a live trial runs the fallback release; the trial's children run the target.
-// Supervisors built before this launcher start their child with process.argv[1], so it stays on
-// this launcher (the child is then counted and runs the target). The fallback still sees itself as
-// the main module through pm_exec_path, which its entry already accepts (src/infra/is-main.ts).
-const supervisorFallback =
-  supervisor && trial && linked(fs.readlinkSync(slot)) === linked(trial.target)
-    ? path.join(linked(trial.previous), "dist", "index.js")
+// The Windows task supervisor starts each Gateway child with process.argv[1] (older builds) or
+// the global above, so argv[1] stays on this launcher: every child is counted and selects a
+// pending release. On a live trial the supervisor itself runs the fallback release. Its entry
+// still sees itself as the main module through pm_exec_path (src/infra/is-main.ts).
+const supervisorEntry =
+  supervisor && gatewayRun
+    ? path.join(
+        trial && !trial.pending && linked(fs.readlinkSync(slot)) === linked(trial.target)
+          ? linked(trial.previous)
+          : slot,
+        "dist",
+        "index.js",
+      )
     : undefined;
-if (supervisorFallback) {
-  process.env.pm_exec_path = supervisorFallback;
+if (supervisorEntry) {
+  process.env.pm_exec_path = supervisorEntry;
   process.argv[1] = fileURLToPath(import.meta.url);
 } else {
   process.argv[1] = path.join(slot, "dist", gatewayRun ? "index.js" : "entry.js");
 }
-await import(pathToFileURL(supervisorFallback ?? process.argv[1]).href);
+await import(pathToFileURL(supervisorEntry ?? process.argv[1]).href);
 `;
 
 export async function writeGitReleaseLauncher(prefix: string): Promise<string> {

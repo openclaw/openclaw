@@ -139,43 +139,53 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       );
     });
 
-    it("rolls back a broken Windows trial from one task supervisor start", async () => {
-      const { prefix } = await setup();
-      // The previous release's supervisor, as shipped before the launcher global: it restarts a
-      // crashed child up to three times and starts each child with process.argv[1].
-      const supervisorSource = `
-        const { spawnSync } = require("node:child_process");
-        if (process.argv.includes("--task-supervisor")) {
-          for (let attempt = 0; attempt < 4; attempt++) {
-            const child = spawnSync(process.execPath, [process.argv[1], "gateway", "--task-supervisor-child=70000"], { encoding: "utf8" });
-            process.stdout.write(child.stdout);
-            process.stderr.write(child.stderr);
-            if (child.status === 0) break;
+    it.each([false, true])(
+      "rolls back a broken Windows trial from one task supervisor start (pending: %s)",
+      async (pending) => {
+        const { prefix } = await setup();
+        // The previous release's supervisor, as shipped before the launcher global: it restarts a
+        // crashed child up to three times and starts each child with process.argv[1].
+        const supervisorSource = `
+          const { spawnSync } = require("node:child_process");
+          if (process.argv.includes("--task-supervisor")) {
+            for (let attempt = 0; attempt < 4; attempt++) {
+              const child = spawnSync(process.execPath, [process.argv[1], "gateway", "--task-supervisor-child=70000"], { encoding: "utf8" });
+              process.stdout.write(child.stdout);
+              process.stderr.write(child.stderr);
+              if (child.status === 0) break;
+            }
+          } else {
+            console.log("old gateway");
           }
-        } else {
-          console.log("old gateway");
+        `;
+        const good = await release(prefix, "1.0.0", supervisorSource);
+        await publishGitRelease({ prefix, releaseRoot: good, trial: true });
+        // pending: a --no-restart update leaves the link on the previous release.
+        await publishGitRelease({
+          prefix,
+          releaseRoot: await release(prefix, "2.0.0", 'throw new Error("boot");\n'),
+          trial: true,
+          pending,
+        });
+
+        // Task Scheduler does not restart a task whose action exits with an error, so one start of
+        // the task supervisor must try the release and switch back by itself.
+        const supervisor = spawnSync(
+          process.execPath,
+          [path.join(prefix, "openclaw-launcher.mjs"), "gateway", "--task-supervisor"],
+          { encoding: "utf8" },
+        );
+
+        // A pending release is selected without the two-start fallback, so its children only fail.
+        expect(supervisor.stderr).toContain(
+          pending ? "boot" : "failed to start twice; switched back",
+        );
+        if (!pending) {
+          expect(supervisor.stdout).toContain("old gateway");
+          expect(await fs.realpath(gitReleaseSlot(prefix))).toBe(await fs.realpath(good));
         }
-      `;
-      const good = await release(prefix, "1.0.0", supervisorSource);
-      await publishGitRelease({ prefix, releaseRoot: good, trial: true });
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "2.0.0", 'throw new Error("boot");\n'),
-        trial: true,
-      });
-
-      // Task Scheduler does not restart a task whose action exits with an error, so one start of
-      // the task supervisor must try the release and switch back by itself.
-      const supervisor = spawnSync(
-        process.execPath,
-        [path.join(prefix, "openclaw-launcher.mjs"), "gateway", "--task-supervisor"],
-        { encoding: "utf8" },
-      );
-
-      expect(supervisor.stderr).toContain("failed to start twice; switched back");
-      expect(supervisor.stdout).toContain("old gateway");
-      expect(await fs.realpath(gitReleaseSlot(prefix))).toBe(await fs.realpath(good));
-    });
+      },
+    );
 
     it("switches back and restores upgraded state after two failed trial starts", async () => {
       const { stateDir, prefix } = await setup();
