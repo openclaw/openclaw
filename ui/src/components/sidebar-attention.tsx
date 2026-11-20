@@ -216,7 +216,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
               closePanel(false);
               (props.onNavigate ?? context.navigate)(route, options);
             }}
-            onOpen={(item) => void open(item)}
+            onOpen={open}
             listRef={(element) => (list = element)}
             panelPosition={panelPosition()}
             watchUpdateProgress={props.watchUpdateProgress}
