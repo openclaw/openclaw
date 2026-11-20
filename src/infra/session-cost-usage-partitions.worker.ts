@@ -29,6 +29,16 @@ function assertUsagePartitionWorker(): void {
   }
 }
 
+function indexedUsageCacheEntries(db: EngineConnection) {
+  // Keep range probes indexed even when statistics still describe a one-row cache.
+  return (
+    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
+    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
+      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+    )
+  );
+}
+
 export function deleteSessionCostUsagePartitionsInDatabase(
   db: EngineConnection,
   params: readonly {
@@ -39,12 +49,7 @@ export function deleteSessionCostUsagePartitionsInDatabase(
 ): void {
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
-  // Keep range probes indexed even when statistics still describe a one-row cache.
-  const entries =
-    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
-    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
-      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
-    );
+  const entries = indexedUsageCacheEntries(db);
   // Combining ranges lets stale small-table statistics turn a refresh into a full scan.
   for (const row of params.filter((param) => param.replacePartitions)) {
     executeSqliteQuerySync(
@@ -85,26 +90,23 @@ export function readSessionCostUsagePartitionsInDatabase(
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
   for (const paths of chunkItems([...new Set(filePaths)], 100)) {
     throwIfCancelled?.();
-    const query = kysely
-      .selectFrom("cache_entries")
-      .select("key")
-      .select((eb) => [
-        boundedUsageCacheColumn("value_json", budget).as("value_json"),
-        boundedUsageCacheColumn("blob", budget).as("blob"),
-        eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
-        eb.fn<number>("length", ["blob"]).as("body_bytes"),
-      ])
-      .where((eb) =>
-        eb.or(
-          paths.map((filePath) =>
-            eb.and([
-              eb("scope", "=", USAGE_COST_PARTITION_SCOPE),
-              eb("key", ">=", usageCostPartitionKey(filePath, start)),
-              eb("key", "<=", usageCostPartitionKey(filePath, end)),
-            ]),
-          ),
-        ),
+    const query = paths
+      .map((filePath) =>
+        kysely
+          .selectFrom(indexedUsageCacheEntries(db))
+          .select("key")
+          .select((eb) => [
+            boundedUsageCacheColumn("value_json", budget).as("value_json"),
+            boundedUsageCacheColumn("blob", budget).as("blob"),
+            eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
+            eb.fn<number>("length", ["blob"]).as("body_bytes"),
+          ])
+          .where("scope", "=", USAGE_COST_PARTITION_SCOPE)
+          .where("key", ">=", usageCostPartitionKey(filePath, start))
+          .where("key", "<=", usageCostPartitionKey(filePath, end)),
       )
+      // Separate ranges retain indexed access; merging their rows preserves budget order.
+      .reduce((ranges, next) => ranges.unionAll(next))
       .orderBy("key", "asc");
     for (const row of iterateSqliteQuerySync(db, query)) {
       throwIfCancelled?.();

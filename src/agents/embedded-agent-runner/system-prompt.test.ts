@@ -190,7 +190,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("tools.fs.workspaceOnly ON");
-    expect(prompt).not.toContain("Keep TMPDIR, TMP, and TEMP at their inherited system paths");
+    expect(prompt).not.toContain(
+      "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+    );
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", async () => {
@@ -266,7 +268,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     });
     expect(prompt.includes("tools.fs.workspaceOnly ON"), name).toBe(restricted);
     expect(
-      prompt.includes("Keep TMPDIR, TMP, and TEMP at their inherited system paths"),
+      prompt.includes(
+        "Keep the provided TMPDIR, TMP, and TEMP values so temporary files stay in owned scratch",
+      ),
       name,
     ).toBe(restricted);
     expect(prompt).toContain("Fixture stable provider guidance.");

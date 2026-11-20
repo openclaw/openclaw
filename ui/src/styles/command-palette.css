@@ -108,6 +108,7 @@
 }
 
 .cmd-palette__item {
+  color: inherit;
   display: flex;
   align-items: center;
   gap: 12px;

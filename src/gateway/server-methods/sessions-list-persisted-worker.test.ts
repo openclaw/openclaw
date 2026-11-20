@@ -47,7 +47,6 @@ const writeSession = (sessionKey: string, entry: Parameters<typeof upsertSession
 const group = { groupId: "retained-group", done: 1 };
 const childLinks = {
   // Terminal controller records retain swarm totals, but do not confer child ownership.
-  childSessions: undefined,
   swarm: { groups: [{ ...group, failed: 0 }] },
 };
 const controllerRow = { key: controller, ...childLinks };
@@ -174,6 +173,7 @@ it("keeps deleted-collector totals without terminal controller links while a sib
         nextOffset: 1,
         sessions: [controllerRow],
       });
+      expect(result).not.toHaveProperty("sessions.0.childSessions");
       expect(JSON.stringify(result)).not.toContain("retained synthetic");
       expect(await lookupPluginStateInWorker(key)).toBe(true);
     } finally {

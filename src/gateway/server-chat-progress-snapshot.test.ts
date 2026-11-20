@@ -154,3 +154,63 @@ it.each([
     Buffer.byteLength(JSON.stringify(events![0])),
   );
 });
+
+// The owner has detached these flat fields; native JSON has nothing left to normalize.
+it("retains scalar progress without encoding a recovery copy", () => {
+  const state = createChatRunState();
+  const data = {
+    phase: "warning",
+    message: 'Ready\n"é🦞',
+    count: 12,
+    pending: false,
+    detail: null,
+  };
+  using encoding = vi.spyOn(JSON, "stringify");
+  using decoding = vi.spyOn(JSON, "parse");
+  state.recordProgressEvent("scalar-run", {
+    runId: "scalar-run",
+    seq: 1,
+    ts: 1,
+    stream: "notice",
+    data,
+  });
+  data.message = "producer changed";
+  const events = projectInFlightRunSnapshot({ chatRunState: state, runId: "scalar-run" }).events;
+  expect(encoding.mock.calls.filter(([value]) => typeof value === "object")).toHaveLength(0);
+  expect(decoding).not.toHaveBeenCalled();
+  encoding.mockRestore();
+  expect(events?.[0]?.data).toEqual({ ...data, message: 'Ready\n"é🦞' });
+  expect(Reflect.set(events![0]!.data, "message", "reader changed")).toBe(false);
+  expect(state.runs.get("scalar-run")?.progressSnapshot?.byteLength).toBe(
+    Buffer.byteLength(JSON.stringify(events![0])),
+  );
+  // Native JSON drops symbol keys even when their values are canonical scalars.
+  state.recordProgressEvent("scalar-run", {
+    runId: "scalar-run",
+    seq: 2,
+    ts: 2,
+    stream: "notice",
+    data: { phase: "warning", message: "next", [Symbol("producer")]: "ignored" },
+  });
+  const next = projectInFlightRunSnapshot({ chatRunState: state, runId: "scalar-run" }).events!.at(
+    -1,
+  )!;
+  expect(Reflect.ownKeys(next.data)).toEqual(["phase", "message"]);
+});
+
+it.each([Number.NaN, Infinity, -Infinity, -0, undefined, Symbol("omitted")])(
+  "normalizes noncanonical scalar progress (%s)",
+  (value) => {
+    const state = createChatRunState();
+    state.recordProgressEvent("scalar-run", {
+      runId: "scalar-run",
+      seq: 1,
+      ts: 1,
+      stream: "notice",
+      data: { phase: "warning", value },
+    });
+    const events = projectInFlightRunSnapshot({ chatRunState: state, runId: "scalar-run" }).events;
+    const expected = typeof value === "number" ? { value: Object.is(value, -0) ? 0 : null } : {};
+    expect(events?.[0]?.data).toStrictEqual({ phase: "warning", ...expected });
+  },
+);

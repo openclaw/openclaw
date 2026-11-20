@@ -402,6 +402,7 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(isLocalBackendClient ? { localBackendClient: true as const } : {}),
     ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
       ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
       : {}),

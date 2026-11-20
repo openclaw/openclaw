@@ -133,6 +133,11 @@ model restrictions once when it starts. A later revocation or policy change
 applies to the next occurrence, which is refused with a message asking you to
 recreate the automation from an authenticated turn; the job is then disabled.
 The already-started occurrence keeps its captured restriction until it finishes.
+Rotating a shared Gateway token or password refuses jobs created through it. A job
+created through [trusted-proxy authentication](/gateway/trusted-proxy-auth) follows
+its proxy user's grant instead: changing `trustedProxies`, `userHeader`, or
+`requiredHeaders` keeps it, while removing the user from `allowUsers`, changing
+its identity scopes, or leaving trusted-proxy mode refuses it.
 
 The link names the creating conversation by key. After a message edit, branch
 switch, or reset, a linked detached job keeps that conversation's workspace,

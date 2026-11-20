@@ -7,6 +7,10 @@
  * Use --engine unconfigured to check reads before engine selection is installed.
  * --shape session-list measures payload-free session-list prerequisites;
  * --shape shared-facts measures a cold 5,000-row selector batch (2,000 requests).
+ * --shape payloads tallies individual source-derived command types at 5,000 sessions
+ * and a 62,000-file prepared workspace; --iterations overrides rounds per command.
+ * --group selects one payload case; --warmup adds untimed candidate calls to
+ * separate steady allocation from JIT/tiering allocation in short bursts.
  * These source-derived shapes are separate controls, not a production frequency mix.
  * Actual readers capture only state directory and supervisor mode from that input.
  * Every run checks exact charges before timing the same number of fresh contexts
@@ -28,12 +32,15 @@ const { values } = parseArgs({
     environment: { type: "string", default: "captured" },
     engine: { type: "string", default: "sqlite" },
     shape: { type: "string", default: "mixed" },
+    iterations: { type: "string" },
+    group: { type: "string" },
+    warmup: { type: "string", default: "0" },
   },
 });
 assert(values.baseline, "--baseline must name the original request module");
 assert(["captured", "full150"].includes(values.environment));
 assert(["sqlite", "unconfigured"].includes(values.engine));
-assert(["mixed", "session-list", "shared-facts"].includes(values.shape));
+assert(["mixed", "session-list", "shared-facts", "payloads"].includes(values.shape));
 const baseline: typeof import("../../src/state/openclaw-state-read-request.js") = await import(
   pathToFileURL(values.baseline).href
 );
@@ -88,7 +95,7 @@ if (values.shape === "session-list") {
     { type: "sessionGroups.snapshot" },
     { type: "userProfiles.catalog" },
   ];
-} else if (values.shape === "shared-facts") {
+} else if (values.shape === "shared-facts" || values.shape === "payloads") {
   commands = [
     {
       type: "sessionRows.sharedFacts",
@@ -110,6 +117,98 @@ if (values.shape === "session-list") {
     },
   ];
 }
+if (values.shape === "payloads") {
+  const ids = Array.from(
+    { length: 5000 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  const keys = ids.map((id) => `agent:synthetic:subagent:${id}`);
+  commands.push(
+    {
+      type: "subagents.runs",
+      scope: {
+        kind: "descendants",
+        sessionKeys: ["agent:synthetic:main"],
+        liveTopology: keys.map((childSessionKey, index) => ({
+          childSessionKey,
+          requesterSessionKey: keys[Math.floor(index / 4)]!,
+        })),
+      },
+    },
+    { type: "subagents.runs", scope: { kind: "ids", runIds: ids } },
+    { type: "cron.jobNames", jobIds: ids, storePath: "/synthetic/cron/jobs.json" },
+    { type: "workers.placementProjection", sessionIds: ids, conflictBindings: [] },
+    {
+      type: "sessionState.versions",
+      input: keys.map((sessionKey) => ({ sessionKey, agentId: "synthetic" })),
+    },
+    {
+      type: "pluginState.lookupMany",
+      input: { pluginId: "synthetic", namespace: "fixture", keys },
+    },
+    {
+      type: "sessionGroups.members",
+      cfg: {
+        agents: {
+          entries: Object.fromEntries(
+            ids
+              .slice(0, 1000)
+              .map((id) => [
+                id,
+                { name: `Synthetic ${id}`, workspace: `/synthetic/workspaces/${id}` },
+              ]),
+          ),
+        },
+      },
+    },
+    {
+      type: "localWorkspace.manifest",
+      input: {
+        id: "synthetic",
+        revision: 1,
+        action: {
+          kind: "scan",
+          target: "canonical",
+          canonicalRoot: "/synthetic/workspace",
+          preparedEntries: Array.from({ length: 62000 }, (_, index) => ({
+            entry: {
+              path: `src/fixture/file-${index}.ts`,
+              type: "file",
+              mode: 0o644,
+              size: 18000,
+              sha256: "a".repeat(64),
+            },
+            identity: `${index}:1`,
+            objectId: "b".repeat(64),
+          })),
+        },
+      },
+    },
+    {
+      type: "localWorkspace.manifest",
+      input: {
+        id: "synthetic",
+        revision: 1,
+        action: {
+          kind: "archive",
+          canonicalRoot: "/synthetic/workspace",
+          archiveRoot: "/synthetic/archive",
+          snapshotCommit: "a".repeat(40),
+        },
+      },
+    },
+    {
+      type: "meetingTranscripts.export",
+      format: "library",
+      selector: "synthetic",
+      includeNotes: true,
+    },
+    { type: "subagents.sessionList" },
+    { type: "subagents.runs", scope: { kind: "maintenance" } },
+    { type: "machineState.read", input: { key: "中🦞".repeat(20000) } },
+    { type: "machineState.read", input: { key: '"\\\n\u0000\ud800'.repeat(20000) } },
+  );
+}
 function request(index: number): OpenClawStateReadRequest {
   return {
     context: {
@@ -125,37 +224,75 @@ function request(index: number): OpenClawStateReadRequest {
     command: commands[index % commands.length]!,
   };
 }
-const iterations = values.shape === "shared-facts" ? 2000 : 100_000;
-for (let index = 0; index < iterations; index++) {
-  const input = request(index);
-  assert.equal(candidate.requestBytes(input), baseline.requestBytes(input));
-}
-const loadBefore = loadavg();
-const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
-const cpuBefore = process.threadCpuUsage();
-const start = performance.now();
-let bytes = 0;
-for (let index = 0; index < iterations; index++) {
-  bytes += candidate.requestBytes(request(index));
-}
-const elapsedMs = performance.now() - start;
-const cpu = process.threadCpuUsage(cpuBefore);
-const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
-console.log(
-  JSON.stringify({
-    environment: values.environment,
-    engine: values.engine,
-    shape: values.shape,
-    iterations,
-    byteExactRequests: iterations,
-    bytes,
-    elapsedMs,
-    mainCpuMs: (cpu.user + cpu.system) / 1000,
-    allocatedBytes:
-      typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
-        ? allocatedAfter - allocatedBefore
-        : undefined,
-    loadBefore,
-    loadAfter: loadavg(),
-  }),
+const requestedIterations = values.iterations
+  ? Number(values.iterations)
+  : values.shape === "shared-facts"
+    ? 2000
+    : values.shape === "payloads"
+      ? 100
+      : 100_000;
+assert(Number.isSafeInteger(requestedIterations) && requestedIterations > 0);
+const warmup = Number(values.warmup);
+assert(Number.isSafeInteger(warmup) && warmup >= 0);
+const selectedGroup = values.group === undefined ? undefined : Number(values.group);
+assert(
+  selectedGroup === undefined ||
+    (values.shape === "payloads" &&
+      Number.isSafeInteger(selectedGroup) &&
+      selectedGroup >= 0 &&
+      selectedGroup < commands.length),
 );
+const groups =
+  selectedGroup === undefined
+    ? values.shape === "payloads"
+      ? commands.map((_, index) => index)
+      : [-1]
+    : [selectedGroup];
+for (const group of groups) {
+  const inputAt = (index: number) => request(group < 0 ? index : group);
+  const iterations =
+    group < 0
+      ? requestedIterations
+      : Math.max(requestedIterations, Math.ceil(20_000_000 / baseline.requestBytes(inputAt(0))));
+  for (let index = 0; index < iterations; index++) {
+    const input = inputAt(index);
+    assert.equal(candidate.requestBytes(input), baseline.requestBytes(input));
+  }
+  for (let index = 0; index < warmup; index++) {
+    candidate.requestBytes(inputAt(index));
+  }
+  const loadBefore = loadavg();
+  const allocatedBefore: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  const cpuBefore = process.threadCpuUsage();
+  const start = performance.now();
+  let bytes = 0;
+  for (let index = 0; index < iterations; index++) {
+    bytes += candidate.requestBytes(inputAt(index));
+  }
+  const elapsedMs = performance.now() - start;
+  const cpu = process.threadCpuUsage(cpuBefore);
+  const allocatedAfter: unknown = Reflect.get(getHeapStatistics(), "total_allocated_bytes");
+  console.log(
+    JSON.stringify({
+      environment: values.environment,
+      engine: values.engine,
+      shape: values.shape,
+      group,
+      commandType: group < 0 ? undefined : commands[group]!.type,
+      serializedCommandBytes:
+        group < 0 ? undefined : Buffer.byteLength(JSON.stringify(commands[group])),
+      iterations,
+      warmup,
+      byteExactRequests: iterations,
+      bytes,
+      elapsedMs,
+      mainCpuMs: (cpu.user + cpu.system) / 1000,
+      allocatedBytes:
+        typeof allocatedBefore === "number" && typeof allocatedAfter === "number"
+          ? allocatedAfter - allocatedBefore
+          : undefined,
+      loadBefore,
+      loadAfter: loadavg(),
+    }),
+  );
+}
