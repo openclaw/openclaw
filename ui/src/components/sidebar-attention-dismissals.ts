@@ -6,7 +6,13 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
+import { resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
+import {
+  cronFailureSignature,
+  cronFailureSignatures,
+  type CronAttentionJob,
+} from "./sidebar-attention-items.ts";
 
 const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "outbox",
@@ -94,14 +100,20 @@ function saveDismissals(key: string | null, dismissals: SidebarAttentionDismissa
 export function dismissSidebarAttention(
   key: string | null,
   dismissal: SidebarAttentionDismissal,
+  cronJobs?: readonly CronAttentionJob[],
 ): SidebarAttentionDismissals {
   if (!key) {
     return {};
   }
   const stored = loadDismissals(key);
+  const job =
+    dismissal.kind === "cronFailed"
+      ? cronJobs?.find((candidate) => cronFailureSignature(candidate) === dismissal.signature)
+      : undefined;
+  const signatures = job ? cronFailureSignatures(job) : [dismissal.signature];
   const next = {
     ...stored,
-    [dismissal.kind]: [...new Set([...(stored[dismissal.kind] ?? []), dismissal.signature])],
+    [dismissal.kind]: [...new Set([...(stored[dismissal.kind] ?? []), ...signatures])],
   };
   saveDismissals(key, next);
   return next;
@@ -158,12 +170,18 @@ export function isSidebarAttentionDismissed(
 
 export function reconcileSidebarAttentionDismissals(params: {
   active: readonly SidebarAttentionDismissal[];
+  cronJobs?: readonly CronAttentionJob[];
   key: string | null;
   scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
 }): SidebarAttentionDismissals {
   const dismissals = loadDismissals(params.key);
   const active = params.active;
   const scope = params.scope;
+  // Visibility is not recovery: paused jobs still retain their failure history.
+  const failures = params.cronJobs
+    ?.filter((job) => job.state.autoDisabled || resolveCronJobLastRunStatus(job) === "error")
+    .flatMap((job) => cronFailureSignatures(job).map((signature) => ({ id: job.id, signature })));
+  const cronFailures = Map.groupBy(failures ?? [], (job) => job.id);
   /**
    * Drop dismissals whose chip is gone or whose entity set changed, so a state
    * that clears and later recurs surfaces again instead of staying hidden by a
@@ -176,7 +194,20 @@ export function reconcileSidebarAttentionDismissals(params: {
     if (!stored) {
       continue;
     }
-    const current = stored.filter((signature) => {
+    // Bind old job-only dismissals to the currently known failed run once, so
+    // upgrading preserves them without hiding every subsequent failure.
+    const signatures =
+      kind === "cronFailed"
+        ? [
+            ...new Set(
+              stored.flatMap(
+                (signature) =>
+                  cronFailures.get(signature)?.map((job) => job.signature) ?? [signature],
+              ),
+            ),
+          ]
+        : stored;
+    const current = signatures.filter((signature) => {
       // A recovery use is an immutable event, not a nag that can recur. Other inventories
       // and a pending owner history read cannot re-arm an already dismissed event.
       if (kind === "openClawIdRecoveryUse") {
@@ -197,13 +228,17 @@ export function reconcileSidebarAttentionDismissals(params: {
             : true);
       return (
         !authoritative ||
+        (kind === "cronFailed" && failures?.some((job) => job.signature === signature)) ||
         active.some((dismissal) => dismissal.kind === kind && dismissal.signature === signature)
       );
     });
     if (current.length > 0) {
       next[kind] = current;
     }
-    if (current.length !== stored.length) {
+    if (
+      current.length !== stored.length ||
+      current.some((signature, index) => signature !== stored[index])
+    ) {
       changed = true;
     }
   }

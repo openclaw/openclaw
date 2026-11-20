@@ -153,6 +153,130 @@ describe("sidebar attention source publication", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([false, true])("retains a paused failed run dismissal (legacy: %s)", async (legacy) => {
+    vi.useFakeTimers();
+    vi.stubGlobal("localStorage", createStorageMock());
+    let page = cronPage("incident");
+    page.jobs[0]!.lastRunAtMs = 100;
+    const request = inventoryRequest(() => page);
+    const harness = gateway(request, true);
+    const key = resolveSidebarAttentionKey(harness.gateway);
+    if (legacy) {
+      dismissSidebarAttention(key, { kind: "cronFailed", signature: "incident" });
+    }
+    activate(harness);
+    await vi.advanceTimersByTimeAsync(0);
+    if (!legacy) {
+      expectLabels("incident");
+      store!.dismiss(store!.entries[0]!.dismissal!);
+    }
+    expectLabels();
+    const saved = dismissalState(harness).cronFailed;
+    async function refresh(enabled: boolean, lastRunAtMs = 100, status = "error") {
+      page = cronPage("incident");
+      Object.assign(page.jobs[0]!, { enabled, lastRunAtMs, lastRunStatus: status });
+      page.snapshotRevision = `${enabled}-${lastRunAtMs}-${status}`;
+      harness.emitEvent("cron", { action: "updated", jobId: "incident" });
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    await refresh(false);
+    expectLabels();
+    expect(dismissalState(harness).cronFailed).toEqual(saved);
+    store!.dispose();
+    activate(harness);
+    await vi.advanceTimersByTimeAsync(0);
+    await refresh(true);
+    expectLabels();
+    await refresh(true, 200);
+    expectLabels("incident");
+    store!.dismiss(store!.entries[0]!.dismissal!);
+    await refresh(false, 200, "ok");
+    expect(dismissalState(harness).cronFailed).toBeUndefined();
+    await refresh(true, 300);
+    expectLabels("incident");
+    store!.dismiss(store!.entries[0]!.dismissal!);
+    page = cronPage();
+    harness.emitEvent("cron", { action: "removed", jobId: "incident" });
+    await vi.advanceTimersByTimeAsync(0);
+    expectLabels();
+    expect(dismissalState(harness).cronFailed).toBeUndefined();
+  });
+  it.each([
+    ["consecutive-failures", "error", false, false, false, false],
+    ["schedule-errors", "ok", false, false, false, false],
+    ["schedule-errors", "error", false, false, false, false],
+    ["schedule-errors", "ok", true, false, false, false],
+    ["schedule-errors", "error", false, true, false, false],
+    ["schedule-errors", "error", false, false, true, false],
+    ["consecutive-failures", "error", false, false, false, true],
+  ] as const)(
+    "retains and re-arms %s dismissals (prior: %s, manual: %s, legacy: %s, untimed: %s, recovered: %s)",
+    async (reason, priorStatus, manualRun, legacy, missingRunTime, manualSuccess) => {
+      vi.useFakeTimers();
+      vi.stubGlobal("localStorage", createStorageMock());
+      const page = cronPage("incident");
+      const job = page.jobs[0]!;
+      Object.assign(job, {
+        enabled: false,
+        lastRunAtMs: missingRunTime ? undefined : 100,
+        lastRunStatus: priorStatus,
+        autoDisabled: { reason, atMs: 150, consecutiveErrors: 3 },
+      });
+      const harness = gateway(
+        inventoryRequest(() => page),
+        true,
+      );
+      if (legacy) {
+        dismissSidebarAttention(resolveSidebarAttentionKey(harness.gateway), {
+          kind: "cronFailed",
+          signature: "incident",
+        });
+      }
+      async function refresh(revision: string, ...labels: string[]) {
+        page.snapshotRevision = revision;
+        harness.emitEvent("cron", { action: "updated", jobId: job.id });
+        await vi.advanceTimersByTimeAsync(0);
+        expectLabels(...labels);
+      }
+      activate(harness);
+      await vi.advanceTimersByTimeAsync(0);
+      if (legacy) {
+        expectLabels();
+        job.enabled = true;
+        delete job.autoDisabled;
+        await refresh("enabled-legacy");
+        return;
+      }
+      expectLabels("incident");
+      store!.dismiss(store!.entries[0]!.dismissal!);
+      // A distinct escalation may arrive without observing recovery in between.
+      job.autoDisabled = { reason, atMs: 250, consecutiveErrors: 3 };
+      if (reason === "consecutive-failures") {
+        job.lastRunAtMs = 200;
+      }
+      await refresh("next-failure", "incident");
+      store!.dismiss(store!.entries[0]!.dismissal!);
+      if (manualSuccess) {
+        job.lastRunAtMs = 300;
+        job.lastRunStatus = "ok";
+        await refresh("manual-recovery");
+      }
+      if (manualRun) {
+        job.lastRunAtMs = 300;
+        job.lastRunStatus = "error";
+        await refresh("manual-failure", "incident");
+        store!.dismiss(store!.entries[0]!.dismissal!);
+      }
+      // Enabling clears escalation, but does not create a new run.
+      job.enabled = true;
+      delete job.autoDisabled;
+      await refresh("enabled");
+      if (missingRunTime) {
+        job.lastRunAtMs = 400;
+        await refresh("timestamped-failure", "incident");
+      }
+    },
+  );
   it("keeps health attention across a same-client blip but clears it for another identity", async () => {
     vi.useFakeTimers();
     const refreshed = deferred<CompactCronPage>();
@@ -343,11 +467,11 @@ describe("sidebar attention source publication", () => {
       connect("alice");
       store = activate(harness);
       await waitForFast(() => expect(store?.entries).toHaveLength(2));
-      store.dismiss({ kind: "cronFailed", signature: "dismissed-incident" });
+      store.dismiss({ kind: "cronFailed", signature: "dismissed-incident@unknown" });
       expectLabels("visible-incident");
       if (boundary === "reconnect") {
         harness.update({ phase: "reconnecting", selfUser: null });
-        store.dismiss({ kind: "cronFailed", signature: "visible-incident" });
+        store.dismiss({ kind: "cronFailed", signature: "visible-incident@unknown" });
         expect(store.entries).toEqual([]);
       }
       connect("bob");
@@ -355,7 +479,7 @@ describe("sidebar attention source publication", () => {
       store.dispose();
       store = activate(harness);
       await waitForFast(() => expect(store?.entries).toHaveLength(2));
-      const dismissal = { kind: "cronFailed" as const, signature: "visible-incident" };
+      const dismissal = { kind: "cronFailed" as const, signature: "visible-incident@unknown" };
       if (boundary === "tenant") {
         store.dismiss(dismissal);
       } else {
@@ -635,7 +759,7 @@ describe("sidebar attention source publication", () => {
       expectCalls(request, 2);
       expectCalls(request, 1, ["models.authStatus"]);
       if (initial === "pending with dismissal") {
-        expect(loadDismissals(key)).toEqual({ cronFailed: ["current"] });
+        expect(loadDismissals(key)).toEqual({ cronFailed: ["current@unknown"] });
       }
     },
   );
@@ -649,7 +773,7 @@ describe("sidebar attention source publication", () => {
     store = activate(harness);
     pages[0]!.resolve(cronPage("dismissed"));
     await waitForFast(() => expect(store?.entries).toHaveLength(1));
-    store.dismiss({ kind: "cronFailed", signature: "dismissed" });
+    store.dismiss({ kind: "cronFailed", signature: "dismissed@unknown" });
 
     harness.emitEvent("cron", {});
     for (const index of [1, 2]) {
@@ -657,12 +781,12 @@ describe("sidebar attention source publication", () => {
       harness.emitEvent("cron", {});
       pages[index]!.resolve(cronPage(`current-${index}`));
       await waitLabels(`current-${index}`);
-      expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
+      expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed@unknown"] });
     }
     pages[3]!.resolve({ ...cronPage("partial"), hasMore: true, total: 2, nextOffset: 1 });
     await waitForFast(() => expect(listCalls).toBe(5));
     expectLabels("current-2");
-    expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed"] });
+    expect(dismissalState(harness)).toEqual({ cronFailed: ["dismissed@unknown"] });
     pages[4]!.resolve({ ...cronPage("fresh"), snapshotRevision: "partial", total: 2, offset: 1 });
     await waitLabels("partial", "fresh");
     expect(dismissalState(harness)).toEqual({});
