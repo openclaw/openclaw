@@ -12,7 +12,6 @@ import {
   createSidebarAttentionStore,
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
-import { createUpdateProgressWatcher } from "../app/update-confirmation.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   createApplicationContextProvider,
@@ -334,7 +333,7 @@ describe("sidebar attention refresh ownership", () => {
       try {
         await overlays.refreshUpdateStatus();
         const { element, trigger } = await mountAttention({ gateway, overlays });
-        element.watchUpdateProgress = createUpdateProgressWatcher({ gateway, overlays });
+        // A report opened without a progress subscription still knows the connected build.
         await openPanel(element, trigger);
         const rows = () => [
           ...element.querySelectorAll<HTMLDetailsElement>("openclaw-sidebar-update-card details"),

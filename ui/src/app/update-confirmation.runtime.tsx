@@ -167,7 +167,11 @@ export async function confirmAndStartUpdateRuntime(
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
-      const serving = latestProgress?.connected ? latestProgress.serving : undefined;
+      const serving = latestProgress
+        ? latestProgress.connected
+          ? latestProgress.serving
+          : undefined
+        : params.existingServing;
       const failed =
         current.kind === "failed" ||
         (run !== null && isReportableUpdateRun(run) && !projectUpdateRunHistory(run, serving));

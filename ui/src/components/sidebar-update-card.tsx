@@ -262,6 +262,7 @@ export function SidebarUpdateCard(
     void confirmAndStartUpdate({
       isCurrentTarget,
       existingRun,
+      existingServing: existingRun && props.connected !== false ? props.serving : undefined,
       prepareRetry: viaNativeApp ? undefined : props.prepareRetry,
       prepareGatewayFallback: props.prepareRetry,
       canStartNativeUpdate: props.canStartNativeUpdate,

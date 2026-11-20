@@ -69,14 +69,11 @@ export function resolveSidebarUpdateAttention(
     campaign && !snapshot.updateCampaignStatusHydrated && canHydrateCampaign;
   const release = isReleaseUpdateAvailable(snapshot.updateAvailable, snapshot.updateSchedule);
   const actionable = busy || release;
-  if (
-    !(
-      runVisible ||
-      snapshot.updateReconciliationPending ||
-      statusBanner ||
-      (campaignPendingHydration ? snapshot.updateRunning : actionable)
-    )
-  ) {
+  const currentVisible =
+    snapshot.updateReconciliationPending ||
+    statusBanner ||
+    (campaignPendingHydration ? snapshot.updateRunning : actionable);
+  if (!runVisible && !currentVisible) {
     return [];
   }
   const runDismissal =
@@ -93,9 +90,25 @@ export function resolveSidebarUpdateAttention(
     projectUpdateRunHistory(run, context.gateway.snapshot.hello?.server);
   // A new release is a different action, not a retry of the recorded run. Give each
   // its own row so a dismissal (or a busy campaign) applies only to its owner.
-  const separateRelease = historical && release && !finishing && !campaignPendingHydration;
+  const separateHistory = historical && (!finishing || campaignPendingHydration);
+  const history: SidebarUpdateEntry[] =
+    separateHistory && runDismissal
+      ? [
+          {
+            type: "update",
+            category: "system",
+            surface: "history",
+            dismissal: canUpdate ? runDismissal : null,
+            requiresAction: false,
+            severity: "warning",
+          },
+        ]
+      : [];
+  if (separateHistory && !currentVisible) {
+    return history;
+  }
   const dismissal =
-    runDismissal && !finishing && !separateRelease
+    runDismissal && !finishing && !separateHistory
       ? runDismissal
       : resolveUpdateAttentionDismissal({
           gatewayBootId: context.gateway.snapshot.hello?.server?.bootId,
@@ -103,11 +116,11 @@ export function resolveSidebarUpdateAttention(
           updateSchedule: snapshot.updateSchedule,
         });
   const forced = busy || isUpdateAttentionForced(statusBanner?.tone);
-  const entries: SidebarUpdateEntry[] = [
+  return [
     {
       type: "update",
       category: "system",
-      surface: separateRelease ? "release" : undefined,
+      surface: separateHistory ? "release" : undefined,
       dismissal: canUpdate && !forced ? dismissal : null,
       retainedDismissal: finishing ? runDismissal : null,
       requiresAction: forced || (canUpdate && actionable),
@@ -117,16 +130,6 @@ export function resolveSidebarUpdateAttention(
           ? "error"
           : "warning",
     },
+    ...history,
   ];
-  if (separateRelease && runDismissal) {
-    entries.push({
-      type: "update",
-      category: "system",
-      surface: "history",
-      dismissal: canUpdate ? runDismissal : null,
-      requiresAction: false,
-      severity: "warning",
-    });
-  }
-  return entries;
 }

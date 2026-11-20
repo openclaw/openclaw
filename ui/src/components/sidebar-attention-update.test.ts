@@ -80,7 +80,7 @@ it("retains the same failed outcome across reconnect until acknowledged or 24 ho
     protocol: 1,
     server: { version: "1.0.0", buildId: "before-build" },
     auth: { role: "operator", scopes: ["operator.admin"] },
-    features: { methods: ["update.run"] },
+    features: { methods: ["update.run", "update.status"] },
   };
   const dismissal = { kind: "updateAvailable", signature: JSON.stringify(["run", run.runId]) };
   expect(resolveSidebarUpdateAttention(context)[0]).toMatchObject({ dismissal, severity: "error" });
@@ -90,6 +90,21 @@ it("retains the same failed outcome across reconnect until acknowledged or 24 ho
     severity: "warning",
     requiresAction: false,
   });
+  snapshot.updateReconciliationPending = true;
+  expect(resolveSidebarUpdateAttention(context).map((entry) => entry.surface)).toEqual([
+    "release",
+    "history",
+  ]);
+  snapshot.updateReconciliationPending = false;
+  snapshot.updateSchedule!.campaign = {
+    id: "pending",
+    state: "waiting-for-idle",
+    announcedAtMs: 0,
+    forceAtMs: 1,
+    updatedAtMs: 0,
+  };
+  expect(resolveSidebarUpdateAttention(context).map((entry) => entry.surface)).toEqual(["history"]);
+  delete snapshot.updateSchedule!.campaign;
   snapshot.updateRunAcknowledged = true;
   expect(resolveSidebarUpdateAttention(context)).toHaveLength(0);
   snapshot.updateRunAcknowledged = false;

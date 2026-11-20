@@ -63,6 +63,7 @@ export type ConfirmAndStartUpdateParams = {
   updateAvailable: UpdateAvailable | null;
   updateSchedule: UpdateScheduleState | null;
   existingRun?: UpdateRunRecord;
+  existingServing?: UpdateRunServingIdentity;
   onCheckStatus?: () => Promise<boolean>;
   /** Refreshes source-owned target details before retry confirmation. */
   prepareRetry?: () => Promise<{

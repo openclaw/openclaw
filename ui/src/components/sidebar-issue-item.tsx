@@ -209,7 +209,10 @@ export function renderSidebarUpdateSurface(params: {
       updateAvailable={params.surface === "history" ? null : snapshot().updateAvailable}
       updateSchedule={params.surface === "history" ? null : snapshot().updateSchedule}
       heldUpdateCampaignId={snapshot().heldUpdateCampaignId}
-      updateBusy={snapshot().updateRunning || snapshot().updateReconciliationPending}
+      updateBusy={
+        params.surface !== "history" &&
+        (snapshot().updateRunning || snapshot().updateReconciliationPending)
+      }
       updateRun={params.surface === "release" ? null : snapshot().updateRun}
       updateRunAcknowledged={snapshot().updateRunAcknowledged}
       connected={gateway().phase === "connected"}
