@@ -1,5 +1,11 @@
+import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
-import { createWorkerMemoryBudget } from "./worker-memory-budget.js";
+import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
+import {
+  createWorkerMemoryBudget,
+  getWorkerMemoryBudgetSnapshot,
+  initializeWorkerMemoryBudget,
+} from "./worker-memory-budget.js";
 
 const MiB = 1024 ** 2;
 const transcriptUrl = new URL("file:///runtime/session-transcript.worker.js");
@@ -140,5 +146,45 @@ describe("worker memory budget", () => {
     expect(budget.snapshot().floorBytes).toBe(2 * 38 * MiB);
     budget.releasePool(owner);
     expect(budget.snapshot()).toMatchObject({ floorBytes: 0, pendingBytes: 0 });
+  });
+
+  it("refuses growth while floors alone exceed the budget, even when they measure small", () => {
+    const owners = Array.from({ length: 15 }, () => ({}));
+    const live = new Map(owners.map((_, index) => [index + 1, 1]));
+    const { budget } = setup({ usageMiB: 500, live: { pools: live } });
+    const pools = owners.map((owner, index) =>
+      budget.registerPool(owner, new URL(`file:///runtime/plugin-${index}.worker.js`), 2),
+    );
+    // 15 x 62 MiB floors > 850 MiB budget, all running, and nothing pending.
+    expect(budget.snapshot()).toMatchObject({ floorsExceedBudget: true, pendingBytes: 0 });
+    expect(pools[0]!.admitGrowth()).toBe(false);
+  });
+
+  it("ignores late growth release after its pool was released", () => {
+    const owner = {};
+    const { budget } = setup({ usageMiB: 0 });
+    const pool = budget.registerPool(owner, transcriptUrl, 2);
+    expect(pool.admitGrowth()).toBe(true);
+    budget.releasePool(owner);
+    expect(pool.isCurrent()).toBe(false);
+    pool.releaseGrowth(1);
+    expect(budget.snapshot().families[0]!.growth).toBe(0);
+  });
+
+  it("retires the previous Gateway's policy and inherited flag when standard is selected", () => {
+    const profile = (selected: "lean" | "standard"): GatewayResourceProfile => ({
+      configured: selected,
+      profile: selected,
+      reason: "explicit",
+      memoryLimitBytes: 1536 * MiB,
+      memoryLimitSource: "host",
+      cpus: 8,
+    });
+    initializeWorkerMemoryBudget(profile("lean"));
+    expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBe(true);
+    expect(getWorkerMemoryBudgetSnapshot()?.budgetBytes).toBe(Math.floor(1536 * MiB * 0.85));
+    initializeWorkerMemoryBudget(profile("standard"));
+    expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBeUndefined();
+    expect(getWorkerMemoryBudgetSnapshot()).toBeUndefined();
   });
 });

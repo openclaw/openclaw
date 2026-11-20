@@ -19,6 +19,11 @@ export function createWorkerTaskPoolMemory(
   return {
     /** Bind the host policy, which can be decided after construction, and release unheld growth. */
     sync(slots: number, closed: boolean): void {
+      if (budget && !budget.isCurrent()) {
+        // Its reservations left with the replaced policy.
+        budget = undefined;
+        growth = 0;
+      }
       // A closed pool must not join the host's memory ledger again.
       if (!closed) {
         budget ??= resolve();

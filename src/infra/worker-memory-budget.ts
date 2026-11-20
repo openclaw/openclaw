@@ -97,8 +97,10 @@ const state = resolveGlobalSingleton(
     hosted: (() => false) as HostedSlotPredicate,
   }),
   (current) => {
+    current.budget?.retire();
     current.budget = undefined;
     current.hosted = () => false;
+    setEnvironmentData(FLOOR_ONLY_KEY, undefined);
   },
 );
 
@@ -151,6 +153,8 @@ export function createWorkerMemoryBudget(params: {
   };
   let lastUsage: number | null = null;
   let warned = false;
+  // A retired owner's pools rebind to the current Gateway's policy on their next dispatch.
+  let retired = false;
   const family = (name: string) => {
     let entry = families.get(name);
     if (!entry) {
@@ -240,6 +244,9 @@ export function createWorkerMemoryBudget(params: {
   return {
     budgetBytes,
     snapshot,
+    retire() {
+      retired = true;
+    },
     releasePool(pool: object) {
       for (const entry of pools) {
         if (entry.pool.deref() === pool) {
@@ -264,11 +271,12 @@ export function createWorkerMemoryBudget(params: {
       ledger();
       return {
         floor,
+        isCurrent: () => !retired && pools.has(entry),
         admitGrowth() {
-          const { pendingBytes } = ledger();
+          const { floorBytes, pendingBytes } = ledger();
           lastUsage = params.readUsageBytes() ?? null;
           const projectedBytes = (lastUsage ?? 0) + pendingBytes + entry.estimate;
-          if (lastUsage === null || projectedBytes >= budgetBytes) {
+          if (lastUsage === null || floorBytes > budgetBytes || projectedBytes >= budgetBytes) {
             entry.family.refusals++;
             publish("refusal", script, { projectedBytes });
             return false;
@@ -280,8 +288,11 @@ export function createWorkerMemoryBudget(params: {
           return true;
         },
         releaseGrowth(count) {
-          entry.growth -= count;
-          entry.family.growth -= count;
+          // A released pool's reservations were already removed.
+          if (pools.has(entry)) {
+            entry.growth -= count;
+            entry.family.growth -= count;
+          }
         },
         reservePointReadFloor() {
           entry.pointReadFloor = true;
@@ -304,7 +315,11 @@ export function createWorkerMemoryBudget(params: {
 
 /** Start admission once the Gateway has chosen lean; standard installs never create it. */
 export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourceProfile>): void {
-  if (profile.profile !== "lean" || !isMainThread) {
+  state.budget?.retire();
+  state.budget = undefined;
+  // Workers created from here on inherit this Gateway's choice, never a previous one.
+  setEnvironmentData(FLOOR_ONLY_KEY, profile.profile === "lean" ? true : undefined);
+  if (profile.profile !== "lean") {
     return;
   }
   const directory =
@@ -330,7 +345,6 @@ export function initializeWorkerMemoryBudget(profile: Readonly<GatewayResourcePr
     poolId: getWorkerPoolId,
     hosted: () => state.hosted,
   });
-  setEnvironmentData(FLOOR_ONLY_KEY, true);
   log.info(
     `Lean worker memory budget: ${Math.round(state.budget.budgetBytes / MiB)} MiB of ${Math.round(profile.memoryLimitBytes / MiB)} MiB (${WORKER_MEMORY_BUDGET_MARGIN * 100}% margin); growth beyond each worker floor waits when it would exceed the budget.`,
   );
@@ -364,6 +378,7 @@ export function createWorkerPoolMemoryBudget(
   }
   return {
     floor: poolFloor(workerScriptName(url), maxWorkers),
+    isCurrent: () => true,
     admitGrowth: () => false,
     releaseGrowth() {},
     reservePointReadFloor() {},
