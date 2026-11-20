@@ -456,7 +456,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;
-        this.host.workerStarted(worker, this);
+        this.host.workerStarted(worker, this, this.maxWorkers, this.options, this.ownerOptions);
       },
       onMessage: (message) => this.receive(slot, message),
       onFailure: (error, nativeFailure) => this.fail(slot, error, nativeFailure),
