@@ -77,6 +77,8 @@ export async function runCliSessionFork(params: {
   sessionManager: SessionManager;
   preparedRunAdmission: PreparedAgentRunAdmission;
   workspaceDir: string;
+  /** The cwd the source session's turns ran the CLI in; its native session lives there. */
+  cwd?: string;
   prompt: string;
   model: { provider: string; model: string; authProfileId?: string };
   /** Tools the fork may run; the grant still lists every session tool. */
@@ -111,6 +113,7 @@ export async function runCliSessionFork(params: {
         ...params.requester,
         inputProvenance: params.inputProvenance,
         workspaceDir: params.workspaceDir,
+        ...(params.cwd ? { cwd: params.cwd } : {}),
         prompt: params.prompt,
         provider: anchor.provider,
         modelProvider: params.model.provider,

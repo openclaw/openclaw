@@ -56,7 +56,7 @@ async function withCliSession(
     workspaceDir: string;
     transcript: () => unknown[];
   }) => Promise<void>,
-  options: { nativeReply?: boolean; bindingSessionId?: string } = {},
+  options: { nativeReply?: boolean; bindingSessionId?: string; spawnedCwd?: string } = {},
 ) {
   await withSessionState("cli-fork", async ({ scope, state }) => {
     await upsertSessionEntryCore(scope, {
@@ -65,6 +65,7 @@ async function withCliSession(
       cliSessionBindings: {
         "claude-cli": { sessionId: options.bindingSessionId ?? "native-1" },
       },
+      ...(options.spawnedCwd ? { spawnedCwd: options.spawnedCwd } : {}),
     });
     const source = SessionManager.open(scope);
     await source.appendMessageAsync({ role: "user", content: "Rewrite my prompt", timestamp: 1 });
@@ -161,6 +162,33 @@ it.each([
     expect(runCliAgent.mock.calls[0]?.[0].sessionKey).not.toBe(anchor.sessionKey);
     expect(transcript()).toEqual(before);
   });
+});
+
+it.each([
+  {
+    name: "the agent's run cwd",
+    config: { cwd: "/work/agent-cwd" },
+    spawnedCwd: undefined,
+    cwd: "/work/agent-cwd",
+  },
+  {
+    name: "the session's spawned cwd",
+    config: { cwd: "/work/agent-cwd" },
+    spawnedCwd: "/work/spawned",
+    cwd: "/work/spawned",
+  },
+])("runs a CLI fork in $name, where its turns ran the CLI", async (row) => {
+  await withCliSession(
+    async ({ anchor, workspaceDir }) => {
+      await fork(anchor, workspaceDir, {
+        config: {
+          agents: { defaults: { ...cliConfig.agents?.defaults, ...row.config } },
+        },
+      });
+      expect(runCliAgent.mock.calls[0]?.[0].cwd).toBe(row.cwd);
+    },
+    { spawnedCwd: row.spawnedCwd },
+  );
 });
 
 it("keeps exec out of a CLI fork of a turn the owner did not send", async () => {

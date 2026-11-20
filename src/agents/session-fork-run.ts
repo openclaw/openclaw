@@ -37,7 +37,7 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveAgentDir, resolveAgentRunCwd } from "./agent-scope-config.js";
 import { resolveCliRuntimeCanonicalProvider } from "./cli-backends.js";
 import {
   readLiveSessionForkRequest,
@@ -612,6 +612,8 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
         sessionManager,
         preparedRunAdmission,
         workspaceDir: executionWorkspaceDir,
+        // The native session lives under the cwd the session's turns ran the CLI in.
+        cwd: cliEntry?.spawnedCwd?.trim() || resolveAgentRunCwd(config, agentId),
         prompt: params.prompt,
         model: { ...params.model, provider: canonicalProvider ?? params.model.provider },
         toolCallsAllow: toolExecutionAllow,
