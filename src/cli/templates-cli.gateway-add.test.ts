@@ -79,13 +79,7 @@ describe("Template Add CLI through the Gateway owner", () => {
   const fixture = useLocalStateOwnerFixture();
   afterEach(() => vi.restoreAllMocks());
 
-  beforeEach(async () => {
-    const config = {
-      ...fixture.config,
-      gateway: { ...fixture.config.gateway, controlUi: { experimental: { templates: true } } },
-    };
-    fixture.config = config;
-    await writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(config));
+  beforeEach(() => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});

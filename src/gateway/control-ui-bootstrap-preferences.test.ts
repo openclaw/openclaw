@@ -86,6 +86,20 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   expect(reader?.entries).toBeUndefined();
 });
 
+it.each([undefined, true, false])(
+  "seeds Template availability for catalog readers (configured: %s)",
+  async (templates) => {
+    const bootstrap = await prepareControlUiBootstrapPreferences(
+      templates === undefined ? {} : { gateway: { controlUi: { experimental: { templates } } } },
+      { operatorScopes: ["operator.read"] },
+    );
+    expect(bootstrap?.config).toHaveProperty(
+      "gateway.controlUi.experimental.templates",
+      templates !== false,
+    );
+  },
+);
+
 it.each([
   { tts: undefined, expected: null },
   { tts: {}, expected: {} },

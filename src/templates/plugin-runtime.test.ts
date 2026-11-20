@@ -10,7 +10,7 @@ import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-pl
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { assertTemplatesLabsEnabled } from "./labs-gate.js";
+import { assertTemplatesEnabled } from "./availability.js";
 import { runTemplatePluginBatch } from "./plugin-runtime.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -130,7 +130,7 @@ it.each([
       OPENCLAW_STATE_DIR: root,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     };
-    let config: OpenClawConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
+    let config: OpenClawConfig = {};
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH, JSON.stringify(config));
     await withEnvAsync(env, async () => {
       const publishIndex = (present: boolean) =>
@@ -173,7 +173,7 @@ it.each([
             if (!authorityActive) {
               throw new Error("Add authority ended");
             }
-            assertTemplatesLabsEnabled(config);
+            assertTemplatesEnabled(config);
           },
           prepareEffect: async () => {
             if (outcome === "zero-target-owner-removed") {

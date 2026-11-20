@@ -52,7 +52,9 @@ async function requestDraft(
     context: createDirectChatContext({
       getRuntimeConfig: () => ({
         agents: { entries: { research: { workspace } } },
-        gateway: { controlUi: { experimental: { templates: condition !== "labs-off" } } },
+        ...(condition === "disabled"
+          ? { gateway: { controlUi: { experimental: { templates: false } } } }
+          : {}),
       }),
       getClientConnIds: () =>
         connections ?? new Set(condition === "disconnected" ? [] : ["draft-author"]),
@@ -105,7 +107,7 @@ describe("Template draft human authority", () => {
     expect(await readFile(draft.path, "utf8")).toBe(edited);
   });
 
-  it.each(["synthetic", "disconnected", "labs-off"])(
+  it.each(["synthetic", "disconnected", "disabled"])(
     "does not turn an agent-authored proposal into %s publication authority",
     async (condition) => {
       const reply = await requestDraft(
@@ -122,7 +124,7 @@ describe("Template draft human authority", () => {
     },
   );
 
-  it.each(["synthetic", "disconnected", "labs-off"])(
+  it.each(["synthetic", "disconnected", "disabled"])(
     "refuses %s creation before touching the workspace",
     async (condition) => {
       const reply = await requestDraft(

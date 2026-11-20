@@ -120,7 +120,7 @@ it("grants installer consent only for the exact live reviewed surface", async ()
 
 it("rejects a stale request at the installer callback", async () => {
   const consent = bind(() => {
-    throw new Error("Labs disabled");
+    throw new Error("Request authority ended");
   });
-  await expect(confirm(consent, review.riskWarning)).rejects.toThrow("Labs disabled");
+  await expect(confirm(consent, review.riskWarning)).rejects.toThrow("Request authority ended");
 });

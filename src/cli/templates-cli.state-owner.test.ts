@@ -5,6 +5,7 @@ import type { TemplateLifecyclePlanResult } from "../../packages/gateway-protoco
 import { templatesAddHandlers } from "../gateway/server-methods/templates-add.js";
 import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { defaultRuntime } from "../runtime.js";
+import { TEMPLATES_DISABLED_MESSAGE } from "../templates/availability.js";
 import type { GatewayTemplateAddApplyResult } from "../templates/gateway-add-result.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 import * as prompt from "./prompt.js";
@@ -105,12 +106,7 @@ describe("Template Add CLI state ownership", () => {
   });
 
   it("rejects an explicitly empty agent ID through the live owner without creating an agent", async () => {
-    await fs.writeFile(
-      process.env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
-    );
     await fixture.startOwner();
-    Object.assign(fixture.config.gateway, { controlUi: { experimental: { templates: true } } });
     await fs.writeFile(
       path.join(root, "package.json"),
       JSON.stringify({ name: "@proof/demo", version: "1.0.0", openclaw: { template: "CLAW.md" } }),
@@ -124,10 +120,6 @@ describe("Template Add CLI state ownership", () => {
   });
 
   it("routes local Add through the live owner while preview stays read-only", async () => {
-    await fs.writeFile(
-      process.env.OPENCLAW_CONFIG_PATH!,
-      JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
-    );
     await fixture.startOwner();
     const before = await snapshotTree(root);
     fixture.handlers["templates.add.plan"] = async ({ params, respond }) => {
@@ -178,7 +170,6 @@ describe("Template Add CLI state ownership", () => {
     await fs.writeFile(
       process.env.OPENCLAW_CONFIG_PATH!,
       JSON.stringify({
-        gateway: { controlUi: { experimental: { templates: true } } },
         mcp: { servers: { statuspage } },
       }),
     );
@@ -263,7 +254,7 @@ describe("Template Add CLI state ownership", () => {
     },
   );
 
-  it.each(["missing-digest", "blocked", "labs-off", "plan-drift"])(
+  it.each(["missing-digest", "blocked", "templates-disabled", "plan-drift"])(
     "does not fall back locally for %s",
     async (kind) => {
       if (kind === "missing-digest") {
@@ -274,18 +265,18 @@ describe("Template Add CLI state ownership", () => {
           { code: "fixture_blocked", path: "$", message: "Requirements unavailable." },
         ];
       }
-      const method = kind === "labs-off" ? "templates.add.plan" : "templates.add.apply";
-      if (kind === "labs-off" || kind === "plan-drift") {
-        fixture.handlers[method] = async ({ params, respond }) => {
-          if (method === "templates.add.apply") {
-            applied.push(params);
-          }
+      if (kind === "templates-disabled") {
+        await fs.writeFile(
+          process.env.OPENCLAW_CONFIG_PATH!,
+          JSON.stringify({ gateway: { controlUi: { experimental: { templates: false } } } }),
+        );
+        fixture.handlers["templates.add.plan"] = templatesAddHandlers["templates.add.plan"]!;
+      } else if (kind === "plan-drift") {
+        fixture.handlers["templates.add.apply"] = async ({ params, respond }) => {
+          applied.push(params);
           respond(false, undefined, {
             code: "FORBIDDEN",
-            message:
-              kind === "labs-off"
-                ? "Templates Labs is disabled"
-                : "The Template changed since review",
+            message: "The Template changed since review",
           });
         };
       }
@@ -303,8 +294,8 @@ describe("Template Add CLI state ownership", () => {
         await expect(runTemplatesAddCommand("@acme/demo", { json: true })).rejects.toThrow(
           kind === "missing-digest"
             ? "bound Template Add review"
-            : kind === "labs-off"
-              ? "Labs is disabled"
+            : kind === "templates-disabled"
+              ? TEMPLATES_DISABLED_MESSAGE
               : "changed since review",
         );
       }

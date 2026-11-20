@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { buildCapabilityConsentErrorDetails } from "../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { assertTemplatesLabsEnabled, TemplatesLabsDisabledError } from "../templates/labs-gate.js";
+import { assertTemplatesEnabled, TemplatesDisabledError } from "../templates/availability.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import type { PluginLifecycleGateway } from "./plugins-lifecycle-client.js";
 import { waitForSignalExitBarriers } from "./signal-exit-barrier.js";
@@ -171,13 +171,13 @@ describe("plugin lifecycle CLI transport", () => {
     },
   );
 
-  it("rechecks Labs after a pending plugin batch reload response", async () => {
+  it("rechecks Template availability after a pending plugin batch reload response", async () => {
     const reply = Promise.withResolvers<{ runtime: typeof runtimeReceipt }>();
     mocks.call.mockReturnValue(reply.promise);
-    let labsEnabled = true;
+    let templatesEnabled: boolean | undefined;
     const commitGuard = vi.fn(() =>
-      assertTemplatesLabsEnabled({
-        gateway: { controlUi: { experimental: { templates: labsEnabled } } },
+      assertTemplatesEnabled({
+        gateway: { controlUi: { experimental: { templates: templatesEnabled } } },
       }),
     );
     const reload = await resolvePluginBatchReload();
@@ -185,10 +185,10 @@ describe("plugin lifecycle CLI transport", () => {
 
     expect(mocks.call).toHaveBeenCalledOnce();
     expect(commitGuard).not.toHaveBeenCalled();
-    labsEnabled = false;
+    templatesEnabled = false;
     reply.resolve({ runtime: runtimeReceipt });
 
-    await expect(result).rejects.toBeInstanceOf(TemplatesLabsDisabledError);
+    await expect(result).rejects.toBeInstanceOf(TemplatesDisabledError);
     expect(commitGuard).toHaveBeenCalledOnce();
   });
 

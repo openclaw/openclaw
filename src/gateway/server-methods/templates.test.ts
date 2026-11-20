@@ -23,12 +23,12 @@ vi.mock("../../templates/clawhub-source.js", async (importOriginal) => ({
 
 afterEach(() => vi.clearAllMocks());
 
-const enabled = { gateway: { controlUi: { experimental: { templates: true } } } };
+const disabled = { gateway: { controlUi: { experimental: { templates: false } } } };
 
 async function catalogRequest(
   method: string,
   params: Record<string, unknown>,
-  getRuntimeConfig: () => unknown = () => enabled,
+  getRuntimeConfig: () => unknown = () => ({}),
 ) {
   const handler = expectDefined(templatesHandlers[method], method);
   const respond = await callAgentHandler(handler, method, params, {
@@ -48,8 +48,8 @@ describe("ClawHub Template catalog Gateway methods", () => {
   const previewParams = { ...release, kind: "instruction", name: "AGENTS.md" };
   const preview = { kind: "instruction", name: "AGENTS.md", content: "# Instructions" };
 
-  it("rejects discovery with Labs off", async () => {
-    expectError(await catalogRequest("templates.catalog.search", {}, () => ({})), "FORBIDDEN");
+  it("rejects discovery on explicit opt-out", async () => {
+    expectError(await catalogRequest("templates.catalog.search", {}, () => disabled), "FORBIDDEN");
     expect(listClawHubTemplates).not.toHaveBeenCalled();
   });
 
@@ -86,7 +86,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
   });
 
   it.each([true, false])(
-    "returns a bounded overview while Labs remains enabled (%s)",
+    "returns a bounded overview unless discovery is disabled (%s)",
     async (complete) => {
       const overview = { featured: [entry], sections: [] };
       readClawHubTemplatesOverview.mockResolvedValue(complete ? overview : undefined);
@@ -99,11 +99,9 @@ describe("ClawHub Template catalog Gateway methods", () => {
       expect(listClawHubTemplates).not.toHaveBeenCalled();
       const source = createDeferredCore<unknown>();
       readClawHubTemplatesOverview.mockReturnValue(source.promise);
-      let labsEnabled = true;
-      const pending = catalogRequest("templates.catalog.search", { overview: true }, () =>
-        labsEnabled ? enabled : {},
-      );
-      labsEnabled = false;
+      let config = {};
+      const pending = catalogRequest("templates.catalog.search", { overview: true }, () => config);
+      config = disabled;
       source.resolve(overview);
       expectError(await pending, "FORBIDDEN");
     },
@@ -115,7 +113,7 @@ describe("ClawHub Template catalog Gateway methods", () => {
     ["templates.catalog.detail", readClawHubTemplateDetail, entry, "detail", release],
     ["templates.catalog.preview", readClawHubTemplatePreview, previewParams, "preview", preview],
   ] as const)(
-    "%s returns the requested result only while Labs remains enabled",
+    "%s serves the result by default and honors an opt-out before delivery",
     async (method, sourceMock, params, field, result) => {
       expect(coreGatewayHandlers[method]).toBeDefined();
       expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
@@ -126,10 +124,9 @@ describe("ClawHub Template catalog Gateway methods", () => {
       expect(sourceMock).toHaveBeenCalledWith(params);
       const source = createDeferredCore<unknown>();
       sourceMock.mockReturnValue(source.promise);
-      let labsEnabled = true;
-      const pending = catalogRequest(method, params, () => (labsEnabled ? enabled : {}));
-
-      labsEnabled = false;
+      let config = {};
+      const pending = catalogRequest(method, params, () => config);
+      config = disabled;
       source.resolve(result);
       expectError(await pending, "FORBIDDEN");
     },

@@ -9,8 +9,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as cliTestHelpers from "./templates-cli.test-helpers.js";
 
-const enabledTemplatesLabsConfig = {
-  gateway: { controlUi: { experimental: { templates: true } } },
+const disabledTemplatesConfig = {
+  gateway: { controlUi: { experimental: { templates: false } } },
 };
 
 const mocks = vi.hoisted(() => ({
@@ -130,8 +130,8 @@ const logLines = () => mocks.runtime.log.mock.calls.map(([line]) => String(line)
 describe("templates cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadConfig.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
-    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue(enabledTemplatesLabsConfig);
+    mocks.loadConfig.mockReset().mockReturnValue({});
+    mocks.readCurrentConfigForPolicyCheck.mockReset().mockReturnValue({});
     mocks.listConfiguredMcpServers.mockReset().mockResolvedValue({
       ok: true,
       mcpServers: {},
@@ -165,15 +165,19 @@ describe("templates cli", () => {
     vi.restoreAllMocks();
   });
 
-  it("blocks local Add while Templates Labs is off", async () => {
-    mocks.loadConfig.mockReturnValue({});
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
-    expect(await add(["--dry-run", "--json"])).toMatchObject({
-      ok: false,
-      error: { code: "templates_labs_disabled" },
-    });
-    expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
-  });
+  it.each([true, false])(
+    "blocks local Add when explicitly disabled (dry run: %s)",
+    async (dryRun) => {
+      mocks.loadConfig.mockReturnValue(disabledTemplatesConfig);
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue(disabledTemplatesConfig);
+      expect(await add(dryRun ? ["--dry-run", "--json"] : ["--json"])).toMatchObject({
+        ok: false,
+        error: { code: "templates_labs_disabled" },
+      });
+      expect(mocks.withOpenClawStateLease).not.toHaveBeenCalled();
+      expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
+    },
+  );
 
   it("resolves a registry name to verified artifact bytes for dry-run and scoped Add", async () => {
     const registry = await registryFixture();
@@ -286,8 +290,7 @@ describe("templates cli", () => {
     const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
     const expectedWorkspace = await cliTestHelpers.canonicalFuturePath(workspace);
     if (agentId) {
-      mocks.loadConfig.mockReturnValue({
-        ...enabledTemplatesLabsConfig,
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({
         agents: { entries: { "demo-agent": {} } },
       });
     }
@@ -377,8 +380,8 @@ describe("templates cli", () => {
     });
   });
 
-  it("does not Add when Labs was switched off after planning", async () => {
-    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+  it("does not Add when Templates is explicitly disabled after planning", async () => {
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue(disabledTemplatesConfig);
     expect(await add(["--json"])).toMatchObject({
       status: "failed",
       error: { code: "templates_labs_disabled" },
@@ -386,11 +389,11 @@ describe("templates cli", () => {
     expect(mocks.applyTemplateAddPlanStateless).not.toHaveBeenCalled();
   });
 
-  it("stops Add effects when Labs turns off after apply begins", async () => {
+  it("stops Add effects when Templates is explicitly disabled after apply begins", async () => {
     const commitEffect = vi.fn();
     mocks.applyTemplateAddPlanStateless.mockImplementationOnce(async (_plan, options) => {
       await Promise.resolve();
-      mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+      mocks.readCurrentConfigForPolicyCheck.mockReturnValue(disabledTemplatesConfig);
       options.assertForwardCurrent?.();
       commitEffect();
     });

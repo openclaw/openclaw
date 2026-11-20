@@ -153,7 +153,6 @@ it.each([
         return sourceImplementation(...args);
       });
       let config: OpenClawConfig = {
-        gateway: { controlUi: { experimental: { templates: true } } },
         agents: {
           entries: { main: { workspace: state.path("existing-workspace") } },
           defaults: { model: "ollama/test-model" },
@@ -520,7 +519,6 @@ it.each([
 it("publishes the ordinary durable agent and empty canonical chat before resolving Template source", async () => {
   await withOpenClawTestState({ label: "template-before-source" }, async (state) => {
     const config: OpenClawConfig = {
-      gateway: { controlUi: { experimental: { templates: true } } },
       agents: {
         ownership: "explicit",
         entries: {
@@ -704,7 +702,6 @@ it.each([false, true])("drops a blocked review's agent (chat cleanup fails: %s)"
       }),
     );
     const config: OpenClawConfig = {
-      gateway: { controlUi: { experimental: { templates: true } } },
       agents: {
         entries: { main: { workspace: state.path("existing-workspace") } },
         defaults: { model: "ollama/test-model" },

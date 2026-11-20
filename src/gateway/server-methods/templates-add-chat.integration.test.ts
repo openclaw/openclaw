@@ -241,7 +241,6 @@ async function withGateway(
     async (state) => {
       let config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
-        gateway: { controlUi: { experimental: { templates: true } } },
         agents: {
           entries: { main: { workspace: state.path("existing-workspace") }, ...entries },
           ...(Object.keys(entries).length > 0 ? { ownership: "explicit" as const } : {}),

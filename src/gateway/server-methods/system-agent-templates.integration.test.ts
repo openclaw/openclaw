@@ -75,7 +75,7 @@ it.for([
   "deny",
   "cancel",
   "revoked",
-  "labs",
+  "disabled",
   "authority",
   "trust",
   "trust-approved",
@@ -88,7 +88,9 @@ it.for([
     const succeeds = ["approve", "direct", "automatic", "trust-approved"].includes(scenario);
     await withOpenClawTestState({ label: "setup-template" }, async (state) => {
       let config: OpenClawConfig = {
-        gateway: { controlUi: { experimental: { templates: scenario !== "labs" } } },
+        ...(scenario === "disabled"
+          ? { gateway: { controlUi: { experimental: { templates: false } } } }
+          : {}),
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
@@ -255,11 +257,15 @@ it.for([
             );
           try {
             await run(async () => {
-              if (scenario === "authority" || scenario === "labs" || scenario === "unavailable") {
+              if (
+                scenario === "authority" ||
+                scenario === "disabled" ||
+                scenario === "unavailable"
+              ) {
                 const review = await engine.handle("Review this published Template");
                 expect(review.text).toContain(
-                  scenario === "labs"
-                    ? "Settings > Labs"
+                  scenario === "disabled"
+                    ? "gateway.controlUi.experimental.templates"
                     : scenario === "authority"
                       ? "operator.admin"
                       : "Template Add preview is unavailable",

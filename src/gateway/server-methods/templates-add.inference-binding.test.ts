@@ -123,7 +123,7 @@ type Fixture = Parameters<Parameters<typeof withFixture>[0]>[0];
 async function withTemplateRuntime(fixture: Fixture, run: () => Promise<void>) {
   const cfg = fixture.getConfig();
   fixture.publish({
-    gateway: { mode: "local", controlUi: { experimental: { templates: true } } },
+    gateway: { mode: "local" },
     agents: {
       ...cfg.agents,
       defaults: {

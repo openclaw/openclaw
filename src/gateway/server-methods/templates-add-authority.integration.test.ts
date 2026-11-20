@@ -194,7 +194,6 @@ it.each([
   async (boundary) => {
     await withOpenClawTestState({ label: "template-request-authority" }, async (state) => {
       let config: OpenClawConfig = {
-        gateway: { controlUi: { experimental: { templates: true } } },
         agents: {
           entries: { main: { workspace: state.path("existing-workspace") } },
           defaults: { model: "ollama/test-model" },
@@ -532,7 +531,6 @@ it.each(["allowed", "revoked"] as const)(
         pluginIo.security.mockResolvedValue(clawHubSecurityResponse(pluginPackage, "1.0.0"));
         pluginIo.download.mockResolvedValue({ ...archive, cleanup: async () => {} });
         let config: OpenClawConfig = {
-          gateway: { controlUi: { experimental: { templates: true } } },
           agents: {
             entries: { main: { workspace: state.path("existing-workspace") } },
             defaults: { model: "ollama/test-model" },

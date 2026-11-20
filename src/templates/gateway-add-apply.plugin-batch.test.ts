@@ -92,7 +92,7 @@ const projection = {
   configuredAccess,
   readiness: { ready: true, requirements: [] },
 } as unknown as TemplateLifecyclePlanResult;
-const config: OpenClawConfig = { gateway: { controlUi: { experimental: { templates: true } } } };
+const config: OpenClawConfig = {};
 
 beforeEach(() => {
   vi.resetAllMocks();

@@ -20,17 +20,17 @@ import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { applyTemplateAddPlanStateless } from "../templates/add-stateless.js";
 import { TEMPLATE_ADD_RESULT_SCHEMA_VERSION, TemplateAddMutationError } from "../templates/add.js";
 import {
+  assertTemplatesEnabled,
+  isTemplatesEnabled,
+  TEMPLATES_DISABLED_MESSAGE,
+  TemplatesDisabledError,
+} from "../templates/availability.js";
+import {
   ClawHubSourceError,
   withResolvedClawHubSource,
   type ClawHubTemplateTrust,
 } from "../templates/clawhub-source.js";
 import { templateDependencyInventory } from "../templates/dependency-inventory.js";
-import {
-  assertTemplatesLabsEnabled,
-  TEMPLATES_LABS_DISABLED_MESSAGE,
-  TemplatesLabsDisabledError,
-  isTemplatesLabsEnabled,
-} from "../templates/labs-gate.js";
 import { buildTemplateAddPlan } from "../templates/lifecycle.js";
 import {
   preflightTemplatePackage,
@@ -56,6 +56,9 @@ import {
   logTemplateAgentConfiguration,
 } from "./templates-cli-output.js";
 import type { TemplatesAddOptions, TemplatesInspectOptions } from "./templates-cli.js";
+
+// Keep the published CLI JSON error code for callers that handle a disabled Gateway.
+const TEMPLATES_DISABLED_CODE = "templates_labs_disabled";
 
 type TemplateCliSkillWarning =
   import("../templates/package-install-options.js").TemplateSkillWarning;
@@ -187,12 +190,12 @@ export async function runTemplatesAddCommand(
       request.mode === "preview"
         ? readCurrentConfigForPolicyCheck({ configPath: resolveConfigPath(), env: process.env })
         : getRuntimeConfig();
-    if (!isTemplatesLabsEnabled(config)) {
-      emitTemplateFailure(opts.json, TEMPLATES_LABS_DISABLED_MESSAGE, {
+    if (!isTemplatesEnabled(config)) {
+      emitTemplateFailure(opts.json, TEMPLATES_DISABLED_MESSAGE, {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
         ok: false,
-        error: { code: "templates_labs_disabled", message: TEMPLATES_LABS_DISABLED_MESSAGE },
+        error: { code: TEMPLATES_DISABLED_CODE, message: TEMPLATES_DISABLED_MESSAGE },
       });
       return;
     }
@@ -433,9 +436,9 @@ async function runTemplatesAddFromSource(
   try {
     const configPath = resolveConfigPath();
     const configEnv = process.env;
-    const assertCurrentLab = () =>
-      assertTemplatesLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
-    assertCurrentLab();
+    const assertCurrentlyEnabled = () =>
+      assertTemplatesEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+    assertCurrentlyEnabled();
     addResult = await withOpenClawStateLease(
       {
         scope: "core:agent-deletion",
@@ -448,7 +451,7 @@ async function runTemplatesAddFromSource(
         operationLabel: "template.add.lease",
       },
       async (lease) => {
-        assertCurrentLab();
+        assertCurrentlyEnabled();
         const onCapabilityConsent = resolvePluginCapabilityConsentCliOptions({
           action: "install",
           acceptCapabilities: opts.acceptCapabilities,
@@ -459,7 +462,7 @@ async function runTemplatesAddFromSource(
         const assertCurrent = () => {
           request.assertCurrent();
           lease.assertOwned();
-          assertCurrentLab();
+          assertCurrentlyEnabled();
         };
         assertCurrent();
         const conversation = createLocalTemplateConversationAdapters({
@@ -475,7 +478,7 @@ async function runTemplatesAddFromSource(
             ...conversation,
             config,
             assertCurrent,
-            assertForwardCurrent: assertCurrentLab,
+            assertForwardCurrent: assertCurrentlyEnabled,
             pluginConsent: {
               onCapabilityConsent: async (review) => await onCapabilityConsent?.(review),
               confirmInstall: async (_pluginId, warning) =>
@@ -500,8 +503,8 @@ async function runTemplatesAddFromSource(
     );
   } catch (error) {
     const code =
-      error instanceof TemplatesLabsDisabledError
-        ? "templates_labs_disabled"
+      error instanceof TemplatesDisabledError
+        ? TEMPLATES_DISABLED_CODE
         : error instanceof TemplateAddMutationError
           ? error.code
           : "add_failed";

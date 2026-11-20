@@ -78,7 +78,7 @@ function runTemplates(root: string, args: string[]) {
 
 describe("Template authoring process state", () => {
   it(
-    "previews with stored plugin metadata without changing operator state",
+    "previews with stored plugin metadata and no Templates opt-in without changing operator state",
     { timeout: 120_000 },
     async () => {
       const root = tempDirs.make("openclaw-templates-populated-state-");
@@ -88,7 +88,6 @@ describe("Template authoring process state", () => {
       await fs.writeFile(
         path.join(root, "config", "openclaw.json"),
         JSON.stringify({
-          gateway: { controlUi: { experimental: { templates: true } } },
           models: {
             providers: {
               fixture: {
@@ -107,7 +106,7 @@ describe("Template authoring process state", () => {
       const before = await snapshotTree(root);
       const result = runTemplates(root, ["add", project, "--dry-run", "--json"]);
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stderr || result.stdout).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         agent: { finalId: "authoring-state-test" },
         blockers: [],
@@ -123,12 +122,7 @@ describe("Template authoring process state", () => {
       const external = tempDirs.make("openclaw-templates-dev-external-");
       const project = path.join(external, "project");
       const workspace = path.join(external, "dev-workspace");
-      await fs.mkdir(path.join(root, "config"), { recursive: true });
       await fs.mkdir(path.join(root, "state"), { recursive: true });
-      await fs.writeFile(
-        path.join(root, "config", "openclaw.json"),
-        JSON.stringify({ gateway: { controlUi: { experimental: { templates: true } } } }),
-      );
       await fs.writeFile(
         path.join(root, "state", "restart-sentinel.json"),
         JSON.stringify({ version: 1, payload: { kind: "restart", status: "ok", ts: 1 } }),
@@ -148,7 +142,7 @@ describe("Template authoring process state", () => {
       ]);
 
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stderr || result.stdout).toBe(0);
       expect(JSON.parse(result.stdout)).toBeTruthy();
       expect(await snapshotTree(root)).toEqual(before);
     },
