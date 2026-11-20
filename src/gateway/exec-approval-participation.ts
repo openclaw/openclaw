@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureActiveEmbeddedRunParticipation } from "../agents/embedded-agent-runner/run-state.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { validateAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import {
   getResidentUserProfileDisplay,
   readResidentUserProfileId,
@@ -88,6 +89,30 @@ export function authorizeParticipationExecApprovalMethod(params: {
   client: GatewayClient | null | undefined;
   manager: Pick<ExecApprovalManager, "getLiveSnapshot"> | undefined;
 }): boolean | undefined {
+  if (params.method === "exec.approval.request" || params.method === "exec.approval.waitDecision") {
+    const identity = params.client?.internal?.agentRuntimeIdentity;
+    const captured = identity && captureActiveEmbeddedRunParticipation(identity);
+    if (!captured || !identity || params.client?.invalidated) {
+      return undefined;
+    }
+    if (params.method === "exec.approval.request") {
+      return true;
+    }
+    const record =
+      isRecord(params.params) && typeof params.params.id === "string"
+        ? params.manager?.getLiveSnapshot(params.params.id)
+        : undefined;
+    // Waiting consumes only this retained tool owner's request, never another approval.
+    return record?.participation?.participantProfileId === captured.ceiling.profileId &&
+      record.participation.sessionKey === captured.ceiling.sessionKey &&
+      record.agentRuntimeDelegatedAuthority &&
+      validateAgentRunDelegatedAuthority(
+        record.agentRuntimeDelegatedAuthority,
+        identity.delegatedAuthority,
+      )
+      ? true
+      : undefined;
+  }
   if (params.method !== "exec.approval.resolve" && params.method !== "approval.resolve") {
     return undefined;
   }
