@@ -634,13 +634,12 @@ function detail(
   const readiness = neededPluginState(scribe, detection);
   if (scribe.plugin && readiness) {
     const value = el("span", undefined, "scribe-status");
-    const userToken = scribe.plugin.channel && detection.userTokens?.[scribe.plugin.id];
-    value.append(
-      el(
-        "span",
-        `${pluginStateText(scribe.plugin, readiness)}${userToken === undefined ? "" : userToken ? " · user token configured" : " · no user token"}`,
-      ),
-    );
+    const tokens = scribe.plugin.channel && detection.tokens?.[scribe.plugin.id];
+    const tokenText = [
+      tokens?.bot === false ? "no bot token" : "",
+      tokens?.user === undefined ? "" : tokens.user ? "user token configured" : "no user token",
+    ].filter(Boolean);
+    value.append(el("span", [pluginStateText(scribe.plugin, readiness), ...tokenText].join(" · ")));
     if (readiness !== "ready") {
       value.append(
         pluginButton(host.basePath, scribe.plugin, readiness, "knowledge-quiet knowledge-small"),

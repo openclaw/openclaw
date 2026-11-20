@@ -553,6 +553,7 @@ export function openStartDialog(input: StartDialogInput) {
     const fields = slackFields(input.detection, changed);
     frame.body.append(...fields.nodes);
     mode = fields.mode;
+    valid = fields.valid;
     options = fields.options;
   } else if (scribe.id === "claim-consolidation") {
     const fields = reviewFields(changed);

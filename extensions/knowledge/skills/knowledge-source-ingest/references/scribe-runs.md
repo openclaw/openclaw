@@ -35,7 +35,11 @@ direct messages and group DMs are included.
    short or empty and still have a `nextPageToken`. Archived conversations are
    left out (don't pass `includeArchived`).
    - With `readAs: "bot"`: every channel the bot is a member of. Read these
-     with `readAs: "bot"`.
+     with `readAs: "bot"`. If that call says the account has no bot token
+     (an account that posts as the user): with the user-token setting on, go
+     on with the `readAs: "user"` listing and reads below only; with it off,
+     stop with
+     `Scribe status: failed — the Slack account has no bot token; turn on the user-token setting to read as the user`.
    - Only when the settings allow the user token: also list with
      `readAs: "user"`. If that call says no user token is configured, go on
      with the bot's channels only. Read channels found only in this listing

@@ -48,19 +48,27 @@ export function slackFields(detection: ScribeDetection, changed: () => void) {
       "scribe-slack-often",
     ),
   );
-  const userToken = detection.userTokens?.slack;
+  const tokens = detection.tokens?.slack;
+  // An account without a bot token can only be read as the user, which the owner must turn on.
+  const userOnly = tokens?.bot === false && tokens.user !== false;
   const which = el("fieldset", undefined, "knowledge-choices");
   which.append(
     el("legend", "Which conversations"),
-    el("p", "Every channel your Slack bot is a member of.", "knowledge-muted"),
+    el(
+      "p",
+      userOnly
+        ? "This Slack account has no bot token, so the scribe can only read as you. Turn on the user token to start."
+        : "Every channel your Slack bot is a member of.",
+      "knowledge-muted",
+    ),
     choice(
       "checkbox",
       "scribe-slack-user-token",
-      "Also channels your user token can access",
-      userToken === false
+      userOnly ? "Read as you with your user token" : "Also channels your user token can access",
+      tokens?.user === false
         ? "No Slack user token is configured for the Slack account."
         : "Uses the Slack user token configured for the Slack account, which can read more than the bot.",
-      userToken === false,
+      tokens?.user === false,
       toggle("userToken"),
     ),
     choice(
@@ -96,6 +104,7 @@ export function slackFields(detection: ScribeDetection, changed: () => void) {
   return {
     nodes: [often, which, since],
     mode: () => state.mode,
+    valid: () => !userOnly || state.userToken,
     options: () => ({
       since: state.since,
       userToken: state.userToken,

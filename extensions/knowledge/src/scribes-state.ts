@@ -130,11 +130,14 @@ export type ScribeDetection = {
   /** Readiness of the plugins scribes need, by plugin id. */
   plugins?: Record<string, PluginReadiness>;
   /**
-   * Whether a channel plugin's default account has a usable user token, by plugin id. Absent
-   * when it could not be read.
+   * Which tokens a channel plugin's default account has usable, by plugin id. A field the
+   * account did not report is absent, and so is a plugin that could not be read.
    */
-  userTokens?: Record<string, boolean>;
+  tokens?: Record<string, AccountTokens>;
 };
+
+/** Whether a channel account has a usable bot token and user token. */
+export type AccountTokens = { bot?: boolean; user?: boolean };
 
 /** The Gateway access scribe reads need: the page host's authenticated request. */
 type ScribeReader = Pick<ControlUiHost, "request">;
@@ -493,7 +496,8 @@ async function conversationCount(host: ScribeReader, agentId: string, archived: 
 
 /**
  * The default account of a channel from channels.status: ready when it is configured, enabled and
- * running, and whether it has a usable user token (undefined when the account does not say).
+ * running, and which of its bot and user tokens are usable (a token the account does not report
+ * is left out).
  * Undefined when channels.status can't be read.
  */
 async function channelAccount(host: ScribeReader, channel: string) {
@@ -513,22 +517,30 @@ async function channelAccount(host: ScribeReader, channel: string) {
   if (!isRecord(account)) {
     return { ready: false };
   }
-  const status = account.userTokenStatus;
+  const tokens: AccountTokens = {};
+  for (const [key, status] of [
+    ["bot", account.botTokenStatus],
+    ["user", account.userTokenStatus],
+  ] as const) {
+    if (typeof status === "string") {
+      tokens[key] = status === "available";
+    }
+  }
   return {
     ready: account.enabled !== false && account.configured === true && account.running === true,
-    ...(typeof status === "string" && { userToken: status === "available" }),
+    tokens,
   };
 }
 
 /**
  * Readiness of one plugin from plugins.inspect, and for a channel plugin from its default
- * account in channels.status, with whether that account has a user token. A plugin the Gateway
+ * account in channels.status, with which tokens that account has. A plugin the Gateway
  * does not know is rejected as an invalid request; any other failure is left unknown (undefined).
  */
 async function pluginReadiness(
   host: ScribeReader,
   plugin: ScribePlugin,
-): Promise<{ readiness?: PluginReadiness; userToken?: boolean }> {
+): Promise<{ readiness?: PluginReadiness; tokens?: AccountTokens }> {
   const result = await host
     .request<{
       plugin?: { installed?: boolean; enabled?: boolean };
@@ -560,7 +572,7 @@ async function pluginReadiness(
   }
   return {
     readiness: account.ready ? "ready" : "needs-sign-in",
-    ...(account.userToken !== undefined && { userToken: account.userToken }),
+    ...(account.tokens && Object.keys(account.tokens).length && { tokens: account.tokens }),
   };
 }
 
@@ -570,22 +582,22 @@ const scribePlugins = () =>
     (plugin, i, all) => all.findIndex((other) => other.id === plugin.id) === i,
   );
 
-// Readiness and user tokens by plugin id, leaving out what could not be read.
+// Readiness and account tokens by plugin id, leaving out what could not be read.
 async function detectPlugins(host: ScribeReader) {
   const plugins = scribePlugins();
   const states = await Promise.all(plugins.map((plugin) => pluginReadiness(host, plugin)));
   const readiness: Record<string, PluginReadiness> = {};
-  const userTokens: Record<string, boolean> = {};
+  const tokens: Record<string, AccountTokens> = {};
   plugins.forEach((plugin, i) => {
     const state = states[i]!;
     if (state.readiness !== undefined) {
       readiness[plugin.id] = state.readiness;
     }
-    if (state.userToken !== undefined) {
-      userTokens[plugin.id] = state.userToken;
+    if (state.tokens) {
+      tokens[plugin.id] = state.tokens;
     }
   });
-  return { readiness, userTokens };
+  return { readiness, tokens };
 }
 
 /** Facts the Available rows can show honestly. Failed reads leave their fields out. */
@@ -617,12 +629,12 @@ export async function detectSources(host: ScribeReader, agentId: string): Promis
     }
   }
   if (plugins.status === "fulfilled") {
-    const { readiness, userTokens } = plugins.value;
+    const { readiness, tokens } = plugins.value;
     if (Object.keys(readiness).length) {
       detection.plugins = readiness;
     }
-    if (Object.keys(userTokens).length) {
-      detection.userTokens = userTokens;
+    if (Object.keys(tokens).length) {
+      detection.tokens = tokens;
     }
   }
   return detection;

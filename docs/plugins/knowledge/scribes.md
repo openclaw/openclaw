@@ -116,7 +116,11 @@ The start dialog offers:
 - **Also channels your user token can access** (off by default): also reads
   every channel the Slack account's user token can access, beyond the channels
   the bot is a member of. The option is disabled when the account has no user
-  token. Without it, the scribe reads only channels the bot is in.
+  token. Without it, the scribe reads only channels the bot is in. An account
+  without a bot token (one that posts as the user) can only be read as the
+  user: the dialog says so and **Start** stays disabled until you turn this
+  option on. A run of such a scribe without the option stops with
+  `Scribe status: failed` and asks for it.
 - **Direct messages and group DMs** (off by default): also reads the direct
   messages and group DMs the token can read.
 
@@ -299,7 +303,7 @@ verification still fails after a fix attempt.
 
 Open a scribe for its schedule, next and last run, model, failure alert, and
 recent runs. Learn from Granola and Learn from Slack also show their plugin's
-state as their source; for Slack, it says whether the account has a user token.
+state as their source; for Slack, it also says whether the account has a bot token and a user token.
 
 | Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

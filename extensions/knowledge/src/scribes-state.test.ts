@@ -674,26 +674,33 @@ describe("Slack readiness", () => {
       return { sessions: [], files: [] };
     });
     const detection = await detectSources({ request } as never, "main");
-    return { slack: detection.plugins?.slack, userTokens: detection.userTokens };
+    return { slack: detection.plugins?.slack, tokens: detection.tokens };
   };
   const running = { enabled: true, configured: true, running: true };
 
-  it("needs a configured, running default Slack account, and reports its user token", async () => {
-    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", userTokens: undefined });
+  it("needs a configured, running default Slack account, and reports its tokens", async () => {
+    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", tokens: undefined });
     expect(await read(() => status({ ...running, running: false }))).toMatchObject({
       slack: "needs-sign-in",
     });
     expect(await read(() => status({ ...running, configured: false }))).toMatchObject({
       slack: "needs-sign-in",
     });
-    expect(await read(() => status({ ...running, userTokenStatus: "missing" }))).toEqual({
+    const bot = { ...running, botTokenStatus: "available" };
+    expect(await read(() => status({ ...bot, userTokenStatus: "missing" }))).toEqual({
       slack: "ready",
-      userTokens: { slack: false },
+      tokens: { slack: { bot: true, user: false } },
     });
-    expect(await read(() => status({ ...running, userTokenStatus: "available" }))).toEqual({
+    expect(await read(() => status({ ...bot, userTokenStatus: "available" }))).toEqual({
       slack: "ready",
-      userTokens: { slack: true },
+      tokens: { slack: { bot: true, user: true } },
     });
+    // A user-only account (posting as the user, no bot token) is ready and says it has no bot.
+    expect(
+      await read(() =>
+        status({ ...running, botTokenStatus: "missing", userTokenStatus: "available" }),
+      ),
+    ).toEqual({ slack: "ready", tokens: { slack: { bot: false, user: true } } });
   });
 
   it("leaves Slack unknown when channels.status can't be read", async () => {
@@ -701,7 +708,7 @@ describe("Slack readiness", () => {
       await read(() => {
         throw new Error("missing scope");
       }),
-    ).toEqual({ slack: undefined, userTokens: undefined });
+    ).toEqual({ slack: undefined, tokens: undefined });
   });
 });
 

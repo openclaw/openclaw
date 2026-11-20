@@ -37,7 +37,10 @@ const startButton = (dialog: HTMLDialogElement) =>
   [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Start")!;
 
 it("offers the Slack user token only when the account has one, and DMs on request", () => {
-  const without = open({ plugins: { slack: "ready" }, userTokens: { slack: false } });
+  const without = open({
+    plugins: { slack: "ready" },
+    tokens: { slack: { bot: true, user: false } },
+  });
   expect(without.textContent).toContain("Slack connected.");
   expect(box(without, "scribe-slack-user-token").disabled).toBe(true);
   expect(without.textContent).toContain("No Slack user token is configured");
@@ -46,7 +49,10 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   );
   document.body.replaceChildren();
 
-  const withToken = open({ plugins: { slack: "ready" }, userTokens: { slack: true } });
+  const withToken = open({
+    plugins: { slack: "ready" },
+    tokens: { slack: { bot: true, user: true } },
+  });
   expect(box(withToken, "scribe-slack-user-token").disabled).toBe(false);
   box(withToken, "scribe-slack-user-token").click();
   box(withToken, "scribe-slack-dms").click();
@@ -61,6 +67,22 @@ it("offers the Slack user token only when the account has one, and DMs on reques
     ),
   );
   expect(startButton(withToken).disabled).toBe(false);
+});
+
+it("asks the owner to turn on the user token when the Slack account has no bot token", () => {
+  const dialog = open({
+    plugins: { slack: "ready" },
+    tokens: { slack: { bot: false, user: true } },
+  });
+  expect(dialog.textContent).toContain("This Slack account has no bot token");
+  const tokenBox = box(dialog, "scribe-slack-user-token");
+  expect(tokenBox.checked).toBe(false);
+  expect(startButton(dialog).disabled).toBe(true);
+  tokenBox.click();
+  expect(startButton(dialog).disabled).toBe(false);
+  expect(dialog.querySelector("textarea")!.value).toContain(
+    "- Slack user token: also read every channel the owner's Slack user token can access",
+  );
 });
 
 it("blocks starting until the Slack account runs, and connects it on the Channels page", () => {
