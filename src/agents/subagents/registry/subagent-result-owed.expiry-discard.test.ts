@@ -12,7 +12,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
-import { renderRuntimeCoordinationFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -48,85 +47,102 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("records a visible failure notice when a suspended required result expires", async () => {
-  // Silence the operator warning; the requester-visible notice is the contract here.
-  using _ = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
-  const suspendedAt = Date.now();
-  const resultText = "Expiry case: the finished child found the missing invoice.";
-  const target = {
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    sessionId: "expiry-requester",
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-  };
-  publishSystemEventStoreResolver(() => target.storePath);
-  await upsertSessionEntryCore(target, {
-    sessionId: target.sessionId,
-    lifecycleRevision: "expiry-requester-revision",
-    updatedAt: suspendedAt,
-  });
-  // Start at the durable state produced after a completion window exhausts.
-  // No cancellation, requester deletion, store change, or revocation occurs.
-  const entry = createSubagentStoreRunFixture({
-    runId: "owed-expiry-child",
-    requesterStorePath: target.storePath,
-    completionTarget: "parent",
-    completionRequesterSessionId: target.sessionId,
-    completionRequesterLifecycleRevision: "expiry-requester-revision",
-    createdAt: suspendedAt - 31 * 60_000,
-    execution: {
-      status: "terminal",
-      startedAt: suspendedAt - 31 * 60_000,
-      endedAt: suspendedAt - 30 * 60_000,
-      outcome: { status: "ok" },
-    },
-    completion: {
-      required: true,
-      capturedAt: suspendedAt - 30 * 60_000,
-      resultText,
-      terminalReply: { disposition: "visible", text: resultText },
-    },
-    delivery: {
-      status: "suspended",
-      suspendedAt,
-      suspendedReason: "expiry",
-      lastError: "requester delivery unavailable during completion window",
-    },
-  });
-  await mutateSubagentRuns([entry.runId], () => ({
-    value: undefined,
-    postimages: new Map([[entry.runId, entry]]),
-  }));
-  expect(await loadTranscriptEvents(target)).toEqual([]);
-
-  vi.setSystemTime(suspendedAt + 7 * 24 * 60 * 60_000 - 1);
-  await testing.sweepOnceForTests();
-  expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery?.status).toBe("suspended");
-
-  vi.setSystemTime(suspendedAt + 7 * 24 * 60 * 60_000);
-  await testing.sweepOnceForTests();
-  await settleRootWork(true);
-
-  const persisted = loadSubagentRegistryFromSqlite().get(entry.runId);
-  const notices = (await loadTranscriptEvents(target)).filter((event) => {
-    const message = event as {
-      type?: string;
-      display?: boolean;
-      details?: { childRunId?: string };
+it.each(["suspended", "pending", "not_required"] as const)(
+  "reports expired %s delivery to an idle requester only when required",
+  async (status) => {
+    using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+    const endedAt = Date.now();
+    const required = status !== "not_required";
+    const suspended = status === "suspended";
+    const expiresAt = endedAt + (suspended ? 7 * 24 * 60 * 60_000 : 30 * 60_000);
+    const resultText =
+      "Captured before drain: the missing invoice is in archive A. " + "x".repeat(3_000);
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "expiry-requester",
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
     };
-    return (
-      message.type === "custom_message" &&
-      message.display === true &&
-      message.details?.childRunId === entry.runId
+    publishSystemEventStoreResolver(() => target.storePath);
+    await upsertSessionEntryCore(target, {
+      sessionId: target.sessionId,
+      lifecycleRevision: "expiry-requester-revision",
+      updatedAt: endedAt,
+    });
+    // Restore the durable drain-interrupted outcome; the requester never starts another turn.
+    const entry = createSubagentStoreRunFixture({
+      runId: "owed-expiry-child",
+      requesterStorePath: target.storePath,
+      expectsCompletionMessage: required,
+      endedReason: "subagent-error",
+      completionRequesterSessionId: target.sessionId,
+      completionRequesterLifecycleRevision: "expiry-requester-revision",
+      createdAt: endedAt - 60_000,
+      execution: {
+        status: "terminal",
+        startedAt: endedAt - 60_000,
+        endedAt,
+        outcome: { status: "error", error: "Gateway stopped" },
+      },
+      completion: {
+        required,
+        capturedAt: endedAt,
+        resultText,
+        terminalReply: { disposition: "visible", text: resultText },
+      },
+      delivery: suspended
+        ? { status: "suspended", suspendedAt: endedAt, suspendedReason: "expiry" }
+        : { status },
+    });
+    await mutateSubagentRuns([entry.runId], () => ({
+      value: undefined,
+      postimages: new Map([[entry.runId, entry]]),
+    }));
+    expect(await loadTranscriptEvents(target)).toEqual([]);
+
+    vi.setSystemTime(expiresAt - 1);
+    await testing.sweepOnceForTests();
+    expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery?.status).toBe(status);
+
+    vi.setSystemTime(expiresAt);
+    await testing.sweepOnceForTests();
+    await settleRootWork(true);
+
+    const persisted = loadSubagentRegistryFromSqlite().get(entry.runId);
+    const notices = (await loadTranscriptEvents(target)).filter((event) => {
+      const message = event as {
+        type?: string;
+        display?: boolean;
+        details?: { childRunId?: string };
+      };
+      return (
+        message.type === "custom_message" &&
+        message.display === true &&
+        message.details?.childRunId === entry.runId
+      );
+    });
+    expect(notices).toHaveLength(required ? 1 : 0);
+    if (!required) {
+      expect(persisted?.delivery?.status).toBe("not_required");
+      expect(warn).not.toHaveBeenCalled();
+      return;
+    }
+    expect(persisted?.delivery).toMatchObject({ status: "discarded", discardReason: "expired" });
+    expect(persisted?.completion?.resultText).toBe(resultText);
+    expect(notices[0]).toMatchObject({
+      content: expect.stringContaining(
+        "Captured before drain: the missing invoice is in archive A.",
+      ),
+      details: expect.objectContaining({ childRunId: entry.runId, error: "expired" }),
+    });
+    const rendered = JSON.stringify(notices[0]);
+    expect(rendered).toContain("Interrupted by Gateway restart; not resumed.");
+    expect(rendered).toContain("[result truncated; see full-result recovery below]");
+    expect(rendered).toContain("Full-result recovery:");
+    expect(rendered).not.toContain(resultText);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("delivery discarded"),
+      expect.objectContaining({ runId: entry.runId, reason: "expired" }),
     );
-  });
-  // Retiring the obligation must not be silent: the requester gets exactly one notice.
-  expect(persisted?.delivery?.status).toBe("discarded");
-  expect(notices).toHaveLength(1);
-  expect(JSON.stringify(notices[0])).toContain(
-    JSON.stringify(renderRuntimeCoordinationFailureCopy("child_completion_delivery_failed")).slice(
-      1,
-      -1,
-    ),
-  );
-});
+  },
+);
