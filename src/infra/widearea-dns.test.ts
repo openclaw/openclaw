@@ -92,9 +92,8 @@ it("keeps truncated host labels as valid DNS hostnames", () => {
   expect(srvTarget).toBeDefined();
   expect(dnsLabelRe.test(srvTarget!)).toBe(true);
 
-  const hostOwner = /^([^\s]+) IN A /m.exec(txt)?.[1];
-  expect(hostOwner).toBeDefined();
-  expect(dnsLabelRe.test(hostOwner!)).toBe(true);
+  // The gateway's own A record shares the SRV target; the nameserver is "ns1".
+  expect(txt).toContain(`${srvTarget} IN A `);
 });
 
 it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
