@@ -81,9 +81,13 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       it("does not verify the incumbent while the restart is deferred for active work", async () => {
         vi.useFakeTimers();
         const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+        const start = performance.now();
+        owner.mockImplementation(() =>
+          performance.now() - start === 35_000 ? { ...incumbent, state: "unknown" } : incumbent,
+        );
         const kill = vi.spyOn(process, "kill").mockImplementation(() => {
-          // An inconclusive process probe during deferral is not a replacement.
-          owner.mockReturnValueOnce({ ...incumbent, state: "unknown" });
+          expect(performance.now() - start).toBeGreaterThan(35_000);
+          owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "new-receipt" });
           setTimeout(
             () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
             resolveGatewayRestartDeferralTimeoutMs(),
@@ -91,14 +95,34 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           return true;
         });
         const verified = vi.fn();
-        const wait = waitForGitReleaseSuccessor(options).then(() => verified(owner()?.pid));
+        const wait = waitForGitReleaseSuccessor(options).then((result) =>
+          verified(result, owner()?.pid),
+        );
         await vi.advanceTimersByTimeAsync(90_000);
         expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         expect(verified).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(resolveGatewayRestartDeferralTimeoutMs());
         await wait;
-        expect(verified).toHaveBeenCalledExactlyOnceWith(2345);
+        expect(verified).toHaveBeenCalledExactlyOnceWith({ status: "changed" }, 2345);
       });
+      it.each([undefined, "earlier-receipt"])(
+        "does not extend the wait on delivery alone (prior receipt: %s)",
+        async (prior) => {
+          vi.useFakeTimers();
+          vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
+            ...incumbent,
+            externalRestartReceipt: prior,
+          });
+          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+          const wait = waitForGitReleaseSuccessor(options);
+          await vi.advanceTimersByTimeAsync(90_000);
+          await expect(wait).resolves.toEqual({
+            status: "unverified",
+            incumbentPid: incumbent.pid,
+          });
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+        },
+      );
       it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
         vi.useFakeTimers();
         vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);

@@ -1,10 +1,14 @@
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer, type RequestListener, type Server } from "node:http";
+import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
+import { gitReleaseSlot } from "../../infra/git-release-paths.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
@@ -20,6 +24,7 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as restart from "../daemon-cli/restart-health.test-helpers.js";
 import { expectNoCalls } from "./update-boundary.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import {
   GatewayRestartHealthError,
   runUpdatedInstallGatewayCommand,
@@ -714,71 +719,125 @@ it.each([false, true])("warns about stopped channels after repair (json=%s)", as
   }
 });
 
-it("ends a verified Git release's trial without the release's own settlement", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
+const releaseDirs = useAutoCleanupTempDirTracker(afterEach);
+async function gitTrial() {
   const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
-  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-trial-")));
-  const prefix = path.join(dir, "git-install");
-  try {
-    for (const version of ["1.0.0", "2.0.0"]) {
-      const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
-      await fs.mkdir(releaseRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(releaseRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version }),
-      );
-      await publishGitRelease({ prefix, releaseRoot, trial: true });
-    }
-    const trial = path.join(prefix, "releases", ".trial");
-    await fs.access(trial);
-    result.root = gitReleaseSlot(prefix);
-
-    const { validation } = await verifyHealth({});
-
-    expect(validation.ok).toBe(true);
-    await expect(fs.access(trial)).rejects.toThrow();
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+  const prefix = path.join(releaseDirs.make("release-verification-"), "git-install");
+  for (const version of ["1.0.0", "2.0.0"]) {
+    const { releaseRoot } = await createGitReleaseDirs(prefix);
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(releaseRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    await publishGitRelease({ prefix, releaseRoot, trial: true });
   }
+  result.root = gitReleaseSlot(prefix);
+  const trial = path.join(prefix, "releases", ".trial");
+  await fs.access(trial);
+  return trial;
+}
+it("ends a verified Git release's trial without the release's own settlement", async () => {
+  const trial = await gitTrial();
+  const { validation } = await verifyHealth({});
+  expect(validation.ok).toBe(true);
+  await expect(fs.access(trial)).rejects.toThrow();
 });
 
-it("lets a switched Git release's Gateway restart itself instead of a native restart", async () => {
-  const fs = await import("node:fs/promises");
-  const os = await import("node:os");
-  const path = await import("node:path");
-  const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
-  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
-  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-restart-")));
-  const prefix = path.join(dir, "git-install");
-  try {
-    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
-    await fs.mkdir(releaseRoot, { recursive: true });
-    await publishGitRelease({ prefix, releaseRoot, trial: false });
-    gatewayFixture({}, { commandLine: "openclaw-gateway" });
-    restart.callGateway.mockImplementation(healthResponse("2026.9.8", "candidate", "successor"));
-    Object.assign(result, {
-      mode: "git",
-      root: gitReleaseSlot(prefix),
-      after: { version: "2026.9.8", buildId: "candidate" },
-    });
-    await listen();
-
-    const outcome = await restartGateway({
+async function gitReleaseRestart() {
+  const trial = await gitTrial();
+  const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
+  await listen();
+  vi.spyOn(await import("../../utils/sleep.js"), "sleep").mockImplementation(restart.sleep);
+  const incumbent = { ...restart.ownerLease(running.pid), port: gatewayPort };
+  const successor = { ...restart.ownerLease(8001), port: gatewayPort };
+  result.mode = "git";
+  result.before = candidate;
+  result.after = candidate;
+  const onVerified = vi.fn();
+  const verify = () =>
+    restartGateway({
+      opts: withRun("release-handoff"),
+      timeoutMs: 60_000,
+      onVerified,
       serviceUpdateVerdict: {
         kind: "owned",
-        root: gitReleaseSlot(prefix),
+        root: result.root!,
         fingerprint: "unit",
         refreshDefinition: false,
       },
     });
+  return { service, incumbent, successor, onVerified, verify, trial };
+}
 
-    expect(outcome).toBe("ok");
-    // Native restarts go through the updated install's gateway command.
-    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
+it.each([
+  ["no incumbent", "ok"],
+  ["same build", "readiness-pending"],
+  ["plugin restart", "readiness-pending"],
+  ["distinct target", "ok"],
+  ["wrong build", "restart-health-failed"],
+] as const)("verifies a switched Git release: %s", async (scenario, expected) => {
+  const { incumbent, onVerified, verify, trial } = await gitReleaseRestart();
+  if (scenario !== "no incumbent") {
+    restart.readGatewayOwnerLease.mockReturnValue(incumbent);
+  }
+  if (scenario !== "same build") {
+    result.before = { ...candidate, buildId: "old-build" };
+  }
+  if (scenario === "plugin restart") {
+    result.postUpdate = {
+      plugins: createPostCorePluginUpdateResult({ status: "ok", changed: true }),
+    };
+  }
+  const build = scenario === "wrong build" ? "old-build" : candidate.buildId;
+  restart.callGateway.mockImplementation(healthResponse(candidate.version, build));
+  const outcome = await verify();
+  expect(restart.readGatewayOwnerLease).toHaveBeenCalledWith(
+    expect.objectContaining({ current: true }),
+  );
+  expect(outcome).toBe(expected);
+  expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+  expect(onVerified).toHaveBeenCalledTimes(expected === "ok" ? 1 : 0);
+  expect(vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1]).toMatchObject({
+    pid: running.pid,
+    runningBuildId: build,
+    versionMatch: scenario !== "wrong build",
+    readyz: scenario !== "wrong build",
+    settled: expected === "ok",
+  });
+  if (expected === "readiness-pending") {
+    expect(result.steps.at(-1)?.advisory?.message).toContain("restart remains unverified");
+  }
+  if (expected !== "ok") {
+    await fs.access(trial);
   }
 });
+
+it.each(["stopped after handoff", "stopped without successor", "unknown service"])(
+  "recovers a switched Git release only after confirmed stop: %s",
+  async (scenario) => {
+    const { service, incumbent, successor, onVerified, verify } = await gitReleaseRestart();
+    restart.readGatewayOwnerLease.mockReturnValueOnce(incumbent);
+    if (scenario === "stopped after handoff") {
+      restart.readGatewayOwnerLease.mockReturnValueOnce(successor);
+    }
+    const stopped = scenario !== "unknown service";
+    vi.mocked(service.readRuntime).mockResolvedValue({ status: stopped ? "stopped" : "unknown" });
+    restart.inspectPortUsage.mockImplementation(async (port) => restart.portUsage([], { port }));
+    if (stopped) {
+      vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {
+        vi.mocked(service.readRuntime).mockResolvedValue(running);
+        busyPort("openclaw-gateway");
+        return "accepted";
+      });
+    }
+    restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+    expect(await verify()).toBe(stopped ? "ok" : "restart-health-failed");
+    expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledTimes(stopped ? 1 : 0);
+    expect(onVerified).toHaveBeenCalledTimes(stopped ? 1 : 0);
+    expect(vi.mocked(recordUpdateRunVerification).mock.calls[0]?.[1]).toMatchObject({
+      serviceRunning: stopped ? false : undefined,
+      settled: false,
+    });
+  },
+);

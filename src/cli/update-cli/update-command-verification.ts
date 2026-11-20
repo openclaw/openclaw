@@ -211,6 +211,7 @@ export async function verifyUpdatedGateway(
     result: UpdateRunResult;
     opts: UpdateCommandOptions;
     onVerified?: (verifiedAtMs: number) => void;
+    unverifiedGitHandoff?: { incumbentPid?: number };
     purpose?: "recovery" | "package-replacement";
   },
 ): Promise<{
@@ -258,20 +259,25 @@ export async function verifyUpdatedGateway(
     );
   }
   const serviceRunning = !params.requireRunningService || health.runtime.status === "running";
+  const before = params.result.before;
+  const distinctCore =
+    (before?.version && params.expectedVersion && before.version !== params.expectedVersion) ||
+    (before?.buildId && params.expectedBuildId && before.buildId !== params.expectedBuildId);
+  // Matching a distinct target can prove core activation; an incumbent can serve the
+  // same build before and after a plugin change without ever loading that change.
+  const handoffPending =
+    health.healthy &&
+    params.unverifiedGitHandoff &&
+    (!distinctCore || params.result.postUpdate?.plugins?.changed);
+  const observed = updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady);
+  if (handoffPending) {
+    observed.settled = false; // Preserve the actual PID, build, and endpoint observations.
+  }
   assertCurrent();
   if (params.purpose === "recovery") {
-    params.result.verification = updateGatewayHealthFacts(
-      health,
-      params.gatewayPort,
-      readyz,
-      http?.coreReady,
-    );
+    params.result.verification = observed;
   } else if (proofOptions.run) {
-    recordUpdateRunVerification(
-      proofOptions.run.runId,
-      updateGatewayHealthFacts(health, params.gatewayPort, readyz, http?.coreReady),
-      proofOptions.run,
-    );
+    recordUpdateRunVerification(proofOptions.run.runId, observed, proofOptions.run);
   }
   const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
   if (
@@ -338,7 +344,7 @@ export async function verifyUpdatedGateway(
       }
     }
   };
-  if (health.healthy && serviceRunning && coreReady) {
+  if (health.healthy && serviceRunning && coreReady && !handoffPending) {
     const pluginFailures = new Map<string, string>();
     for (const failure of health.activatedPluginErrors ?? []) {
       pluginFailures.set(failure.id, failure.error);
@@ -384,9 +390,18 @@ export async function verifyUpdatedGateway(
       ...(pluginWarnings.length > 0 ? { pluginWarnings } : {}),
     };
   }
-  if (params.purpose !== "package-replacement" && gatewayReadinessPending(health)) {
+  if (
+    params.purpose !== "package-replacement" &&
+    (handoffPending || gatewayReadinessPending(health))
+  ) {
+    const summary = handoffPending
+      ? "Gateway is serving, but the cooperative Git release restart remains unverified."
+      : "Gateway is still starting; readiness remains unverified.";
+    const incumbentPid = params.unverifiedGitHandoff?.incumbentPid;
     const detail = [
-      "Gateway readiness is pending; leaving the observed running process starting without another recovery restart or rollback.",
+      handoffPending
+        ? `${summary}${incumbentPid ? ` Previous Gateway PID: ${incumbentPid}.` : ""} No second restart was requested.`
+        : "Gateway readiness is pending; leaving the observed running process starting without another recovery restart or rollback.",
       ...renderRestartDiagnostics(health),
       ...(http ? [`Last HTTP readiness response: ${http.readyz ?? "unavailable"}.`] : []),
       `Keep recovery backups and check progress with \`${formatCliCommand("openclaw gateway status --deep")}\`.`,
@@ -395,7 +410,7 @@ export async function verifyUpdatedGateway(
     defaultRuntime.error(detail);
     return {
       ok: false,
-      summary: "Gateway is still starting; readiness remains unverified.",
+      summary,
       stopReason:
         health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
     };
@@ -504,7 +519,15 @@ export async function verifyUpdatedGateway(
       defaultRuntime.log(theme.muted(line));
     }
   }
-  return { ok: params.purpose === "package-replacement", summary: reason };
+  return {
+    ok: params.purpose === "package-replacement",
+    summary: reason,
+    ...(health.waitOutcome === "stopped-free" &&
+    health.runtime.status === "stopped" &&
+    health.portUsage.status === "free"
+      ? { stopReason: "stopped-free" }
+      : {}),
+  };
 }
 
 export { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";

@@ -176,7 +176,7 @@ export async function maybeRestartService(
       recordMutableUpdateSignalPhase(run, phase);
     }
   };
-  let verificationObserved = false;
+  let lastVerification: Awaited<ReturnType<typeof verifyUpdatedGateway>> | undefined;
   let lastProgressAt = -Infinity;
   const onProgress = (stage: string, reason: string) => {
     if (performance.now() - lastProgressAt < 30_000) {
@@ -188,13 +188,8 @@ export async function maybeRestartService(
   const failed = async (outcome: "failed" | "restart-health-failed" = "failed") => {
     // A restart can fail before health verification starts; recovery owns that phase.
     recordPhase("verifying");
-    if (!verificationObserved) {
-      await recordFailedUpdateGatewayState(
-        params.opts.run,
-        serviceEnv,
-        assertCurrent,
-        params.timeoutMs,
-      );
+    if (!lastVerification) {
+      await recordFailedUpdateGatewayState(run, serviceEnv, assertCurrent, params.timeoutMs);
     }
     assertCurrent();
     return outcome;
@@ -274,7 +269,7 @@ export async function maybeRestartService(
       activation.serviceEnv,
       `SERVICE-DEFINITION: ${refusal.message} The updated installation is kept; after resolving the service hold, run \`${formatCliCommand("openclaw gateway start", activation.serviceEnv)}\`. Gateway readiness remains unverified.`,
     );
-    if (!verificationObserved) {
+    if (!lastVerification) {
       await recordFailedUpdateGatewayState(params.opts.run, activation.serviceEnv, assertCurrent);
       assertCurrent();
     }
@@ -326,11 +321,10 @@ export async function maybeRestartService(
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
     expectedGatewayBuildId: string | undefined,
-    opts: {
-      requireRunningService?: boolean;
-      health?: GatewayRestartSnapshot;
-      recoverHealth?: boolean;
-    } = {},
+    opts: Pick<
+      Parameters<typeof verifyUpdatedGateway>[0],
+      "requireRunningService" | "health" | "unverifiedGitHandoff"
+    > & { recoverHealth?: boolean } = {},
   ) => {
     recordPhase("verifying");
     const verification = await verifyUpdatedGateway({
@@ -342,8 +336,7 @@ export async function maybeRestartService(
       onProgress,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
-      requireRunningService: opts.requireRunningService,
-      health: opts.health,
+      ...opts,
       onVerified: params.onVerified,
       assertCurrent,
       recoverHealth: async (initialHealth, reinspect, assertReadinessCurrent) => {
@@ -405,7 +398,7 @@ export async function maybeRestartService(
         return recovery;
       },
     });
-    verificationObserved = true;
+    lastVerification = verification;
     assertCurrent();
     if (verification.serviceDefinitionRefusal) {
       return await serviceDefinitionRefused(verification.serviceDefinitionRefusal);
@@ -428,6 +421,8 @@ export async function maybeRestartService(
   };
 
   const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
+  const expectedVersion = normalizeOptionalString(expectedIdentity?.version);
+  const expectedGatewayBuildId = normalizeOptionalString(expectedIdentity?.buildId);
   if (!activation.shouldRestart) {
     if (!activation.opts.json) {
       defaultRuntime.log(theme.muted("Gateway: updater restart skipped (--no-restart)."));
@@ -437,8 +432,8 @@ export async function maybeRestartService(
         await verifyUpdatedGateway({
           ...activation,
           purpose: "package-replacement",
-          expectedVersion: normalizeOptionalString(expectedIdentity?.version),
-          expectedBuildId: normalizeOptionalString(expectedIdentity?.buildId),
+          expectedVersion,
+          expectedBuildId: expectedGatewayBuildId,
           waitForStartup: false,
         });
       } catch (error) {
@@ -473,21 +468,23 @@ export async function maybeRestartService(
     readPackageReleaseSlotSync(activation.result.root ?? "")
   ) {
     recordPhase("restarting");
-    await waitForGitReleaseSuccessor(activation);
+    const handoff = await waitForGitReleaseSuccessor(activation);
     assertCurrent();
-    const outcome = await verifyRestartedGateway(
-      normalizeOptionalString(expectedIdentity?.version),
-      normalizeOptionalString(expectedIdentity?.buildId),
-      { requireRunningService: true },
-    );
+    const outcome = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
+      requireRunningService: true,
+      recoverHealth: handoff.status === "no-incumbent",
+      unverifiedGitHandoff: handoff.status === "unverified" ? handoff : undefined,
+    });
     if (outcome) {
       return outcome;
+    }
+    if (handoff.status !== "no-incumbent" && lastVerification?.stopReason !== "stopped-free") {
+      return await failed("restart-health-failed");
     }
   }
 
   try {
-    let expectedGatewayVersion = normalizeOptionalString(expectedIdentity?.version);
-    const expectedGatewayBuildId = normalizeOptionalString(expectedIdentity?.buildId);
+    let expectedGatewayVersion = expectedVersion;
     const canVerifyUpdatedGatewayByVersion =
       expectedGatewayVersion !== undefined &&
       expectedGatewayVersion !== normalizeOptionalString(activation.result.before?.version);
@@ -707,11 +704,10 @@ export async function maybeRestartService(
     if (err instanceof GatewayRestartHealthError && !updatedInstallRestartNeedsServiceRootProof) {
       // The installed CLI owns restart retries; observe its final health result
       // without another native mutation.
-      const healthy = await verifyRestartedGateway(
-        normalizeOptionalString(expectedIdentity?.version),
-        normalizeOptionalString(expectedIdentity?.buildId),
-        { requireRunningService: true, recoverHealth: false },
-      );
+      const healthy = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
+        requireRunningService: true,
+        recoverHealth: false,
+      });
       return healthy ?? (await failed("restart-health-failed"));
     }
     defaultRuntime.error(

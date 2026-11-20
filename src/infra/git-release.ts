@@ -373,64 +373,91 @@ export async function collectGitReleases(params: {
   return collected;
 }
 
-/** Let the watcher act first. While the update holds the installation lease the watcher
- * defers, so request a cooperative restart once and allow its normal active-work budget.
- * A new owner is not proof of a healthy release: the caller still verifies its exact build. */
+/** Wait for this release's resident to leave, not merely for delivery of SIGUSR2.
+ * Only the resident can say whether its running policy admitted a deferred restart. */
 export async function waitForGitReleaseSuccessor(params: {
   serviceEnv: NodeJS.ProcessEnv;
   gatewayPort: number;
   allowGitReleaseRestartSignal?: boolean;
   signal?: AbortSignal;
-}): Promise<void> {
+}): Promise<
+  { status: "no-incumbent" | "changed" } | { status: "unverified"; incumbentPid?: number }
+> {
   const signal = resolveCommandProcessSignal(params.signal);
   signal?.throwIfAborted();
   const readOwner = () => {
     try {
-      return readGatewayOwnerLease({
-        env: params.serviceEnv,
-        port: params.gatewayPort,
-        current: true,
-      });
+      return readGatewayOwnerLease({ env: params.serviceEnv, current: true });
     } catch {
-      // An unavailable observation is not evidence that the incumbent exited.
-      return null;
+      return null; // Unreadable is not the same as a confirmed absent lease.
     }
   };
   const incumbent = readOwner();
-  if (!incumbent || incumbent.state === "dead") {
-    return;
+  if (incumbent === undefined || incumbent?.state === "dead") {
+    return { status: "no-incumbent" };
   }
-  const waitForHandoff = async (timeoutMs: number) => {
-    const until = performance.now() + timeoutMs;
-    let current: typeof incumbent | null = incumbent;
-    while (performance.now() < until) {
-      await sleep(Math.min(1_000, until - performance.now()), signal);
-      const observed = readOwner();
-      if (
-        observed === undefined ||
-        (observed &&
-          (observed.owner !== incumbent.owner ||
-            observed.pid !== incumbent.pid ||
-            observed.state === "dead"))
-      ) {
-        return null;
-      }
-      current = observed;
+  if (!incumbent || incumbent.port !== params.gatewayPort) {
+    return { status: "unverified" };
+  }
+  const unverified = { status: "unverified", incumbentPid: incumbent.pid } as const;
+  const start = performance.now();
+  const signalAt = start + 35_000; // The watcher normally checks the installation every 30s.
+  let until = start + 90_000; // Old residents do not publish a receipt.
+  let sentAt: number | undefined;
+  let previousReceipt: string | undefined;
+  while (performance.now() < until) {
+    await sleep(Math.min(1_000, until - performance.now()), signal);
+    const current = readOwner();
+    if (
+      current &&
+      current.state === "live" &&
+      current.port === params.gatewayPort &&
+      current.owner !== incumbent.owner &&
+      (current.pid !== incumbent.pid ||
+        (current.startedAt !== null &&
+          incumbent.startedAt !== null &&
+          current.startedAt !== incumbent.startedAt))
+    ) {
+      return { status: "changed" };
     }
-    return current;
-  };
-  // The maintenance tick runs every 30s. Do not signal a successor it already started.
-  const current = await waitForHandoff(35_000);
-  if (!params.allowGitReleaseRestartSignal || current?.state !== "live") {
-    return;
+    if (current === undefined || current?.state === "dead") {
+      return unverified;
+    }
+    const now = performance.now();
+    if (
+      !current ||
+      current.state !== "live" ||
+      current.pid !== incumbent.pid ||
+      current.port !== incumbent.port ||
+      current.owner !== incumbent.owner ||
+      current.startedAt !== incumbent.startedAt
+    ) {
+      // A transient inconclusive poll at the watcher boundary must not signal an
+      // unknown owner. A subsequent fresh live match may still receive our one request.
+      continue;
+    }
+    if (sentAt === undefined && now >= signalAt) {
+      if (!params.allowGitReleaseRestartSignal) {
+        return unverified;
+      }
+      signal?.throwIfAborted();
+      previousReceipt = current.externalRestartReceipt;
+      try {
+        process.kill(incumbent.pid, "SIGUSR2");
+      } catch {
+        return unverified;
+      }
+      sentAt = now;
+    } else if (
+      sentAt !== undefined &&
+      current.externalRestartReceipt &&
+      current.externalRestartReceipt !== previousReceipt
+    ) {
+      // A receipt is evidence to wait, never permission to signal or evidence of readiness.
+      // Anchor the budget to our single request, even if other signals arrive later.
+      until =
+        sentAt + resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS;
+    }
   }
-  signal?.throwIfAborted();
-  try {
-    process.kill(current.pid, "SIGUSR2");
-  } catch {
-    return;
-  }
-  await waitForHandoff(
-    resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS,
-  );
+  return unverified;
 }
