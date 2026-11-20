@@ -358,7 +358,7 @@ qualification limits, including signed macOS app and native Windows flows.
 | Retained `agent exec --state-dir` | Uses the effective configured engines; temporary and `--isolated` runs use SQLite. See [agent exec](/cli/agent#agent-exec).                                                                         | [#188420](https://github.com/openclaw/openclaw/pull/188420) |
 | iMessage with PostgreSQL state    | Recovery cursors use the selected shared-state engine without NUL-containing keys.                                                                                                                  | [#184919](https://github.com/openclaw/openclaw/pull/184919) |
 | Store-backed Gateway credentials  | Local CLI RPC commands resolve `gateway.auth.*` refs from the configured state engine. See the [store provider](/gateway/secrets/secretref-contract#store-provider).                                | [#185238](https://github.com/openclaw/openclaw/pull/185238) |
-| Archive backup creation           | `backup create` works while the Gateway runs; generic PostgreSQL snapshots, Git backups, and restore still require offline custody.                                                                 | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
+| Archive backup creation           | `backup create` and Git capture work while the Gateway runs; generic PostgreSQL snapshots and restore still require offline custody.                                                                | [#185236](https://github.com/openclaw/openclaw/pull/185236) |
 | Retained agent creation           | Missing, uninitialized, or mismatched namespaces refuse reuse; new anchors publish after initialization commits. See [retained-store recovery](/gateway/postgresql#recover-a-retained-agent-store). | [#188350](https://github.com/openclaw/openclaw/pull/188350) |
 
 ## Search on PostgreSQL
@@ -854,7 +854,8 @@ and [`engine opener`](https://github.com/openclaw/openclaw/blob/main/src/infra/d
 
 Use `openclaw backup create` to capture PostgreSQL stores together with the
 SQLite stores that still hold the rest of the installation. It runs while the
-Gateway serves requests. Generic local snapshots and Git backups whose selected
+Gateway serves requests. Git capture, including scheduled Git backups, uses the
+same online per-store snapshots. Generic local snapshots and restore whose selected
 source is PostgreSQL require the Gateway stopped; if it is running, they refuse:
 “stop through the service owner, then rerun.” They never stop the Gateway
 automatically. `openclaw backup sqlite` refuses a PostgreSQL anchor and directs

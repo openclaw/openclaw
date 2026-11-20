@@ -886,7 +886,9 @@ procedure; there is no automatic discard or migration.
 
 ### Disaster recovery from Git
 
-Prepare explicit Git recovery points while offline, alongside the full archive:
+Prepare explicit Git recovery points alongside the full archive. Capture works
+while the Gateway runs, including scheduled Git backups; each store uses its own
+read-only snapshot, as with archive capture. Restore still requires offline custody:
 
 ```bash
 openclaw backup git init --repository ~/Backups/openclaw-git
