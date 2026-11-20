@@ -351,9 +351,10 @@ export async function executeFollowupTurn(params: {
     // A session event rejected for stale policy is re-admitted by its owner under the
     // same durable source id; reject it before admission records that source claim.
     turn.queued.run.internalEventExecution?.assertCurrent?.();
-    await inputAdmission.admitUserTurn(recorder);
-    accepted = true;
-    await admitFollowupRunLifecycle(turn.queued);
+    await admitFollowupRunLifecycle(turn.queued, async () => {
+      await inputAdmission.admitUserTurn(recorder);
+      accepted = true;
+    });
     turn.operation.abortSignal.throwIfAborted();
     setChannelSourceTurnId(sessionCtx, sourceTurnId);
     if (turn.preflightFailurePayload) {

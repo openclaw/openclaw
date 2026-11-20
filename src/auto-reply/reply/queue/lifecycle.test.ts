@@ -39,7 +39,13 @@ it.each([false, true])(
     const release = queue.gate();
     const failure = new Error("source adoption failed");
     const reauthorize = vi.fn();
-    const onAdopted = vi.fn(release.wait).mockRejectedValueOnce(failure);
+    const persistInput = vi.fn(async () => {});
+    const onAdopted = vi
+      .fn(async () => {
+        expect(persistInput).toHaveBeenCalledTimes(onAdopted.mock.calls.length);
+        await release.wait();
+      })
+      .mockRejectedValueOnce(failure);
     run.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "operator",
       scopes: ["operator.write"],
@@ -51,9 +57,10 @@ it.each([false, true])(
     if (enqueued) {
       expect(markEnqueued(run)).toBe(true);
     }
-    await expect(admit(run)).rejects.toThrow(failure);
+    await expect(admit(run, persistInput)).rejects.toThrow(failure);
+    expect(persistInput).toHaveBeenCalledOnce();
     expect(reauthorize).toHaveBeenCalledTimes(enqueued ? 1 : 0);
-    const retry = admit(run);
+    const retry = admit(run, persistInput);
     const concurrent = admit(run);
     await release.entered;
     expect(reauthorize).toHaveBeenCalledTimes(enqueued ? 2 : 0);
@@ -65,6 +72,30 @@ it.each([false, true])(
     expect(onAdopted).toHaveBeenCalledTimes(2);
   },
 );
+
+it("rejects queued authority before consuming input or acknowledging adoption", async () => {
+  const rejected = queue.source("revoked");
+  const failure = new Error("queued requester lost access");
+  const persistInput = vi.fn(async () => {});
+  const onAdopted = vi.fn();
+  const reauthorize = vi.fn(() => {
+    throw failure;
+  });
+  rejected.operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "operator",
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+    reauthorize,
+  });
+  rejected.turnAdoptionLifecycle = { onAdopted };
+  expect(markEnqueued(rejected)).toBe(true);
+  await expect(admit(rejected, persistInput)).rejects.toThrow(failure);
+  expect(reauthorize).toHaveBeenCalledOnce();
+  expect(persistInput).not.toHaveBeenCalled();
+  expect(onAdopted).not.toHaveBeenCalled();
+  complete(rejected);
+  await expect(settleSource(rejected.controllerInput!)).rejects.toThrow(failure);
+});
 
 it.each(["abandonment", "publication failure", "adoption"] as const)(
   "retains source custody during pending %s",

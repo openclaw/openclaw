@@ -144,14 +144,16 @@ export function retireFollowupRunCancellation(run: FollowupRun): void {
 }
 export async function admitFollowupRunLifecycle(
   run: FollowupRun | FollowupLifecycleSource,
+  admitUserTurn?: () => Promise<void>,
 ): Promise<void> {
   const state = custody(run);
   run.operatorAuthority?.assertCurrent();
   if (state.adopted) {
-    return;
+    return await admitUserTurn?.();
   }
   if (state.adopting) {
-    return await state.adopting;
+    await state.adopting;
+    return await admitUserTurn?.();
   }
   if (state.completed) {
     throw new Error("Input completed before source adoption");
@@ -176,6 +178,9 @@ export async function admitFollowupRunLifecycle(
         throw error;
       }
     }
+    // Reject queued authority before consuming its receipt, but acknowledge the
+    // source only after input persistence succeeds.
+    await admitUserTurn?.();
     await run.turnAdoptionLifecycle?.onAdopted();
     // A successful custody callback commits before the post-await authority check.
     state.adopted = true;
