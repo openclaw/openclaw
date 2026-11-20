@@ -664,8 +664,9 @@ export function createUserTurnTranscriptRecorder(
         // Settled by waitForRuntimePersistence.
         const admission = recordAdmission(receipt, persistedMessage, true);
         const targetRunId = confirmedSteerTargetRunId;
-        if (targetRunId && persistedMessage["__openclaw"]?.steerTargetRunId !== targetRunId) {
-          // The stamp joins the admission write that the turn owner already awaits.
+        if (targetRunId) {
+          // The stamp joins the admission write that the turn owner already awaits; it is a
+          // no-op when the committed row already names this run.
           admissionWrite = admission.then(() =>
             runInDetachedAsyncContext(() => stampPersistedSteerTargetRunId(targetRunId)),
           );
