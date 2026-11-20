@@ -61,6 +61,8 @@ vi.mock("../../infra/sqlite-error-diagnostics.js", () => ({
 }));
 vi.mock("../../infra/sqlite-transaction.js", () => ({
   runSqliteImmediateTransactionSync: boundary.native,
+}));
+vi.mock("../../infra/sqlite-write-admission.js", () => ({
   withSqliteWriteAdmissionService: boundary.native,
 }));
 

@@ -611,3 +611,17 @@ it("rolls a failed inner write back to its savepoint before the outer commit", (
     "COMMIT",
   ]);
 });
+
+it.each(["25P03", "25P04"])(
+  "retires a transaction terminated by %s before another request",
+  (code) => {
+    const f = transportFixture("normal");
+    f.db.isTransaction = true;
+    f.rejectQuery({ name: "error", message: "session timed out", code });
+    expect(() => f.db.exec("SELECT 7")).toThrow("transaction rolled back");
+    expect(f.db.isOpen).toBe(false);
+    const sent = f.sent.mock.calls.length;
+    expect(() => f.db.exec("SELECT 8")).toThrow("transaction rolled back");
+    expect(f.sent).toHaveBeenCalledTimes(sent);
+  },
+);

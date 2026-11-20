@@ -126,7 +126,7 @@ async function runClientCredentialTaskAsync(
           import("../state/openclaw-agent-db-resources.js"),
           import("../state/openclaw-state-worker-error.js"),
           import("./gateway-state-owner.js"),
-          import("./sqlite-transaction.js"),
+          import("./sqlite-write-admission.js"),
           import("./sqlite-worker-operation-admission.js"),
           import("./worker-task-pool.js"),
         ]);

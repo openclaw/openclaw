@@ -7,13 +7,13 @@ import {
   type StateDatabaseSchemaLease,
 } from "../../infra/gateway-state-owner.js";
 import { resolveIdentityPathViaExistingAncestor } from "../../infra/path-existence.js";
-import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { resolveDatabasePathKeyAsync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
 import type {
   RetainedWorkerTransactionAdmission,
   SqliteWorkerOperationSettlement,
 } from "../../infra/sqlite-worker-operation-settlement.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-write-admission.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";

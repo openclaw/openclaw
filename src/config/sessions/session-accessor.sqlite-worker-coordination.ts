@@ -3,7 +3,6 @@ import { settleWithCleanup } from "../../infra/error-graph-internal.js";
 import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/path-existence.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
-import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -11,6 +10,7 @@ import {
   createSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-write-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db.js";
 import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";

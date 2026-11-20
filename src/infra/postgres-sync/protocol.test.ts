@@ -89,6 +89,10 @@ describe("PostgreSQL SQL boundary", () => {
     expect(isPostgresConnectionError("57014")).toBe(false);
   });
 
+  it.each(["25P03", "25P04"])("retires sessions terminated by %s", (code) => {
+    expect(isPostgresConnectionError(code)).toBe(true);
+  });
+
   it("retains unrelated PostgreSQL errors and their SQLSTATE", () => {
     expect(
       decodePostgresError({ name: "error", message: "syntax error", code: "42601" }),

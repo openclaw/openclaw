@@ -3,7 +3,6 @@ import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   attributesSqliteStatements,
   startSqliteStatementTiming,
@@ -49,7 +48,7 @@ import type {
   SynchronousSqliteCallback,
 } from "./sqlite-transaction-types.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
-import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
+import { readSqliteWriteAdmissionServices } from "./sqlite-write-admission.js";
 
 export type { SqliteTransactionOptions } from "./sqlite-transaction-types.js";
 
@@ -74,66 +73,6 @@ export function assertTransactionUsable(db: TransactionDatabase | PostgresSqlCon
 }
 
 const transactionLog = createSubsystemLogger("sqlite/transaction");
-const writeAdmissionServices = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteWriteAdmissionServices"),
-  () => new Map<string, Set<() => void>>(),
-);
-const writeAdmissionLocations = new WeakMap<DatabaseSync, string | null>();
-
-function writeAdmissionLocation(database: DatabaseSync): string | null {
-  const cached = writeAdmissionLocations.get(database);
-  if (cached !== undefined) {
-    return cached;
-  }
-  // A native handle's filename is stable; normalize namespace aliases once, without filesystem IO.
-  const location = database.location();
-  const canonical = location === null ? null : normalizeDatabasePath(location);
-  writeAdmissionLocations.set(database, canonical);
-  return canonical;
-}
-
-/** Keep worker-owned lock holders serviceable across connections and module graphs. */
-export async function withSqliteWriteAdmissionService<T>(
-  database: DatabaseSync,
-  service: () => void,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const location = writeAdmissionLocation(database);
-  if (location === null) {
-    throw new Error("SQLite write admission service requires a file-backed database");
-  }
-  const release = retainSqliteWriteAdmissionService([location], service);
-  try {
-    return await operation();
-  } finally {
-    release();
-  }
-}
-
-/** Locations come from the retained native owner; registration grants no write authority. */
-export function retainSqliteWriteAdmissionService(
-  nativeLocations: readonly string[],
-  service: () => void,
-): () => void {
-  const locations = new Set(nativeLocations.map(normalizeDatabasePath));
-  const registrations = [...locations].map((location) => {
-    const services = writeAdmissionServices.get(location) ?? new Set<() => void>();
-    // Separate reservations remain valid when the same owner retains two operations.
-    const retained = () => service();
-    services.add(retained);
-    writeAdmissionServices.set(location, services);
-    return { location, services, retained };
-  });
-  return () => {
-    for (const { location, services, retained } of registrations) {
-      services.delete(retained);
-      if (services.size === 0 && writeAdmissionServices.get(location) === services) {
-        writeAdmissionServices.delete(location);
-      }
-    }
-  };
-}
-
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -155,8 +94,7 @@ function beginImmediateTransaction(
   db: DatabaseSync,
   diagnostics: SqliteBeginAdmissionDiagnostics,
 ): void {
-  const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
-  const services = location === null ? undefined : writeAdmissionServices.get(location);
+  const services = readSqliteWriteAdmissionServices(db);
   if (!services) {
     execNativeBegin(db, diagnostics);
     return;
@@ -649,10 +587,10 @@ export function runSqliteSingleStatementSync<T>(
   }
   assertTransactionUsable(db);
   return withSqlitePostCommitPublications(db, () => {
-    const location = writeAdmissionServices.size > 0 ? writeAdmissionLocation(db) : null;
+    const services = readSqliteWriteAdmissionServices(db);
     // A worker can hold the writer lock while awaiting this host's commit grant.
     // Reserve through the serviceable BEGIN owner before entering the callback.
-    if (db.isTransaction || (location !== null && writeAdmissionServices.has(location))) {
+    if (db.isTransaction || services) {
       return runSqliteTransactionSync(db, statement, "immediate");
     }
     const result = runSqliteReadOperationSync(db, statement);

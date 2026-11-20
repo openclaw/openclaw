@@ -24,6 +24,7 @@ import {
 } from "./idle-bridges.js";
 import { recordPostgresPoolFailure } from "./pool-state.js";
 import {
+  POSTGRES_REQUEST_TIMEOUT_MS,
   decodePostgresError,
   decodePostgresRows,
   isPostgresConnectionError,
@@ -183,7 +184,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (id > 2_147_483_647) {
       throw this.loseConnection();
     }
-    const deadline = performance.now() + 120_000;
+    const deadline = performance.now() + POSTGRES_REQUEST_TIMEOUT_MS;
     const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
       (this.idleCheckout !== undefined || retainedIdle) &&
