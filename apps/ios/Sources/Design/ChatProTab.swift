@@ -46,6 +46,8 @@ struct ChatProTab: View {
     @State private var isGatewayStatusManuallyExpanded = false
     let headerSidebarAction: OpenClawSidebarHeaderAction?
     let openSettings: () -> Void
+    /// Set only while no Gateway has ever been saved or connected on this device.
+    let startFirstGatewaySetup: (() -> Void)?
 
     var body: some View {
         self.content
@@ -180,6 +182,15 @@ struct ChatProTab: View {
                     !self.appModel.talkMode.isEnabled &&
                         !self.appModel.talkMode.hasActivePushToTalkSession &&
                         !self.appModel.voiceNoteRecorder.ownsPendingChatAttachment
+                },
+                firstConnectionNotice: self.startFirstGatewaySetup.map { start in
+                    OpenClawChatFirstConnectionNotice(
+                        title: String(localized: "Not connected yet"),
+                        message: UIDevice.current.userInterfaceIdiom == .pad
+                            ? String(localized: "Connect this iPad to OpenClaw on your computer.")
+                            : String(localized: "Connect this iPhone to OpenClaw on your computer."),
+                        actionTitle: String(localized: "Connect"),
+                        action: start)
                 })
                 .environment(
                     \.openClawEmbeddedBrowserUnavailableReason,
@@ -798,13 +809,14 @@ private struct ChatToolbarStatusPopover<Status: View>: ViewModifier {
 }
 
 /// RootTabs rebuilds the chat tab with fresh closures on every sidebar open and close.
-/// Equal header controls mean nothing the tab draws changed: both closures only call
-/// RootTabs methods that read its live state, so an older copy behaves the same.
+/// Compare header controls and first-run action availability, not closure identity.
+/// The closures call RootTabs methods that read its live state.
 /// The tab's own model, environment, and state reads still invalidate it directly.
 extension ChatProTab: @MainActor Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.headerSidebarAction?.systemName == rhs.headerSidebarAction?.systemName &&
             lhs.headerSidebarAction?.accessibilityIdentifier == rhs.headerSidebarAction?.accessibilityIdentifier &&
-            lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation
+            lhs.headerSidebarAction?.drawerPresentation === rhs.headerSidebarAction?.drawerPresentation &&
+            (lhs.startFirstGatewaySetup != nil) == (rhs.startFirstGatewaySetup != nil)
     }
 }

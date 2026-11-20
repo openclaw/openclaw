@@ -579,7 +579,7 @@ describe("older-page prepend reuse", () => {
       .flatMap((item) => (item.kind === "group" ? item.messages : []))
       .flatMap((entry) => normalizeMessage(entry.message).content)
       .flatMap((block) => (block.type === "automation_creation_card" ? block.plan.rows : []));
-    expect(rows).toEqual([{ ...slot, status: "created", jobId: "persisted" }]);
+    expect(rows).toEqual([{ ...slot, jobId: "persisted" }]);
     resetChatThreadState();
   });
 

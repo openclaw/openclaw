@@ -375,15 +375,17 @@ function convertResponsesMessagesWithStyle(
   }
   let replayMessages = transformedMessages;
   // Responses continuation requires the complete prior input before tool output.
-  // Each carrier stays with its preceding user/checkpoint; moving it past an
-  // appended steering user would rewrite the already admitted request prefix.
+  // A turn's carrier stays with its user/checkpoint; a steering carrier stays where first sent.
   const isCarrier = (message: (typeof replayMessages)[number]) => hasRuntimeContextMarker(message);
   if (replayMessages.some(isCarrier)) {
     const anchored: typeof replayMessages = [];
     // A checkpoint is already emitted above; it anchors an otherwise userless tail.
     let insertionIndex = replayPlan.compactedWindow || replayPlan.compaction ? 0 : undefined;
-    for (const message of replayMessages) {
-      if (isCarrier(message) && insertionIndex !== undefined) {
+    for (const [index, message] of replayMessages.entries()) {
+      const next = replayMessages[index + 1];
+      const previous = anchored[(insertionIndex ?? 0) - 1];
+      const steering = previous && isCarrier(previous) && next?.role === "user" && !isCarrier(next);
+      if (isCarrier(message) && insertionIndex !== undefined && !steering) {
         anchored.splice(insertionIndex++, 0, message);
         continue;
       }

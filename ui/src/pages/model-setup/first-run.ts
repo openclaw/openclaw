@@ -1,18 +1,15 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { pluginSlugCandidate, sameRouteLocation } from "../../app-route-paths.ts";
+import { isApplicationEntryPath, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 
-export function isDefaultChatLanding(
-  location: RouteLocation,
-  basePath: string,
-  routeIdFromPath: (pathname: string, basePath: string) => string | null,
-): boolean {
+export function isDefaultChatLanding(location: RouteLocation, basePath: string): boolean {
+  // Only an implicit landing may adopt a saved session or first-run setup.
+  // Unknown deep links belong to the router's visible not-found state.
   return (
     !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
-    !pluginSlugCandidate(location.pathname, basePath) &&
-    (routeIdFromPath(location.pathname, basePath) === null ||
+    (isApplicationEntryPath(location.pathname, basePath) ||
       /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }

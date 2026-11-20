@@ -385,20 +385,52 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       await expect(fs.access(trial)).rejects.toThrow();
     });
 
-    it("maps a release entry to its launcher and back", async () => {
-      const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
-      const entry = path.join(gitReleaseSlot(prefix), "dist", "index.js");
-      const launcher = resolveGitReleaseLauncherForEntrypoint(entry);
+    it.each(["openclaw", "lib/node_modules/openclaw"])(
+      "keeps the service on the release launcher for %s",
+      async (relativeSlot) => {
+        const { prefix } = await setup();
+        const slot = path.join(prefix, relativeSlot);
+        const root = path.join(prefix, "releases", "git-fixture", relativeSlot);
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(path.join(root, "dist", "index.js"), "");
+        await fs.mkdir(path.dirname(slot), { recursive: true });
+        await fs.symlink(path.relative(path.dirname(slot), root), slot);
+        const entry = path.join(slot, "dist", "index.js");
+        const launcher = path.join(prefix, "openclaw-launcher.mjs");
+        // A legacy install retains the launcher written by its older updater.
+        await fs.writeFile(launcher, "");
+        const { resolveGatewayProgramArguments } = await import("../daemon/program-args.js");
+        const service = await resolveGatewayProgramArguments({
+          cliEntrypoint: entry,
+          runtime: "node",
+          runtimePath: process.execPath,
+          port: 18789,
+        });
+        expect(service.programArguments.slice(-4)).toEqual([
+          launcher,
+          "gateway",
+          "--port",
+          "18789",
+        ]);
+        expect(resolveGitReleaseLauncherForEntrypoint(entry)).toBe(launcher);
+        expect(resolveGitReleaseEntrypointForLauncher(launcher)).toBe(entry);
+        expect(resolveGitReleaseLauncherForEntrypoint("/opt/openclaw/dist/index.js")).toBeNull();
+        if (relativeSlot === "openclaw") {
+          expect(await writeGitReleaseLauncher(prefix)).toBe(launcher);
+        }
+      },
+    );
 
-      expect(launcher).toBe(path.join(prefix, "openclaw-launcher.mjs"));
-      expect(resolveGitReleaseEntrypointForLauncher(launcher!)).toBe(entry);
-      expect(resolveGitReleaseLauncherForEntrypoint("/opt/openclaw/dist/index.js")).toBeNull();
-      expect(await writeGitReleaseLauncher(prefix)).toBe(launcher);
+    it("does not use another package's release as the Git launcher", async () => {
+      const { prefix } = await setup();
+      const slot = path.join(prefix, "other");
+      const root = path.join(prefix, "releases", "git-fixture", "other");
+      await fs.mkdir(root, { recursive: true });
+      await fs.symlink(path.relative(prefix, root), slot);
+
+      expect(
+        resolveGitReleaseLauncherForEntrypoint(path.join(slot, "dist", "index.js")),
+      ).toBeNull();
     });
 
     it("keeps a service unit that names the launcher across release switches", async () => {

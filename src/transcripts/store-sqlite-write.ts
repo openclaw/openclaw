@@ -2,7 +2,6 @@ import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import {
   deriveMeetingTranscriptSessionColumns,
   deriveMeetingTranscriptSummaryColumns,
@@ -27,6 +26,7 @@ import {
   transcriptSummaryInputRevisionFromRow,
 } from "./store-sqlite.js";
 import type { TranscriptSummaryWriteGuard } from "./store-types.js";
+import type { TranscriptSessionDescriptor } from "./types.js";
 
 type TranscriptSessionValues = Pick<
   MeetingTranscriptSessionRow,

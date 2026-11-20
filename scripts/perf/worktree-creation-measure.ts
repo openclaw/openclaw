@@ -1,3 +1,14 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { channel } from "node:diagnostics_channel";
+import { readFileSync, statSync } from "node:fs";
+import fs from "node:fs/promises";
+import { registerHooks } from "node:module";
+import { loadavg } from "node:os";
+import path from "node:path";
+import { parseArgs } from "node:util";
+import { getHeapStatistics } from "node:v8";
 /**
  * node --import ./scripts/tsx.mjs scripts/perf/worktree-creation-measure.ts \
  *   --repo <task-owned-clone> --output <new-directory> --samples 5
@@ -34,21 +45,25 @@
  * Native worker code is unchanged between arms; Linux procfs costs need Linux proof.
  * Acceptance: only changed-file bytes lose shared extents, clean old/new templates,
  * A/A controls and five serial A/B pairs; diagnostics must not add material cost.
+ * --filesystem-worker selects the unchanged native filesystem worker from a frozen
+ * repository compiler runtime, avoiding source-loader descendants in process settlement.
+ * Add --first-send-image <local-podman-image> to include the real first-send preparation
+ * owner after each create. The fixture needs an offline frozen dependency and a
+ * postinstall copying advance.txt into node_modules/source-dependent.txt and its
+ * ionice class into node_modules/install-priority.txt. Native
+ * Podman and btrfs remain real; no model or Gateway transport is measured here.
+ * --expected-inline-builds 1 qualifies the baseline; the candidate requires zero.
+ * Report idle/create/send work separately and total CPU/allocation with A/A controls.
+ * --base-advance creates at A, pushes B to a local origin, runs the idle pass,
+ * then measures first and warm creates at B. Run two A/A controls and five
+ * interleaved A/B pairs with one sample per fresh synthetic clone. Acceptance:
+ * first-create native copies 2 -> 1, correct B HEAD/contents, lower latency,
+ * no >20% total idle+first+warm CPU/allocation regression beyond A/A variation.
  * --alternate-commit alternates source generations without requiring a refresh.
  * Acceptance: after seeding both commits, no new generation on a flip back;
  * report owner latency, CPU/allocation, and retained IDs with matched A/A controls.
  */
-import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
-import { readFileSync, statSync } from "node:fs";
-import fs from "node:fs/promises";
-import { registerHooks } from "node:module";
-import { loadavg } from "node:os";
-import path from "node:path";
-import { parseArgs } from "node:util";
-import { getHeapStatistics } from "node:v8";
+import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 const { values } = parseArgs({
   options: {
@@ -56,6 +71,9 @@ const { values } = parseArgs({
     output: { type: "string" },
     samples: { type: "string", default: "5" },
     "default-base": { type: "boolean" },
+    "base-advance": { type: "boolean" },
+    "first-send-image": { type: "string" },
+    "expected-inline-builds": { type: "string", default: "0" },
     "expected-commit": { type: "string" },
     "alternate-policy": { type: "boolean" },
     prewarm: { type: "boolean" },
@@ -68,9 +86,14 @@ const { values } = parseArgs({
     "refresh-commit": { type: "string" },
     "alternate-commit": { type: "string" },
     "filesystem-owner": { type: "string" },
+    "filesystem-worker": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
+assert(
+  !values["first-send-image"] || values["base-advance"],
+  "--first-send-image requires --base-advance",
+);
 const output = path.resolve(values.output);
 if (process.env.OPENCLAW_BENCH_BASELINE_DIR) {
   await import("./worker-retained-heap-preload.js");
@@ -176,11 +199,23 @@ Reflect.set(globalThis, contentionKey, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
-    if (values["filesystem-owner"] && url.endsWith("/src/agents/worktrees/filesystem-native.ts")) {
+    if (
+      (values["filesystem-owner"] || values["filesystem-worker"]) &&
+      url.endsWith("/src/agents/worktrees/filesystem-native.ts")
+    ) {
+      let source = readFileSync(values["filesystem-owner"] ?? new URL(url), "utf8");
+      if (values["filesystem-worker"]) {
+        const resolver = "return resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy);";
+        assert(source.includes(resolver));
+        source = source.replace(
+          resolver,
+          `return new URL(${JSON.stringify(values["filesystem-worker"])});`,
+        );
+      }
       return {
         format: "module-typescript",
         shortCircuit: true,
-        source: readFileSync(values["filesystem-owner"], "utf8"),
+        source,
       };
     }
     if (
@@ -250,7 +285,21 @@ const observe = (message: unknown) => {
 };
 diagnostics.subscribe(observe);
 const { setRuntimeConfigSnapshot } = await import("../../src/config/runtime-snapshot.js");
-const config = {
+const config: OpenClawConfig = {
+  ...(values["first-send-image"]
+    ? {
+        agents: {
+          entries: { main: { workspace: repo } },
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "podman",
+              docker: { image: values["first-send-image"], user: "0:0" },
+            },
+          },
+        },
+      }
+    : {}),
   worktreeMaxCount: 4096,
   logging: {
     level: "info" as const,
@@ -363,13 +412,205 @@ const projectOwnerSha256 = projectSelection
       )
       .digest("hex")
   : undefined;
-const rows = [];
+const rows: unknown[] = [];
 try {
   if (projectSelection) {
     // Fixture registration must not warm only the first measured state lookup.
     await drainGlobalSingletonLifecycleState();
   }
-  for (let index = 0; index < samples; index++) {
+  if (values["base-advance"]) {
+    const { prewarmLocalWorkspaceTemplates } =
+      await import("../../src/gateway/worker-environments/local-workspace-prewarm.js");
+    // Startup runs an empty idle pass before later creates; exclude lazy loader cost.
+    await prewarmLocalWorkspaceTemplates({
+      getConfig: () => config,
+      signal: new AbortController().signal,
+    });
+    const service = new ManagedWorktreeService({ getConfig: () => config });
+    const { replaceSessionEntry } = await import("../../src/config/sessions/session-accessor.js");
+    const { prepareLocalSandboxWorkspace } =
+      await import("../../src/agents/sandbox/local-workspace.js");
+    const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
+    const { withWorktreePreparationTiming } =
+      await import("../../src/agents/worktrees/preparation-timing.js");
+    const { withDiagnosticsTimelineObserver } =
+      await import("../../src/infra/diagnostics-timeline.js");
+    const sandbox = resolveSandboxConfigForAgent(config, "main");
+    const create = async (name: string) => {
+      const sessionKey = `agent:main:prewarm-${name}`;
+      const created = await service.create({
+        repoRoot: repo,
+        name,
+        runSetupScript: false,
+        provisionIgnoredFiles: false,
+        ...(values["first-send-image"]
+          ? { ownerKind: "session" as const, ownerId: sessionKey }
+          : {}),
+      });
+      if (values["first-send-image"]) {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: name,
+            updatedAt: Date.now(),
+            worktree: { id: created.id, branch: created.branch, repoRoot: created.repoRoot },
+          },
+        );
+      }
+      return { ...created, sessionKey };
+    };
+    await create("seed");
+    assert(
+      (await listTemplatesAsync(process.env)).some(
+        (entry) => entry.status === "ready" && entry.backend === "btrfs",
+      ),
+      "Base-advance proof requires a ready native btrfs template",
+    );
+    const contents = "synthetic base advance\n";
+    await fs.writeFile(path.join(repo, "advance.txt"), contents);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, ...args], {
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 ** 2,
+      }).trim();
+    git("add", "advance.txt");
+    git(
+      "-c",
+      "user.name=Synthetic",
+      "-c",
+      "user.email=synthetic@example.invalid",
+      "commit",
+      "-qm",
+      "advance",
+    );
+    git("push", "origin", "main");
+    const target = git("rev-parse", "HEAD");
+    const realNow = Date.now;
+    Date.now = () => realNow() + 31_000;
+    let clones = 0;
+    const copy = nativeWorktreeFilesystem.copy;
+    nativeWorktreeFilesystem.copy = async (...args) => {
+      clones++;
+      await copy(...args);
+    };
+    const childCpu = () => {
+      if (process.platform !== "linux") {
+        return 0;
+      }
+      const fields = readFileSync("/proc/self/stat", "utf8").split(") ")[1]!.split(" ");
+      return (Number(fields[13]) + Number(fields[14])) * 10;
+    };
+    // The isolated container cgroup also includes Podman builders after conmon reparents them.
+    const containerCpu = () =>
+      values["first-send-image"]
+        ? Number(
+            readFileSync("/sys/fs/cgroup/cpu.stat", "utf8").match(/^usage_usec (\d+)$/m)?.[1],
+          ) / 1000
+        : undefined;
+    const measure = async <T>(phase: string, run: () => Promise<T>) => {
+      const containerBefore = containerCpu();
+      const monotonicStartUs = Number(process.hrtime.bigint() / 1000n);
+      const cpu = process.cpuUsage();
+      const mainCpu = process.threadCpuUsage();
+      const allocated = getHeapStatistics().total_allocated_bytes;
+      const children = childCpu();
+      const beforeClones = clones;
+      const start = performance.now();
+      const phases: string[] = [];
+      const result = await withDiagnosticsTimelineObserver((name) => {
+        phases.push(name);
+      }, run);
+      const elapsedMs = performance.now() - start;
+      const used = process.cpuUsage(cpu);
+      const mainUsed = process.threadCpuUsage(mainCpu);
+      const row = {
+        phase,
+        target,
+        elapsedMs,
+        monotonicStartUs,
+        monotonicEndUs: Number(process.hrtime.bigint() / 1000n),
+        containerCpuMs:
+          containerBefore === undefined ? undefined : containerCpu()! - containerBefore,
+        processCpuMs: (used.user + used.system) / 1000,
+        mainThreadCpuMs: (mainUsed.user + mainUsed.system) / 1000,
+        mainThreadAllocatedBytes: getHeapStatistics().total_allocated_bytes - allocated,
+        childCpuMs: childCpu() - children,
+        nativeCopies: clones - beforeClones,
+        templateBuilds: phases.filter(
+          (name) =>
+            name === "attempt.setup.sandbox.workspace_selection.prepare.reconcile.template.build",
+        ).length,
+        manifestCaptures: phases.filter((name) => name === "worktree.sandbox.snapshot").length,
+        load: loadavg(),
+      };
+      rows.push(row);
+      console.log(JSON.stringify(row));
+      return { result, row };
+    };
+    try {
+      await measure("idle", () =>
+        prewarmLocalWorkspaceTemplates({
+          getConfig: () => config,
+          signal: new AbortController().signal,
+        }),
+      );
+      for (const name of ["first", "warm"]) {
+        const { result: created, row: creation } = await measure(name, () => create(name));
+        assert(
+          created &&
+            typeof created === "object" &&
+            "path" in created &&
+            typeof created.path === "string",
+        );
+        assert.equal(git("rev-parse", "HEAD"), target);
+        assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), target);
+        assert.equal(await fs.readFile(path.join(created.path, "advance.txt"), "utf8"), contents);
+        assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+        if (values["first-send-image"]) {
+          assert.equal(creation.nativeCopies, 1, "Create must only clone its warm template");
+          const { result: projection, row: measured } = await measure(`${name}-send`, () =>
+            withWorktreePreparationTiming("sandbox", async () => {
+              using prepared = await prepareLocalSandboxWorkspace({
+                cfg: config,
+                agentId: "main",
+                sandbox,
+                sessionKey: created.sessionKey,
+                workspaceDir: created.path,
+              });
+              assert(prepared);
+              return prepared.workspaceDir;
+            }),
+          );
+          assert.equal(await requireGit(projection, ["rev-parse", "HEAD"]), target);
+          assert.equal(await requireGit(projection, ["status", "--porcelain"]), "");
+          assert.equal(await fs.readFile(path.join(projection, "advance.txt"), "utf8"), contents);
+          assert.equal(
+            await fs.readFile(path.join(projection, "node_modules/source-dependent.txt"), "utf8"),
+            contents,
+          );
+          assert.equal(
+            (
+              await fs.readFile(path.join(projection, "node_modules/install-priority.txt"), "utf8")
+            ).trim() === "idle",
+            Number(values["expected-inline-builds"]) === 0,
+          );
+          assert.equal(
+            measured.templateBuilds,
+            name === "first" ? Number(values["expected-inline-builds"]) : 0,
+          );
+          assert.equal(
+            measured.manifestCaptures,
+            name === "first" ? Number(values["expected-inline-builds"]) : 0,
+          );
+        }
+      }
+      await fs.writeFile(path.join(output, "results.json"), JSON.stringify(rows, null, 2));
+    } finally {
+      Date.now = realNow;
+      nativeWorktreeFilesystem.copy = copy;
+    }
+  }
+  for (let index = 0; index < (values["base-advance"] ? 0 : samples); index++) {
     const requestedCommit = refreshCommit && index % 2 === 0 ? refreshCommit : commit;
     const previous = refreshCommit
       ? (await listTemplatesAsync(process.env)).find((entry) => entry.status === "ready")

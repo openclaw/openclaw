@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, expect, onTestFinished, vi, type Mock } from "vitest";
 import type { WebSocket } from "ws";
@@ -319,6 +320,9 @@ export function attachGatewayHarness(options: {
     closed = true;
     attachment.closed(code, reason);
     close(code, reason);
+    if (!options.socket) {
+      socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+    }
   };
   harnessCleanups.push(async () => {
     closeSocket();
@@ -338,7 +342,7 @@ export function attachGatewayHarness(options: {
   let onMessage: ((data: Buffer) => void) | undefined;
   const socket =
     options.socket ??
-    ({
+    (Object.assign(new EventEmitter(), {
       readyState: 1,
       _receiver: { _maxPayload: MAX_PREAUTH_PAYLOAD_BYTES, _allowSynchronousEvents: false },
       send: socketSend,
@@ -346,9 +350,9 @@ export function attachGatewayHarness(options: {
         if (event === "message") {
           onMessage = handler;
         }
-        return socket;
+        return EventEmitter.prototype.on.call(socket, event, handler);
       }),
-    } as unknown as WebSocket);
+    }) as unknown as WebSocket);
   const send = vi.fn((frame: unknown) => {
     frames.push(frame);
     return { kind: "sent" } as const;
