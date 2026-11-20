@@ -157,32 +157,34 @@ export function UpdateRunView(props: {
                 </ol>
               </details>
             </Show>
-            <details
-              class="update-run-view__diagnostics"
-              open
-              onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
-            >
-              <summary>
-                {t("updates.run.details")}{" "}
-                <Show when={current().detailStep}>
-                  {(step) => <span title={step()}>{formatUpdateRunStepLabel(step())}</span>}
-                </Show>
-              </summary>
-              <pre
-                ref={(element) => (details = element)}
-                class="update-run-view__details"
-                tabindex={0}
-                aria-label={t("updates.run.details")}
-                onScroll={logFollow.handleScroll}
+            <Show when={!current().terminal || current().details}>
+              <details
+                class="update-run-view__diagnostics"
+                open
+                onToggle={(event) => event.currentTarget.open && logFollow.schedule(true)}
               >
-                {current().details ||
-                  t(
-                    current().detailStep === "updater-runtime-retention"
-                      ? "updates.run.prepareUpdaterDetails"
-                      : "updates.run.noDetails",
-                  )}
-              </pre>
-            </details>
+                <summary>
+                  {t("updates.run.details")}{" "}
+                  <Show when={current().detailStep}>
+                    {(step) => <span title={step()}>{formatUpdateRunStepLabel(step())}</span>}
+                  </Show>
+                </summary>
+                <pre
+                  ref={(element) => (details = element)}
+                  class="update-run-view__details"
+                  tabindex={0}
+                  aria-label={t("updates.run.details")}
+                  onScroll={logFollow.handleScroll}
+                >
+                  {current().details ||
+                    t(
+                      current().detailStep === "updater-runtime-retention"
+                        ? "updates.run.prepareUpdaterDetails"
+                        : "updates.run.noDetails",
+                    )}
+                </pre>
+              </details>
+            </Show>
             <Show when={current().oracles.length}>
               <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
                 <For each={current().oracles}>

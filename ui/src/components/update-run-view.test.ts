@@ -85,6 +85,7 @@ it("shows a standalone repair with its failed update and only applicable phases"
   expect(text(".update-run-view__report-body")).toContain(
     `Earlier failed update ${sourceId}: post-update-failed.`,
   );
+  expect(find(".update-run-view__diagnostics")).toBeNull();
   expect(find(".update-run-view__oracles")).toBeNull();
 });
 
