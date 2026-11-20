@@ -29,7 +29,7 @@ import {
   requireGit,
   runGit,
 } from "./git.js";
-import { appendNameOrdinal, appendWorktreeIdSuffix, validateName } from "./name.js";
+import { appendWorktreeIdSuffix, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
 import {
@@ -451,9 +451,8 @@ async function resolveWorktreeName(
   }
   validateName(suggestedName);
   // Only this repository's local state is checked below; the ID keeps the branch unique remotely.
-  const base = appendWorktreeIdSuffix(suggestedName, worktreeId);
   for (let ordinal = 1; ordinal <= 1_000; ordinal += 1) {
-    const candidate = ordinal === 1 ? base : appendNameOrdinal(base, ordinal);
+    const candidate = appendWorktreeIdSuffix(suggestedName, worktreeId, ordinal);
     const worktreePath = path.join(root, candidate);
     // A new ID never names the caller's existing checkout; owner reuse happens before naming.
     const registered = await findWorktreeByName(env, fingerprint, candidate);

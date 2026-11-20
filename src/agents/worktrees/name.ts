@@ -13,22 +13,20 @@ function appendNameSuffix(name: string, value: string): string {
   return `${name.slice(0, WORKTREE_NAME_MAX_LENGTH - suffix.length).replace(/-+$/g, "")}${suffix}`;
 }
 
-export function appendNameOrdinal(name: string, ordinal: number): string {
-  return appendNameSuffix(name, String(ordinal));
-}
-
 const WORKTREE_ID_SUFFIX_LENGTH = 6;
 
 /**
- * Ends a generated name with the start of its worktree's random ID. Branches are named
- * `openclaw/<name>` and outlive their checkouts on GitHub, so a readable name alone can
- * collide with an old remote branch; the ID makes that practically impossible without a lookup.
+ * Ends a generated name with the start of its worktree's random ID, plus `ordinal` when a local
+ * collision forces another candidate. Branches are named `openclaw/<name>` and outlive their
+ * checkouts on GitHub, so a readable name alone can collide with an old remote branch; the ID
+ * makes that very unlikely without a lookup. Truncation shortens the readable name, never the ID.
  */
-export function appendWorktreeIdSuffix(name: string, worktreeId: string): string {
-  const suffix = worktreeId
+export function appendWorktreeIdSuffix(name: string, worktreeId: string, ordinal = 1): string {
+  const id = worktreeId
     .replace(/[^a-z0-9]/giu, "")
     .toLowerCase()
     .slice(0, WORKTREE_ID_SUFFIX_LENGTH);
+  const suffix = [id, ordinal > 1 ? String(ordinal) : ""].filter(Boolean).join("-");
   return suffix ? appendNameSuffix(name, suffix) : name;
 }
 
