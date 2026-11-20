@@ -3394,7 +3394,11 @@ is_installer_git_wrapper() {
     IFS= read -r first < "$wrapper" || return 1
     second="$(sed -n '2p' "$wrapper")"; third="$(sed -n '3p' "$wrapper")"; fourth="$(sed -n '4p' "$wrapper")"
     [[ "$first" == "#!/usr/bin/env bash" && "$second" == "set -euo pipefail" && -z "$fourth" ]] || return 1
-    case "$third" in "exec "*"/dist/entry.js \"\$@\"") return 0 ;; *) return 1 ;; esac
+    # `openclaw update` points a Git install's wrapper at the release launcher.
+    case "$third" in
+        "exec "*"/dist/entry.js \"\$@\"" | "exec "*"/git-install/openclaw-launcher.mjs \"\$@\"") return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 prepare_git_wrapper_backup_for_npm() {

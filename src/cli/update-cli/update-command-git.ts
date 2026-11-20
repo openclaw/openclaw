@@ -142,8 +142,9 @@ export async function retireStandaloneGitWrapper(params: {
     params.assertCurrent?.();
     try {
       if (params.replacementRoot) {
-        // The installer's formats, so its own wrapper checks still recognize the result. The
-        // launcher selects a pending release and counts a foreground Gateway start.
+        // The installer's formats, which its wrapper checks (`install.sh`, `install.ps1`) also
+        // recognize with the launcher entry. The launcher selects a pending release and counts a
+        // foreground Gateway start.
         const entry = pathApi.join(pathApi.dirname(params.replacementRoot), GIT_RELEASE_LAUNCHER);
         const next =
           platform === "win32"
@@ -455,8 +456,10 @@ export async function updateGitInstall(params: {
     // the release prefix, so the checkout comes from the release's Git common directory: the main
     // repository, so PATH entries written for a linked-worktree checkout are matched only from
     // that checkout.
+    // Real paths: a state directory reached through a symlink (macOS /tmp) still matches.
+    const realOf = (entry: string) => fs.realpath(entry).catch(() => path.resolve(entry));
     const releaseDriven = !path
-      .relative(resolveGitReleasePrefix(), path.resolve(gitRoot))
+      .relative(await realOf(resolveGitReleasePrefix()), await realOf(gitRoot))
       .startsWith("..");
     const checkoutRoot = releaseDriven
       ? await resolveGitReleaseCheckout(result.root, gitRoot, effectiveTimeout)
