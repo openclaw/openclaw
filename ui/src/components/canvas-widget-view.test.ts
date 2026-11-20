@@ -426,6 +426,7 @@ describe("Canvas widget view", () => {
     commitWidget(view, "agent:main:another");
     expect(client.request).toHaveBeenCalledOnce();
     commitWidget(view);
+    await vi.advanceTimersByTimeAsync(1_000);
     await settle(view);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(view.documentHtml).toBe(documentView.html);
@@ -619,6 +620,61 @@ describe("Canvas widget view", () => {
     await transition(view, "connected");
     expect(view.querySelector("iframe")).not.toBeNull();
     expect(client.request).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps unavailable widgets terminal across chat events and remounts", async () => {
+    vi.useFakeTimers();
+    client.request.mockRejectedValue(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Canvas widget unavailable; reload the chat or ask the agent to recreate it.",
+      }),
+    );
+    let view = mount(client, "cv_missing", document.body, ["operator.sessions.read"]);
+    await settle(view);
+    for (let i = 0; i < 12; i += 1) {
+      commitWidget(view);
+      gateways.get(view)!.emit({
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: view.sessionKey, state: "final" },
+      });
+      await settle(view);
+      view.remove();
+      await settle(view);
+      view = mount(client, "cv_missing", document.body, ["operator.sessions.read"]);
+      await settle(view);
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(client.request).toHaveBeenCalledOnce();
+    expect(alert(view)?.textContent).toContain("Canvas widget unavailable");
+    expect(view.querySelector("button")).toBeNull();
+    client.request.mockResolvedValue(documentView);
+    view.docId = "cv_recreated";
+    await settle(view);
+    expect(view.documentHtml).toBe(documentView.html);
+    expect(client.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds transient retries even while chat events arrive", async () => {
+    vi.useFakeTimers();
+    client.request.mockRejectedValue(
+      new GatewayProtocolRequestError({
+        code: "UNAVAILABLE",
+        message: "Projection busy",
+        retryable: true,
+      }),
+    );
+    const view = mount(client, "cv_busy", document.body, ["operator.sessions.read"]);
+    await settle(view);
+    for (let i = 0; i < 40; i += 1) {
+      commitWidget(view);
+      await settle(view);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(client.request).toHaveBeenCalledTimes(6);
+    expect(alert(view)?.textContent).toContain("Projection busy");
   });
 
   it("keeps a slow authenticated read alive after the loading notice", async () => {

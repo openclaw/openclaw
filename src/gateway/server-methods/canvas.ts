@@ -115,7 +115,8 @@ export const canvasHandlers: GatewayRequestHandlers = {
         await respondWithCanvasHtml(
           invocation,
           async () => {
-            const document = await readCanvasDocumentHtmlSource(invocation.params.docId);
+            const document =
+              retained?.document ?? (await readCanvasDocumentHtmlSource(invocation.params.docId));
             if (
               document.cspSandbox !== "scripts" ||
               Buffer.byteLength(document.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
