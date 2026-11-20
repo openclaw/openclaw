@@ -15,7 +15,7 @@ const skillRoot = path.resolve("skills/meme-maker");
 const scriptPath = path.join(skillRoot, "scripts/meme.mjs");
 const template = templates.find((entry) => entry.id === "two-buttons")!;
 
-function renderFixture(format: "svg" | "png", isolated = false) {
+function renderFixture(format: "svg" | "png" | "jpg", isolated = false) {
   const root = createTempDir("openclaw-meme-maker-");
   const cache = path.join(root, "cache");
   const imageDir = path.join(cache, "openclaw/meme-maker");
@@ -61,6 +61,14 @@ describe("meme-maker local rendering", () => {
     const font = { fontFiles, loadSystemFonts: false };
     const caption = new Resvg(svg.replace(/<image[^>]*\/>/, ""), { font }).innerBBox()!;
     expect(Math.abs(caption.x + caption.width / 2 - 138)).toBeLessThan(10); // rotated box 0 center
+  });
+
+  it("rejects a JPEG filename before writing an SVG into it", async () => {
+    const { out, result } = renderFixture("jpg");
+    await expect(result).rejects.toMatchObject({
+      stderr: expect.stringContaining("Use --out with .svg or .png"),
+    });
+    expect(fs.existsSync(out)).toBe(false);
   });
 
   it("directs SVG output when PNG rendering is unavailable without inviting package installs", async () => {
