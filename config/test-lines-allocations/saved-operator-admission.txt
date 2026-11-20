@@ -1,0 +1,4 @@
+# Eighteen saved credential/ingress kinds require refusal, admitted completion, and Stop proof.
+# Three shared real auth-mode fixtures and one restart sentinel exercise actual queued owners.
+# Covers 812 net test lines minus the normal 400-line allowance; no production test hooks.
+412
