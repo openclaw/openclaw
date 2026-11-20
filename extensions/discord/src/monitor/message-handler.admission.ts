@@ -1,40 +1,179 @@
+import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type {
   ChannelIngressContextBinding,
-  ResolveChannelMessageIngressParams,
+  ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
+import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveDiscordGuildEntry, resolveDiscordMemberAccessState } from "./allow-list.js";
-import { resolveDiscordChannelNameSafe } from "./channel-access.js";
 import {
   resolveDiscordDmCommandAccess,
   resolveDiscordTextCommandAccess,
 } from "./dm-command-auth.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
-import type { DiscordChannelInfo } from "./message-channel-info.js";
 import { resolveDiscordPreflightChannelAccess } from "./message-handler.preflight-channel-access.js";
 import { resolveDiscordPreflightChannelContext } from "./message-handler.preflight-channel-context.js";
-import { resolveDiscordPreflightThreadContext } from "./message-handler.preflight-thread.js";
 import type {
+  DiscordMessageEvent,
+  DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,
-  DiscordSenderIdentity,
 } from "./message-handler.preflight.types.js";
 
-type DiscordMessageSourceParams = {
-  preflight: DiscordMessagePreflightParams;
-  sender: DiscordSenderIdentity;
-  messageChannelId: string;
-  channelInfo: DiscordChannelInfo | null;
-  isGuildMessage: boolean;
-  isDirectMessage: boolean;
-  isGroupDm: boolean;
-  hasControlCommand: boolean;
+type DiscordMessageAccessFacts = Pick<
+  DiscordMessagePreflightContext,
+  | "sender"
+  | "memberRoleIds"
+  | "messageChannelId"
+  | "channelName"
+  | "isGuildMessage"
+  | "isDirectMessage"
+  | "isGroupDm"
+  | "threadChannel"
+  | "threadParentId"
+  | "threadParentName"
+  | "hasControlCommand"
+> & { guild?: DiscordMessageEvent["guild"]; guildId?: string; authorIsBot: boolean };
+type DiscordMessageAccessPolicy = Pick<
+  DiscordMessagePreflightParams,
+  | "cfg"
+  | "accountId"
+  | "dmEnabled"
+  | "groupDmEnabled"
+  | "groupDmChannels"
+  | "dmPolicy"
+  | "groupPolicy"
+  | "guildEntries"
+  | "allowFrom"
+> & { allowNameMatching: boolean };
+type IngressOptions = Pick<
+  Parameters<typeof resolveDiscordDmCommandAccess>[0],
+  | "token"
+  | "rest"
+  | "contextBinding"
+  | "childSessionPublication"
+  | "conversationParentId"
+  | "conversationThreadId"
+>;
+
+export type PreparedDiscordMessageAccess = Pick<
+  DiscordMessagePreflightContext,
+  | "guildInfo"
+  | "channelConfig"
+  | "threadName"
+  | "displayChannelSlug"
+  | "guildSlug"
+  | "resolveChannelIngress"
+> & {
+  allowed: boolean;
+  ingress: ResolvedChannelMessageIngress;
+  allowTextCommands: boolean;
+  displayChannelName?: string;
 };
 
-/** Receipt-time identity stays fixed; queued execution reacquires current account access. */
-export function createDiscordMessageSourceAdmission(
-  params: DiscordMessageSourceParams,
-): NonNullable<ResolveChannelMessageIngressParams["childSessionPublication"]> {
-  const { preflight, sender } = params;
+/** One access decision for receipt and admission; native identity/structure facts never refetch. */
+async function resolveDiscordMessageAccess(
+  facts: DiscordMessageAccessFacts,
+  policy: DiscordMessageAccessPolicy,
+  options: IngressOptions,
+) {
+  if ((facts.isDirectMessage && !policy.dmEnabled) || (facts.isGroupDm && !policy.groupDmEnabled)) {
+    logVerbose("discord: drop message (direct/group dms disabled)");
+    return null;
+  }
+  const guildInfo = facts.isGuildMessage
+    ? resolveDiscordGuildEntry({
+        guild: facts.guild ?? undefined,
+        guildId: facts.guildId,
+        guildEntries: policy.guildEntries,
+      })
+    : null;
+  if (facts.isGuildMessage && Object.keys(policy.guildEntries ?? {}).length > 0 && !guildInfo) {
+    logVerbose(`Blocked discord guild ${facts.guildId ?? "unknown"} (not in discord.guilds)`);
+    return null;
+  }
+  const channel = resolveDiscordPreflightChannelContext({
+    ...facts,
+    guildName: facts.guild?.name,
+    guildInfo,
+  });
+  if (
+    !resolveDiscordPreflightChannelAccess({
+      ...facts,
+      ...channel,
+      guildInfo,
+      groupPolicy: policy.groupPolicy,
+      groupDmChannels: policy.groupDmChannels,
+      channelMatchMeta: formatAllowlistMatchMeta(channel.channelConfig),
+    })
+  ) {
+    return null;
+  }
+  const member = resolveDiscordMemberAccessState({
+    channelConfig: channel.channelConfig,
+    guildInfo,
+    sender: facts.sender,
+    memberRoleIds: facts.memberRoleIds,
+    allowNameMatching: policy.allowNameMatching,
+  });
+  if (facts.isGuildMessage && member.hasAccessRestrictions && !member.memberAllowed) {
+    logVerbose("Blocked discord guild sender (not in users/roles allowlist)");
+    return null;
+  }
+  const common = {
+    ...options,
+    accountId: policy.accountId,
+    cfg: policy.cfg,
+    sender: {
+      id: facts.sender.id,
+      name: facts.sender.name,
+      tag: facts.sender.tag,
+      isPluralKit: facts.sender.isPluralKit,
+      authorKind: facts.authorIsBot ? ("bot" as const) : ("user" as const),
+    },
+    allowNameMatching: policy.allowNameMatching,
+    conversationId: facts.messageChannelId,
+  };
+  const allowTextCommands = shouldHandleTextCommands({ cfg: policy.cfg, surface: "discord" });
+  const ingress = facts.isDirectMessage
+    ? await resolveDiscordDmCommandAccess({
+        ...common,
+        dmPolicy: policy.dmPolicy,
+        configuredAllowFrom: policy.allowFrom ?? [],
+      })
+    : await resolveDiscordTextCommandAccess({
+        ...common,
+        ownerAllowFrom: policy.allowFrom,
+        memberAccessConfigured: member.hasAccessRestrictions,
+        memberAllowed: member.memberAllowed,
+        allowTextCommands,
+        hasControlCommand: facts.hasControlCommand,
+      });
+  return {
+    ...channel,
+    guildInfo,
+    ingress,
+    allowTextCommands,
+    allowed: facts.isDirectMessage
+      ? ingress.senderAccess.allowed
+      : !ingress.commandAccess.shouldBlockControlCommand,
+  };
+}
+
+/** Preflight retains facts; the same decision consumes live policy once when its turn starts. */
+export async function prepareDiscordMessageAccess(
+  preflight: DiscordMessagePreflightParams,
+  facts: DiscordMessageAccessFacts,
+): Promise<PreparedDiscordMessageAccess | null> {
+  const receiptPolicy = {
+    ...preflight,
+    allowNameMatching: isDangerousNameMatchingEnabled(preflight.discordConfig),
+  };
+  const options = { token: preflight.token, rest: preflight.client.rest };
+  const access = await resolveDiscordMessageAccess(facts, receiptPolicy, options);
+  if (!access) {
+    return null;
+  }
   const readPolicy =
     preflight.readPolicy ??
     createDiscordLivePolicyReader({
@@ -53,158 +192,30 @@ export function createDiscordMessageSourceAdmission(
       },
       resolvedAllowlist: { guildEntries: preflight.guildEntries, allowFrom: preflight.allowFrom },
     });
+  const assertCurrent = () => preflight.abortSignal?.throwIfAborted();
   return {
-    assertCurrent: () => preflight.abortSignal?.throwIfAborted(),
-    prepare: async () => {
-      const policy = await readPolicy();
-      const senderFacts = {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-        isPluralKit: sender.isPluralKit,
-        authorKind: preflight.data.author?.bot ? ("bot" as const) : ("user" as const),
-      };
-      const common = {
-        accountId: preflight.accountId,
-        cfg: policy.cfg,
-        sender: senderFacts,
-        allowNameMatching: policy.allowNameMatching,
-        conversationId: params.messageChannelId,
-      };
-      if (params.isDirectMessage) {
-        if (!policy.dmEnabled) {
-          return null;
-        }
-        const access = await resolveDiscordDmCommandAccess({
-          ...common,
-          dmPolicy: policy.dmPolicy,
-          configuredAllowFrom: policy.allowFrom,
-          token: preflight.token,
-          rest: preflight.client.rest,
-        });
-        if (!access.senderAccess.allowed) {
-          return null;
-        }
-      } else {
-        if (params.isGroupDm && !policy.groupDmEnabled) {
-          return null;
-        }
-        const guildInfo = params.isGuildMessage
-          ? resolveDiscordGuildEntry({
-              guild: preflight.data.guild ?? undefined,
-              guildId: preflight.data.guild_id ?? undefined,
-              guildEntries: policy.guildEntries,
-            })
-          : null;
-        if (
-          params.isGuildMessage &&
-          Object.keys(policy.guildEntries ?? {}).length > 0 &&
-          !guildInfo
-        ) {
-          return null;
-        }
-        const thread = await resolveDiscordPreflightThreadContext({
-          client: preflight.client,
-          isGuildMessage: params.isGuildMessage,
-          message: preflight.data.message,
-          channelInfo: params.channelInfo,
-          messageChannelId: params.messageChannelId,
-          abortSignal: preflight.abortSignal,
-        });
-        if (!thread) {
-          return null;
-        }
-        const channel = resolveDiscordPreflightChannelContext({
-          isGuildMessage: params.isGuildMessage,
-          messageChannelId: params.messageChannelId,
-          channelName:
-            params.channelInfo?.name ??
-            resolveDiscordChannelNameSafe(
-              "channel" in preflight.data.message ? preflight.data.message.channel : undefined,
-            ),
-          guildInfo,
-          threadChannel: thread.earlyThreadChannel,
-          threadParentId: thread.earlyThreadParentId,
-          threadParentName: thread.earlyThreadParentName,
-        });
-        if (
-          !resolveDiscordPreflightChannelAccess({
-            ...params,
-            ...channel,
-            groupPolicy: policy.groupPolicy,
-            groupDmChannels: policy.groupDmChannels,
-            guildInfo,
-            channelMatchMeta: "run admission",
-          })
-        ) {
-          return null;
-        }
-        const member = resolveDiscordMemberAccessState({
-          channelConfig: channel.channelConfig,
-          guildInfo,
-          memberRoleIds: Array.isArray(preflight.data.rawMember?.roles)
-            ? preflight.data.rawMember.roles
-            : [],
-          sender,
-          allowNameMatching: policy.allowNameMatching,
-        });
-        if (params.isGuildMessage && member.hasAccessRestrictions && !member.memberAllowed) {
-          return null;
-        }
-        const access = await resolveDiscordTextCommandAccess({
-          ...common,
-          ownerAllowFrom: policy.allowFrom,
-          memberAccessConfigured: member.hasAccessRestrictions,
-          memberAllowed: member.memberAllowed,
-          allowTextCommands: shouldHandleTextCommands({ cfg: policy.cfg, surface: "discord" }),
-          hasControlCommand: params.hasControlCommand,
-        });
-        if (access.commandAccess.shouldBlockControlCommand) {
-          return null;
-        }
+    ...access,
+    resolveChannelIngress: async (
+      contextBinding: ChannelIngressContextBinding,
+      conversation?: { parentId?: string; threadId?: string },
+    ) => {
+      const resolved = await resolveDiscordMessageAccess(facts, receiptPolicy, {
+        ...options,
+        contextBinding,
+        conversationParentId: conversation?.parentId,
+        conversationThreadId: conversation?.threadId,
+        childSessionPublication: {
+          assertCurrent,
+          prepare: async () =>
+            (await resolveDiscordMessageAccess(facts, await readPolicy(), options))?.allowed
+              ? assertCurrent
+              : null,
+        },
+      });
+      if (!resolved) {
+        throw new Error("Discord source access changed during context construction");
       }
-      // A started ordinary request may finish after access changes; retain cancellation only.
-      return () => preflight.abortSignal?.throwIfAborted();
+      return resolved.ingress;
     },
   };
-}
-
-/** Initial ingress and later admission keep the same Discord source and policy owners. */
-export function createDiscordChannelMessageIngress(
-  params: DiscordMessageSourceParams & {
-    memberAccessConfigured: boolean;
-    memberAllowed: boolean;
-    allowNameMatching: boolean;
-    allowTextCommands: boolean;
-  },
-) {
-  const { preflight, sender } = params;
-  return async (
-    contextBinding?: ChannelIngressContextBinding,
-    conversation?: { parentId?: string; threadId?: string },
-  ) =>
-    await resolveDiscordTextCommandAccess({
-      accountId: preflight.accountId,
-      cfg: preflight.cfg,
-      ownerAllowFrom: preflight.allowFrom,
-      sender: {
-        id: sender.id,
-        name: sender.name,
-        tag: sender.tag,
-        isPluralKit: sender.isPluralKit,
-        authorKind: preflight.data.author?.bot ? "bot" : "user",
-      },
-      memberAccessConfigured: params.memberAccessConfigured,
-      memberAllowed: params.memberAllowed,
-      allowNameMatching: params.allowNameMatching,
-      allowTextCommands: params.allowTextCommands,
-      hasControlCommand: params.hasControlCommand,
-      conversationId: params.messageChannelId,
-      conversationParentId: conversation?.parentId,
-      conversationThreadId: conversation?.threadId,
-      ...(contextBinding ? { contextBinding } : {}),
-      childSessionPublication: contextBinding
-        ? createDiscordMessageSourceAdmission(params)
-        : undefined,
-    });
 }

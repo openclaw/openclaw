@@ -35,15 +35,21 @@ const discord = await loadBundledPluginFacade<{
       cfg: OpenClawConfig;
       sessionKey: string;
       messageId: string;
-    }) => Promise<ResolvedChannelMessageIngress>;
+      thread?: boolean;
+    }) => Promise<{
+      ingress: ResolvedChannelMessageIngress;
+      counts: () => { policyReads: number; restCalls: number };
+    }>;
   }>;
 }>({ pluginId: "discord", artifactBasename: "test-api.js" });
 
-it("rechecks queued Discord access before model requests without granting public children", async () => {
+it("renews queued and immediate Discord access without native refetches", async () => {
   const { prepareDiscordQueuedAdmission } = await discord.loadDiscordQueuedAdmissionFixture();
   await withOpenClawTestState({ label: "discord-queued-admission" }, async () => {
-    for (const revoke of [false, true]) {
-      const sessionKey = `agent:main:discord:channel:queued-${revoke}`;
+    for (const scenario of ["immediate", "queued-allowed", "queued-revoked"]) {
+      const queued = scenario !== "immediate";
+      const revoke = scenario === "queued-revoked";
+      const sessionKey = `agent:main:discord:channel:${scenario}`;
       const messageId = revoke ? "500000000000000005" : "400000000000000004";
       const cfg: OpenClawConfig = {
         channels: {
@@ -72,11 +78,12 @@ it("rechecks queued Discord access before model requests without granting public
       };
       const ingress = createHostChannelIngressRuntime(owner);
       const runtime = { channel: { inbound: { ingress } } } as unknown as PluginRuntime;
-      const channelIngress = await prepareDiscordQueuedAdmission({
+      const { ingress: channelIngress, counts } = await prepareDiscordQueuedAdmission({
         runtime,
         cfg,
         sessionKey,
         messageId,
+        thread: !queued,
       });
       const context = await createHostChannelInboundEventContextBuilder(
         buildChannelInboundEventContext,
@@ -95,6 +102,7 @@ it("rechecks queued Discord access before model requests without granting public
       });
       const followup = createFollowupRun({ config: cfg, sessionKey });
       copyChildSessionPublication(context, followup.run);
+      const beforeAdmission = counts();
       const model = vi.fn();
       const deliver = vi.fn(async () => {});
       const deliverPrepared = vi.fn(async () => {});
@@ -105,11 +113,13 @@ it("rechecks queued Discord access before model requests without granting public
         model();
         return { payloads: [{ text: "Authorized reply" }], meta: { durationMs: 0 } };
       });
-      const predecessor = createReplyOperation({
-        sessionKey,
-        sessionId: followup.run.sessionId,
-        resetTriggered: false,
-      });
+      const predecessor = queued
+        ? createReplyOperation({
+            sessionKey,
+            sessionId: followup.run.sessionId,
+            resetTriggered: false,
+          })
+        : undefined;
       const waiting = createDeferred();
       const submit = mailbox.submitSessionControllerTask;
       const submission = vi
@@ -144,7 +154,9 @@ it("rechecks queued Discord access before model requests without granting public
       );
       try {
         await waiting.promise;
-        expect(model).not.toHaveBeenCalled();
+        if (queued) {
+          expect(model).not.toHaveBeenCalled();
+        }
         if (revoke) {
           currentConfig = structuredClone(cfg);
           const channel =
@@ -155,7 +167,7 @@ it("rechecks queued Discord access before model requests without granting public
           channel.users = ["600000000000000006"];
           setRuntimeConfigSnapshot(currentConfig);
         }
-        predecessor.complete();
+        predecessor?.complete();
         const result = await pending;
         if (result.outcome.kind === "rejected") {
           dispatcher.sendFinalReply(result.outcome.payload);
@@ -168,6 +180,13 @@ it("rechecks queued Discord access before model requests without granting public
         expect(model).toHaveBeenCalledTimes(revoke ? 0 : 1);
         expect(deliver).toHaveBeenCalledTimes(revoke ? 0 : 1);
         expect(deliverPrepared).not.toHaveBeenCalled();
+        if (!queued) {
+          expect(beforeAdmission.restCalls).toBeGreaterThan(0);
+          expect(counts()).toEqual({
+            policyReads: beforeAdmission.policyReads + 1,
+            restCalls: beforeAdmission.restCalls,
+          });
+        }
         if (revoke) {
           expect(result.outcome).toMatchObject({
             kind: "rejected",
@@ -186,7 +205,7 @@ it("rechecks queued Discord access before model requests without granting public
           expect(result.outcome).toMatchObject({ kind: "settled", status: "ok" });
         }
       } finally {
-        predecessor.complete();
+        predecessor?.complete();
         await Promise.allSettled([pending]);
         submission.mockRestore();
       }
