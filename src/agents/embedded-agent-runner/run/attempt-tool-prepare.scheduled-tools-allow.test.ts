@@ -43,9 +43,9 @@ vi.mock("../../openclaw-plugin-tools.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../../openclaw-plugin-tools.js")>()),
     resolveOpenClawPluginToolsForOptions: pluginTools,
-    resolveOpenClawPluginToolsForOptionsAsync: async (options: {
-      pluginToolAllowlist?: string[];
-    }) => pluginTools(options),
+    resolveOpenClawPluginToolsForOptionsAsync: async (params: {
+      options?: { pluginToolAllowlist?: string[] };
+    }) => pluginTools(params),
   };
 });
 

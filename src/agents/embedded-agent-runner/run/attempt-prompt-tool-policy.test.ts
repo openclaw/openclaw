@@ -42,7 +42,8 @@ function createPolicyFixture(
   let names = [...activeToolNames];
   const session = {
     getActiveToolNames: () => [...names],
-    getToolDefinition: (name: string) => createStubTool(name),
+    getToolDefinition: (name: string): ReturnType<typeof createStubTool> | undefined =>
+      createStubTool(name),
     setActiveToolsByName: (next: string[]) => void (names = [...next]),
   };
   const params = {

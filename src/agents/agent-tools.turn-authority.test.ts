@@ -157,7 +157,7 @@ it.each([
   ],
 ])("never hands the source's preparer to a tool %s refuses", async (_label, refuse) => {
   let ran = false;
-  const source = fakeTool("exec");
+  const source = fakeTool("exec", "exec");
   source.execute = async () => {
     ran = true;
     return { content: [{ type: "text", text: "ran" }], details: {} };
@@ -172,7 +172,7 @@ it.each([
 });
 
 it("keeps the scoped-reads split off the source preparer", () => {
-  const source = fakeTool("automations");
+  const source = fakeTool("automations", "automations");
   attachInternalToolExecutionPreparer(source, async () => {
     throw new Error("source preparer ran");
   });
