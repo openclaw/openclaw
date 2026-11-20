@@ -135,7 +135,7 @@ describe("Control UI build chunking", () => {
 
   it("groups catalog cards without eagerly loading the skill reader or Markdown", async () => {
     const discovery = modulePath("../pages/skills/discovery-view.tsx");
-    const reader = modulePath("../pages/skills/skill-reader-dialog.tsx");
+    const reader = modulePath("../pages/skills/clawhub-skill-page.tsx");
     const grid = modulePath("../pages/plugins/catalog-grid.tsx");
     const card = modulePath("../pages/plugins/plugin-card.tsx");
     const skeleton = modulePath("../pages/plugins/catalog-skeleton.tsx");

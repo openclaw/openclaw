@@ -31,7 +31,7 @@ const TOKEN = "prefix-randomized-token";
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-export const TURN_KINDS = [
+const TURN_KINDS = [
   "user",
   "tool",
   "parallelTools",
@@ -72,7 +72,7 @@ function prng(seed: number) {
 }
 
 /** A seeded journey of `length` turns that uses every turn kind at least once. */
-export function randomJourney(seed: number, length = TURN_KINDS.length + 6): TurnKind[] {
+function randomJourney(seed: number, length = TURN_KINDS.length + 6): TurnKind[] {
   const random = prng(seed);
   const kinds: TurnKind[] = [...TURN_KINDS];
   while (kinds.length < length) {

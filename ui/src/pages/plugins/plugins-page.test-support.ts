@@ -16,7 +16,10 @@ import type {
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
 import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
-import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createPluginDeclaredSurface } from "../../test-helpers/plugins-e2e-fixtures.test-support.ts";
@@ -112,12 +115,11 @@ export function createPluginSettingsDetailProps(
     canEditConfig: true,
     configValue: {},
     configHints: {},
-    configUnsupportedPaths: [],
+    rawConfigSchema: null,
+    settingsContext: createContext(createApplicationGateway().gateway),
     pluginId: "workboard",
     inspection: null,
     inspectionRead: { receipt: () => null, value: () => null },
-    configSchema: null,
-    hostControlsSchema: null,
     backHref: "/settings/plugins",
     backLabel: "Plugins",
     tab: "readme",
