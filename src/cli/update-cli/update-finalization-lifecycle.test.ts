@@ -9,6 +9,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { inspectUpdateRunAbandonment } from "../../infra/update-run-activity.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
+import { isUpdateRepairRun } from "../../infra/update-run-record.js";
 import {
   ABANDONED_UPDATE_RUN_MS,
   UPDATE_RUN_HEARTBEAT_MS,
@@ -80,8 +81,119 @@ it("reports standalone repair as repairing before Doctor maintenance", () => {
     phase: "repairing",
     status: "running",
     target: { kind: "package", version: "2026.10.5" },
+    after: { version: "2026.10.5" },
+    steps: expect.arrayContaining([
+      expect.objectContaining({ step: "finalize:package-rollback-not-needed", status: "skipped" }),
+    ]),
   });
 });
+
+it.each([
+  ["failed", "none"],
+  ["succeeded", "none"],
+  ["failed", "observation"],
+  ["succeeded", "observation"],
+  ["failed", "receipt"],
+] as const)(
+  "links standalone repair only when the newest prior update %s (settlement: %s)",
+  (status, settlement) => {
+    const prior = ledger.createUpdateRun({
+      trigger: "cli",
+      target: { kind: "package", version: "2026.11.5" },
+    });
+    ledger.recordUpdateRunPhase(prior.runId, "staging");
+    ledger.recordUpdateRunPhase(prior.runId, "activating", {
+      step: {
+        step: "finalize:doctor",
+        status: "failed",
+        detail: "SQLite migration publication could not be verified: database is locked",
+      },
+    });
+    let latest = prior;
+    if (status === "succeeded") {
+      ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+      vi.advanceTimersByTime(1);
+      latest = ledger.createUpdateRun({ trigger: "cli" });
+      ledger.recordUpdateRunPhase(latest.runId, "staging");
+      ledger.recordUpdateRunPhase(latest.runId, "activating");
+    }
+    if (settlement === "observation") {
+      ledger.recordUpdateRunStep(latest.runId, {
+        step: "reconcile:settle",
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: "Interrupted completion observed.",
+      });
+    }
+    ledger.finishUpdateRun(latest.runId, {
+      status,
+      reason: status === "failed" ? "post-update-failed" : undefined,
+    });
+    if (settlement === "receipt") {
+      vi.advanceTimersByTime(1);
+      ledger.createUpdateRun({
+        trigger: "cli",
+        settlement: { reason: "settled", detail: "Retained recovery settled." },
+      });
+    }
+
+    vi.advanceTimersByTime(1);
+    const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(lifecycle.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        endedAtMs: expect.any(Number),
+        detail: `Update ${prior.runId} to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: SQLite migration publication could not be verified: database is locked`,
+      });
+    }
+  },
+);
+
+it.each([
+  ["skipped", 1, true],
+  ["failed", 1, true],
+  ["succeeded", 1, true],
+  ["skipped", 9, true],
+  ["failed", 1, false],
+] as const)(
+  "selects the repair retry's prior update after %s standalone repair (%i attempts, install kind recorded: %s)",
+  (status, attempts, recordInstallKind) => {
+    const prior = ledger.createUpdateRun({ trigger: "cli" });
+    ledger.finishUpdateRun(prior.runId, { status: "failed", reason: "post-update-failed" });
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      vi.advanceTimersByTime(1);
+      const lifecycle = new UpdateFinalizationLifecycle(false, undefined, () => {});
+      const runId = lifecycle.attachLedger(true);
+      if (recordInstallKind) {
+        lifecycle.recordInstallKind("package");
+      }
+      if (status === "failed") {
+        lifecycle.fail();
+      } else {
+        lifecycle.complete(0, status === "skipped" ? "Run openclaw update repair." : undefined);
+      }
+      expect.soft(isUpdateRepairRun(getUpdateRun(runId)!)).toBe(true);
+    }
+
+    vi.advanceTimersByTime(1);
+    const retry = new UpdateFinalizationLifecycle(false, undefined, () => {});
+    const repair = getUpdateRun(retry.attachLedger(true))!;
+    const link = repair.steps.find((step) => step.step === "finalize:repaired-run");
+    if (status === "succeeded") {
+      expect(link).toBeUndefined();
+    } else {
+      expect(link).toMatchObject({
+        status: "completed",
+        detail: `Update ${prior.runId} failed at requested: post-update-failed.`,
+      });
+    }
+  },
+);
 
 it("writes successful finalization progress to stderr and failures as errors", async () => {
   const { lifecycle } = finalization(5_000, false, false);
