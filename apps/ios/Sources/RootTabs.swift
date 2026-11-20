@@ -640,6 +640,8 @@ struct RootTabs: View {
     private func rootGatewayLifecycle(_ content: some View) -> some View {
         let refreshID: UUID? = self.hasConnectedOnce || self.appModel.isLocalGatewayFixtureEnabled
             ? nil : self.gatewayRegistryRefreshID
+        let registryChanges = NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+            .receive(on: DispatchQueue.main)
         return self.rootGatewayProblemLifecycle(content)
             .task(id: refreshID) {
                 guard let refreshID else { return }
@@ -650,8 +652,7 @@ struct RootTabs: View {
                 guard !Task.isCancelled, refreshID == self.gatewayRegistryRefreshID else { return }
                 self.hasSavedGateway = hasSavedGateway
             }
-            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
-                .receive(on: DispatchQueue.main)) { _ in
+            .onReceive(registryChanges) { _ in
                 self.hasSavedGateway = nil
                 self.gatewayRegistryRefreshID = UUID()
             }
