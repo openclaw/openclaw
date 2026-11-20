@@ -309,7 +309,7 @@ export async function applyTemplateAddForRequest(
               ...(params.resume ? { resume: true as const } : {}),
               // Creation has finished: the first turn starts now, with its outcome, and
               // nothing was installed here that needs an installer card in the chat.
-              onAgentCreated: async (agent, opening) => {
+              onAgentCreated: async (agent, opening, onModelRequested) => {
                 assertCurrent();
                 await measureTemplateAddStage(
                   "opening.total",
@@ -324,6 +324,7 @@ export async function applyTemplateAddForRequest(
                         assertCurrent();
                         publishProgress("agent-ready", agent);
                       },
+                      onModelRequested,
                     ),
                 );
               },

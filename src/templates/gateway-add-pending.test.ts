@@ -27,6 +27,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { withResolvedClawHubSource } from "./clawhub-source.js";
+import { createTemplateCronGateway } from "./cron-gateway.js";
 import {
   applyTemplateAddForGateway,
   TemplateGatewayPlanBlockedError,
@@ -84,7 +85,6 @@ it.each([
         outcome === "admitted-runtime-retry" || outcome === "admitted-config-retry";
       const originZone = outcome === "admitted-runtime-retry" ? "America/New_York" : undefined;
       let deviceTimeZone = originZone;
-      const cronAdd = vi.fn(async (_job: Record<string, unknown>) => ({ id: "fixture-weekly" }));
       await fs.writeFile(
         manifest,
         "---\n" +
@@ -251,13 +251,23 @@ it.each([
           ),
         ).toBe("A calm fixture personality.\n");
       });
+      await using cleanup = new AsyncDisposableStack();
+      const scheduler = retrySchedule
+        ? cleanup.adopt(createDeletionCron(state), (fixture) => fixture.stop())
+        : undefined;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("Fixture authority expired");
+        }
+      };
       const applyInput = {
+        cronGateway:
+          scheduler && createTemplateCronGateway(scheduler.cron, () => config, assertCurrent),
         source: { packageName: "@fixture/template-first", version: "1.0.0" },
         ...(outcome.startsWith("admitted-")
           ? { agentId: "fixture-first", planIntegrity: review!.planIntegrity }
           : {}),
         getPlanningContext: async () => ({ config, sourceMcpServers: {}, deviceTimeZone }),
-        ...(retrySchedule ? { cronGateway: { add: cronAdd } } : {}),
         policyConfig: { configPath: state.configPath, env: state.env },
         configWriteOptions: {
           beforeCommit: async () => {
@@ -270,11 +280,7 @@ it.each([
             }
           },
         },
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Fixture authority expired");
-          }
-        },
+        assertCurrent,
         prepareAgentChat,
         waitForAgentRuntime: async () => {
           if (outcome === "admitted-recreated" && recreating) {
@@ -464,18 +470,19 @@ it.each([
           expect.objectContaining({ code: "agent_id_collision" }),
         );
         result = await applyTemplateAddForGateway(applyInput);
+        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
+        if (scheduler) {
+          const jobs = await scheduler.cron.list({ includeDisabled: true });
+          expect(jobs.map((job) => job.schedule)).toEqual([
+            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
+          ]);
+        }
         if (before) {
           const after = await fs.stat(profile);
           expect({ ino: after.ino, mtimeMs: after.mtimeMs }).toEqual({
             ino: before.ino,
             mtimeMs: before.mtimeMs,
           });
-        }
-        expect(result, JSON.stringify(result)).toMatchObject({ status: "complete", sessionKey });
-        if (retrySchedule) {
-          expect(cronAdd.mock.calls.map(([job]) => job.schedule)).toEqual([
-            { kind: "cron", expr: "0 9 * * 1", tz: originZone ?? "Europe/Paris" },
-          ]);
         }
         expect(loadSessionEntryReadOnly({ agentId: "fixture-first", sessionKey })?.sessionId).toBe(
           admittedSessionId,

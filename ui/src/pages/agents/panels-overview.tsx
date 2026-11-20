@@ -29,8 +29,6 @@ import "../../components/solid/overlay.css";
 import {
   type AgentContext,
   buildAgentContext,
-  buildModelOptions,
-  createPrimaryModelExclusion,
   resolveAgentConfig,
   resolveAgentTextAvatar,
   resolveEffectiveModelFallbacks,
@@ -38,6 +36,7 @@ import {
   resolveModelPrimary,
 } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { buildModelOptions, createPrimaryModelExclusion } from "../../lib/agents/model-options.ts";
 import type { AgentSettingsAccess } from "../../lib/agents/settings-access.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";

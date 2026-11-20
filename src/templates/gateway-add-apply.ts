@@ -15,6 +15,7 @@ import {
   type StatelessTemplateAddOptions,
 } from "./add-stateless.js";
 import { TemplateAddMutationError } from "./add.js";
+import { prefetchClawHubSource, type PrefetchedClawHubSource } from "./clawhub-source.js";
 import { digestTemplateValue } from "./digest.js";
 import { createTemplateAgentFromChat, selectChatTemplateAgentId } from "./gateway-add-chat.js";
 import {
@@ -86,7 +87,21 @@ export async function applyTemplateAddForGateway(
         : {}),
     };
   };
+  // A first chat-based Add reads the registry while its agent and chat are admitted.
+  // Nothing fetched is read before admission settles; every other outcome discards it.
+  let prefetched: PrefetchedClawHubSource | undefined;
   try {
+    if (input.mode === "chat" && !input.resume && input.prepareAgentChat) {
+      prefetched = prefetchClawHubSource({
+        coordinate: input.source,
+        mode: "apply",
+        ...(input.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
+        ...(input.token ? { token: input.token } : {}),
+        ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+    }
     if (input.mode === "chat" && input.agentId) {
       const resumed = await continueTemplateSetup(input, input.agentId, stateContext);
       if (resumed) {
@@ -249,7 +264,13 @@ export async function applyTemplateAddForGateway(
       // That path settles or removes its own admission; the handling below is plan-based.
       const admission = admitted;
       admitted = undefined;
-      return await createTemplateAgentFromChat(input, admission, readySessionKey, stateContext);
+      return await createTemplateAgentFromChat(
+        input,
+        admission,
+        readySessionKey,
+        stateContext,
+        prefetched,
+      );
     }
 
     const resolved = await withResolvedTemplateAddSource({
@@ -679,5 +700,7 @@ export async function applyTemplateAddForGateway(
       };
     }
     throw error;
+  } finally {
+    await prefetched?.discard();
   }
 }
