@@ -226,12 +226,15 @@ function customizeSidebar(page: Page, mobile: boolean) {
     open: async (name: string) => {
       await expand();
       await sidebar.getByRole("link", { name, exact: true }).click();
+      if (mobile) {
+        await expect.poll(() => page.locator("main.content").getAttribute("inert")).toBe(null);
+      }
     },
   };
 }
 
 suite.define(() => {
-  it("finds installed video-capable providers in Media search across pagination", async () => {
+  it("finds installed video providers in Media search and paginates uninstalled entries", async () => {
     const context = await createContext({ width: 1200, height: 928 });
     const page = await context.newPage();
     const local: PluginsListResult = {
@@ -327,7 +330,7 @@ suite.define(() => {
       all: { items: [fal, novita, zai], categories: discoveryCategories.categories },
       models: { items: [novita, zai] },
       media: { items: [fal, novita, zai], nextCursor: "media-page-two" },
-      nextMedia: { items: [publishedNovita] },
+      nextMedia: { items: [fal, publishedNovita] },
     } satisfies Record<string, PluginsCatalogBrowseResult>;
     const gateway = await installMockGateway(page, {
       featureMethods: ["plugins.list", "plugins.catalog.browse", "plugins.catalog.categories"],
@@ -408,6 +411,15 @@ suite.define(() => {
         expect(await cards.filter({ hasText: name }).count()).toBe(1);
       }
       await captureScreenshot(page, "media-discovery-after.png");
+      const priorBrowse = (
+        await gateway.getRequests("plugins.catalog.browse", { category: "media" })
+      ).length;
+      await page.getByRole("searchbox", { name: "Search plugins", exact: true }).fill("");
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        after: priorBrowse,
+        match: { category: "media" },
+      });
+      await expectFilteredCards("Media", ["fal"]);
       await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.nextMedia);
       await page.getByRole("button", { name: "Load more", exact: true }).click();
       await gateway.waitForRequest("plugins.catalog.browse", {
@@ -416,8 +428,9 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Load more", exact: true }).count())
         .toBe(0);
-      expect(await cards.count()).toBe(3);
-      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(1);
+      expect(await cards.count()).toBe(1);
+      expect(await cards.filter({ hasText: "fal" }).count()).toBe(1);
+      expect(await cards.filter({ hasText: "Novita" }).count()).toBe(0);
     } finally {
       await context.close();
     }
