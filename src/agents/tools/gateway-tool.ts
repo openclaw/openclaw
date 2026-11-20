@@ -11,7 +11,7 @@ import type {
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { captureOperatorToolGatewayAuthority } from "../../gateway/operator-invocation-authority.js";
+import { readOperatorToolRunAuthority } from "../../gateway/operator-invocation-authority.js";
 import {
   DEFAULT_UPDATE_TIMEOUT_MS,
   summarizeUpdateRunResponse,
@@ -131,7 +131,7 @@ export function createGatewayTool(options?: {
     label: "Gateway",
     name: "gateway",
     description: allowManagementActions
-      ? "Read gateway config/schema. On this Gateway, users.getRole resolves one profile; users.setRole assigns or clears its role as the requesting administrator. Owner request/operator schedule: update.run, restart, update.cleanup."
+      ? "Read Gateway config/schema. Local profile roles: users.getRole; users.setRole assigns or clears (admin). Owner request/operator schedule: update.run, restart, update.cleanup."
       : "Owner request/operator schedule: update.run, restart, update.cleanup. Cleanup permanently retires eligible rollback copies; dryRun previews.",
     parameters: allowManagementActions ? GatewayToolSchema : GatewayUpdateToolSchema,
     execute: async (_toolCallId, args, signal) => {
@@ -263,7 +263,7 @@ export function createGatewayTool(options?: {
         if (params.gatewayUrl != null || params.gatewayToken != null) {
           throw new ToolInputError("Profile roles can only be managed on the current Gateway.");
         }
-        if (!captureOperatorToolGatewayAuthority()?.authority) {
+        if (!readOperatorToolRunAuthority()) {
           throw new ToolInputError("Profile roles require an authenticated Gateway operator.");
         }
         const localGateway = { resolveGatewayContext: getInProcessGatewayToolContext, signal };
