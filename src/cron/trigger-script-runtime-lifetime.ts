@@ -27,7 +27,7 @@ export async function reuseCronTriggerRuntime<
     isCurrent: () => boolean;
     sandboxNeedsProvisioning?: (signal: AbortSignal) => Promise<boolean>;
   },
->(entry: TriggerRuntimeLease<T>, scope: TriggerRuntimeDeadline, isCurrentEntry: () => boolean) {
+>(entry: TriggerRuntimeLease<T>, scope: TriggerRuntimeDeadline) {
   const retained = await retainCronTriggerRuntime(entry, scope);
   const { runtime } = retained;
   let reusable = false;
@@ -35,10 +35,7 @@ export async function reuseCronTriggerRuntime<
     const check = runtime.sandboxNeedsProvisioning;
     reusable =
       runtime.isCurrent() &&
-      (!check ||
-        (!(await scope.wait(() => check(scope.signal))) &&
-          isCurrentEntry() &&
-          runtime.isCurrent()));
+      (!check || (!(await scope.wait(() => check(scope.signal))) && runtime.isCurrent()));
     return reusable ? retained : undefined;
   } finally {
     if (!reusable) {

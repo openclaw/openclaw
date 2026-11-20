@@ -404,39 +404,23 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       request.callerOrigin ?? null,
       request.execTarget ?? null,
     ]);
-    const matchesRequest = (entry: TriggerRuntimeCacheEntry) =>
-      entry.configEpoch === request.runtimeConfig &&
-      entry.agentId === agentId &&
-      entry.toolsAllowKey === toolsAllowKey;
-    for (;;) {
-      const cached = runtimeCache.get(request.jobId);
-      if (!cached) {
-        break;
+    const cached = runtimeCache.get(request.jobId);
+    if (
+      cached &&
+      cached.configEpoch === request.runtimeConfig &&
+      cached.agentId === agentId &&
+      cached.toolsAllowKey === toolsAllowKey
+    ) {
+      runtimeCache.delete(request.jobId);
+      runtimeCache.set(request.jobId, cached);
+      // A preparation can outlive this evaluation's deadline and serve the next tick.
+      const retained = await reuseCronTriggerRuntime(cached, scope);
+      if (retained) {
+        return retained;
       }
-      if (matchesRequest(cached)) {
-        runtimeCache.delete(request.jobId);
-        runtimeCache.set(request.jobId, cached);
-        // Shared preparation follows its first caller's cancellation, not its deadline;
-        // a later caller's cancellation leaves the shared work for the next tick.
-        const retained = await reuseCronTriggerRuntime(
-          cached,
-          scope,
-          () => runtimeCache.get(request.jobId) === cached,
-        );
-        if (retained) {
-          return retained;
-        }
-        // Join a replacement for the same request without retiring a newer configuration.
-        const current = runtimeCache.get(request.jobId);
-        if (current !== cached) {
-          if (current && !matchesRequest(current)) {
-            throw new Error("Cron script preparation changed while checking its sandbox.");
-          }
-          continue;
-        }
-      }
+    }
+    if (cached) {
       retireRuntime(request.jobId, cached);
-      break;
     }
     const { cancelSignal } = preparationLimits;
     const preparation = new AbortController();
