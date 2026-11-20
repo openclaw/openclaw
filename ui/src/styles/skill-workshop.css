@@ -44,11 +44,6 @@
   background: var(--ok, var(--accent-2));
 }
 
-.sw-learning__gear svg {
-  width: 15px;
-  height: 15px;
-}
-
 .sw-learning-menu.oc-popover {
   display: grid;
   gap: 6px;
@@ -146,19 +141,16 @@
   gap: 14px;
 }
 
-.sw-library__bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
+.sw-library__bar,
 .sw-library__tools {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+}
+
+.sw-library__bar {
+  justify-content: space-between;
 }
 
 /* Archived has no Sort and one active agent has no picker: no empty row or gap. */
@@ -798,6 +790,7 @@
   padding: 0;
 }
 
+.sw-learning__gear svg,
 .sw-pager .btn svg {
   width: 15px;
   height: 15px;
