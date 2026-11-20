@@ -55,6 +55,45 @@ it.each([
   },
 );
 
+it.each(["sqlite", "artifact"] as const)(
+  "adds realtime billing rows to %s totals without replacing the agent's context or model",
+  (source) => {
+    const snapshot = aggregateSessionTranscriptUsage(
+      [
+        {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          usage: {
+            input: 100_000,
+            output: 500,
+            contextUsage: { state: "available", promptTokens: 100_000, totalTokens: 100_500 },
+          },
+        },
+        {
+          role: "assistant",
+          content: [],
+          api: "realtime",
+          provider: "openai",
+          model: "gpt-realtime-2.1",
+          usage: { input: 900, output: 400, cacheRead: 600, cacheWrite: 0, totalTokens: 1_900 },
+        },
+      ],
+      source,
+    );
+    expect(snapshot).toMatchObject({
+      modelProvider: "openai",
+      model: "gpt-5.6-luna",
+      inputTokens: 100_900,
+      outputTokens: 900,
+      cacheRead: 600,
+      totalTokens: 100_500,
+      contextUsage: { state: "available", promptTokens: 100_000, totalTokens: 100_500 },
+    });
+  },
+);
+
 it.each([321, 0, undefined])(
   "reads persisted compaction context %s without changing cumulative billing",
   (tokensAfter) =>

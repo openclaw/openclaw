@@ -1,5 +1,6 @@
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../agents/harness/transcript-visibility.js";
 import { buildUsageWithNoCost } from "../agents/stream-message-shared.js";
+import { REALTIME_VOICE_TRANSCRIPT_API } from "../agents/usage.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -49,7 +50,8 @@ export async function recordRealtimeVoiceUsage(params: {
         message: {
           role: "assistant",
           content: [],
-          api: "realtime",
+          // Marks a billing-only row: context and model readers skip it (isBillingOnlyUsageRecord).
+          api: REALTIME_VOICE_TRANSCRIPT_API,
           provider: usage.provider,
           model: usage.model,
           usage: buildUsageWithNoCost({

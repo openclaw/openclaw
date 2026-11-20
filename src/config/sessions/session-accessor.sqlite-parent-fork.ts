@@ -7,7 +7,11 @@ import {
 } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
 import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
-import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
+import {
+  derivePromptTokens,
+  isBillingOnlyUsageRecord,
+  normalizeUsage,
+} from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER } from "../../shared/transcript-only-openclaw-assistant.js";
 import type {
@@ -117,7 +121,8 @@ export function estimateParentForkPromptTokens(
       : isRecord(event.usage)
         ? event.usage
         : undefined;
-    if (!usageRaw) {
+    // Billing-only rows measure a realtime provider's tokens, not this context.
+    if (!usageRaw || isBillingOnlyUsageRecord(message)) {
       if (latestUsageEstimate !== undefined) {
         trailingBytes += serializedBytes;
       }
