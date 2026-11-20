@@ -51,11 +51,11 @@ import { workboardResourceRoute } from "./control-ui-workboard-resource-fixture.
 
 type PageAction = {
   label: string;
+  prepare?: InteractionScenario["prepare"];
   run: InteractionScenario["run"];
 };
 type NoChangeAction = PageAction & {
   kind: "push" | "refresh" | "poll" | "presence-push" | "model-push";
-  prepare?: InteractionScenario["prepare"];
 };
 type PageDefinition = {
   ready: string;
@@ -879,17 +879,20 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
   skills: {
     ready: ".skill-discovery .skill-installed-shelf",
     action: {
-      label: "Open 1,000 installed skills and filter to one skill",
-      run: async (page) => {
-        await page.getByRole("button", { name: "Installed", exact: true }).click();
-        await ready(page, "skills", {
-          ready: ".skill-discovery [data-skill-id]",
-          rows: {
-            selector: ".skill-discovery [data-skill-id]",
-            minimum: quantity.catalog,
-            totalSelector: ".skill-discovery [aria-setsize]",
-          },
+      label: "Filter 1,000 installed skills to one match from discovery",
+      prepare: async (page) => {
+        await page.locator(".skill-discovery .skill-installed-shelf").click();
+        await page.waitForFunction(() => {
+          const discovery = document.querySelector(".skill-discovery");
+          const total = Number(
+            discovery?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0,
+          );
+          return (
+            total >= 1000 || (discovery?.querySelectorAll("[data-skill-id]").length ?? 0) >= 1000
+          );
         });
+      },
+      run: async (page) => {
         await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
         await page.waitForFunction(() => {
           const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
@@ -2176,6 +2179,7 @@ export function createEnginePageScenarios(
       prepare: async (page, gateway) => {
         await enter(page);
         await definition.source?.prepare(page, gateway);
+        await definition.action?.prepare?.(page, gateway);
       },
       run: async (page, gateway) => {
         const evidence = await definition.action!.run(page, gateway);

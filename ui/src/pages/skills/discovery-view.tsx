@@ -17,9 +17,9 @@ import { PluginCatalogGrid } from "../plugins/catalog-grid.tsx";
 import { renderCatalogGridSkeleton } from "../plugins/catalog-skeleton.tsx";
 import { PluginCardSummary, renderPluginOfficialBadge } from "../plugins/plugin-card.tsx";
 import {
+  SkillTile,
   installedReference,
   SkillStateStatus,
-  SkillTile,
   verdictForSkill,
 } from "./skill-status.tsx";
 import "../../styles/skills-discovery.css";
