@@ -76,7 +76,7 @@ it("admits reads only from settled active rows, not hidden or resource-preparing
       </div>
     );
   };
-  let snapshot: TranscriptLayoutProps = {
+  const initialSnapshot: TranscriptLayoutProps = {
     applicationContext: app,
     messageElements: createTranscriptMessageElements(() => undefined),
     rows: [{ kind: "item", key: "row", item: null }],
@@ -94,6 +94,7 @@ it("admits reads only from settled active rows, not hidden or resource-preparing
     presented: true,
     onCommit: () => {},
   };
+  let snapshot = initialSnapshot;
   const element = renderer.render(snapshot);
   document.body.append(element);
   renderer.connect();
@@ -117,7 +118,7 @@ it("admits reads only from settled active rows, not hidden or resource-preparing
       { preparingRowKey: "row" },
       { forecastRowKeys: new Set(["row"]) },
     ]) {
-      snapshot = { ...snapshot, ...preparation, activeRowKeys: new Set() };
+      snapshot = { ...initialSnapshot, ...preparation, activeRowKeys: new Set() };
       renderer.render(snapshot);
       expect(stillPresented()).toBe(false); // Owner fences before Solid flush.
       deliveries.forEach((deliver) => deliver());
@@ -137,6 +138,9 @@ it("admits reads only from settled active rows, not hidden or resource-preparing
     deliveries.forEach((deliver) => deliver());
     expect(viewed).not.toHaveBeenCalled();
     pending = false;
+    // The owner has settled, but the hidden DOM has not yet been released.
+    deliveries.forEach((deliver) => deliver());
+    expect(viewed).not.toHaveBeenCalled();
     renderer.syncInitialPosition();
     flush();
 

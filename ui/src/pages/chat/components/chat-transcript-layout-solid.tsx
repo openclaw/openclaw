@@ -434,6 +434,7 @@ export class ChatTranscriptRenderer {
           const readPresented = (key: string) =>
             active() &&
             positionSettled() &&
+            this.element?.style.visibility === "" &&
             this.accepted?.initialPositionPending() === false &&
             this.accepted.activeRowKeys.has(key);
           const source = projectOwner(this, (owner) => {

@@ -128,7 +128,7 @@ it("admits a persisted final only when its source bubble is presented and inters
     expect(viewed).not.toHaveBeenCalled();
     visibility.mockReturnValue("visible");
     document.dispatchEvent(new Event("visibilitychange"));
-    setMessage({ ...message(), stopReason: "toolUse" });
+    setMessage((current) => ({ ...current, stopReason: "toolUse" }));
     setPresented(true);
     flush();
     deliveries.forEach((deliver) => deliver(true));
