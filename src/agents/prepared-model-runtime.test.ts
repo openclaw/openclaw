@@ -601,6 +601,24 @@ describe("remote catalog publication boundaries", () => {
     }
   });
 
+  it("reports adoption cancelled by a config publication as superseded", async () => {
+    await setup();
+    const { preparing, commit, pricingSpy } = holdPricing();
+    const adoption = applyRemoteModelCatalogUpdate(() => config);
+    try {
+      await preparing.promise;
+      // The config reload that changed the catalog source republishes every owner.
+      await refresh(config, { gatewayLifecycle: true, catalogMode: "static" });
+      commit.resolve();
+      expect(await adoption).toBe("superseded");
+      expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    } finally {
+      commit.resolve();
+      await Promise.allSettled([adoption]);
+      pricingSpy.mockRestore();
+    }
+  });
+
   it("releases the pricing deadline when preparation settles", async () => {
     await setup();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
