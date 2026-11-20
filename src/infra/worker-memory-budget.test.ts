@@ -12,6 +12,7 @@ const transcriptUrl = new URL("file:///runtime/session-transcript.worker.js");
 
 function setup(options: {
   usageMiB: number;
+  baselineMiB?: number;
   live?: { pools?: Map<number, number>; direct?: Map<string, number> };
   hosted?: (url: string, key?: string) => boolean;
 }) {
@@ -25,6 +26,7 @@ function setup(options: {
     // 1000 MiB limit -> 850 MiB budget.
     limitBytes: 1000 * MiB,
     readUsageBytes: () => usage,
+    baselineBytes: (options.baselineMiB ?? 0) * MiB,
     usageSource: "cgroup-v2-working-set",
     countLive: () => live,
     poolId: (pool) => {
@@ -195,5 +197,26 @@ describe("worker memory budget", () => {
     initializeWorkerMemoryBudget(profile("standard"));
     expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBeUndefined();
     expect(getWorkerMemoryBudgetSnapshot()).toBeUndefined();
+  });
+
+  it("counts the measured startup baseline with the floors", () => {
+    // 700 MiB baseline + one 38 MiB transcript floor + 150 MiB of unmeasured kinds > 850 MiB.
+    const { budget } = setup({ usageMiB: 0, baselineMiB: 700 });
+    budget.registerPool({}, transcriptUrl, 2);
+    expect(budget.snapshot()).toMatchObject({
+      baselineBytes: 700 * MiB,
+      floorsExceedBudget: false,
+    });
+    budget.registerPool({}, new URL("file:///runtime/plugin-a.worker.js"), 2);
+    budget.registerPool({}, new URL("file:///runtime/plugin-b.worker.js"), 2);
+    expect(budget.snapshot().floorsExceedBudget).toBe(true);
+  });
+
+  it("reports when measured use at floors alone exceeds the budget", () => {
+    const { budget } = setup({ usageMiB: 900 });
+    const pool = budget.registerPool({}, transcriptUrl, 2);
+    expect(budget.snapshot().floorsExceedBudget).toBe(false);
+    expect(pool.admitGrowth()).toBe(false);
+    expect(budget.snapshot().floorsExceedBudget).toBe(true);
   });
 });

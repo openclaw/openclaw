@@ -78,6 +78,7 @@ it("renders lean admission totals and only families with budget activity", () =>
       usageSource: "cgroup-v2-working-set",
       floorBytes: 700 * MiB,
       pendingBytes: 38 * MiB,
+      baselineBytes: 400 * MiB,
       floorsExceedBudget: false,
       growthAdmissions: 2,
       refusals: 5,
@@ -113,7 +114,7 @@ it("renders lean admission totals and only families with budget activity", () =>
     {
       Item: "Worker memory budget",
       Value:
-        "1305 MiB of 1536 MiB · in use 900 MiB (cgroup-v2-working-set) · floors 700 MiB · pending 38 MiB · growth 2 admitted / 5 refused · waits 3 (1 waiting, max 800 ms)",
+        "1305 MiB of 1536 MiB · in use 900 MiB (cgroup-v2-working-set) · floors 700 MiB incl. 400 MiB at startup · pending 38 MiB · growth 2 admitted / 5 refused · waits 3 (1 waiting, max 800 ms)",
     },
     {
       Item: "Budget session-transcript.worker.js",
