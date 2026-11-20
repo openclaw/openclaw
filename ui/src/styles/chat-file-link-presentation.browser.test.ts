@@ -173,7 +173,9 @@ async function probeWrap(themeMode: "dark" | "light", container: WrapContainer) 
                 columnWidth: width,
                 labelFragments: range.getClientRects().length,
                 overflows: column.scrollWidth > column.clientWidth,
-                labelStartsMarkLine: Math.abs(labelTop - first.top) < 2,
+                // Font ascenders and chip padding shift ink within one line;
+                // a stranded label advances by a full line, not two pixels.
+                labelStartsMarkLine: Math.abs(labelTop - first.top) < lineHeight / 2,
                 markLineTop: Math.round(first.top),
                 glyphToLabelGapPx: labelTop - rect.top,
                 lineHeightPx: lineHeight,
