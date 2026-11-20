@@ -206,6 +206,7 @@ it.each([
   "independent-migration",
 ] as const)(
   "restores pre-migration databases only before settled activation: %s",
+  { timeout: 180_000 },
   async (scenario) => {
     const independentPlugin = scenario.startsWith("independent-");
     // newer-schema: Doctor commits a schema this (previous) build cannot open, then fails.

@@ -102,7 +102,6 @@ export async function requestCliNativeToolApproval(params: {
   fallbackCwd?: string;
   env?: NodeJS.ProcessEnv;
   bindingEnv?: NodeJS.ProcessEnv;
-  assertActive?: () => void;
   abortSignal?: AbortSignal;
   ask: ExecAsk;
 }): Promise<CliNativeToolApprovalOutcome> {
@@ -151,7 +150,6 @@ export async function requestCliNativeToolApproval(params: {
       const policyContext = captureOpenClawStateWorkerContext();
       const file = (await readExecApprovalsSnapshotAsync(policyContext)).file;
       params.abortSignal?.throwIfAborted();
-      params.assertActive?.();
       const { allowlist } = resolveExecApprovalsFromFile({ file, agentId: params.agentId });
       const analysis = await evaluateShellAllowlistWithAuthorization({
         command: bashCommand,
@@ -188,7 +186,6 @@ export async function requestCliNativeToolApproval(params: {
         autoAllow = async () => {
           const assertCurrent = () => {
             params.abortSignal?.throwIfAborted();
-            params.assertActive?.();
           };
           assertCurrent();
           const authorization: ExecApprovalUsageAuthorization = {

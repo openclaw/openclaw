@@ -224,6 +224,7 @@ export function captureGatewayToolReceiptAssertion(
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    prepareSessionSourceStorageEffect: receipt.prepareSessionSourceStorageEffect?.bind(receipt),
     ...(prepareEffect
       ? {
           async prepareSessionSourceEffect() {

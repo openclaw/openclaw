@@ -1808,7 +1808,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
             publicationAuthority: independentQ
               ? { admission: { request: { qualificationSha: "b".repeat(40) } } }
               : undefined,
-            // Verifier tooling must come from authenticated Q, not an incidental run head.
+            // A receipt-recovery parent runs at P, not at its authenticated Q.
             run: { headSha: independentQ ? "d".repeat(40) : "c".repeat(40) },
           },
           targetSha: "c".repeat(40),
@@ -2368,12 +2368,19 @@ describe("GitHub API public fallback", () => {
   );
 });
 
-describe("release checklist requires ordinary qualification", () => {
+describe("receipt recovery checklist consumption", () => {
   it.each([
-    ["Full Release Validation", ".github/workflows/full-release-validation.yml", true],
-    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", false],
-    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
-    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/full-release-receipt-recovery.yml",
+      true,
+    ],
+    [
+      "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
+      ".github/workflows/unrelated.yml",
+      false,
+    ],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", true],
   ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
     const result = runInNewContext(
       stripNodeTypeScriptTypes(

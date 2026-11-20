@@ -131,7 +131,30 @@ export function createMessageMethodTestDriver(getHandlers: () => GatewayRequestH
   };
 }
 
-export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Mock }) {
+export function createMessageMethodPluginFixtures(mocks: {
+  getChannelPlugin: Mock;
+  sendPoll: Mock;
+}) {
+  function routePlugin(channel: string, config: Partial<ChannelPlugin["config"]> = {}) {
+    return {
+      ...createChannelTestPluginBase({ id: channel }),
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] as const }),
+        handleAction: async () => jsonResult({ ok: true }),
+      },
+      messaging: { targetResolver: { looksLikeId: () => true } },
+      outbound: { sendPoll: mocks.sendPoll },
+      config: {
+        listAccountIds: (cfg: { channels?: Record<string, { accounts?: object }> }) => {
+          const ids = Object.keys(cfg.channels?.[channel]?.accounts ?? {});
+          return ids.length ? ids : ["default"];
+        },
+        resolveAccount: (_cfg: unknown, accountId: string) => ({ accountId, enabled: true }),
+        ...config,
+      },
+    };
+  }
+
   function registerMessageThreadAddressingPlugin(id: ChannelPlugin["id"]): void {
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({ id }),
@@ -170,6 +193,7 @@ export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Moc
         supportsAction: ({ action: requestedAction }) => requestedAction === action,
         handleAction: async () => jsonResult({ ok: true }),
       },
+      messaging: { targetResolver: { looksLikeId: () => true } },
       ...(threading ? { threading } : {}),
     };
     mocks.getChannelPlugin.mockReturnValue(plugin);
@@ -180,7 +204,7 @@ export function createMessageMethodPluginFixtures(mocks: { getChannelPlugin: Moc
     return plugin;
   }
 
-  return { registerMessageThreadAddressingPlugin, registerMessageActionPlugin };
+  return { registerMessageThreadAddressingPlugin, registerMessageActionPlugin, routePlugin };
 }
 
 export type MessageMethodDriver = ReturnType<typeof createMessageMethodTestDriver>;

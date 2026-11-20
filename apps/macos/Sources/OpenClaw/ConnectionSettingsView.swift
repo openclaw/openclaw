@@ -33,7 +33,7 @@ struct ConnectionSettingsView: View {
     var body: some View {
         Form {
             self.statusSection
-            if let presentation = self.openClawID.presentation(state: self.state) {
+            if MacOpenClawIDFeature.isEnabled, let presentation = self.openClawID.presentation(state: self.state) {
                 OpenClawIDSettingsSection(presentation: presentation, model: self.openClawID)
             }
             self.gatewayModeSection

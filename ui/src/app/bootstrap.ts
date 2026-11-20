@@ -114,7 +114,7 @@ export function bootstrapApplication(
     hasPendingGateway,
   } = initial;
   const firstRunDefaultLanding =
-    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath, routeIdFromPath);
+    startsApplicationRouter && isDefaultChatLanding(applicationLocation, basePath);
   const gateway = createApplicationGateway(
     settings,
     startup.password ?? "",
@@ -676,7 +676,7 @@ export function bootstrapApplication(
               shouldInstallLocation: () =>
                 parsedInitialSession
                   ? sameRouteLocation(history.location(), initialRoutingLocation)
-                  : isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+                  : isDefaultChatLanding(history.location(), basePath),
             }),
             (error) => {
               console.error("[openclaw] initial session location failed", error);

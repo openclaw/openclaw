@@ -20,6 +20,7 @@ import { withSessionTurn } from "../../../sessions/session-controller.admission.
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
+  adoptSessionControllerSource,
   clearSessionControllerMailbox,
   reserveSessionControllerSource,
   retireSessionControllerInput,
@@ -135,6 +136,8 @@ function setup(sourceTool = "subagent_settle") {
 function steering(
   fixture: ReturnType<typeof setup>,
   inject: ReplyBackendMessageInjectionV2["queueMessage"],
+  phase: "running" | "preflight_compacting" = "running",
+  runId?: string,
 ) {
   const { target } = fixture;
   const operation = createReplyOperation({
@@ -143,17 +146,18 @@ function steering(
     resetTriggered: false,
     target,
   });
-  operation.setPhase("running");
+  operation.setPhase(phase);
   const queueMessage = vi.fn(inject);
   operation.attachBackend({
     kind: "embedded",
+    runId,
     cancel() {},
     supportsTranscriptCommitWait: true,
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
   });
   const input = reserveSessionControllerSource(sessionKey, {
     target,
-    policy: { mode: "steer" },
+    policy: { mode: "followup" },
   });
   onTestFinished(() => {
     operation.complete();
@@ -161,13 +165,123 @@ function steering(
     clearSessionControllerMailbox(input.mailbox, () => {});
   });
   fixture.state.active = true;
-  return { queueMessage, input };
+  return { queueMessage, input, operation };
 }
 
 function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.dispatch).toHaveBeenCalledTimes(dispatches);
   expect(fixture.send).not.toHaveBeenCalled();
 }
+
+it.each(["resumed", "preparing", "idle"] as const)(
+  "delivers a restart-terminated child's result to the %s requester session",
+  async (state) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const fixture = setup("subagent_announce");
+    const dispatch = fixture.dispatch.getMockImplementation()!;
+    fixture.dispatch.mockImplementation(async function <T>(
+      ...args: Parameters<typeof dispatchGatewayMethodInProcess>
+    ) {
+      const input = args[2]?.controllerInput;
+      assert(input);
+      adoptSessionControllerSource(input, {
+        protocolRunId: fixture.params.directIdempotencyKey,
+        target: fixture.target,
+        policy: input.policy,
+        adapter: {},
+      });
+      return (await withSessionTurn(
+        {
+          sessionKey,
+          sessionId: fixture.state.entry.sessionId,
+          target: fixture.target,
+          controllerInput: input,
+        },
+        () => dispatch(...args),
+      )) as T;
+    });
+    const original = steering(
+      fixture,
+      async () => assert.fail("Retired requester received input"),
+      "running",
+      "pre-restart",
+    );
+    const child = createReplyOperation({
+      sessionKey: "agent:worker:subagent:interrupted-child",
+      sessionId: "child-session",
+      resetTriggered: false,
+    });
+    original.operation.abortForRestart();
+    child.abortForRestart();
+    original.operation.complete();
+    child.complete();
+    retireSessionControllerInput(original.input);
+    fixture.params.sourceSessionKey = "agent:worker:subagent:interrupted-child";
+    fixture.params.internalEvents = taskCompletionEvents({
+      childSessionKey: fixture.params.sourceSessionKey,
+      status: "error",
+      statusLabel: "failed: Gateway stopped",
+      result: "(no output)",
+      noVisibleResult: true,
+    });
+    const received: string[] = [];
+    const childTerminal = createDeferredCore();
+    const resumed =
+      state !== "idle"
+        ? steering(
+            fixture,
+            async (_text, options) => {
+              options?.onQueueAccepted?.(true);
+              received.push(options?.currentInboundContext?.text ?? "");
+              childTerminal.resolve();
+            },
+            state === "preparing" ? "preflight_compacting" : "running",
+            "restart-recovery",
+          )
+        : undefined;
+    const parentContinuation = childTerminal.promise.then(() => "child failure handled");
+    const input =
+      resumed?.input ??
+      reserveSessionControllerSource(sessionKey, {
+        target: fixture.target,
+        policy: { mode: "followup" },
+      });
+    fixture.params.controllerInput = input;
+    fixture.dispatchDone.resolve(
+      response([{ text: "Child interruption handled" }], sentDeliveryStatus),
+    );
+    try {
+      const delivery = fixture.startDelivery();
+      let settled: Awaited<typeof delivery> | undefined;
+      void delivery.then((result) => {
+        settled = result;
+      });
+      if (state === "preparing") {
+        setTimeout(() => resumed!.operation.setPhase("running"), 10);
+      }
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled).toMatchObject({ delivered: true, path: resumed ? "steered" : "direct" });
+      expect(original.queueMessage).not.toHaveBeenCalled();
+      if (resumed) {
+        expect(received).toHaveLength(1);
+        expect(received[0]).toContain("Gateway stopped");
+        await expect(parentContinuation).resolves.toBe("child failure handled");
+        resumed.operation.complete();
+        expect(resumed.operation.result).toMatchObject({ kind: "completed" });
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+      } else {
+        expect(fixture.dispatch).toHaveBeenCalledOnce();
+        expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({ sessionKey });
+      }
+    } finally {
+      resumed?.operation.complete();
+      retireSessionControllerInput(input);
+    }
+  },
+);
 
 it("delivers a text fallback on the current generation after its producer releases", async ({
   signal,
@@ -258,7 +372,7 @@ it("preserves the direct completion phase without replacing controller custody",
   expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
 });
 
-it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
+it("keeps the same completion input when timeout recovery ends without a backend", async ({
   signal,
 }) => {
   const fixture = setup("subagent_announce");
@@ -288,6 +402,10 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
     const parentClaim = input.mailbox.claim;
     fixture.params.controllerInput = input;
     delivery = fixture.startDelivery();
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
     await withinTest(
       awaitGateBeforeSettlement(
         fixture.dispatchEntered.promise,
@@ -297,10 +415,7 @@ it("keeps the same completion input queued when timeout recovery cannot accept s
       signal,
     );
     expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
-    expect(input.mailbox.claim).toBe(parentClaim);
     expect(input.phase).not.toBe("consumed");
-    releaseRecovery.resolve();
-    await recovery;
     fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
     await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
     expectNoReplay(fixture);

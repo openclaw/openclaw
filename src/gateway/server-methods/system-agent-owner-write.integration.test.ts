@@ -38,7 +38,7 @@ afterEach(() => vi.restoreAllMocks());
 
 // Synthetic inference chooses an operation; dispatch, approval, validation and persistence are real.
 it.for(["active", "revoked", "non-owner"] as const)(
-  "preserves the %s source grant through delegated role persistence after a network read",
+  "checks the %s source grant at admission for delegated role persistence after a network read",
   (state, { signal }) =>
     withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
       const config: OpenClawConfig = {
@@ -200,16 +200,14 @@ it.for(["active", "revoked", "non-owner"] as const)(
                     } finally {
                       release.resolve();
                     }
-                    if (state === "revoked") {
-                      await expect(pending).rejects.toThrow(/revoked/);
-                    } else {
-                      expect(JSON.stringify(await pending)).toContain("done: config.set");
-                    }
+                    expect((await pending).details).toMatchObject({
+                      reply: expect.stringContaining("done: config.set"),
+                    });
                     await Promise.allSettled(handler.mock.results.map((result) => result.value));
                   }
                   expect(taint.isTainted()).toBe(true);
                   const saved = await fs.readFile(fixture.configPath, "utf8");
-                  if (state === "active") {
+                  if (state !== "non-owner") {
                     expect(JSON.parse(saved).gateway.roles.assignments.byGithubLogin).toEqual({
                       "fixture-contributor": "contributor",
                     });

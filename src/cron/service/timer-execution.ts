@@ -216,12 +216,14 @@ export async function executeJobCore(
         !sessionPreparation?.notices.events.length &&
         isCronScratchEffectivelyEmpty(snapshot?.state.scratch?.content)
       ) {
+        // An empty checklist is a quiet check, not a failure: complete with nothing to deliver.
         return {
-          status: "skipped",
+          status: "ok",
           summary: "Automation scratch is explicitly empty",
           executionStarted: false,
           delivered: false,
           deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
         };
       }
     }

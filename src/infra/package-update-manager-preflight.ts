@@ -8,7 +8,7 @@ import { hasErrnoCode, ignoreMissingPath, isErrno } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
-import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
+import { resolvePackageUpdateLauncherNames } from "./package-update-launcher-names.js";
 import { realpathOrResolve } from "./path-existence.js";
 import { createPackageUpdateErrorFacts, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";

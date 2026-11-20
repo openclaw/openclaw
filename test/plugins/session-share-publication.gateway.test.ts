@@ -99,6 +99,7 @@ it.each([false, true])(
         slots: { memory: "none" },
       },
       gateway: {
+        sessionControl: { publicationReadEnabled: true },
         auth: { mode: "token", token: "synthetic-gateway-secret" },
         tls: {
           enabled: true,

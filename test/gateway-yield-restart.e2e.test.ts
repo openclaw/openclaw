@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import type { OperatorScope } from "../src/gateway/operator-scopes.js";
 import { findSubagentSpawnReceipt } from "../src/gateway/server.subagent-stop-settlement.product.test-support.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { openNodeSqliteDatabase } from "../src/infra/node-sqlite.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
 import { restartResumeConfig } from "./gateway-restart-resume.test-support.js";
 import {
@@ -32,6 +35,8 @@ it
     "finish",
     "root-source-stopped",
     "root-background-stopped",
+    "root-main-tool-stopped",
+    "root-main-legacy-stopped",
     "other-agent",
     "parked-message",
     "completed-before",
@@ -41,6 +46,8 @@ it
   { timeout: 180_000 },
   async (action, { signal, onTestFailed }) => {
     const stoppedRoot = action.startsWith("root-");
+    const legacyShutdown = action === "root-main-legacy-stopped";
+    const mainTool = action === "root-main-tool-stopped" || legacyShutdown;
     const parkedRoot = action === "root-source-stopped" || action === "parked-message";
     const restartRoot = stoppedRoot || parkedRoot || action === "completed-before";
     const childAgent = action === "other-agent" ? "other" : "main";
@@ -65,6 +72,7 @@ it
     let yieldRequester: (() => void) | undefined;
     let yieldedAfterOutage = false;
     let requesterFinished = false;
+    let toolMarker = "";
     const reservation = await reserveTestPortListener({
       offsets: [0],
       signal,
@@ -99,6 +107,18 @@ it
           };
           if (text.includes(childPrompt) && !text.includes(rootPrompt)) {
             childCalls++;
+            if (mainTool) {
+              if (text.includes("RUN_MAIN_LANE_TOOL")) {
+                call("exec", {
+                  command: `printf ready > '${toolMarker.replaceAll("'", "'\\''")}' ; sleep 600`,
+                  yieldMs: 120_000,
+                  timeoutSeconds: 600,
+                });
+              } else {
+                call("sessions_yield", { waitFor: "message" });
+              }
+              return;
+            }
             if (action === "completed-before" || text.includes("CONTINUE_PARKED_CHILD")) {
               if (action === "policy-unavailable") {
                 finishChild = () => reply("PARKED_CHILD_COMPLETED");
@@ -156,7 +176,14 @@ it
               reply("ROOT_RECONCILED_STOPPED_CHILD");
               return;
             }
-            if (action === "root-background-stopped") {
+            if (mainTool && phase === "child parked") {
+              // Hold this requester turn while its child executes the long-running tool.
+              return;
+            }
+            if (
+              action === "root-background-stopped" ||
+              (mainTool && text.includes("already_pending"))
+            ) {
               reply("REQUESTER_WAITING_FOR_BACKGROUND_RESULT");
               return;
             }
@@ -242,11 +269,37 @@ it
         },
         tools: {
           ...base.tools,
-          allow: ["sessions_spawn", "sessions_yield", "sessions_send", "sessions_history"],
+          allow: [
+            "sessions_spawn",
+            "sessions_yield",
+            "sessions_send",
+            "sessions_history",
+            ...(mainTool ? ["exec"] : []),
+          ],
         },
       },
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
+    toolMarker = instance.state.path("long-tool-started");
+    const readChildRun = () => {
+      const db = openNodeSqliteDatabase(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const row = db
+          .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
+          .get(childRunId!);
+        assert(
+          typeof row?.payload_json === "string",
+          `Child outcome disappeared before delivery: ${JSON.stringify(db.prepare("SELECT kind, occurred_at, payload_json FROM session_state_events WHERE run_id = ?").all(childRunId!))}`,
+        );
+        const stored: unknown = JSON.parse(row.payload_json);
+        assert(isRecord(stored));
+        return isRecord(stored.parentCompletion) ? stored.parentCompletion : stored;
+      } finally {
+        db.close();
+      }
+    };
     if (action === "policy-unavailable") {
       const pluginDir = instance.state.path("recovery-access");
       await writeRestartPlugin(
@@ -330,7 +383,24 @@ it
         );
         assert(childKey);
         assert(childRunId);
-        if (!stoppedRoot) {
+        if (mainTool) {
+          expect(
+            await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
+          ).toMatchObject({ status: "ok", yielded: true });
+          const continuation = await client.request<{ runId: string }>("chat.send", {
+            sessionKey: childKey,
+            message: "RUN_MAIN_LANE_TOOL",
+            idempotencyKey: randomUUID(),
+            deliver: false,
+          });
+          childRunId = continuation.runId;
+          await vi.waitFor(() => expect(existsSync(toolMarker)).toBe(true), { timeout: 30_000 });
+          expect(readChildRun()).toMatchObject({
+            spawnMode: "run",
+            expectsCompletionMessage: true,
+            execution: { status: "running" },
+          });
+        } else if (!stoppedRoot) {
           expect(
             await client.request("agent.wait", { runId: childRunId, timeoutMs: 30_000 }),
           ).toMatchObject(
@@ -380,6 +450,41 @@ it
         await instance.stopGateway();
         await client.stopAndWait();
         client = undefined;
+        if (mainTool) {
+          expect(readChildRun()).toMatchObject({
+            execution: {
+              status: "terminal",
+              outcome: { status: "error", error: "Gateway stopped" },
+            },
+            completion: { required: true },
+            delivery: { status: "pending" },
+          });
+        }
+        if (legacyShutdown) {
+          // Previous Gateways recorded this exact quiet-kill state during shutdown.
+          // Reproduce the persisted upgrade input after the real main-lane tool is aborted.
+          const legacy = readChildRun();
+          assert(isRecord(legacy.execution));
+          Object.assign(legacy, {
+            endedReason: "subagent-killed",
+            completion: { required: true },
+            cleanupHandled: true,
+            cleanupCompletedAt: legacy.execution.endedAt,
+            suppressAnnounceReason: "killed",
+            killReconciliation: { killedAt: legacy.execution.endedAt, suppressTaskDelivery: true },
+          });
+          const db = openNodeSqliteDatabase(
+            path.join(instance.stateDir, "state", "openclaw.sqlite"),
+          );
+          try {
+            db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
+              JSON.stringify(legacy),
+              childRunId!,
+            );
+          } finally {
+            db.close();
+          }
+        }
         if (action !== "root-background-stopped") {
           expect
             .soft(
@@ -429,7 +534,9 @@ it
               const history = await client!.request<{ messages: unknown[] }>("chat.history", {
                 sessionKey: rootKey,
               });
-              expect(JSON.stringify(history.messages)).toContain("ROOT_RECONCILED_STOPPED_CHILD");
+              expect(
+                JSON.stringify(history.messages).includes("ROOT_RECONCILED_STOPPED_CHILD"),
+              ).toBe(true);
               expect(history.messages).not.toEqual(
                 expect.arrayContaining([
                   expect.objectContaining({ customType: "run-failed-before-reply" }),
@@ -439,6 +546,36 @@ it
             { timeout: 15_000 },
           );
           expect(childCalls).toBe(callsBeforeRestart);
+          if (mainTool) {
+            await vi.waitFor(
+              () => {
+                const db = openNodeSqliteDatabase(
+                  path.join(instance.stateDir, "state", "openclaw.sqlite"),
+                  { readOnly: true },
+                );
+                try {
+                  const removals = db
+                    .prepare(
+                      "SELECT payload_json FROM session_state_events WHERE session_key = ? AND run_id = ? AND kind = 'child_delivery_removed'",
+                    )
+                    .all(rootKey, childRunId!);
+                  if (removals.length === 0) {
+                    expect(readChildRun().delivery).toMatchObject({ status: "delivered" });
+                  }
+                  for (const removal of removals) {
+                    expect(JSON.parse(String(removal.payload_json))).toMatchObject({
+                      outcome: "delivered",
+                      previousStatus: "delivered",
+                      deliveredAt: expect.any(Number),
+                    });
+                  }
+                } finally {
+                  db.close();
+                }
+              },
+              { timeout: 15_000 },
+            );
+          }
           return;
         }
         phase = "restored parked child";

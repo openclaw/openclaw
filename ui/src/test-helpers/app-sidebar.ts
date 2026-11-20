@@ -508,6 +508,8 @@ export function createContext(
   const router = createApplicationRouter();
   onTestFinished(() => router.stop());
   return {
+    basePath: "",
+    resourceBasePath: "",
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,

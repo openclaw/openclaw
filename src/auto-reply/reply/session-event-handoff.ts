@@ -66,8 +66,10 @@ import {
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 import {
-  settleSessionEventAttempt,
+  createSessionEventReadmission,
   resolveSessionEventTerminalOutcome,
+  settleSessionEventAttempt,
+  type SessionEventReadmission,
 } from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
@@ -82,19 +84,14 @@ const loadGenerationReadmission = createLazyRuntimeNamedExport(
   "runOutsideAdmittedGenerationScopes",
 );
 
-/** Producer-owned occurrence; passive notices continue to use enqueueSystemEvent. */
+/**
+ * Producer-owned occurrence; passive notices continue to use enqueueSystemEvent.
+ * Producers omit `retry`; only re-admission of the same occurrence passes it.
+ */
 export function enqueueSessionEventForHost(
   text: string,
-  options: SessionEventOptions,
-): SessionEventReceipt {
-  return enqueueSessionEventAttempt(text, options, 0);
-}
-
-function enqueueSessionEventAttempt(
-  text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
-  readmissionAttempt: number,
-  configReadmissions = readmissionAttempt,
+  retry: SessionEventReadmission = createSessionEventReadmission(),
 ): SessionEventReceipt {
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
@@ -210,27 +207,29 @@ function enqueueSessionEventAttempt(
       generationLease?.assertCurrent();
     }
   };
+  const captureSources = () =>
+    composeSessionSourceAssertion(
+      [
+        operatorAuthority?.assertCurrent,
+        accepted ? undefined : acceptanceAssertion,
+        options.assertCurrent,
+        options.expectedTarget?.assertCurrent,
+        options.scheduledAutomation?.assertCurrent,
+        createDynamicSessionSourceAssertion(
+          () => generationLease?.assertCurrent,
+          () => {
+            throw new Error("Session event destination authority changed");
+          },
+        ),
+      ],
+      (assertSources) => {
+        assertSources();
+        assertCurrent();
+      },
+    );
   Object.assign(assertCurrent, {
-    prepareSessionSourceEffect: () =>
-      composeSessionSourceAssertion(
-        [
-          operatorAuthority?.assertCurrent,
-          accepted ? undefined : acceptanceAssertion,
-          options.assertCurrent,
-          options.expectedTarget?.assertCurrent,
-          options.scheduledAutomation?.assertCurrent,
-          createDynamicSessionSourceAssertion(
-            () => generationLease?.assertCurrent,
-            () => {
-              throw new Error("Session event destination authority changed");
-            },
-          ),
-        ],
-        (assertSources) => {
-          assertSources();
-          assertCurrent();
-        },
-      ).prepareSessionSourceEffect(),
+    prepareSessionSourceEffect: () => captureSources().prepareSessionSourceEffect(),
+    prepareSessionSourceStorageEffect: () => captureSources().prepareSessionSourceStorageEffect(),
   });
   const assertEffectCurrent = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
     assertSource();
@@ -309,6 +308,7 @@ function enqueueSessionEventAttempt(
     }
     settlement = "settling";
     const complete = async () => {
+      let inputSettled = true;
       try {
         await settleUserTurnPendingInput(
           inputRecorder,
@@ -319,6 +319,7 @@ function enqueueSessionEventAttempt(
           accepted,
         );
       } catch (error) {
+        inputSettled = false;
         failure ??= error instanceof Error ? error : String(error);
       }
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
@@ -335,14 +336,22 @@ function enqueueSessionEventAttempt(
           assertAcceptanceCurrent: pendingAcceptanceAssertion,
         },
         signal,
-        adopted,
         occurrenceId,
         ownership,
-        configReadmissions,
-        dispatchAttempt: readmissionAttempt,
-        canResume: () => !started && !delivery.deliveryAttempted && !signal.aborted && !abandoned,
-        canRetryConfig: () => configPolicy.changed && configPolicy.canReadmit(configReadmissions),
+        retry,
         waitingProvider,
+        facts: () => ({
+          source: options.source,
+          failure,
+          configPolicy,
+          inputSettled,
+          accepted,
+          adopted,
+          started,
+          conversationResultCommitted,
+          delivery,
+          abandoned,
+        }),
         onSettling(error) {
           settlement = "finished";
           signal.removeEventListener("abort", onAbort);
@@ -356,8 +365,7 @@ function enqueueSessionEventAttempt(
             terminalOutcome,
           });
         },
-        preserveOccurrence: options.preserveOccurrenceOnRejection === true && !adopted && !started,
-        enqueue: enqueueSessionEventAttempt,
+        enqueue: enqueueSessionEventForHost,
         log,
       });
       const { terminal, receipt } = readmission;
@@ -470,7 +478,7 @@ function enqueueSessionEventAttempt(
       sessionKey,
       text: promptText,
       options,
-      readmissionAttempt,
+      readmissionAttempt: retry.attempt,
       occurrenceId,
       deliveryContext: route,
       target,
@@ -534,7 +542,7 @@ function enqueueSessionEventAttempt(
             options.source === "restart" && operatorAuthority ? true : undefined,
           prepareInput: async (recorder) => {
             inputRecorder = recorder;
-            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, readmissionAttempt);
+            await stageSessionEventInput(recorder, occurrenceId, assertCurrent, retry.attempt);
           },
           execRequestOwners,
           deliver: options.deliver === false || target.deliver === false ? false : undefined,
