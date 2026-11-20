@@ -188,6 +188,8 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
   const gateway = facts.kind === "gateway" ? facts.snapshot : undefined;
   const principal = live?.openclawIdPrincipal ?? gateway?.openclawIdPrincipal;
   const device = gateway?.device ?? live?.device;
+  const publicKey = paired && sha256Hex(paired.publicKey);
+  const capturedSharedGeneration = gateway?.sharedGeneration ?? live?.sharedGeneration;
   try {
     if (live) {
       assertAdmittedRunOperatorAuthority(live);
@@ -226,52 +228,54 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       }
       scopes = intersectOperatorScopes(scopes, channel.operatorProfile.scopes);
     }
-    const source = gateway?.authPolicy;
+    const source = gateway?.authPolicy ?? live?.authPolicy;
     // Browser origin is checked at connect; saved work follows its person's access,
     // not the submitting browser (owner decision, 2026-11-20).
     const policy =
-      !principal && (source || live?.verifiedIdentity)
-        ? resolveGatewayAuthPolicyGrant(
-            config,
-            source
-              ? { ...source, browserOrigin: undefined }
-              : { role: "operator", verifiedIdentity: live?.verifiedIdentity },
-          )
+      source && !principal
+        ? resolveGatewayAuthPolicyGrant(config, { ...source, browserOrigin: undefined })
         : undefined;
-    if (gateway) {
-      // Proxy policy generations do not describe either ambient identity or local fallback secrets.
-      const sharedGeneration =
-        !principal &&
-        (source?.authMethod === "trusted-proxy" ||
-          (source?.authMethod === "password" &&
-            (source.fallbackCredentialGeneration !== undefined ||
-              policy?.methodEnabled !== undefined)))
-          ? undefined
-          : gateway.sharedGeneration;
-      if (sharedGeneration !== undefined) {
-        if (!context.sharedGatewaySessionGenerationState) {
-          throw new GatewayOperatorAccessUnavailableError();
-        }
-        if (context.sharedGatewaySessionGenerationState.requiredGeneration !== sharedGeneration) {
-          refuse();
-        }
+    // Proxy policy generations do not describe either ambient identity or local fallback secrets.
+    const sharedGeneration =
+      !principal &&
+      (source?.authMethod === "trusted-proxy" ||
+        (source?.authMethod === "password" &&
+          (source.fallbackCredentialGeneration !== undefined ||
+            policy?.methodEnabled !== undefined)))
+        ? undefined
+        : capturedSharedGeneration;
+    if (sharedGeneration !== undefined) {
+      if (!context.sharedGatewaySessionGenerationState) {
+        throw new GatewayOperatorAccessUnavailableError();
       }
-      if (policy && (policy.methodEnabled === false || policy.proxyUserAllowed === false)) {
+      if (context.sharedGatewaySessionGenerationState.requiredGeneration !== sharedGeneration) {
         refuse();
       }
-      if (source?.authMethod === "password" && !principal) {
-        if (
-          source.fallbackCredentialGeneration !== undefined
-            ? source.fallbackCredentialGeneration !== policy?.fallbackCredentialGeneration
-            : policy?.fallbackCredentialGeneration !== undefined &&
-              source.grantGeneration !==
-                stableStringify(resolveGatewayAuthPolicyGrant(config, source))
-        ) {
-          refuse();
-        }
+    }
+    if (policy && (policy.methodEnabled === false || policy.proxyUserAllowed === false)) {
+      refuse();
+    }
+    if (source?.authMethod === "password" && !principal) {
+      if (
+        source.fallbackCredentialGeneration !== undefined
+          ? source.fallbackCredentialGeneration !== policy?.fallbackCredentialGeneration
+          : policy?.fallbackCredentialGeneration !== undefined &&
+            source.grantGeneration !==
+              stableStringify(resolveGatewayAuthPolicyGrant(config, source))
+      ) {
+        refuse();
       }
     }
-    if (device) {
+    if (device && live) {
+      if (
+        !paired ||
+        paired.deviceId !== device.deviceId ||
+        device.key !== publicKey ||
+        paired.tokens?.operator?.revokedAtMs
+      ) {
+        refuse();
+      }
+    } else if (device && gateway) {
       const tokenCurrent = isPairedDeviceTokenIdentityCurrent(
         paired ?? null,
         "operator",
@@ -279,12 +283,11 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
         [],
       );
       const tokenlessIdentityCurrent =
-        (live !== undefined ||
-          (!principal &&
-            (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale"))) &&
+        !principal &&
+        (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale") &&
         paired &&
         paired.deviceId === device.deviceId &&
-        device.key === sha256Hex(paired.publicKey) &&
+        device.key === publicKey &&
         listApprovedPairedDeviceRoles(paired).includes("operator") &&
         !paired.tokens?.operator?.revokedAtMs;
       if (!tokenCurrent && !tokenlessIdentityCurrent) {
@@ -296,7 +299,7 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
           : (paired?.approvedScopes ?? paired?.scopes ?? [])),
         ...(policy?.grant ?? []),
       ]);
-    } else if (source?.authMethod === "tailscale") {
+    } else if (gateway && source?.authMethod === "tailscale") {
       // Older rows omitted tokenless device facts. An unchanged grant preserves their
       // hidden device scopes; changed grants can only narrow until these rows age out.
       if (
@@ -304,7 +307,19 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
       ) {
         scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
       }
-    } else if (source?.authMethod === "trusted-proxy" && !principal) {
+    } else if (gateway && source?.authMethod === "trusted-proxy" && !principal) {
+      scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
+    }
+    if (live?.deviceScopeCeiling) {
+      scopes = intersectOperatorScopes(scopes, [
+        ...live.deviceScopeCeiling,
+        ...(policy?.grant ?? []),
+      ]);
+    } else if (
+      live &&
+      !principal &&
+      (source?.authMethod === "trusted-proxy" || source?.authMethod === "tailscale")
+    ) {
       scopes = intersectOperatorScopes(scopes, policy?.grant ?? []);
     }
     if (gateway?.sourceIngress === "principal") {
@@ -394,8 +409,11 @@ export function decideOperatorAdmission(facts: Facts, prepared: PreparedOperator
     const authority = createAdmittedRunOperatorAuthority({
       profileId: profile.profileId,
       openclawIdPrincipal: principal,
-      device,
-      verifiedIdentity: live?.verifiedIdentity ?? source?.verifiedIdentity,
+      device:
+        device && paired && publicKey ? { deviceId: device.deviceId, key: publicKey } : undefined,
+      deviceScopeCeiling: live?.deviceScopeCeiling,
+      authPolicy: source,
+      sharedGeneration: capturedSharedGeneration,
       ingress: live?.ingress,
       scopes,
       gatewayAccessGrant: grant,

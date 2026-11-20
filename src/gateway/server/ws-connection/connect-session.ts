@@ -429,6 +429,7 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
     internal.operatorDeviceTokenIdentity = source;
+    internal.operatorDeviceScopeCeiling = device ? Object.freeze([...deviceScopes]) : undefined;
     registrationStartedAt += performance.now() - sourceStartedAt;
   }
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>

@@ -1,5 +1,6 @@
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
+import type { GatewayAuthPolicyFacts } from "../gateway/auth-policy.types.js";
 import type { RemoteIngressPrincipalIdentity } from "../gateway/server/client-identity-types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
@@ -10,7 +11,9 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Plain source evidence for another same-process start; never a lifetime check. */
   device?: Readonly<{ deviceId: string; key: string }>;
-  verifiedIdentity?: string;
+  deviceScopeCeiling?: readonly string[];
+  authPolicy?: GatewayAuthPolicyFacts;
+  sharedGeneration?: string;
   ingress?: Readonly<
     RemoteIngressPrincipalIdentity & {
       signal: AbortSignal;

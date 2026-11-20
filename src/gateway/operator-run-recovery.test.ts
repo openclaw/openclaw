@@ -523,10 +523,7 @@ describe("scheduled authenticated operator source", () => {
           try {
             expect(admitted.authority.recoverySnapshot).toBeUndefined();
             expect(admitted.authority.recoverySnapshotUnavailableReason).toBe("device-no-token");
-            expect(admitted.authority.device).toMatchObject({
-              deviceId: "recovery-device",
-              key: expect.any(String),
-            });
+            expect(admitted.authority.device).toBeUndefined();
             expectCurrent(admitted.authority);
           } finally {
             admitted.release();
@@ -537,6 +534,61 @@ describe("scheduled authenticated operator source", () => {
         }
       },
       { tokenlessDevice: true },
+    ));
+
+  it("preserves a tokenless shared-token source without capture-time pairing I/O", () =>
+    withRecovery(
+      async (fixture) => {
+        // The connect producer returns null for an attested tokenless handshake;
+        // undefined instead means missing capture evidence, as covered above.
+        fixture.client.internal!.operatorDeviceTokenIdentity = null;
+        fixture.context.sharedGatewaySessionGenerationState =
+          new SharedGatewaySessionGenerationState({
+            current: expectDefined(
+              fixture.client.sharedGatewaySessionGeneration,
+              "shared credential generation",
+            ),
+            required: null,
+          });
+        const caller = acceptedCaller(fixture);
+        try {
+          const before = expectDefined(await caller.capture(), "tokenless shared-token operator");
+          let snapshot: typeof fixture.snapshot;
+          try {
+            snapshot = expectDefined(
+              before.authority.recoverySnapshot,
+              "durable shared-token source",
+            );
+            expect(snapshot).toMatchObject({
+              authPolicy: { authMethod: "token" },
+              scopes: ["operator.admin"],
+              sharedGeneration: "original-credential-generation",
+            });
+            expect(snapshot.device).toBeUndefined();
+          } finally {
+            before.release();
+          }
+          const read = vi
+            .spyOn(pairingStore, "loadPairedDevicePairingStoreRecordReadOnly")
+            .mockRejectedValue(new Error("synthetic pairing store unavailable"));
+          try {
+            const admitted = expectDefined(await caller.capture(), "live shared-token operator");
+            try {
+              expect(admitted.authority.recoverySnapshot).toEqual(snapshot);
+              expect(admitted.authority.recoverySnapshotUnavailableReason).toBeUndefined();
+              expectCurrent(admitted.authority);
+              expect(read).not.toHaveBeenCalled();
+            } finally {
+              admitted.release();
+            }
+          } finally {
+            read.mockRestore();
+          }
+        } finally {
+          caller.release();
+        }
+      },
+      { sharedGeneration: "original-credential-generation" },
     ));
 
   it("does not adopt an incidental paired token for tokenless trusted-proxy ingress", () =>

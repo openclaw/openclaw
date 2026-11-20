@@ -73,11 +73,14 @@ const rows: Record<Kind, Row> = {
   "cron-management-grant": { credential: "cron-management-grant", ingress: "live" },
   "cron-operator-source": { credential: "cron-operator-source", ingress: "live" },
   "live-device": { credential: "live-device", ingress: "live" },
+  "live-proxy": { credential: "live-proxy", ingress: "live" },
   "live-ingress": { credential: "live-ingress", ingress: "live" },
 };
 
 const modeFor = (row: Row): Mode =>
-  ["trusted-proxy", "proxy-device", "fallback", "live-device"].includes(row.credential)
+  ["trusted-proxy", "proxy-device", "fallback", "live-device", "live-proxy"].includes(
+    row.credential,
+  )
     ? "trusted-proxy"
     : row.credential === "password"
       ? "password"

@@ -77,38 +77,74 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
   identity: Awaited<ReturnType<typeof prepareUserProfileIdentity>>;
   config: OpenClawConfig;
 }): Promise<
-  { device?: AdmittedRunOperatorAuthority["device"] } & (
+  {
+    device?: AdmittedRunOperatorAuthority["device"];
+    authPolicy?: AdmittedRunOperatorAuthority["authPolicy"];
+    sharedGeneration?: string;
+  } & (
     | { snapshot: OperatorRunRecoverySnapshot; unavailableReason?: undefined }
     | { snapshot?: undefined; unavailableReason: OperatorRecoveryUnavailableReason }
   )
 > {
   const { client, authority, identity } = params;
+  const ocid = authority.openclawIdPrincipal?.authority !== undefined;
+  const sourcePolicy =
+    client.authPolicy ??
+    (ocid
+      ? captureGatewayAuthPolicy(params.config, { role: "operator", authMethod: "trusted-proxy" })
+      : undefined);
+  const authPolicy = sourcePolicy && {
+    role: sourcePolicy.role,
+    authMethod: sourcePolicy.authMethod,
+    authModeOverride: sourcePolicy.authModeOverride,
+    verifiedIdentity: sourcePolicy.verifiedIdentity,
+    delegation: sourcePolicy.delegation,
+    grantGeneration: sourcePolicy.grantGeneration,
+    fallbackCredentialGeneration:
+      sourcePolicy.authMethod === "password"
+        ? resolveGatewayAuthPolicyGrant(params.config, sourcePolicy).fallbackCredentialGeneration
+        : undefined,
+  };
+  const sharedGeneration = client.usesSharedGatewayAuth
+    ? client.sharedGatewaySessionGeneration
+    : undefined;
   const sourceDevice = client.connect.device;
   const tokenDevice = client.internal?.operatorDeviceTokenIdentity;
-  let device = tokenDevice ?? undefined;
-  if (sourceDevice && !device) {
+  let device: AdmittedRunOperatorAuthority["device"];
+  if (sourceDevice && tokenDevice) {
+    const publicKey = normalizeDevicePublicKeyBase64Url(sourceDevice.publicKey);
+    if (publicKey) {
+      device = { deviceId: sourceDevice.id, key: sha256Hex(publicKey) };
+    }
+  }
+  const tokenlessIdentity =
+    !ocid &&
+    tokenDevice == null &&
+    (sourcePolicy?.authMethod === "trusted-proxy" || sourcePolicy?.authMethod === "tailscale");
+  if (sourceDevice && tokenlessIdentity) {
     try {
       const paired = await loadPairedDevicePairingStoreRecordReadOnly(sourceDevice.id);
       if (paired) {
         device = { deviceId: sourceDevice.id, key: sha256Hex(paired.publicKey) };
       }
     } catch {
-      // Preserve attested runtime facts, but no durable source, while the store is unavailable.
-      const publicKey = normalizeDevicePublicKeyBase64Url(sourceDevice.publicKey);
-      return {
-        device: publicKey ? { deviceId: sourceDevice.id, key: sha256Hex(publicKey) } : undefined,
-        unavailableReason: "device-no-token",
-      };
+      // Capture cannot invent a pairing dependency when its row is unavailable.
+      return { authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
     }
   }
   const remote = client.internal?.remoteIngressPrincipal;
   if (remote) {
     if (!remote.recoverySource) {
-      return { device, unavailableReason: "remote-ingress-no-source" };
+      return {
+        device,
+        authPolicy,
+        sharedGeneration,
+        unavailableReason: "remote-ingress-no-source",
+      };
     }
     const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
     if (params.modelPolicy && !modelPolicy) {
-      return { device, unavailableReason: "model-policy" };
+      return { device, authPolicy, sharedGeneration, unavailableReason: "model-policy" };
     }
     const profile = identity.readCurrentProfile();
     const snapshot = normalizeGatewayOperatorRecoverySnapshot({
@@ -125,42 +161,31 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
       controlUiAdmin: false,
       localOperator: false,
     });
-    return snapshot ? { device, snapshot } : { device, unavailableReason: "decode-failed" };
+    return snapshot
+      ? { device, authPolicy, sharedGeneration, snapshot }
+      : { device, authPolicy, sharedGeneration, unavailableReason: "decode-failed" };
   }
-  const ocid = authority.openclawIdPrincipal?.authority !== undefined;
-  const authPolicy =
-    client.authPolicy ??
-    (ocid
-      ? captureGatewayAuthPolicy(params.config, { role: "operator", authMethod: "trusted-proxy" })
-      : undefined);
   if (!ocid && (!client.internal?.authenticatedOperator || client.internal.syntheticClient)) {
-    return { device, unavailableReason: "unauthenticated" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "unauthenticated" };
   }
   if (!authPolicy?.authMethod) {
-    return { device, unavailableReason: "no-auth-method" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "no-auth-method" };
   }
   if (authority.gatewayAccessGrant === undefined) {
-    return { device, unavailableReason: "no-grant" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "no-grant" };
   }
-  const tokenlessIdentity =
-    !ocid &&
-    tokenDevice == null &&
-    (authPolicy.authMethod === "trusted-proxy" || authPolicy.authMethod === "tailscale");
   if (sourceDevice && tokenDevice === undefined && !tokenlessIdentity) {
-    return { device, unavailableReason: "device-no-token" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
   }
   if (sourceDevice && tokenlessIdentity && !device) {
-    return { unavailableReason: "device-no-token" };
+    return { authPolicy, sharedGeneration, unavailableReason: "device-no-token" };
   }
-  const sharedGeneration = client.usesSharedGatewayAuth
-    ? client.sharedGatewaySessionGeneration
-    : undefined;
   if (client.usesSharedGatewayAuth && sharedGeneration === undefined) {
-    return { device, unavailableReason: "shared-auth-no-generation" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "shared-auth-no-generation" };
   }
   const modelPolicy = captureOperatorModelPolicySnapshot(params.modelPolicy);
   if (params.modelPolicy && !modelPolicy) {
-    return { device, unavailableReason: "model-policy" };
+    return { device, authPolicy, sharedGeneration, unavailableReason: "model-policy" };
   }
   const profile = identity.readCurrentProfile();
   const source = {
@@ -176,10 +201,9 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     sharedGeneration,
     device: tokenDevice ?? (tokenlessIdentity ? device : undefined),
     authPolicy: {
-      ...authPolicy,
+      ...sourcePolicy,
       generation: "",
-      fallbackCredentialGeneration: resolveGatewayAuthPolicyGrant(params.config, authPolicy)
-        .fallbackCredentialGeneration,
+      fallbackCredentialGeneration: authPolicy.fallbackCredentialGeneration,
     },
     automationAdmin: resolveGatewayUiAdminSource(client) !== undefined,
     controlUiAdmin: client.internal?.controlUiAdmin === true,
@@ -187,5 +211,7 @@ export async function captureGatewayOperatorRecoverySnapshot(params: {
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
   };
   const snapshot = normalizeGatewayOperatorRecoverySnapshot(source);
-  return snapshot ? { device, snapshot } : { device, unavailableReason: "decode-failed" };
+  return snapshot
+    ? { device, authPolicy, sharedGeneration, snapshot }
+    : { device, authPolicy, sharedGeneration, unavailableReason: "decode-failed" };
 }

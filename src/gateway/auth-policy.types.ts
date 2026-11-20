@@ -18,3 +18,10 @@ export type GatewayAuthPolicy = Readonly<{
   /** Handshake-attested origin facts remain authoritative after transport retirement. */
   browserOrigin?: Readonly<GatewayWsBrowserOrigin>;
 }>;
+
+/** Authentication evidence retained in memory independently of durable-source bounds. */
+export type GatewayAuthPolicyFacts = Readonly<
+  Omit<GatewayAuthPolicy, "generation" | "browserOrigin"> & {
+    fallbackCredentialGeneration?: string;
+  }
+>;

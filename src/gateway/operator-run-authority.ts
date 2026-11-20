@@ -484,6 +484,8 @@ export async function prepareGatewayOperatorRunAuthority(
       snapshot: recoverySnapshot,
       unavailableReason: recoverySnapshotUnavailableReason,
       device,
+      authPolicy,
+      sharedGeneration,
     } = await captureGatewayOperatorRecoverySnapshot({
       client,
       authority: admission,
@@ -498,7 +500,9 @@ export async function prepareGatewayOperatorRunAuthority(
       recoverySnapshot,
       recoverySnapshotUnavailableReason,
       device,
-      verifiedIdentity: client.authPolicy?.verifiedIdentity,
+      deviceScopeCeiling: client.internal?.operatorDeviceScopeCeiling,
+      authPolicy,
+      sharedGeneration,
       ingress: ingressPrincipal && {
         bindingId: ingressPrincipal.bindingId,
         pluginId: ingressPrincipal.pluginId,

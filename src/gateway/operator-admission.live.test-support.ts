@@ -59,6 +59,7 @@ export type LiveAdmissionKind =
   | "recorded-person"
   | "recorded-system-turn"
   | "live-device"
+  | "live-proxy"
   | "live-ingress"
   // These are separate run/receipt capabilities, not operator admission.
   | "cron-standing-grant"
@@ -104,10 +105,11 @@ async function prepareLiveProducer(
     agents: [],
     sessions: { others: "none" },
   };
-  if (kind === "live-device") {
+  const proxyCredential = kind === "live-device" || kind === "live-proxy";
+  if (proxyCredential) {
     assert(
       next.gateway.auth?.mode === "trusted-proxy",
-      "The live-device role-policy row belongs in the identified proxy pool",
+      "The live proxy credential rows belong in the identified proxy pool",
     );
     // Valid live role policy, deliberately beyond the durable codec's 256-ref bound.
     // Every denied pattern is unrelated to the fixture's actual provider.
@@ -116,7 +118,7 @@ async function prepareLiveProducer(
     };
   }
   await fixture.publish(next, c.signal);
-  if (kind === "live-device") {
+  if (proxyCredential) {
     const pending = await requestDevicePairing({
       deviceId: c.identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(c.identity.publicKeyPem),
@@ -145,7 +147,15 @@ async function prepareLiveProducer(
     return {
       send: (params) => operator.request("chat.send", params),
       revoke: async () => {
-        await removePairedDevice(c.identity.deviceId);
+        if (kind === "live-proxy") {
+          const revoked = structuredClone(fixture.config);
+          assert(revoked.gateway?.auth?.trustedProxy?.allowUsers);
+          revoked.gateway.auth.trustedProxy.allowUsers =
+            revoked.gateway.auth.trustedProxy.allowUsers.filter((user) => user !== PROXY_USER);
+          await fixture.publish(revoked, c.signal);
+        } else {
+          await removePairedDevice(c.identity.deviceId);
+        }
       },
       release: () => operator.stopAndWait(),
     };
@@ -415,7 +425,8 @@ export async function runLiveAdmissionCase(
     return await runCronAdmissionCase(kind, scenario, fixture);
   }
   const producer = await prepareLiveProducer(kind, fixture);
-  const liveCredential = kind === "live-device" || kind === "live-ingress";
+  const proxyCredential = kind === "live-device" || kind === "live-proxy";
+  const liveCredential = proxyCredential || kind === "live-ingress";
   let liveStartDecisions = 0;
   const decide = admission.decideOperatorAdmission;
   const decisionObserver = vi
@@ -425,6 +436,15 @@ export async function runLiveAdmissionCase(
         expect(facts.kind).toBe("live");
         assert(facts.kind === "live");
         expect(captureQueuedOperatorRecoverySource(facts.authority)?.kind).toBe("unavailable");
+        if (proxyCredential) {
+          expect(facts.authority.authPolicy).toMatchObject({
+            authMethod: "trusted-proxy",
+            verifiedIdentity: PROXY_USER,
+          });
+          expect(facts.authority.sharedGeneration).toBe(
+            c.original.operatorAuthority?.sharedGeneration,
+          );
+        }
         // The shared live fact check, not an obsolete invocation, owns this new start.
         expect(() => facts.authority.assertCurrent()).not.toThrow();
         liveStartDecisions++;
@@ -518,9 +538,14 @@ export async function runLiveAdmissionCase(
       expect(Object.isFrozen(authority)).toBe(true);
       expect(captureQueuedOperatorRecoverySource(authority)).toEqual({
         kind: "unavailable",
-        reason: kind === "live-device" ? "decode-failed" : "remote-ingress-no-source",
+        reason: proxyCredential ? "decode-failed" : "remote-ingress-no-source",
       });
-      if (kind === "live-device") {
+      if (proxyCredential) {
+        expect(authority.authPolicy).toMatchObject({
+          authMethod: "trusted-proxy",
+          verifiedIdentity: PROXY_USER,
+        });
+        expect(authority.sharedGeneration).toBeUndefined();
         expect(authority.device).toEqual({
           deviceId: c.identity.deviceId,
           key: expect.any(String),

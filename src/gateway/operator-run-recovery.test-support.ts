@@ -39,7 +39,7 @@ export function recoveryFixture(
 export function pairedOperator(): PairedDevice {
   return {
     deviceId: "recovery-device",
-    publicKey: "fixture-public-key",
+    publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
     roles: ["operator"],
     approvedScopes: ["operator.admin"],
     tokens: {
@@ -147,6 +147,7 @@ export async function createOperatorRecoveryFixture(params: {
       signedAt: 1,
       nonce: "fixture-nonce",
     };
+    client.internal.operatorDeviceScopeCeiling = [...(params.scopes ?? ["operator.admin"])];
     client.internal.operatorDeviceTokenIdentity = params.tokenlessDevice
       ? null
       : expectDefined(
