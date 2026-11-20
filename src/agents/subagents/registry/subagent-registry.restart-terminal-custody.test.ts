@@ -593,10 +593,10 @@ it("6: an in-process restart leaves a delegate the new lifecycle is running: no 
     await fixture.settle();
     await resumeRoots();
 
-    expect(isSubagentRunLive(live)).toBe(true);
     expect(loadSubagentRegistryFromSqlite().get("live-delegate")).toEqual(before);
     expect(messages).toEqual([]);
     expect(fixture.announce).not.toHaveBeenCalled();
+    expect(isSubagentRunLive(live)).toBe(true);
     expect(registryWarn).not.toHaveBeenCalledWith(
       "Settling subagent interrupted by Gateway restart",
       expect.anything(),
