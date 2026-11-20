@@ -278,7 +278,6 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
       "Content-Type": "application/json",
       "X-Provider-Tenant": "provider-a",
       originator: "openclaw",
-      version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
   });
