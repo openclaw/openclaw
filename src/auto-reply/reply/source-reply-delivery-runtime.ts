@@ -19,6 +19,14 @@ type SourceReplyDeliveryRuntime = {
   track: (owner: SourceReplyDeliveryProjection) => void;
   applyMode: (owner: SourceReplyDeliveryProjection, mode: SourceReplyDeliveryMode) => void;
   applyPreparedMode: (owner: SourceReplyDeliveryProjection, mode: SourceReplyDeliveryMode) => void;
+  projectSessionPrompt: (
+    owner: SourceReplyDeliveryProjection,
+    mode?: SourceReplyDeliveryMode,
+  ) => SourceReplyDeliveryProjection;
+  selectPromptComponents: (
+    owner: SourceReplyDeliveryProjection,
+    components: Record<SourceReplyDeliveryMode, string>,
+  ) => void;
 };
 
 const sourceReplyDeliveryRuntimeKey = "__openclawSourceReplyDeliveryRuntime" as const;
@@ -49,6 +57,60 @@ export function createSourceReplyDeliveryRuntime(params: {
 }): SourceReplyDeliveryRuntime {
   const projections = new Set(params.projections);
   let currentMode = params.initialMode;
+  let promptComponentByMode = params.promptComponentByMode;
+  const projectPrompt = (projection: SourceReplyDeliveryProjection, nextComponent: string) => {
+    const prompt = projection.extraSystemPrompt;
+    if (!nextComponent || !prompt) {
+      return;
+    }
+    const offset = params.promptComponentOffset ?? -1;
+    const currentComponent = Object.values(promptComponentByMode).find(
+      (component) => component && prompt.slice(offset, offset + component.length) === component,
+    );
+    // Replace only the delivery-owned prompt component. Later context additions
+    // must survive prepared harness selection instead of restoring a stale prompt.
+    if (currentComponent && currentComponent !== nextComponent && offset >= 0) {
+      const context = projection.extraSystemPromptTurnContext;
+      const end = context ? context.start + context.text.length : -1;
+      const valid =
+        context &&
+        context.text &&
+        Number.isInteger(context.start) &&
+        context.start >= 0 &&
+        prompt.slice(context.start, end) === context.text &&
+        (context.start === 0 || prompt.slice(context.start - 2, context.start) === "\n\n") &&
+        (end === prompt.length || prompt.slice(end, end + 2) === "\n\n");
+      if (valid && context.start <= offset && end >= offset + currentComponent.length) {
+        const relative = offset - context.start;
+        projection.extraSystemPromptTurnContext = {
+          start: context.start,
+          text:
+            context.text.slice(0, relative) +
+            nextComponent +
+            context.text.slice(relative + currentComponent.length),
+        };
+      } else if (valid && context.start >= offset + currentComponent.length) {
+        projection.extraSystemPromptTurnContext = {
+          ...context,
+          start: context.start + nextComponent.length - currentComponent.length,
+        };
+      } else if (!valid || end > offset) {
+        // Never turn a stale annotation into a valid one by replacing its expected bytes.
+        projection.extraSystemPromptTurnContext = undefined;
+      }
+      projection.extraSystemPrompt =
+        prompt.slice(0, offset) + nextComponent + prompt.slice(offset + currentComponent.length);
+    }
+  };
+  const selectPromptComponents = (
+    owner: SourceReplyDeliveryProjection,
+    components: Record<SourceReplyDeliveryMode, string>,
+  ) => {
+    for (const projection of new Set([...projections, owner])) {
+      projectPrompt(projection, components[currentMode]);
+    }
+    promptComponentByMode = components;
+  };
   const applyMode = (
     owner: SourceReplyDeliveryProjection,
     mode: SourceReplyDeliveryMode,
@@ -57,52 +119,9 @@ export function createSourceReplyDeliveryRuntime(params: {
     currentMode = mode;
     for (const projection of new Set([...projections, owner])) {
       projection.sourceReplyDeliveryMode = mode;
-      if (!updatePrompt) {
-        continue;
-      }
-      const nextComponent = params.promptComponentByMode[mode];
-      const prompt = projection.extraSystemPrompt;
-      if (!nextComponent || !prompt) {
-        continue;
-      }
-      const offset = params.promptComponentOffset ?? -1;
-      const currentComponent = Object.values(params.promptComponentByMode).find(
-        (component) => component && prompt.slice(offset, offset + component.length) === component,
-      );
-      // Replace only the delivery-owned prompt component. Later context additions
-      // must survive prepared harness selection instead of restoring a stale prompt.
-      if (currentComponent && currentComponent !== nextComponent && offset >= 0) {
-        const context = projection.extraSystemPromptTurnContext;
-        const end = context ? context.start + context.text.length : -1;
-        const valid =
-          context &&
-          context.text &&
-          Number.isInteger(context.start) &&
-          context.start >= 0 &&
-          prompt.slice(context.start, end) === context.text &&
-          (context.start === 0 || prompt.slice(context.start - 2, context.start) === "\n\n") &&
-          (end === prompt.length || prompt.slice(end, end + 2) === "\n\n");
-        if (valid && context.start <= offset && end >= offset + currentComponent.length) {
-          const relative = offset - context.start;
-          projection.extraSystemPromptTurnContext = {
-            start: context.start,
-            text:
-              context.text.slice(0, relative) +
-              nextComponent +
-              context.text.slice(relative + currentComponent.length),
-          };
-        } else if (valid && context.start >= offset + currentComponent.length) {
-          projection.extraSystemPromptTurnContext = {
-            ...context,
-            start: context.start + nextComponent.length - currentComponent.length,
-          };
-        } else if (!valid || end > offset) {
-          // Never turn a stale annotation into a valid one by replacing its expected bytes.
-          projection.extraSystemPromptTurnContext = undefined;
-        }
-        projection.extraSystemPrompt =
-          prompt.slice(0, offset) + nextComponent + prompt.slice(offset + currentComponent.length);
-      }
+    }
+    if (updatePrompt) {
+      selectPromptComponents(owner, promptComponentByMode);
     }
     params.onModeResolved?.(mode);
   };
@@ -114,5 +133,14 @@ export function createSourceReplyDeliveryRuntime(params: {
     track: (owner) => projections.add(owner),
     applyMode: (owner, mode) => applyMode(owner, mode, false),
     applyPreparedMode: (owner, mode) => applyMode(owner, mode, true),
+    selectPromptComponents,
+    projectSessionPrompt: (owner, mode = params.initialMode) => {
+      if (promptComponentByMode === params.promptComponentByMode) {
+        return owner;
+      }
+      const projection = { ...owner };
+      projectPrompt(projection, params.promptComponentByMode[mode]);
+      return projection;
+    },
   };
 }

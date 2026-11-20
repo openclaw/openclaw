@@ -41,13 +41,14 @@ which defaults off. The primary model still writes replies and uses tools.
 With Decision assistance enabled and a configured `decisionModel`, unmentioned
 messages in always-on groups and channels are assessed before reply
 generation. The Decision Model uses the existing group etiquette and bounded
-recent conversation to decide whether a reply is invited or adds clear value.
+recent conversation to decide whether any participation is invited or adds clear
+value, including an emoji reaction alone.
 
-A rejected message is recorded without a primary-model run. Approval commits the
-primary model to a conversational reply in its usual voice. Existing permissions
-and delivery rules still apply. An undelivered `NO_REPLY` follows existing
-generation recovery and failure handling; `NO_REPLY` after confirmed message-tool
-delivery prevents duplicate output.
+A rejected message is recorded without a primary-model run or interaction.
+After approval, the primary model chooses the response form, content and emoji
+in its usual voice; a reaction alone can suffice. Its turn context omits the
+participation and silence instructions already handled by the Decision Model.
+Existing permissions, delivery and completion rules still apply.
 
 Mentions, commands, media turns, and generic CLI backends keep ordinary behavior.
 Embedded harnesses, including Codex, support participation assessment. With

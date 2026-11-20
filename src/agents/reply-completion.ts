@@ -235,15 +235,7 @@ export function shouldDeliverMissingReplyNotice(
 export function resolveReplyCompletion(
   expectation: ReplyExpectation,
   evidence: ReplyCompletionEvidence,
-  sourceReplyDelivery: ReplyDeliveryState = "missing",
 ): ReplyCompletion {
-  if (
-    expectation === "result-required" &&
-    evidence === "silent" &&
-    sourceReplyDelivery !== "missing"
-  ) {
-    return { expectation, outcome: sourceReplyDelivery };
-  }
   return {
     expectation,
     outcome:

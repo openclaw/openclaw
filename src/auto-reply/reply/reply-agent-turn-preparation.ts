@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
-import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
@@ -64,6 +63,7 @@ import type {
   PreparedReplyAgentTurn,
 } from "./reply-turn-admission.types.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { readSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 
 /** Claims and prepares immediate and queued turns through one admission and preflight owner. */
 export function prepareReplyAgentTurn<TConfigured>(
@@ -589,16 +589,14 @@ export async function prepareReplyAgentTurn<TConfigured>(
           turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
         }
       }
-      if (participation?.reply) {
-        turn.queued.run.terminalReplyExpectation = "result-required";
-        turn.queued.currentInboundContext = appendCurrentInboundContext(
-          turn.queued.currentInboundContext,
-          [
-            {
-              kind: "runtime-instruction",
-              text: "The Decision Model approved participation for this turn. Generate and deliver your reply in your usual voice and style, following this conversation's delivery instructions. After confirmed message-tool delivery, end with NO_REPLY to avoid repeating that reply.",
-            },
-          ],
+      if (participation?.reply && turn.queued.currentInboundContext?.participationAssessed) {
+        const { participationAssessed, ...context } = turn.queued.currentInboundContext;
+        turn.queued.currentInboundContext = { ...context, ...participationAssessed };
+      }
+      if (participation?.reply && turn.queued.groupParticipation?.promptComponentByMode) {
+        readSourceReplyDeliveryRuntime(turn.queued.run)?.selectPromptComponents(
+          turn.queued.run,
+          turn.queued.groupParticipation.promptComponentByMode,
         );
       }
       if (

@@ -30,8 +30,9 @@ function systemMessages(request: unknown) {
 
 it.each([
   ["silent", 0],
-  ["text", 2],
+  ["text", 1],
   ["message-tool", 2],
+  ["reaction", 2],
 ] as const)("persists and delivers %s participation", async (mode, primaryRequests) => {
   await writeFile(
     join(fixture.config.agents!.defaults!.workspace!, "IDENTITY.md"),
@@ -43,11 +44,13 @@ it.each([
   decision.mockResolvedValue(judgment(mode === "silent" ? "silent" : "reply"));
   const onAdopted = vi.fn();
   const onAbandoned = vi.fn();
-  const messageToolOnly = mode === "message-tool";
-  const text = "The TLS port is 443.";
-  if (mode === "text") {
-    fixture.respond(answer("NO_REPLY"));
+  const reactionOnly = mode === "reaction";
+  const messageToolOnly = mode === "message-tool" || reactionOnly;
+  if (reactionOnly) {
+    fixture.config.agents!.defaults!.silentReply = { group: "allow" };
   }
+  const input = reactionOnly ? "Thanks for sorting that out!" : "Bob, which TLS port?";
+  const text = "The TLS port is 443.";
   if (messageToolOnly) {
     fixture.respond(
       {
@@ -62,7 +65,9 @@ it.each([
                 name: TOOL_CALL_RAW_TOOL_NAME,
                 arguments: JSON.stringify({
                   id: "message",
-                  args: { action: "send", message: text, final: true },
+                  args: reactionOnly
+                    ? { action: "react", emoji: "🙌", messageId: "delivery-reaction", final: true }
+                    : { action: "send", message: text, final: true },
                 }),
               },
             },
@@ -75,16 +80,25 @@ it.each([
   } else {
     fixture.respond(answer(text));
   }
-  await fixture.dispatch("Bob, which TLS port?", `delivery-${mode}`, "-10001", {
-    sourceReplyDeliveryMode: messageToolOnly ? "message_tool_only" : "automatic",
-    turnAdoptionLifecycle: { onAdopted, onAbandoned },
-  });
+  await fixture.dispatch(
+    input,
+    `delivery-${mode}`,
+    "-10001",
+    {
+      sourceReplyDeliveryMode: messageToolOnly ? "message_tool_only" : "automatic",
+      turnAdoptionLifecycle: { onAdopted, onAbandoned },
+    },
+    reactionOnly ? { SenderIsBot: true, InboundEventKind: "user_request" } : undefined,
+  );
   expect(decision).toHaveBeenCalledOnce();
   expect(decision.mock.calls[0]?.[0]).toMatchObject({
     state: { agentName: mode === "text" ? "Configured" : "Cactux" },
   });
   expect(fixture.requests).toHaveLength(primaryRequests);
-  expect(fixture.sent).toEqual(mode === "silent" ? [] : [text]);
+  expect(fixture.sent).toEqual(mode === "silent" || reactionOnly ? [] : [text]);
+  expect(fixture.reactions).toEqual(
+    reactionOnly ? [{ emoji: "🙌", messageId: "delivery-reaction" }] : [],
+  );
   expect(onAdopted).toHaveBeenCalledOnce();
   expect(onAbandoned).not.toHaveBeenCalled();
   const history = await readRecentUserAssistantTextForSession({
@@ -93,24 +107,25 @@ it.each([
     storePath: fixture.storePath,
   });
   expect(history).toContainEqual(
-    expect.objectContaining({ role: "user", text: expect.stringContaining("which TLS port?") }),
+    expect.objectContaining({ role: "user", text: expect.stringContaining(input) }),
   );
+  if (reactionOnly) {
+    expect(JSON.stringify(fixture.requests[0])).not.toContain("Default: stay silent.");
+    expect(JSON.stringify(fixture.requests[0])).not.toContain("NO_REPLY");
+  }
   if (mode === "text") {
     const first = fixture.requests[0];
-    expect(JSON.stringify(first)).toContain(
-      "The Decision Model approved participation for this turn.",
-    );
-    expect(JSON.stringify(first)).toContain("Without approval, apply this etiquette:");
+    expect(JSON.stringify(first)).not.toContain("NO_REPLY");
+    expect(JSON.stringify(first)).not.toContain("mostly lurk");
     const prefix = systemMessages(first);
     expect(prefix).toHaveLength(1);
-    expect(JSON.stringify(prefix)).not.toContain(
-      "The Decision Model approved participation for this turn.",
-    );
     fixture.respond(answer("NO_REPLY"));
     await fixture.reply("Please check again.", "ordinary-mention", "-10001", undefined, {
       WasMentioned: true,
     });
     expect(systemMessages(fixture.requests.at(-1))).toEqual(prefix);
+    expect(JSON.stringify(fixture.requests.at(-1))).toContain("NO_REPLY");
+    expect(JSON.stringify(fixture.requests.at(-1))).toContain("mostly lurk");
     expect(decision).toHaveBeenCalledOnce();
     expect(fixture.sent).toEqual([text]);
   }
@@ -145,8 +160,6 @@ it.each(["off", "command", "audio", "internal", "unavailable"] as const)(
     expect([reply].flat().flatMap((payload) => (payload?.text ? [payload.text] : []))).toEqual([]);
     expect(fixture.requests).toHaveLength(1);
     expect(decision).toHaveBeenCalledTimes(mode === "unavailable" ? 1 : 0);
-    expect(JSON.stringify(fixture.requests[0])).not.toContain(
-      "The Decision Model approved participation for this turn.",
-    );
+    expect(JSON.stringify(fixture.requests[0])).toContain("NO_REPLY");
   },
 );

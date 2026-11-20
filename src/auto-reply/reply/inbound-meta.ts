@@ -111,6 +111,18 @@ export function refreshActiveGoalContext(
   return {
     ...context,
     text: refreshedText,
+    ...(context.participationAssessed
+      ? {
+          participationAssessed: {
+            ...context.participationAssessed,
+            text: refreshActiveGoalContextText(
+              context.participationAssessed.text,
+              injectedGoals,
+              activeGoalContext,
+            ),
+          },
+        }
+      : {}),
     ...(refreshedResumableText !== undefined
       ? { resumableText: refreshedResumableText || undefined }
       : {}),
