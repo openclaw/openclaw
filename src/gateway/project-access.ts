@@ -56,7 +56,7 @@ export function resolveRunProjectRequester(
 }
 
 /** operator.write callers may use every registry project; restricted roles see a subset. */
-export function hasFullProjectAccess(requester: ProjectRequester): boolean {
+function hasFullProjectAccess(requester: ProjectRequester): boolean {
   return (
     requester.kind === "internal" ||
     authorizeOperatorScopesForRequiredScope(WRITE_SCOPE, requester.scopes).allowed
@@ -149,7 +149,7 @@ async function isPublicGitHubOrigin(
  * Restricted requesters may use agent-workspace pseudo-projects (governed by
  * roles.agents) and public GitHub repositories on the configured host.
  */
-export async function canRequesterUseProject(
+async function canRequesterUseProject(
   cfg: OpenClawConfig,
   project: Pick<ProjectRegistryIdentity, "source" | "originUrl">,
   requester: ProjectRequester,
@@ -159,16 +159,6 @@ export async function canRequesterUseProject(
     return true;
   }
   return await isPublicGitHubOrigin(cfg, project.originUrl, options);
-}
-
-/** Repository URLs follow the same public-only rule as registered projects. */
-export async function canRequesterUseRepositoryUrl(
-  cfg: OpenClawConfig,
-  url: string,
-  requester: ProjectRequester,
-  options: ProjectAccessOptions = {},
-): Promise<boolean> {
-  return hasFullProjectAccess(requester) || (await isPublicGitHubOrigin(cfg, url, options));
 }
 
 /** Hidden projects are indistinguishable from unknown ids. */
