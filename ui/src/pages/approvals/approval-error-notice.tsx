@@ -1,4 +1,5 @@
 import { Errored } from "solid-js";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RetryAction } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 
@@ -16,7 +17,7 @@ export function ApprovalErrorNotice(props: {
   return (
     <Errored
       fallback={(error, reset) => (
-        <div class="callout danger" role="alert">
+        <InlineAlert tone="danger" role="alert">
           {formatUiError(error())}
           {props.onRetry ? (
             <RetryAction
@@ -27,7 +28,7 @@ export function ApprovalErrorNotice(props: {
               }}
             />
           ) : null}
-        </div>
+        </InlineAlert>
       )}
     >
       {readError()}

@@ -137,6 +137,65 @@ async function waitForConfigPatch(
 }
 
 suite.define(() => {
+  it("does not report missing cloud profiles while their config is pending", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const config = profilesConfig({ "build-fleet": configuredCloudWorkerProfile() });
+      const gateway = await workerGateway(page, "ready", config, {
+        heldMethods: ["config.get"],
+        methodResponses: {
+          "environments.list": {
+            environments: [],
+            profiles: [{ id: "build-fleet", providerId: "crabbox" }],
+          },
+        },
+      });
+      await page.goto(new URL("settings/cloud-workers", suite.server.baseUrl).href);
+      await gateway.waitForRequest("config.get");
+      await page.locator(".settings-disclosure > summary").click();
+      await page
+        .getByRole("button", { name: "Add profile", exact: true })
+        .waitFor({ state: "hidden" });
+      const falseEmpty = await page
+        .getByText("No cloud device profiles yet.", { exact: true })
+        .count();
+      await gateway.resolveDeferred("config.get", configResponse(config, "ready"));
+      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).waitFor();
+      expect(falseEmpty).toBe(0);
+    });
+  });
+
+  it("shows a failed cloud profile read instead of empty guidance and retries to a real empty result", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(page, "empty", {}, { heldMethods: ["config.get"] });
+      await page.goto(new URL("settings/cloud-workers", suite.server.baseUrl).href);
+      await gateway.waitForRequest("config.get");
+      await page.locator(".settings-disclosure > summary").click();
+      await gateway.rejectDeferred("config.get", {
+        message: "Cloud profile configuration could not be read",
+      });
+      await expect
+        .poll(() => evaluateControlUiContext(page, (app) => app.runtimeConfig.state.lastError))
+        .toContain("Cloud profile configuration could not be read");
+      const surface = page.locator("openclaw-cloud-workers-page");
+      expect(
+        await surface.getByText("No cloud device profiles yet.", { exact: true }).count(),
+      ).toBe(0);
+      const error = surface
+        .getByRole("alert")
+        .filter({ hasText: "Cloud profile configuration could not be read" });
+      await error.waitFor();
+      const reads = await gateway.deferNext("config.get");
+      await error.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.waitForRequest("config.get", { after: reads });
+      await gateway.resolveDeferred("config.get", configResponse({}, "empty"));
+      await surface.getByText("No cloud device profiles yet.", { exact: true }).waitFor();
+      expect(await error.count()).toBe(0);
+      expect(
+        await surface.getByRole("button", { name: "Add profile", exact: true }).isEnabled(),
+      ).toBe(true);
+    });
+  });
+
   it("adds and edits advanced machine profiles while refreshing live availability", async () => {
     await suite.withPage(editorPageOptions, async ({ page }) => {
       const gateway = await workerGateway(page, "initial");
@@ -152,17 +211,17 @@ suite.define(() => {
       await page.locator(".settings-disclosure > summary").click();
       await gateway.waitForRequest("environments.list");
       const socketCount = await gateway.getSocketCount();
-      await page.getByText("No cloud worker profiles are configured.", { exact: true }).waitFor();
+      await page.getByText("No cloud device profiles yet.", { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Add profile" }).click();
-      expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
+      expect(await page.getByRole("combobox", { name: "Device class", exact: true }).count()).toBe(
         0,
       );
       await fillForm(page, [
         [page.getByLabel("Profile ID"), "build-fleet"],
         [page.getByLabel("Crabbox backend"), "hetzner"],
       ]);
-      const machineClass = page.getByRole("textbox", { name: "Machine class", exact: true });
+      const machineClass = page.getByRole("textbox", { name: "Device class", exact: true });
       await expect.poll(() => machineClass.inputValue()).toBe("");
       expect(await machineClass.getAttribute("list")).toBeNull();
       expect(await page.locator("openclaw-cloud-workers-page datalist").count()).toBe(0);
@@ -201,7 +260,7 @@ suite.define(() => {
       await publishProfiles(gateway, { "build-fleet": buildFleet }, "added");
 
       await page.getByText("Advertised", { exact: true }).waitFor();
-      await page.getByText("Profile saved.", { exact: true }).waitFor();
+      await page.getByText("Profile saved", { exact: true }).waitFor();
       expect(await gateway.getSocketCount()).toBe(socketCount);
 
       await exactButton(page, "Edit: build-fleet").click();
@@ -218,10 +277,10 @@ suite.define(() => {
         [page.getByLabel("Setup environment names", { exact: true }), "BUILD_TAG, CACHE_DIR"],
         [setup, ""],
         [setup, "install-node"],
-        [page.getByLabel("Ready workers", { exact: true }), "2"],
+        [page.getByLabel("Ready cloud devices", { exact: true }), "2"],
         [page.getByLabel("Suspend after", { exact: true }), "2h"],
       ]);
-      expect(await page.getByRole("combobox", { name: "Machine class", exact: true }).count()).toBe(
+      expect(await page.getByRole("combobox", { name: "Device class", exact: true }).count()).toBe(
         0,
       );
       expect(await machineClass.getAttribute("list")).toBeNull();
@@ -331,7 +390,7 @@ suite.define(() => {
       await fillForm(page, [
         [profileId, "reconnect-proof"],
         [backend, "hetzner"],
-        [page.getByLabel("Machine class", { exact: true }), "standard"],
+        [page.getByLabel("Device class", { exact: true }), "standard"],
       ]);
 
       await gateway.deferNext("config.patch");
@@ -361,7 +420,7 @@ suite.define(() => {
         config: {},
       });
       await expect.poll(() => profileId.inputValue()).toBe("reconnect-proof");
-      await expect.poll(() => page.getByText("Profile saved.", { exact: false }).count()).toBe(0);
+      await expect.poll(() => page.getByText("Profile saved", { exact: false }).count()).toBe(0);
       await expect.poll(() => page.getByRole("alert").count()).toBe(0);
 
       await gateway.deferNext("config.patch");
@@ -375,7 +434,7 @@ suite.define(() => {
       );
       const savedProfile = configuredCloudWorkerProfile("hetzner");
       await publishProfiles(gateway, { "reconnect-proof": savedProfile }, "retry-saved");
-      await page.getByText("Profile saved.", { exact: true }).waitFor();
+      await page.getByText("Profile saved", { exact: true }).waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
     });
   });
@@ -523,8 +582,7 @@ suite.define(() => {
 
         await exactButton(row, "Delete: pending").click();
         const confirmation = await waitForConfirmModal(page);
-        await expect.poll(() => confirmation.textContent()).toContain("Delete profile pending?");
-        await expect.poll(() => confirmation.textContent()).toContain("Repository defaults");
+        await expect.poll(() => confirmation.textContent()).toContain("Deleting pending");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         await gateway.deferNext("config.patch");
         await exactButton(confirmation, "Delete").click();
@@ -639,7 +697,7 @@ suite.define(() => {
           }
           await expect
             .poll(() => page.getByRole("alert").textContent())
-            .toBe("The profile was not deleted. Reload the config and try again.");
+            .toBe("Couldn’t delete the profile. Reload the config and try again.");
           expect(await gateway.getRequests("config.patch")).toHaveLength(0);
           await row.waitFor();
         }
@@ -654,7 +712,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
       await page.locator(".settings-disclosure > summary").click();
       await page
-        .getByText("Administrator access is required to manage cloud worker profiles.", {
+        .getByText("You need admin access to manage cloud device profiles.", {
           exact: true,
         })
         .waitFor();

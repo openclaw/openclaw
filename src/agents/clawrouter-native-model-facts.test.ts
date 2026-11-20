@@ -34,6 +34,7 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 afterEach(() => {
   clearLiveCatalogCacheForTests();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 // Real ClawRouter catalog, model registry, provider runtime hooks, and runtime decisions.
@@ -186,6 +187,311 @@ it("resolves routed GPT and Claude models with the native runtime decisions", as
     expect(new Set(catalogRequests)).toEqual(
       new Set(["https://clawrouter.openclaw.ai/v1/catalog"]),
     );
+  });
+});
+
+it("uses Vercel's granted native Messages SDK route for catalog, replay and streaming", async () => {
+  const upstream = "anthropic/claude-sonnet-4.6";
+  const id = `vercel-ai-gateway/${upstream}`;
+  const nativePath = "/v1/native/vercel-ai-gateway/v1/messages";
+  const credential = "synthetic-router-vercel-key";
+  vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-unused-anthropic-key");
+  vi.stubEnv("AI_GATEWAY_API_KEY", "synthetic-unused-gateway-key");
+  vi.stubEnv("CLAWROUTER_API_KEY", "");
+  const { default: entry } = await loadBundledPluginFacade<{
+    default: Parameters<typeof registerSingleProviderPlugin>[0];
+  }>({ pluginId: "clawrouter", artifactBasename: "index.js" });
+  const plugin = await registerSingleProviderPlugin(entry);
+  await withOpenClawTestState({ label: "clawrouter-vercel-sdk" }, async (state) => {
+    const row = {
+      ...catalogProvider("vercel-ai-gateway", [upstream], ["llm.chat", "llm.messages"]),
+      allowed: true,
+      executable: true,
+      openaiCompatible: true,
+      routes: [
+        {
+          endpoint: "messages",
+          path: "/v1/messages",
+          methods: ["POST"],
+          requestFormat: "anthropic.messages",
+          responseFormat: "anthropic.messages",
+        },
+        {
+          endpoint: "chat_completions",
+          path: "/chat/completions",
+          methods: ["POST"],
+          requestFormat: "openai.chat_completions",
+          responseFormat: "openai.chat_completions",
+        },
+      ],
+      offers: [
+        {
+          endpoint: "messages",
+          modelId: id,
+          transport: "http",
+          routeKind: "native",
+          route: nativePath,
+          eligible: true,
+          affordability: "request-dependent",
+        },
+        {
+          endpoint: "chat_completions",
+          modelId: id,
+          transport: "http",
+          routeKind: "native",
+          route: "/v1/native/vercel-ai-gateway/chat/completions",
+          eligible: true,
+          affordability: "request-dependent",
+        },
+      ],
+    };
+    let providers: unknown[] = [row];
+    let reject = false;
+    const requests: Request[] = [];
+    const bodies: Record<string, unknown>[] = [];
+    const catalogKeys: Array<string | null> = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      if (request.url.endsWith("/v1/catalog")) {
+        catalogKeys.push(request.headers.get("authorization"));
+        return Response.json({ version: "clawrouter.client-catalog.v1", providers });
+      }
+      requests.push(request);
+      bodies.push((await request.json()) as Record<string, unknown>);
+      if (reject) {
+        return Response.json(
+          { error: { type: "permission_error", message: "Synthetic revoked grant" } },
+          { status: 403 },
+        );
+      }
+      const events = [
+        {
+          type: "message_start",
+          message: {
+            id: "msg_synthetic",
+            type: "message",
+            role: "assistant",
+            model: upstream,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 11, output_tokens: 0 },
+          },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "verified" } },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { output_tokens: 3 },
+        },
+        { type: "message_stop" },
+      ];
+      const bytes = new TextEncoder().encode(
+        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+      );
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            for (let offset = 0; offset < bytes.length; offset += 7) {
+              controller.enqueue(bytes.slice(offset, offset + 7));
+            }
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const config = {
+      models: { providers: { clawrouter: { apiKey: credential } } },
+    } as unknown as OpenClawConfig;
+    const discover = async (key: string) => {
+      const catalog = await plugin.catalog?.run({
+        config,
+        env: {},
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        resolveProviderAuth: () => ({
+          apiKey: key,
+          discoveryApiKey: key,
+          mode: "api_key",
+          source: "profile",
+        }),
+        resolveProviderApiKey: () => ({ apiKey: key, discoveryApiKey: key }),
+      });
+      if (!catalog || !("provider" in catalog) || !catalog.provider) {
+        throw new Error("Missing catalog");
+      }
+      return catalog.provider;
+    };
+    const catalog = await discover(credential);
+    expect(catalog.models).toHaveLength(1);
+    const selected = catalog.models[0]!;
+    expect(selected).toMatchObject({
+      id,
+      api: "anthropic-messages",
+      baseUrl: "https://clawrouter.openclaw.ai/v1/native/vercel-ai-gateway",
+    });
+    const model: Model = {
+      ...selected,
+      provider: "clawrouter",
+      api: "anthropic-messages",
+      baseUrl: selected.baseUrl!,
+      input: ["text", "image"],
+    };
+    const history: AgentMessage[] = [
+      { role: "user", content: "look up a record", timestamp: 1 },
+      {
+        role: "assistant",
+        api: "openai-responses",
+        provider: "openai",
+        model: "gpt-6-luna",
+        content: [
+          { type: "toolCall", id: "call_previous|fc_one", name: "lookup", arguments: { index: 1 } },
+        ],
+        usage: makeZeroUsageSnapshot(),
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_previous|fc_one",
+        toolName: "lookup",
+        content: [{ type: "text", text: "synthetic record" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    const replay = await sanitizeSessionHistory({
+      provider: "clawrouter",
+      modelId: id,
+      modelApi: model.api,
+      model,
+      policy: resolveTranscriptPolicy({
+        provider: "clawrouter",
+        modelId: id,
+        modelApi: model.api,
+        model,
+        runtimeHandle: { provider: "clawrouter", plugin },
+      }),
+      config,
+      env: {},
+      workspaceDir: state.workspaceDir,
+      sessionId: "vercel-replay",
+      sessionManager: makeInMemorySessionManager([
+        makeModelSnapshotEntry({
+          timestamp: 0,
+          provider: "openai",
+          modelApi: "openai-responses",
+          modelId: "gpt-6-luna",
+        }),
+      ]),
+      messages: history,
+    });
+    const stream =
+      plugin.wrapStreamFn?.({ provider: "clawrouter", modelId: id, streamFn: streamSimple }) ??
+      streamSimple;
+    const context = {
+      messages: convertToLlm(replay),
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a synthetic record",
+          parameters: { type: "object", properties: { index: { type: "integer" } } },
+        },
+      ],
+    };
+    const result = await (
+      await stream(model, context, { apiKey: credential, maxTokens: 100 })
+    ).result();
+    expect(result).toMatchObject({
+      stopReason: "stop",
+      model: id,
+      content: [{ type: "text", text: "verified" }],
+      usage: { input: 11, output: 3 },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe(`https://clawrouter.openclaw.ai${nativePath}`);
+    expect(requests[0]!.headers.get("authorization")).toBe(`Bearer ${credential}`);
+    expect(requests[0]!.headers.get("anthropic-version")).toBe("2023-06-01");
+    expect(JSON.stringify([...requests[0]!.headers])).not.toContain("synthetic-unused");
+    expect(bodies[0]).toMatchObject({ model: upstream, stream: true });
+    const messages = bodies[0]!.messages as Array<{
+      role: string;
+      content: Array<Record<string, unknown>>;
+    }>;
+    const use = messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === "tool_use");
+    const answer = messages
+      .flatMap((message) => message.content)
+      .find((block) => block.type === "tool_result");
+    expect(use).toMatchObject({ name: "lookup", input: { index: 1 } });
+    expect(use?.id).toMatch(/^[a-zA-Z0-9_-]+$/);
+    expect(answer).toMatchObject({ tool_use_id: use?.id, content: "synthetic record" });
+    expect(JSON.stringify(bodies[0])).not.toContain("clawrouterRoute");
+
+    // Missing router auth never acquires either ambient upstream credential.
+    expect((await (await stream(model, context, {})).result()).stopReason).toBe("error");
+    expect(requests).toHaveLength(1);
+    reject = true;
+    expect((await (await stream(model, context, { apiKey: credential })).result()).stopReason).toBe(
+      "error",
+    );
+    expect(requests).toHaveLength(2);
+
+    // Keep the valid Chat offer: denial must not silently switch this native model to Chat.
+    const denied = [
+      { ...row, allowed: false },
+      { ...row, offers: [row.offers[1]] },
+      { ...row, offers: row.offers.map((offer) => ({ ...offer, eligible: false })) },
+      { ...row, offers: [{ ...row.offers[0], route: "https://foreign.example/v1/messages" }] },
+      {
+        ...row,
+        routes: [{ ...row.routes[0], path: "/messages" }],
+        offers: [{ ...row.offers[0], route: "/v1/native/vercel-ai-gateway/messages" }],
+      },
+      { ...row, routes: [{ ...row.routes[0], responseFormat: "unknown.messages" }] },
+      { ...row, models: [{ ...row.models[0], upstream: "anthropic/unknown-model" }] },
+    ];
+    for (const [index, provider] of denied.entries()) {
+      providers = [provider];
+      expect((await discover(`synthetic-denied-router-key-${index}`)).models).toEqual([]);
+    }
+    expect(catalogKeys[0]).toBe(`Bearer ${credential}`);
+    expect(new Set(catalogKeys).size).toBe(denied.length + 1);
+    expect(requests).toHaveLength(2);
+    providers = [
+      {
+        ...row,
+        models: [
+          {
+            id: "vercel-ai-gateway/synthetic-chat",
+            upstream: "synthetic-chat",
+            capabilities: ["llm.chat", "llm.messages"],
+          },
+        ],
+      },
+    ];
+    expect((await discover("synthetic-other-vercel-key")).models[0]?.api).toBe(
+      "openai-completions",
+    );
+    providers = [
+      {
+        ...row,
+        id: "other-gateway",
+        nativeBaseUrl: "/v1/native/other-gateway",
+        models: [
+          {
+            id: "other-gateway/model",
+            upstream: "model",
+            capabilities: ["llm.chat", "llm.messages"],
+          },
+        ],
+      },
+    ];
+    expect((await discover("synthetic-other-key")).models[0]?.api).toBe("openai-completions");
   });
 });
 

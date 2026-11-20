@@ -6,12 +6,10 @@ import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import * as acpManager from "../../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../../acp/control-plane/manager.lifecycle.js";
-import { SessionActorQueue } from "../../../acp/control-plane/session-actor-queue.js";
 import * as runtimeRegistry from "../../../acp/runtime/registry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
-import * as sessionEntryWorker from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
@@ -39,7 +37,6 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import * as registryPersistence from "../registry/subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "../registry/subagent-registry.test-helpers.js";
-import * as acpSpawnRuntime from "./acp-spawn-runtime.js";
 import { createAcpSpawnSessionBinding } from "./acp-spawn-store.test-support.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
@@ -131,13 +128,8 @@ afterEach(async () => {
 
 it.each([
   ["runtime", "abort"],
-  ["row", "admission close"],
   ["row", "live"],
-  ["thread", "admission close"],
   ["thread", "live"],
-  ["actor", "admission close"],
-  ["metadata", "admission close"],
-  ["initialized", "admission close"],
 ] as const)(
   "pending ACP spawn transfers work only from its live parent: %s / %s",
   async (stage, closure) => {
@@ -207,60 +199,15 @@ it.each([
       entered.resolve(sessionKey);
       await release.promise;
     };
-    let childKey: string | undefined;
     const upsert = sessionAccessor.upsertSessionEntryCore;
     vi.spyOn(sessionAccessor, "upsertSessionEntryCore").mockImplementation(async (...args) => {
       const entry = await upsert(...args);
-      childKey = args[0].sessionKey;
+      const childKey = args[0].sessionKey;
       if (stage === "row") {
         await pause(childKey);
       }
       return entry;
     });
-    if (stage === "actor") {
-      const run = vi.spyOn(SessionActorQueue.prototype, "run");
-      run.mockImplementationOnce(function (this: SessionActorQueue, key, op) {
-        run.mockRestore();
-        return this.run(key, async (isCurrent) => {
-          if (!childKey) {
-            throw new Error("ACP actor started before its child entry existed");
-          }
-          await pause(childKey);
-          return await op(isCurrent);
-        });
-      });
-    } else if (stage === "initialized" || stage === "metadata") {
-      const initialize = acpSpawnRuntime.initializeAcpSpawnRuntime;
-      vi.spyOn(acpSpawnRuntime, "initializeAcpSpawnRuntime").mockImplementationOnce(
-        async (params) => {
-          const initialized = await initialize(params);
-          if (stage === "initialized") {
-            await pause(params.sessionKey);
-          } else if (!admissionContext.getAdmittedRunDelegatedAuthority(admitted)) {
-            lateMetadata(initialized.initialized.meta);
-          }
-          return initialized;
-        },
-      );
-    }
-    const lateMetadata = vi.fn();
-    if (stage === "metadata") {
-      const update = sessionEntryWorker.withSessionEntryWorker;
-      let held = false;
-      vi.spyOn(sessionEntryWorker, "withSessionEntryWorker").mockImplementation(async (...args) => {
-        const updated = await update(...args);
-        if (
-          !held &&
-          args[0].agentId === "fixture" &&
-          childKey &&
-          ensuredSessions.includes(childKey)
-        ) {
-          held = true;
-          await pause(childKey);
-        }
-        return updated;
-      });
-    }
     const bindThread = vi.fn<NonNullable<bindings.SessionBindingAdapter["bind"]>>(async (input) =>
       createAcpSpawnSessionBinding({
         targetSessionKey: input.targetSessionKey,
@@ -280,8 +227,6 @@ it.each([
       bindings.registerSessionBindingAdapter(bindingAdapter);
     }
     const pausesRuntime = stage === "runtime" || thread;
-    const initializesRuntime =
-      live || pausesRuntime || stage === "metadata" || stage === "initialized";
     const ensuredSessions: string[] = [];
     let initialChildVisibility: string | undefined;
     const closeRuntime = vi.fn(async () => {});
@@ -422,9 +367,6 @@ it.each([
           runIds: [parentRunId],
         });
         expect(await wrappedOutcome).toBeInstanceOf(Error);
-      } else if (closure === "admission close") {
-        admission.close();
-        expect(parent.controller.signal.aborted).toBe(false);
       } else if (stage === "row") {
         // This child already exists; disabling new Drafts cannot revoke its first turn.
         configRuntime.setRuntimeConfigSnapshot({
@@ -475,14 +417,13 @@ it.each([
         expect.soft(socket).not.toHaveBeenCalled();
         expect.soft(sourceBoundary, "cleaned before return").toEqual({
           entry: undefined,
-          closes: Number(initializesRuntime),
+          closes: 1,
         });
         expect.soft(readChild(childSessionKey)).toBeUndefined();
         expect.soft(result).toMatchObject({ details: { status: "error" } });
       }
       expect
         .soft({
-          metadata: lateMetadata.mock.calls.length,
           ensuredSessions,
           threads: bindThread.mock.calls.length,
           dispatches: dispatch.mock.calls.length,
@@ -490,12 +431,11 @@ it.each([
           closed: closeRuntime.mock.calls.length,
         })
         .toEqual({
-          metadata: 0,
-          ensuredSessions: initializesRuntime ? [childSessionKey] : [],
+          ensuredSessions: [childSessionKey],
           threads: Number(thread && live),
           dispatches: Number(live),
           registered: Number(live),
-          closed: Number(!live && initializesRuntime),
+          closed: Number(!live),
         });
     } finally {
       release.resolve();

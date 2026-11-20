@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   sessionActivityListing,
@@ -438,4 +439,71 @@ describe("Activity recap generation", () => {
     await waitForSummary(0, "updating");
     expectEnsure(retryRow);
   });
+});
+
+it("keeps denial across pulse rollovers but admits explicit retry, reconnect and new selections", async () => {
+  const filters = { personId: "other", time: "24h" as const, query: "" };
+  const denied = new GatewayRequestError({ code: "FORBIDDEN", message: "Not available" });
+  request.mockRejectedValue(denied);
+  await controller.load(client, filters);
+  const read = controller.read;
+  controller.invalidate({ reason: "update" });
+  await vi.advanceTimersByTimeAsync(3_600_000);
+  await controller.load(client, { ...filters });
+  await controller.load(client, filters, "refresh");
+  expect(request).toHaveBeenCalledTimes(1);
+  expect(controller.read).toBe(read);
+  expect(controller.error).toContain("Not available");
+  await controller.load(client, filters, "retry");
+  expect(request).toHaveBeenCalledTimes(2);
+  await controller.load(client, filters, "query", false, false);
+  await controller.load(client, filters);
+  expect(request).toHaveBeenCalledTimes(3);
+  await controller.load(client, { ...filters, personId: "different" });
+  expect(request).toHaveBeenCalledTimes(4);
+});
+
+it("defers hidden authority changes, absorbs the catch-up and rejects pre-change responses", async () => {
+  const documentEvents = new EventTarget();
+  const pageEvents = new EventTarget();
+  let visibilityState = "visible";
+  Object.defineProperty(documentEvents, "visibilityState", { get: () => visibilityState });
+  vi.stubGlobal("document", documentEvents);
+  vi.stubGlobal("addEventListener", pageEvents.addEventListener.bind(pageEvents));
+  vi.stubGlobal("removeEventListener", pageEvents.removeEventListener.bind(pageEvents));
+  controller.dispose();
+  controller = createSessionActivity(() => {});
+  const filters = { personId: "other", time: "7d" as const, query: "" };
+  request.mockResolvedValueOnce(sessionActivityListing([active]));
+  await controller.load(client, filters);
+  request.mockReturnValueOnce(held.promise);
+  const old = controller.load(client, filters, "refresh");
+  visibilityState = "hidden";
+  documentEvents.dispatchEvent(new Event("visibilitychange"));
+  controller.invalidate({ reason: "sharing" });
+  controller.invalidate({ reason: "profile-identity" });
+  await controller.load(client, filters, "query", false, false);
+  expect(controller.loading).toBe(false);
+  await controller.load(client, filters, "authority");
+  await controller.load(client, filters);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(2);
+  held.resolve(sessionActivityListing([{ ...active, label: "obsolete" }]));
+  await old;
+  expect(controller.result?.sessions[0]?.label).not.toBe("obsolete");
+  request.mockRejectedValueOnce(new GatewayRequestError({ code: "FORBIDDEN", message: "Revoked" }));
+  visibilityState = "visible";
+  documentEvents.dispatchEvent(new Event("visibilitychange"));
+  // A normal snapshot may arrive before the coordinator's resume timer.
+  await controller.load(client, filters);
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(request).toHaveBeenCalledTimes(3);
+  expect(controller.result).toBeUndefined();
+  expect(controller.error).toContain("Revoked");
+  request.mockResolvedValueOnce(result);
+  controller.invalidate({ reason: "profile-identity" });
+  await vi.waitFor(() => expect(controller.error).toBeUndefined());
+  await vi.waitFor(() => expect(controller.loading).toBe(false));
+  expect(request).toHaveBeenCalledTimes(4);
+  expect(controller.result).toEqual(result);
 });

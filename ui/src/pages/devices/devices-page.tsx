@@ -14,9 +14,8 @@ import {
   hasOperatorReadAccess,
 } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
+import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
@@ -60,7 +59,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const [gatewaySystemInfo, setGatewaySystemInfo] = createSignal<SystemInfoResult | null>(null, {
     ownedWrite: true,
   });
-  const [desktopEnvironments, setDesktopEnvironments] = createSignal<EnvironmentSummary[]>([], {
+  const [desktopEnvironments, setDesktopEnvironments] = createSignal<
+    EnvironmentSummary[] | undefined
+  >(undefined, {
     ownedWrite: true,
   });
   // Event admission compares against the latest delivery, before Solid's next flush.
@@ -78,6 +79,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const [devicesRead, setDevicesRead] = createSignal<InventoryReadReceipt | null>(null);
   let canManagePairing = false;
   let canAdmin = false;
+  let roleAllowsAdmin: boolean | undefined;
   let canRead = true;
   let configGateway: ApplicationContext["gateway"] | null = null;
   let configClient: ApplicationGatewaySnapshot["client"] = null;
@@ -160,7 +162,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         setDesktopEnvironments(result.environments);
       }
     },
-    onError: () => setDesktopEnvironments([]),
+    onError: () => setDesktopEnvironments(undefined),
   });
   const systemInfoPolling = useVisiblePoll(60_000, refreshSystemInfo);
   const polling = useVisiblePoll(30_000, () => {
@@ -228,7 +230,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     publish: () => publishData(),
   });
   onSettled(() => {
-    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     syncConfigCustody();
     // Config receipts record which connection owns the accepted policy draft.
     const stopConfig = configProjection.subscribe(syncConfigCustody);
@@ -258,6 +259,9 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
 
   function setRouteData(data: DevicesRouteData | undefined) {
     applyRouteData(data);
+    if (data && gatewayBinding.connected && gatewayBinding.isRouteDataCurrent(data)) {
+      void context.runtimeConfig.refresh({ background: true }).catch(() => undefined);
+    }
     ensureInitialData();
     publishData();
   }
@@ -325,7 +329,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     }
     if (connected && !canLoadDesktopEnvironments()) {
       environmentsTask.cancel();
-      setDesktopEnvironments([]);
+      setDesktopEnvironments(undefined);
     }
     if (
       routeDataInitialized &&
@@ -374,6 +378,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       return;
     }
     const auth = snapshot.hello?.auth ?? null;
+    roleAllowsAdmin = auth?.roleAllowsAdmin;
     const nextRead = hasOperatorReadAccess(auth);
     const nextAdmin = hasOperatorAdminAccess(auth);
     const nextPairing = !auth || hasOperatorPairingAccess(auth);
@@ -488,10 +493,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
       void refreshDeviceInventory();
     }
-    const config = context.runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
-      void context.runtimeConfig.refresh();
-    }
+    // A shared display read after an offline mount still needs an editable draft.
+    void context.runtimeConfig.ensureLoaded().catch(() => undefined);
     if (canAdmin && !pageState.execApprovalsSnapshot && !pageState.execApprovalsLoading) {
       refreshExecApprovals();
     }
@@ -561,7 +564,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     // Binding disposal also resets request state; only live snapshots publish samples.
     updatePresence([]);
     setGatewaySystemInfo(null);
-    setDesktopEnvironments([]);
+    setDesktopEnvironments(undefined);
   }
 
   // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,
@@ -646,6 +649,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       canPairDevice: canAdmin,
       canManagePairing,
       canAdmin,
+      roleAllowsAdmin,
       configForm: bindingConfig(config),
       configLoading: config.configLoading,
       configSaving: config.configSaving,
@@ -707,17 +711,15 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   );
   return (
     <openclaw-devices-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
-            <div class="page-subtitle">
-              {subtitleForRoute("devices", t)}{" "}
-              <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
-            </div>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader
+        title={titleForRoute("devices", t)}
+        subtitle={
+          <>
+            {subtitleForRoute("devices", t)}{" "}
+            <LearnMoreLink url={"https://docs.openclaw.ai/nodes"} />
+          </>
+        }
+      />
       <SettingsWorkspace>
         <DevicesView
           {...view()}

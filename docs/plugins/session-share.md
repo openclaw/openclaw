@@ -1,5 +1,5 @@
 ---
-summary: "Share selected OpenClaw sessions read-only with a paired team Gateway"
+summary: "Share selected OpenClaw sessions through paired nodes or outbound Gateway reads"
 read_when:
   - Sharing personal OpenClaw sessions with a team Gateway
   - Pairing a node that exposes only session listings and transcripts
@@ -58,6 +58,87 @@ A valid, nonempty `share.groups` selection is always required. The optional pers
 Subagents, incognito sessions, drafts, and adopted rows from other session catalogs are never published, even when they belong to a selected group. This also excludes named or resumed sessions with recorded spawn lineage; a user-created fork remains eligible.
 
 With the default hybrid reload mode, the source Gateway applies plugin configuration automatically. Start or restart the source node host after changing plugin configuration. Changing filters or removing a session's matching group or person involvement revokes new and in-flight transcript reads; a receiver that already read text may retain that text.
+
+## Outbound Gateway pull
+
+A receiver can initiate an outbound WSS connection to a source Gateway instead
+of accepting an inbound source node. No listener or tunnel is added on the
+receiver. On the source, explicitly set
+`gateway.sessionControl.publicationReadEnabled: true` and the plugin option
+`share.gateway: true`, select `share.groups`,
+and set `share.involvingProfileId`. Add the exact approved reader device IDs to
+`share.gatewayDeviceIds`. Missing or empty device grants publish nothing over
+Gateway RPC. The device reads sessions matching both the groups and canonical
+person; it does not become that person. Requests cannot change these filters.
+Merged profile IDs remain supported; unknown or removed people publish nothing.
+
+The host switch is off unless it is exactly `true`. Plugin installation,
+authentication and stored grants do not turn it on. Disabling it retires current
+reader connections and pending disclosures, including when it is turned back on
+before their next check. Start a new connection after re-enabling. Unrelated
+configuration changes do not retire the host reader admission. Ordinary clients
+and node-based sharing are unchanged. An explicitly enabled reader connection
+may remain inert when no source plugin methods are available.
+
+On the receiver, configure a source under `gateways`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "session-share": {
+        enabled: true,
+        config: {
+          gateways: {
+            team: {
+              url: "wss://team.example.com",
+              label: "Team",
+              deviceIdentityKey: "session-share:team",
+              deviceToken: { source: "env", provider: "default", id: "TEAM_DEVICE_TOKEN" },
+              cloudflareAccess: {
+                clientId: { source: "env", provider: "default", id: "TEAM_ACCESS_ID" },
+                clientSecret: { source: "env", provider: "default", id: "TEAM_ACCESS_SECRET" },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Credentials must use SecretRefs and remain on the receiver Gateway. The client
+requests exactly `operator.session-share.read` and does not modify shared device-auth
+storage. Preprovision a dedicated named, non-primary device identity and approve
+its exact singleton publication-read token through the source's existing device
+pairing owner. Broad operator tokens are rejected even when the client requests
+only the publication scope. Do not reuse a human operator's device identity:
+the device store keeps one token per role.
+
+`deviceIdentityKey` selects that existing identity from the receiver's credential
+store. Missing identities fail closed; this feature creates no identities,
+pairing requests, or credentials and never falls back to the primary identity or
+cached operator token. A Cloudflare service token admits the WSS connection at
+the edge; it does not authorize OpenClaw session access. Both layers must succeed.
+
+Changing the source URL, identity selector, credential references or their provider
+configuration retires that outbound connection until the service restarts.
+Unrelated configuration reloads do not retire it. Source filter/device-grant and
+token changes are checked before disclosure; an already delivered transcript
+cannot be recalled.
+
+Gateway sources appear alongside paired nodes in the existing read-only session
+catalog. Each catalog poll requests a fresh filtered page from the source.
+Reads recheck the same source group and canonical-profile boundary. Disconnects
+and reconnects invalidate in-flight replies. An admitted read may finish after a
+configuration change; the next request requires restarting the service. These
+connections expose no steering or other mutation operation.
+
+The console refreshes a selected read-only Gateway transcript every five seconds
+while its pane is visible. Only one read runs at a time. Polling retains loaded
+older history when the new page overlaps it; a reset or gap replaces that window.
+Hiding the pane or losing its connection retires pending reads.
 
 ## Enable the receiver and pair the source
 
@@ -175,6 +256,6 @@ Check the configured node ID and `linkGitHubIdentities`. Both profiles need the 
 
 - [Connect a node](/cli/connect)
 - [Node command allowlists](/nodes#restrict-the-node-command-surface)
-- [Team setup](/start/teams)
+- [Multiplayer](/start/multiplayer)
 - [Beam](/plugins/beam)
 - [User model](/concepts/user-model)

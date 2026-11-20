@@ -44,6 +44,12 @@ aborts package-file reads and stops and joins prerequisite subprocesses. Doctor
 closes its owned resources, records the signal exit status, and lets Node exit
 naturally so V8 can finish worker cleanup safely.
 
+If a command-owned handle nobody closed keeps Doctor or `openclaw update repair`
+alive after its work has settled, stderr names the active resources 10 seconds
+later and, on Linux and macOS, the process ends with `SIGTERM` (exit status 143).
+That line means the command's work finished; include it in any bug report. On
+Windows the line is reported and the process keeps waiting.
+
 Before maintenance begins, package-root discovery, source-config loading, and
 Tailscale prerequisite inspection each have a 60-second asynchronous wait limit.
 A timeout names the phase and recommends `OPENCLAW_DEBUG=1 openclaw doctor --lint`

@@ -13,3 +13,10 @@ export type SessionCreationReceipt = {
   authorization: SessionCreationOperation["authorization"];
   expiresAt: number;
 };
+
+/** Storage witnessed rejection before installing the entry; absence alone is never this proof. */
+export class SessionEntryCreationNotCommittedError extends Error {
+  constructor(cause: unknown) {
+    super("session entry creation did not commit", { cause });
+  }
+}

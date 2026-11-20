@@ -67,31 +67,31 @@ export function bindPluginToolCallbacks(
     return result;
   };
   const prepare = tool.prepareArguments;
+  const executeBound = async (...args: Parameters<AnyAgentTool["execute"]>) => {
+    const [toolCallId, params, signal, onUpdate] = args;
+    const pending =
+      memoryAudience &&
+      resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId === entry.pluginId
+        ? prepareMemoryAudienceRead(memoryAudience)
+        : undefined;
+    if (pending) {
+      await racePromiseWithAbortSignal(pending, signal);
+    }
+    // Cancellation retains this context after the instance call has settled.
+    const result = await withPluginRuntimePluginScope(
+      { pluginId: entry.pluginId, pluginSource: entry.source },
+      () =>
+        invoke(() => {
+          const execute = (executionSignal?: AbortSignal) =>
+            tool.execute(toolCallId, params, executionSignal, onUpdate);
+          return signal ? runWithTrackedCancellation(signal, execute) : execute();
+        }),
+      registry,
+    );
+    return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
+  };
   const callbacks = {
-    execute: async (...args: Parameters<AnyAgentTool["execute"]>) => {
-      const [toolCallId, params, signal, onUpdate] = args;
-      const pending =
-        memoryAudience &&
-        resolveMemoryCapabilityRegistration(registry.memoryCapabilities)?.pluginId ===
-          entry.pluginId
-          ? prepareMemoryAudienceRead(memoryAudience)
-          : undefined;
-      if (pending) {
-        await racePromiseWithAbortSignal(pending, signal);
-      }
-      // Cancellation retains this context after the instance call has settled.
-      const result = await withPluginRuntimePluginScope(
-        { pluginId: entry.pluginId, pluginSource: entry.source },
-        () =>
-          invoke(() => {
-            const execute = (executionSignal?: AbortSignal) =>
-              tool.execute(toolCallId, params, executionSignal, onUpdate);
-            return signal ? runWithTrackedCancellation(signal, execute) : execute();
-          }),
-        registry,
-      );
-      return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
-    },
+    execute: executeBound,
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }
       : {}),

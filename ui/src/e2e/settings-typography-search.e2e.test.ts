@@ -60,7 +60,10 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifacts, "search-before-result.png") });
           }
-          const result = sidebar.getByRole("link", { name: destination, exact: true });
+          const result = sidebar.getByRole("link", {
+            name: `${destination} Appearance`,
+            exact: true,
+          });
           await expect(result).toBeVisible();
           await result.click();
           await expect(page).toHaveURL(/\/settings\/appearance\?/);

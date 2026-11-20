@@ -219,7 +219,7 @@ Moved to [Configuration — runtime basics](/gateway/config-runtime).
 
 ## Automations (`cron`)
 
-Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.failureAlert`.
+Moved to [Configuration — automations and media template variables](/gateway/config-automation). Sections: `cron.delivery`, `cron.agents`, and `cron.creators`, `cron.failureAlert`.
 
 <a id="cronfailurealert"></a>
 
@@ -238,3 +238,11 @@ Moved to [Configuration — environment, secrets, and includes](/gateway/config-
 - [Doctor](/gateway/doctor)
 - [Cloud Workers](/gateway/cloud-workers) — the feature these worker settings configure
 - [`openclaw configure`](/cli/configure) — interactive prompts that edit these settings without hand-editing the file
+
+### Publication reader opt-in
+
+`gateway.sessionControl.publicationReadEnabled` permits restricted publication-reader
+connections only when set to `true`. It defaults to off and does not supply device
+or source-publication permissions. Disabling it retires existing reader admissions
+and pending disclosures, even across a subsequent re-enable. Reconnect after
+re-enabling. See [Session Share](/plugins/session-share#outbound-gateway-pull).

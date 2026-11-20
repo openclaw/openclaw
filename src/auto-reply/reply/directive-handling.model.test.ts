@@ -137,6 +137,7 @@ import {
   useSessionStoreTempDirs,
 } from "../../test-utils/session-state-cleanup.js";
 import type { ElevatedLevel } from "../thinking.js";
+import { registerModelRuntimeDirectiveTests } from "./directive-handling.model-runtime.test-support.js";
 import { registerModelStatusDirectiveTests } from "./directive-handling.model-status.test-support.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 
@@ -823,6 +824,13 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     );
   }
 
+  registerModelRuntimeDirectiveTests({
+    createSessionEntry,
+    runHandleCommand,
+    refreshQueuedFollowupSession: queueMocks.refreshQueuedFollowupSession,
+    persistStickyModelSelection: stickyModelMock.persistBestEffort,
+  });
+
   it("preserves a compatible auth profile for a mixed model directive", async () => {
     const sessionEntry = createSessionEntry({
       providerOverride: "openai",
@@ -845,36 +853,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.authProfileOverride).toBe("team:prod");
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(sessionEntry.authProfileOverrideCompactionCount).toBe(2);
-  });
-
-  it("preserves an explicit runtime pin when a model switch omits --runtime", async () => {
-    const sessionEntry = createSessionEntry({
-      agentRuntimeOverride: "codex",
-      nativeRuntimeConsent: "codex",
-    });
-    await runHandleCommand("/model openai/gpt-4o", { sessionEntry });
-
-    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
-    expect(sessionEntry.nativeRuntimeConsent).toBe("codex");
-  });
-
-  it("rejects model and runtime changes for model-locked sessions", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-6",
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "codex",
-      modelSelectionLocked: true,
-    });
-    const initialSessionEntry = { ...sessionEntry };
-
-    const result = await runHandleCommand("/model openai/gpt-4o --runtime openclaw", {
-      sessionEntry,
-    });
-
-    expect(result?.text).toBe(MODEL_SELECTION_LOCKED_MESSAGE);
-    expect(result?.isError).toBe(true);
-    expect(sessionEntry).toEqual(initialSessionEntry);
   });
 
   it("rechecks a newly persisted model lock before committing directive changes", async () => {

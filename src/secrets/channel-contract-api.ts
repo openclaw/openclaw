@@ -6,7 +6,7 @@ import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-met
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { getPluginCacheRoot } from "../plugins/plugin-cache.js";
 import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
@@ -147,6 +147,7 @@ export function loadChannelSecretContractApi(params: {
   env?: NodeJS.ProcessEnv;
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   bundledOnly?: boolean;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): BundledChannelSecretContractApi | undefined {
   const bundled = loadBundledChannelSecretContractApi(params.channelId);
   if (bundled || params.bundledOnly) {
@@ -161,7 +162,8 @@ export function loadChannelSecretContractApi(params: {
     const channelId = params.channelId;
     const config = params.config;
     const loadablePluginOrigins = params.loadablePluginOrigins;
-    const manifestRegistry = resolveConfigWidePluginManifestRegistry({ config, env });
+    const manifestRegistry =
+      params.manifestRegistry ?? resolveConfigWidePluginManifestRegistry({ config, env });
     records = manifestRegistry.plugins
       .filter((record) => record.origin !== "bundled")
       .filter((record) => recordOwnsChannel(record, channelId))

@@ -50,26 +50,14 @@
   }
 }
 
-.session-hovercard__commentary,
-.session-hovercard__excerpt {
+/* The Markdown owner supplies only the retained preview, including its ellipsis. */
+.session-hovercard__commentary {
   max-height: 4.5em;
+  overflow: clip;
   color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-/* The Markdown owner supplies only the retained preview, including its ellipsis. */
-.session-hovercard__commentary {
-  overflow: clip;
-}
-
-.session-hovercard__excerpt {
-  display: -webkit-box;
-  overflow: clip;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
 }
 
 .session-hovercard__commentary .session-progress-card__markdown {
@@ -415,28 +403,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__deletions {
   color: var(--danger);
-}
-
-.session-hovercard__error {
-  display: grid;
-  grid-template-columns: var(--session-hovercard-context-icon-size) minmax(0, 1fr);
-  align-items: start;
-  gap: var(--space-2);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.session-hovercard__error-icon {
-  white-space: normal;
-}
-
-.session-hovercard__error-icon svg {
-  display: block;
-  width: var(--session-hovercard-context-icon-size);
-  height: var(--session-hovercard-context-icon-size);
 }
 
 .session-hovercard__pr-number {

@@ -11,9 +11,14 @@ export function renderUserFacingText(
 }
 
 /** Only an explicit preflight copy can replace private diagnostic detail. */
-export function renderAgentHarnessPreflightUserMessage(error: unknown): string | undefined {
-  if (!isAgentHarnessPreflightError(error) || error.userMessage === undefined) {
+export function renderAgentHarnessPreflightUserMessage(
+  error: unknown,
+  options?: { audience: "desktop" },
+): string | undefined {
+  if (!isAgentHarnessPreflightError(error)) {
     return undefined;
   }
-  return renderUserFacingText(error.userMessage, { errorContext: true });
+  const message =
+    (options?.audience === "desktop" ? error.desktopMessage : undefined) ?? error.userMessage;
+  return message === undefined ? undefined : renderUserFacingText(message, { errorContext: true });
 }

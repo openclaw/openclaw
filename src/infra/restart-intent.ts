@@ -25,7 +25,6 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { prepareOpenClawStateReadSource } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { sleep } from "../utils/sleep.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { readLockPayloadSync, resolveGatewayLockPaths } from "./gateway-lock.js";
 import { readGatewayOwnerLeaseAsync } from "./gateway-owner-lease.js";
 import { readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
@@ -36,6 +35,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { GatewayRestartPreparationError } from "./restart-intent-error.js";
 import {
   normalizeRestartIntentReason,
@@ -44,7 +44,7 @@ import {
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -232,6 +232,14 @@ function readLegacyGatewayRestartLockSync(env: NodeJS.ProcessEnv) {
 
 /** Called only for stopped native service state while physical cleanup exclusion is held. */
 function assertLegacyGatewayStoppedSync(env: NodeJS.ProcessEnv) {
+  // Doctor and embedded agents project this lock too. Killed, they leave it behind, and only a
+  // Gateway can serve; refusing here strands the stopped service an interrupted update must restart.
+  const { role, pid: ownerPid } =
+    readLockPayloadSync(resolveGatewayLockPaths(env).stateLockPath, true) ?? {};
+  const pid = asPositiveSafeInteger(ownerPid);
+  if (role !== undefined && role !== "gateway" && pid !== undefined && isPidDefinitelyDead(pid)) {
+    return;
+  }
   const legacy = readLegacyGatewayRestartLockSync(env);
   if (!legacy) {
     return;

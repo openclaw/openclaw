@@ -4,7 +4,6 @@ import {
 } from "../../packages/media-generation-core/src/normalization.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import type {
   getMusicGenerationProvider,
   listMusicGenerationProviders,
@@ -14,6 +13,7 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
+import { createCapabilityProviderLookup } from "../plugins/provider-registry-shared.js";
 import {
   resolveMusicGenerationModeCapabilities,
   validateMusicGenerationDuration,
@@ -42,7 +42,7 @@ export async function generateMusic(
   }
   return withAcquiredPluginCapabilityProviders(
     { key: "musicGenerationProviders", cfg: params.cfg },
-    (providers) => runMusicGeneration(params, createMediaProviderLookup(providers)),
+    (providers) => runMusicGeneration(params, createCapabilityProviderLookup(providers)),
   );
 }
 

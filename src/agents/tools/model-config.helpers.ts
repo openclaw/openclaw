@@ -81,9 +81,7 @@ export function hasAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
@@ -111,7 +109,6 @@ export function hasAuthForProvider(params: {
   }
   return hasAuthProfileForProvider({
     provider: params.provider,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     capability: params.capability,
   });
@@ -119,9 +116,7 @@ export function hasAuthForProvider(params: {
 
 export function hasAuthProfileForProvider(params: {
   provider: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
 }): boolean {
@@ -150,7 +145,6 @@ export function hasAuthProfileForProvider(params: {
 export async function prepareToolAuthProfileStore(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): Promise<AuthProfileStore | undefined> {
   return (
     options?.authProfileStore ??
@@ -333,7 +327,6 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
   resolveCodexMediaRoute?: () => { model: string } | undefined;
@@ -406,7 +399,6 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean | undefined;
@@ -430,7 +422,6 @@ export function buildToolModelConfigFromCandidates(params: {
         provider,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
         authStore: params.authStore,
       });
     if (!provider || !providerConfigured) {

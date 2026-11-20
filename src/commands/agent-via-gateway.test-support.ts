@@ -1,8 +1,6 @@
-import path from "node:path";
 import { GatewayPendingRequests } from "../../packages/gateway-client/src/pending-request.js";
 import type { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayLockOptions } from "../infra/gateway-lock.js";
 
 export async function settleGatewayAgentRequest(params: {
   response: Pick<
@@ -34,23 +32,6 @@ export async function settleGatewayAgentRequest(params: {
     pending.flush(requestError);
   }
   return await result;
-}
-
-export function createLocalGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    timeoutMs: 100,
-    ...overrides,
-  };
 }
 
 export function createExplicitSystemAgentConfig(

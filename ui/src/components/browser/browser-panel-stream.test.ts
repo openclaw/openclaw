@@ -22,7 +22,7 @@ import {
 import { screencastFrame, TestScreencastSocket } from "./browser-screencast-test-support.ts";
 
 const NEXT_URL = "https://example.test/next";
-const otherRoute = { target: "host", profile: "other" } as const;
+const otherRoute = { target: "host", profile: "other", targetId: "raw-tab-a" } as const;
 const nextPage = { url: NEXT_URL, title: "Next" };
 const nextMeta = JSON.stringify({ type: "meta", ...nextPage });
 const nextReady = JSON.stringify({ type: "ready", targetId: "raw-a", ...nextPage });
@@ -81,9 +81,8 @@ describe("Browser panel streaming", () => {
       expect(controller.urlDraft).toBe(NEXT_URL);
     } else {
       socket.disconnect(1006);
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000, calls, 1);
       expect(calls("/screenshot")).toHaveLength(0);
-      expect(calls("/screencast")).toHaveLength(1);
     }
     expect(controller.view).toBe(pinnedView);
     expectFrame(controller, 0);
@@ -302,9 +301,7 @@ describe("Browser panel streaming", () => {
     expect(controller.view?.dataUrl).toMatch(/^data:/);
     expect(revokedUrls).toEqual(["blob:frame-0"]);
     expect(calls("/screencast")).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(10_000);
-    await flush();
-    expect(calls("/screencast")).toHaveLength(2);
+    await advance(10_000, calls, 2);
     sockets[1]!.disconnect(1006);
     await flush();
     expect(calls("/screenshot")).toHaveLength(2);
@@ -369,7 +366,10 @@ describe("Browser panel streaming", () => {
     const { controller, calls } = setup(async (envelope) =>
       envelope.path === "/navigate" ? { targetId: "raw-a", url: NEXT_URL } : undefined,
     );
+    controller.operations.resetRoute(otherRoute);
     const initialSocket = await start(controller);
+    void controller.selectTab(otherRoute.targetId, otherRoute, { focusBrowserTab: false });
+    expect(initialSocket.close).not.toHaveBeenCalled();
     if (failed) {
       initialSocket.disconnect(1006);
       await vi.advanceTimersByTimeAsync(0);
@@ -401,6 +401,58 @@ describe("Browser panel streaming", () => {
     expectFrame(controller, 2, NEXT_URL, { cssWidth: 300, title: "Next", url: NEXT_URL });
     expect(revokedUrls).toContain("blob:frame-0");
     expect(createdUrls.filter((url) => !revokedUrls.includes(url))).toEqual(["blob:frame-2"]);
+  });
+
+  it.each(["viewport sync", "panel refresh"])(
+    "keeps an input's policy error visible through %s while frames stream",
+    async (work) => {
+      const { controller, resizes } = setup(async (request) => {
+        if (request.path === "/operator/input") {
+          throw new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "browser navigation blocked by policy",
+            details: { reason: "navigation_blocked" },
+          });
+        }
+        return undefined;
+      });
+      if (work === "viewport sync") {
+        controller.handleViewportResize(640, 480);
+      }
+      const socket = await start(controller);
+      await vi.advanceTimersByTimeAsync(400);
+      controller.input.handleViewportKeydown(
+        new KeyboardEvent("keydown", { key: "a", cancelable: true }),
+      );
+      await flush();
+      const policyError = controller.errorText;
+      expect(policyError).toContain("navigation rules block this address");
+      if (work === "panel refresh") {
+        void controller.refreshAll();
+      }
+      for (let second = 0; second < 10; second += 1) {
+        await receive(
+          socket,
+          work === "viewport sync" ? screencastFrame(PAGE_URL, 1300, 800) : screencastFrame(),
+        );
+        await vi.advanceTimersByTimeAsync(1000);
+      }
+      if (work === "viewport sync") {
+        expect(resizes().length).toBeGreaterThan(1);
+      }
+      expect(controller.errorText).toBe(policyError);
+    },
+  );
+
+  it("lets an explicit refresh replace an action's error", async () => {
+    const { controller } = setup();
+    await controller.runAction(async () => {
+      throw new Error("Synthetic action failure");
+    });
+    expect(controller.errorText).toContain("Synthetic action failure");
+    void controller.retryEmptyError();
+    await flush();
+    expect(controller.errorText).toBeNull();
   });
 
   it("does not let continuous mismatched frames postpone the debounced viewport sync", async () => {

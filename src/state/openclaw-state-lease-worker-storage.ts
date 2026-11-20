@@ -72,6 +72,7 @@ export async function acquireLease(
         { signal },
       ),
     {
+      signal,
       existingOnly: database.schemaPolicy === "existing",
       assertCurrent: assertAdmission,
       createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
@@ -107,13 +108,18 @@ export async function prepareOpenClawStateLeaseStorageRuntime(): Promise<void> {
 function admittedWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: LeaseWorkerOperation<T>,
+  signal?: AbortSignal,
 ) {
   return async (admission: WorkerLeaseScope): Promise<T> => {
     const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
     return runOpenClawStateWorkerOperation(
       context,
       (scope) => operation(scope, admission.identity),
-      { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
+      {
+        signal,
+        assertCurrent: admission.assertCurrent,
+        createAdmission: admission.createAdmission,
+      },
     );
   };
 }
@@ -146,20 +152,23 @@ export function createOpenClawStateLeaseWorkerStorage(
     ): Promise<OpenClawStateLeaseAcquisition> {
       return owner.runLifecycle(
         "acquire",
-        admittedWorkerOperation(context, (scope, identity) =>
-          scope.execute(
-            {
-              type: "stateLease.acquire",
-              input: {
-                identity,
-                leaseMs,
-                operationLabel,
-                processBound,
-                ...(observeExpiry ? { observeExpiry: true as const } : {}),
+        admittedWorkerOperation(
+          context,
+          (scope, identity) =>
+            scope.execute(
+              {
+                type: "stateLease.acquire",
+                input: {
+                  identity,
+                  leaseMs,
+                  operationLabel,
+                  processBound,
+                  ...(observeExpiry ? { observeExpiry: true as const } : {}),
+                },
               },
-            },
-            { signal },
-          ),
+              { signal },
+            ),
+          signal,
         ),
       );
     },

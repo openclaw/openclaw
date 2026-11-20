@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
 import {
   receiveMessageOnPort,
   type MessagePort,
@@ -35,8 +36,22 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   private readonly diagnosticName: string;
   threadId = 0;
   started = false;
+  /** Where this worker's code lives; eval and non-file workers have no path. */
+  get sourcePath(): string | undefined {
+    if (this.evalSource) {
+      return undefined;
+    }
+    if (!(this.filename instanceof URL)) {
+      return this.filename;
+    }
+    return this.filename.protocol === "file:" ? fileURLToPath(this.filename) : undefined;
+  }
   executionStopped = false;
-  private executionExitCode: number | undefined;
+  executionExitCode: number | undefined;
+  terminalFailure?: Error;
+  get taskChannelFailure(): Error | undefined {
+    return this.taskPort?.failure;
+  }
   private referenced = true;
   private stopping = false;
   private joined = false;
@@ -388,6 +403,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   ownerFailed(error: Error): void {
     this.runInContext(() => {
+      this.terminalFailure ??= error;
       this.taskPort?.close();
       this.stopping = false;
       this.rejectSamples(error);
@@ -398,6 +414,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
 
   ownerJoined(error: Error): void {
     this.runInContext(() => {
+      this.terminalFailure ??= error;
       this.stopping = false;
       this.supervisorJoined = true;
       this.rejectSamples(error);
@@ -489,10 +506,9 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     } else if (reply.type === "resource-message") {
       this.resourceBinding?.receive(reply.response);
     } else if (reply.type === "error" || reply.type === "messageerror") {
-      this.emit(
-        reply.type,
-        toErrorObject(decodeNativeWorkerFailure(reply.error), "Native worker failed"),
-      );
+      const error = toErrorObject(decodeNativeWorkerFailure(reply.error), "Native worker failed");
+      this.terminalFailure ??= error;
+      this.emit(reply.type, error);
     } else if (reply.type === "create-error") {
       // A constructor refusal has no native Worker to join and emits no fake exit.
       this.joined = true;

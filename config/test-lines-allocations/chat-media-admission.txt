@@ -1,2 +1,0 @@
-7
-# Protect fixed remote preview geometry across decode and cached first paint.

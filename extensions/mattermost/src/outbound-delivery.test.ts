@@ -10,6 +10,7 @@ import {
   type PluginHookRegistration,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../runtime-api.js";
 
 const sendMessageMattermostMock = vi.hoisted(() => vi.fn());
 
@@ -31,13 +32,13 @@ function installSendingHook(result: { content?: string; cancel?: boolean }) {
   return handler;
 }
 
-const deliver = (text: string, options: { to?: string; accountId?: string; skipQueue?: boolean }) =>
+const deliver = (text: string, opts: Partial<Parameters<typeof sendDurableMessageBatch>[0]>) =>
   sendDurableMessageBatch({
     cfg: {},
     channel: "mattermost",
     to: "channel:CHAN1",
     payloads: [{ text }],
-    ...options,
+    ...opts,
   });
 
 beforeEach(() => {
@@ -57,16 +58,15 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it.each([
-  ["internal tool traces", "Done.\n⚠️ 🛠️ `search repos (agent)` failed", "Done."],
-  ["ordinary assistant prose", "The pipeline has 3 open deals.", "The pipeline has 3 open deals."],
-])("sends sanitized %s through the channel handler", async (_name, text, expected) => {
-  await deliver(text, { to: "channel:team-1", skipQueue: true });
-  expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-    "channel:team-1",
-    expected,
-    expect.objectContaining({ cfg: {} }),
-  );
+const splitCfg = { channels: { mattermost: { textChunkLimit: 14 } } };
+
+it.each<[string, string, string[], OpenClawConfig]>([
+  ["internal tool traces", "Done.\n⚠️ 🛠️ `search repos (agent)` failed", ["Done."], {}],
+  ["ordinary prose", "The pipeline has 3 open deals.", ["The pipeline has 3 open deals."], {}],
+  ["fence", "```py\n  a\n  b\n```\n\nend", ["```py\n  a\n```", "```py\n  b\n```", "end"], splitCfg],
+])("sends sanitized %s through the channel handler", async (_name, text, expected, cfg) => {
+  await deliver(text, { to: "channel:team-1", skipQueue: true, cfg });
+  expect(sendMessageMattermostMock.mock.calls.map((call) => call[1])).toEqual(expected);
 });
 
 it("applies a message rewrite exactly once before the provider post", async () => {

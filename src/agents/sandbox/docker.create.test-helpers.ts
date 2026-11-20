@@ -114,17 +114,21 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
       }
       return spawnState.containerExists ? result(0, `${spawnState.inspectRunning}\n`) : missing();
     }
-    if (
-      format ===
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}'
-    ) {
+    if (format?.includes('"State":{{json .State}}')) {
       if (spawnState.inspectError) {
         return result(125, "", spawnState.inspectError);
       }
       return spawnState.containerExists
         ? result(
             0,
-            `${"c".repeat(64)}\n${spawnState.inspectRunning}\n${spawnState.readOnlyRoot}\n${spawnState.labelHash}\n`,
+            JSON.stringify({
+              Id: "c".repeat(64),
+              State: { Running: spawnState.inspectRunning, Paused: false },
+              ReadonlyRootfs: spawnState.readOnlyRoot,
+              Labels: { "openclaw.configHash": spawnState.labelHash },
+              Mounts: JSON.parse(spawnState.mounts),
+              Tmpfs: spawnState.tmpfs,
+            }),
           )
         : missing();
     }
@@ -207,7 +211,6 @@ export function createSandboxContainerTestHarness() {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   beforeAll(async () => {
-    vi.resetModules();
     // mock-isolation: keep container registration in the suite-owned registry fixture.
     vi.doMock("./registry.js", () => registryMocks);
     // mock-isolation: route runtime logging and exits to fixture spies.
@@ -218,8 +221,6 @@ export function createSandboxContainerTestHarness() {
       ...(await importOriginal<typeof import("../../process/exec.js")>()),
       spawnCommand: spawnDockerProcess,
     }));
-    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
-    docker = await import("./docker.js");
   });
 
   async function computeTestSandboxHash(input: Parameters<typeof computeSandboxConfigHash>[0]) {
@@ -258,7 +259,10 @@ export function createSandboxContainerTestHarness() {
     return createCall;
   }
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ prepareSandboxMountPlan } = await import("./mount-plan.js"));
+    docker = await import("./docker.js");
     Object.assign(spawnState, freshSpawnState());
     resolveDockerSourceNamespace.mockResolvedValue(undefined);
     registryMocks.readRegistryEntry.mockClear();

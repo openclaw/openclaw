@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isArchiveHeld, subscribeHeldArchives } from "../../components/session-archive-hold.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/navigation.ts";
@@ -32,6 +33,15 @@ export function chatSessionPresentationTitle(
   return presentation
     ? resolveSessionDisplayName(key, presentation)
     : resolveSessionDisplayName(row?.key ?? key, row);
+}
+
+/** The presentation key changes with the roster and when a held archive starts sending. */
+export function watchPresentation(
+  sessions: Pick<ApplicationContext["sessions"], "subscribe">,
+  notify: () => void,
+): () => void {
+  const stops = [sessions.subscribe(notify), subscribeHeldArchives(notify)];
+  return () => stops.forEach((stop) => stop());
 }
 
 /** Capture rendered roster facts without retaining a mutable row as the previous value. */
@@ -67,6 +77,7 @@ export function chatSessionPresentationKey(
       scopedAgentParamsForSession(state, state.sessionKey).agentId,
     ),
     state.sessions.archiveVisibility(selected?.key ?? state.sessionKey),
+    isArchiveHeld(selected?.key ?? state.sessionKey),
     collectKnownSessionGroups(publication.groups, publication.result?.sessions ?? []),
     publication.groupSettings,
     [...approvalSources].map((key) => rows.find((row) => areUiSessionKeysEquivalent(row.key, key))),

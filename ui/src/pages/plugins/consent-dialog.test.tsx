@@ -5,11 +5,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { createInspectResult } from "./plugins-page.test-support.ts";
+import { PluginArtTile } from "./presentation.tsx";
 
 type ConsentProps = Parameters<typeof PluginConsentDialog>[0];
 
@@ -156,7 +154,9 @@ describe("renderPluginConsentDialog", () => {
         "calendar-cli",
         "schedule",
         "Dangerous config flags calendar.allowShell",
-        "Prompt injection Blocked (set in config)",
+        "Modify prompts",
+        "Allows this plugin to add or change the context and instructions sent to the model, which can influence its responses. Only allow this for plugins you trust.",
+        "Blocked (set in config)",
         "Conversation access Off (default)",
         "Off by default for external plugins.",
         "Allowed models: model-a, model-b",

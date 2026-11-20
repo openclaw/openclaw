@@ -190,7 +190,7 @@ suite.define(() => {
         const item = await openMenu(page, ".agent-chat__input");
         await expect.poll(() => item.getAttribute("aria-checked")).toBe("false");
         expect(await item.isDisabled()).toBe(false);
-        expect(await tooltipTitleText(item)).toContain("remove");
+        expect(await tooltipTitleText(item)).toContain("Remove");
         await item.click();
         await expect.poll(readOverrides).toEqual(siblings);
         await expect.poll(() => item.isDisabled()).toBe(true);

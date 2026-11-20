@@ -15,6 +15,7 @@ import type {
   ControlUiView,
   ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
+import { formatUiError } from "../lib/format-error.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -56,7 +57,10 @@ function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) 
   );
 }
 
-const views = new WeakMap<HTMLElement, { focus(options?: FocusOptions): void }>();
+const views = new WeakMap<
+  HTMLElement,
+  { connected(): void; focus(options?: FocusOptions): void }
+>();
 
 function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const context = useOptionalApplication();
@@ -70,6 +74,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   let handle: ReturnType<ControlUiView<unknown>>;
   let viewContext: ControlUiViewContext<unknown> | undefined;
   let disposed = false;
+  let pendingMount: (() => void) | undefined;
   const defaultContainers = new Map<HTMLElement, () => void>();
   host.style.display = "contents";
   const resolveRegistration = (): ViewRegistration | undefined => {
@@ -86,6 +91,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   registration = resolveRegistration();
   const [available, setAvailable] = createSignal(Boolean(registration));
   const unmount = () => {
+    pendingMount = undefined;
     mountAbort?.abort();
     mountAbort = undefined;
     const previous = handle;
@@ -189,7 +195,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   const fail = (failure: unknown) => {
     const pluginId = registration?.pluginId ?? "host";
     unmount();
-    setError(failure instanceof Error ? failure.message : String(failure));
+    setError(formatUiError(failure));
     context?.plugins.reportError(pluginId, failure);
   };
   const update = () => {
@@ -280,7 +286,14 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
     const viewOwner = getOwner();
     let container!: HTMLDivElement;
     onSettled(() => {
-      runWithOwner(viewOwner, () => mount(container));
+      // A routed page can settle inside a workspace that its replacement inserts later.
+      pendingMount = () => {
+        pendingMount = undefined;
+        runWithOwner(viewOwner, () => mount(container));
+      };
+      if (host.isConnected) {
+        pendingMount();
+      }
     });
     return (
       <div
@@ -294,6 +307,7 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
   }
   onSettled(() => {
     views.set(host, {
+      connected: () => pendingMount?.(),
       focus(options) {
         if (handle?.focus) {
           handle.focus();
@@ -358,6 +372,7 @@ export const PluginView = defineSolidBridge<
     mountReplacementCompanion: { default: undefined, attribute: false },
     presented: { default: true, type: Boolean },
   },
+  connected: (host) => views.get(host)?.connected(),
   methods: { focus: (host, options) => views.get(host)?.focus(options) },
 });
 

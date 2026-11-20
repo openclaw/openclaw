@@ -57,6 +57,8 @@ export type DiscordComponentSelectSpec = {
   maxValues?: number;
   options?: DiscordComponentSelectOption[];
   allowedUsers?: string[];
+  /** Internal use only: bypass dynamic component ids with a fixed custom id. */
+  internalCustomId?: string;
 };
 
 export type DiscordComponentSectionAccessory =

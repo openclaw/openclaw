@@ -26,10 +26,14 @@ export function replaceChatStream(
   state: Pick<StreamRolloverState, "chatRunId" | "chatStream" | "chatStreamSegments">,
   text: string | null,
 ): void {
-  state.chatStreamSegments = state.chatStreamSegments?.filter(
+  const segments = state.chatStreamSegments?.filter(
     (segment) =>
       !state.chatRunId || segment.runId !== state.chatRunId || streamSegmentHasItemId(segment),
   );
+  // An unchanged history refresh must not invalidate the full transcript projection.
+  if (segments?.length !== state.chatStreamSegments?.length) {
+    state.chatStreamSegments = segments;
+  }
   state.chatStream = text;
 }
 

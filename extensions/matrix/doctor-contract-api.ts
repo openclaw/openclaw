@@ -7,6 +7,7 @@ import {
   decodeUtf8Input,
   Utf8InputError,
   type PluginDoctorStateMigration,
+  type PluginDoctorRecoveryCliRegistrar,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { matrixAccountStateSchemaMigration } from "./src/matrix/account-state-schema-doctor.js";
@@ -40,6 +41,11 @@ import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
 import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./config-doctor-api.js";
+
+export const registerRecoveryCli: PluginDoctorRecoveryCliRegistrar = async (params) => {
+  const { registerMatrixDoctorCommands } = await import("./src/cli-doctor.js");
+  registerMatrixDoctorCommands(params);
+};
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 

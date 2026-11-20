@@ -4,8 +4,9 @@
 
 ## Checkout and source
 
-- **Before the first `review-init`, run `scripts/pr workspace <pr>`.** Check its physical `canonicalRoot`, `worktree`, and `artifactDirectory` against the actual file-tool read/write scope, not just shell permissions or the current task cwd. Linked task worktrees still use the canonical repository’s `.worktrees`; `OPENCLAW_PR_TOOLING_ROOT` selects dependencies only. The preflight reports paths without GitHub calls, PR locks, workflow admission, dependency installation, or checkout creation; it does not grant access.
-- If those paths are outside scope, choose a viable route **before init**: use an already operator-provisioned canonical `.worktrees` symlink whose physical target is allowed, or a fresh full ordinary checkout inside the allowed workspace. Preserve full history/blobs. Do not replace or relocate a shared `.worktrees` directory for one task. Never clone away an active/uncertain operation or retry an uncertain merge in a new lock namespace. See [workspace preflight](../../../../docs/reference/scripts/pr-tooling.md#qualify-the-workspace-before-review).
+- **Reuse the existing base and assigned task worktree; do not clone again for main, review, or landing history.** Before the first `review-init`, run `scripts/pr workspace <pr>`. Check its physical `canonicalRoot`, `worktree`, and `artifactDirectory` against the actual file-tool read/write scope, not just shell permissions or the current task cwd. `review-init` provisions its own PR worktree sharing the base's objects. Linked task worktrees still use the canonical repository’s `.worktrees`; `OPENCLAW_PR_TOOLING_ROOT` selects dependencies only. The preflight reports paths without GitHub calls, PR locks, workflow admission, dependency installation, or checkout creation; it does not grant access.
+- For missing history, deepen the existing clone rather than making a fresh full clone. Keep `blob:none`; use the [history recovery recipe](../../../../docs/reference/scripts/pr-tooling.md#reuse-the-base-and-fetch-only-needed-history). Managed shallow bases use their Doctor/lifecycle owner; task-owned ordinary clones can deepen just the needed refs. Diagnose a failed unshallow in place; do not clone again or remove the filter.
+- If canonical paths are outside scope, use an already operator-provisioned `.worktrees` symlink whose physical target is allowed. If none exists, a separate `--filter=blob:none` checkout with full commit history is the fallback **before init**, as described in [workspace preflight](../../../../docs/reference/scripts/pr-tooling.md#qualify-the-workspace-before-review). Do not replace or relocate shared `.worktrees`. Never clone away an active/uncertain operation or retry an uncertain merge in a new lock namespace.
 - Dependency drift after workflow admission: the current wrapper automatically prepares the retained anchor’s frozen dependencies in its private content-addressed cache. Keep the workflow binding; no manual tooling-root downgrade or rebind is needed. See [dependency materialization](../../../../docs/reference/scripts/pr-tooling.md).
 - Trusted canonical/origin-main wrapper only. Untrusted PR supplies no local wrapper and never runs locally; isolation: `$openclaw-testing` + `$crabbox`. Never weaken guards for missing commands/deps. Requires git, gh, jq, rg, pnpm, node.
 - Unset ambient `GITHUB_TOKEN`, `GH_TOKEN`, `HOMEBREW_GITHUB_API_TOKEN` if wrong writer possible. Verify effective PATH `gh` or `OPENCLAW_GH_BIN`, not cached `ghx` reads. Qualify protected route's exact merge arguments via [GitHub transport](../../../../docs/reference/scripts/github-transport.md#octopool-string-rewrite-protection). Unsupported writer → route-owner blocker; no raw binary, changed semantics, uncertain replay.
@@ -37,6 +38,24 @@
 - Attributed inherited-only reds use the [authorized pre-existing-failure route](#authorized-pre-existing-failures); name failures in PR. Matching-signature evidence or a maintainer's concrete scoped attribution can establish unrelatedness as described there; the table is not the only attribution source. New/unknown failures require investigation, not silent relabeling; PR-caused failure does not select inherited-failure exception.
 - PR-caused CI failure → `pnpm test:ci-failed <pr>` → fix new failures/investigate unknown → `pnpm test:ci-failed <pr> --run` until selected affected tests pass locally → push once. This repair loop does not apply to already-attributed unrelated failures. Never `gh run rerun` to chase green; never local full suite for CI repair.
 - The inherited-failure exception never covers PR-caused failures, including tiny lint, type, or stale-expectation failures. Repair them before landing; promising a later main fix does not establish unrelatedness.
+
+### Delegated CodeQL dismissal requests
+
+- A CodeQL failure is a security gate, not an inherited-CI exception. Inspect the exact alert, query, data flow, trusted checkout identity, dependency lock, script policy, cache restore/save behavior, and workflow permissions before classifying it. Prefer a source fix when the flow is not proven safe.
+- When a repository security administrator agrees that the alert is a false positive but the caller lacks direct dismissal authority, request delegated dismissal with GitHub's code-scanning API. `create_request` must be a JSON boolean, so use `-F`; keep the dismissal comment at **280 characters or fewer**:
+
+```bash
+comment='Trusted release tooling is pinned to github.workflow_sha, uses a frozen lockfile with scripts disabled, restores but never saves its dependency cache, and has contents:read only.'
+(( ${#comment} <= 280 )) || { echo 'CodeQL dismissal comment exceeds 280 characters' >&2; exit 1; }
+gh api --method PATCH \
+  repos/openclaw/openclaw/code-scanning/alerts/<alert-number> \
+  -f state=dismissed \
+  -f dismissed_reason='false positive' \
+  -f dismissed_comment="$comment" \
+  -F create_request=true
+```
+
+- HTTP 400 commonly means `create_request=true` was omitted or encoded as a string; HTTP 422 commonly means the comment is too long or a field is invalid. HTTP 409 means GitHub reports that a request already exists: do not submit another. Read the alert again to distinguish open from dismissed; if the pending request is not visible to the caller, record that visibility limit and ask a repository security administrator to inspect it. If an urgent release-tooling repair is otherwise proven and an authorized administrator explicitly lands it while the request is pending, record the exact alert, reviewed head, classification, request state, and reason; never describe the alert as dismissed until GitHub reports it dismissed.
 
 ## Review, prepare, merge
 

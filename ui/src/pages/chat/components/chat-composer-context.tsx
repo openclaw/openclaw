@@ -1,8 +1,11 @@
 import { Show, createMemo, createSignal } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatCompactTokenCount } from "../../../lib/format.ts";
-import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
-import type { ProviderQuotaGroup } from "../../../lib/provider-quota-summary.ts";
+import { isMonitoredAuthProvider, providerUsageForAccount } from "../../../lib/model-auth.ts";
+import type {
+  ProviderQuotaGroup,
+  ProviderQuotaSelection,
+} from "../../../lib/provider-quota-summary.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   getContextNoticeViewModel,
@@ -27,85 +30,77 @@ export function ContextNotice(props: ContextNoticeProps) {
         : undefined,
     ),
   );
-  const currentGroup = createMemo(() => {
+  const providers = createMemo(() => {
     const currentProvider = (
       props.session?.modelProvider?.trim() || latestAssistantProvider(props.messages)
     )?.toLowerCase();
-    if (!currentProvider || !props.providerUsage) {
-      return undefined;
-    }
-    const groups = new Map<string, ProviderQuotaGroup>();
-    for (const provider of (props.providerUsage.modelAuthStatusResult?.providers ?? []).filter(
-      isMonitoredAuthProvider,
-    )) {
-      const usage = provider.usage;
-      if (!usage) {
-        continue;
-      }
-      const windows: ProviderQuotaGroup["windows"] = (usage.windows ?? []).map((limit) =>
-        Object.assign(
-          {
-            label: (limit.label || "").trim(),
-            usedPercent: Math.max(0, Math.min(100, Math.round(limit.usedPercent))),
-          },
-          limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
-        ),
-      );
-      const budgets: ProviderQuotaGroup["budgets"] = (usage.billing ?? []).flatMap((entry) => {
-        if (
-          entry.type !== "budget" ||
-          !Number.isFinite(entry.used) ||
-          !Number.isFinite(entry.limit) ||
-          entry.used < 0 ||
-          entry.limit <= 0
-        ) {
-          return [];
-        }
-        return [
-          {
-            used: entry.used,
-            limit: entry.limit,
-            unit: entry.unit,
-            ...(entry.label ? { label: entry.label } : {}),
-          },
-        ];
-      });
-      if (windows.length === 0 && budgets.length === 0) {
-        continue;
-      }
-      // Session rows report canonical model providers while auth rows may use
-      // CLI aliases (claude-cli vs anthropic); expose both ids for matching.
-      const providerIds = [
-        ...new Set([provider.provider, usage.providerId].filter((id): id is string => Boolean(id))),
-      ];
-      const identity = JSON.stringify([
-        provider.displayName,
-        usage.accountEmail ?? null,
-        windows,
-        budgets,
-      ]);
-      const existing = groups.get(identity);
-      if (existing) {
-        for (const id of providerIds) {
-          if (!existing.providers.includes(id)) {
-            existing.providers.push(id);
-          }
-        }
-        continue;
-      }
-      groups.set(identity, {
-        providers: providerIds,
-        displayName: provider.displayName,
-        ...(usage.plan ? { plan: usage.plan } : {}),
-        ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
-        windows,
-        budgets,
-      });
-    }
-    return [...groups.values()].find((group) =>
-      group.providers.some((id) => id.trim().toLowerCase() === currentProvider),
-    );
+    return currentProvider
+      ? (props.providerUsage?.modelAuthStatusResult?.providers ?? []).filter((provider) =>
+          [provider.provider, provider.usage?.providerId].some(
+            (id) => id?.trim().toLowerCase() === currentProvider,
+          ),
+        )
+      : [];
   });
+  // Usage does not attribute each run to a credential yet. Keep mixed providers
+  // conservative: missing account-specific quota does not imply token billing.
+  const hasSubscription = createMemo(() =>
+    providers().some((provider) =>
+      provider.profiles.some((profile) => profile.type === "oauth" || profile.type === "token"),
+    ),
+  );
+  const quota = createMemo<ProviderQuotaSelection>(() => {
+    const available = providers().filter(
+      (provider) => isMonitoredAuthProvider(provider) && provider.usage,
+    );
+    if (available.length === 0) {
+      return { status: "unavailable" };
+    }
+    const profileId =
+      props.accountSelection?.kind === "automatic"
+        ? undefined
+        : props.accountSelection?.authProfileId;
+    const selected = available.filter((provider) => providerUsageForAccount(provider, profileId));
+    const provider = selected[0];
+    const usage = provider?.usage;
+    // Alias rows share the Gateway's canonical usage snapshot. Distinct usage
+    // providers remain ambiguous; presentation labels cannot identify an account.
+    if (
+      !provider ||
+      !usage ||
+      selected.some((candidate) => candidate.usage?.providerId !== usage.providerId)
+    ) {
+      return { status: "unknown" };
+    }
+    const windows = usage.windows ?? [];
+    const budgets: ProviderQuotaGroup["budgets"] = (usage.billing ?? []).flatMap((entry) => {
+      if (
+        entry.type !== "budget" ||
+        !Number.isFinite(entry.used) ||
+        !Number.isFinite(entry.limit) ||
+        entry.used < 0 ||
+        entry.limit <= 0
+      ) {
+        return [];
+      }
+      return [entry];
+    });
+    if (windows.length === 0 && budgets.length === 0) {
+      return { status: "unavailable" };
+    }
+    return {
+      status: "known",
+      group: {
+        providers: [provider.provider],
+        displayName: provider.displayName,
+        plan: usage.plan,
+        accountEmail: usage.accountEmail,
+        windows,
+        budgets,
+      },
+    };
+  });
+  const currentGroup = () => quota().group;
   const summary = createMemo(() => {
     const context = model();
     return context
@@ -130,7 +125,7 @@ export function ContextNotice(props: ContextNoticeProps) {
   };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
   return (
-    <Show when={Boolean(model() || currentGroup())}>
+    <Show when={Boolean(model() || quota().status !== "unavailable")}>
       {(_visible) => {
         const [open, setOpen] = createSignal(false);
         const [visited, setVisited] = createSignal(false);
@@ -191,6 +186,8 @@ export function ContextNotice(props: ContextNoticeProps) {
                     {...props}
                     model={model()}
                     currentGroup={currentGroup()}
+                    quotaUnknown={quota().status === "unknown"}
+                    hasSubscription={hasSubscription()}
                     open={open()}
                     onOpenContext={props.onOpenContext ? openContext : undefined}
                   />

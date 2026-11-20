@@ -1,25 +1,21 @@
 import { describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
+import {
+  collectCompactionPreparationEntryFact,
+  prepareCompactionEntryFacts,
+} from "./compaction-preparation.js";
 import { compactWithoutSummary, prepareCompaction } from "./compaction.js";
 import {
   createContextUsage,
   createMessageEntry as messageEntry,
 } from "./compaction.test-support.js";
+import { assistant as assistantMessage, toolResult, user } from "./shard-fixtures.test-support.js";
+import { compactionEntry } from "./summary-capture.test-support.js";
 
 const settings = { enabled: true, reserveTokens: 1_000, keepRecentTokens: 1 };
-function assistant(text: string, timestamp: number): AgentMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "test-api",
-    provider: "test-provider",
-    model: "summary-model",
-    usage: createContextUsage(1),
-    stopReason: "stop",
-    timestamp,
-  };
-}
+const assistant = (text: string, timestamp: number): AgentMessage =>
+  assistantMessage(text, { model: "summary-model", usage: createContextUsage(1), timestamp });
 
 function prepare(entries: SessionTreeEntry[], pendingEntryId?: string) {
   const result = prepareCompaction(
@@ -39,16 +35,16 @@ describe("manual compaction requests", () => {
     const request = "Review the patch; do not deploy it.";
     const entries: SessionTreeEntry[] = [
       messageEntry(assistant("Prior retained work", 1), 0),
-      {
-        type: "compaction",
-        id: "prior-compaction",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 100,
-        summary: `## Latest unresolved user request\n${JSON.stringify(request)}\n\nPrior work continues.`,
-        details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: request },
-      },
+      compactionEntry(
+        1,
+        `## Latest unresolved user request\n${JSON.stringify(request)}\n\nPrior work continues.`,
+        "entry-0",
+        {
+          id: "prior-compaction",
+          tokensBefore: 100,
+          details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: request },
+        },
+      ),
       messageEntry(assistant("Still working.", 3), 2),
       messageEntry(assistant("Still working after a tool result.", 4), 3),
     ];
@@ -73,15 +69,9 @@ describe("run-owned compaction requests", () => {
   it("attributes a split internal run without reviving completed human work", () => {
     const source = "Inspect the worker artifact; do not publish it.";
     const entries = [
-      messageEntry({ role: "user", content: "Completed human task", timestamp: 1 }, 0),
+      messageEntry(user("Completed human task", 1), 0),
       messageEntry(assistant("Completed.", 2), 1),
-      messageEntry(
-        Object.assign(
-          { role: "user" as const, content: source, timestamp: 3 },
-          { provenance: { kind: "inter_session" } },
-        ),
-        2,
-      ),
+      messageEntry(Object.assign(user(source, 3), { provenance: { kind: "inter_session" } }), 2),
       messageEntry(assistant("The internal task is still running.", 4), 3),
     ];
     const preparation = prepare(entries);
@@ -98,17 +88,14 @@ describe("run-owned compaction requests", () => {
   it("keeps the admitted human request across later internal updates", () => {
     const request = "Review the patch; do not deploy it.";
     const entries = [
-      messageEntry({ role: "user", content: "Completed earlier task", timestamp: 1 }, 0),
+      messageEntry(user("Completed earlier task", 1), 0),
       messageEntry(assistant("Completed.", 2), 1),
-      messageEntry({ role: "user", content: request, timestamp: 3 }, 2),
+      messageEntry(user(request, 3), 2),
       messageEntry(assistant("Review started.", 4), 3),
       messageEntry(
-        Object.assign(
-          { role: "user" as const, content: "Worker update", timestamp: 5 },
-          {
-            provenance: { kind: "inter_session" },
-          },
-        ),
+        Object.assign(user("Worker update", 5), {
+          provenance: { kind: "inter_session" },
+        }),
         4,
       ),
       messageEntry(assistant("Review continues.", 6), 5),
@@ -122,24 +109,24 @@ describe("run-owned compaction requests", () => {
   it("does not carry a prior checkpoint's pending ask into a new internal run", () => {
     const entries: SessionTreeEntry[] = [
       messageEntry(assistant("Prior retained work", 1), 0),
-      {
-        type: "compaction",
-        id: "prior-compaction",
-        parentId: "entry-0",
-        timestamp: new Date(2).toISOString(),
-        firstKeptEntryId: "entry-0",
-        tokensBefore: 100,
-        summary:
-          'Generated recovery context.\n\n## Pending user asks\n- Old human ask\n\n## Decisions\nPrior work completed.\n\n## Latest unresolved user request\n"Old human ask"\n\n',
-        details: { readFiles: [], modifiedFiles: [], latestUnresolvedUserRequest: "Old human ask" },
-      },
-      messageEntry(
-        Object.assign(
-          { role: "user" as const, content: "Independent cron task", timestamp: 3 },
-          {
-            provenance: { kind: "internal_system" },
+      compactionEntry(
+        1,
+        'Generated recovery context.\n\n## Pending user asks\n- Old human ask\n\n## Decisions\nPrior work completed.\n\n## Latest unresolved user request\n"Old human ask"\n\n',
+        "entry-0",
+        {
+          id: "prior-compaction",
+          tokensBefore: 100,
+          details: {
+            readFiles: [],
+            modifiedFiles: [],
+            latestUnresolvedUserRequest: "Old human ask",
           },
-        ),
+        },
+      ),
+      messageEntry(
+        Object.assign(user("Independent cron task", 3), {
+          provenance: { kind: "internal_system" },
+        }),
         2,
       ),
       messageEntry(assistant("Working on cron.", 4), 3),
@@ -156,4 +143,72 @@ describe("run-owned compaction requests", () => {
       expect(fallback.value.summary).toContain("Prior work completed.");
     }
   });
+});
+
+it("prepares detached source indexes with reset retention, exact usage and unchanged file outcomes", () => {
+  const payload = "DISCARDED_BODY".repeat(10_000);
+  const entries: SessionTreeEntry[] = [
+    {
+      type: "custom",
+      id: "invalid",
+      parentId: null,
+      timestamp: new Date(0).toISOString(),
+      customType: "openclaw.background-result-placement",
+      data: {},
+    },
+    messageEntry(user("old request"), 0),
+    messageEntry(
+      assistantMessage([
+        {
+          type: "toolCall",
+          id: "write",
+          name: "write",
+          arguments: { path: "/output", body: payload },
+        },
+      ]),
+      1,
+    ),
+    messageEntry(
+      toolResult(payload, { toolCallId: "write", toolName: "write", details: { changed: false } }),
+      2,
+    ),
+    {
+      type: "reset",
+      id: "reset",
+      parentId: "entry-2",
+      timestamp: new Date(0).toISOString(),
+      reason: "new",
+      firstKeptEntryId: "entry-0",
+    },
+    messageEntry(user("new request " + "中𠀀".repeat(2000)), 3),
+    messageEntry(assistant("working", 4), 4),
+  ];
+  const facts = structuredClone(
+    entries.map((entry, index) => collectCompactionPreparationEntryFact(entry, index + 100)),
+  );
+  entries.length = 0;
+  expect(JSON.stringify(facts)).not.toContain("DISCARDED_BODY");
+  const result = prepareCompactionEntryFacts(facts, settings, "unresolved");
+  expect(result.ok).toBe(true);
+  if (!result.ok || !result.value) {
+    throw new Error("expected fact preparation");
+  }
+  expect(result.value).toMatchObject({
+    firstKeptEntryId: "entry-3",
+    firstKeptEntryIndex: 5,
+    historyEntryIndexes: [101, 102, 103],
+    turnPrefixEntryIndexes: [],
+    tokensBefore: 1,
+    isSplitTurn: false,
+    fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+  });
+  expect(result.value.latestUnresolvedUserRequest?.length).toBeLessThanOrEqual(800);
+  expect(result.value.latestUnresolvedUserRequest).toContain("new request");
+  expect(result.value.requestSelection).toEqual({
+    state: "unresolved",
+    request: result.value.latestUnresolvedUserRequest,
+  });
+  expect(() =>
+    prepareCompactionEntryFacts([...facts.slice(0, 1), ...facts.slice(-1)], settings),
+  ).toThrow("Invalid background result placement marker");
 });

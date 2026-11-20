@@ -7,6 +7,7 @@ import {
   executeGitCommand,
   executeGitCommandBytes,
   executeGitCommandBuffered,
+  GitCommandTimeoutError,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
   type GitBufferedCommandOptions,
@@ -21,6 +22,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
@@ -29,6 +31,7 @@ export { findGitCheckoutRoot, insideGitCheckout } from "../workspace-git.js";
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 const REPAIRABLE_FETCH_FLAGS = new Set([
+  "--quiet",
   "--no-auto-maintenance",
   "--refetch",
   "--no-tags",
@@ -82,14 +85,10 @@ export function gitEnvironment(
         CYGWIN: withNoGlob(resolveEnvironmentValue(effectiveWindowsEnv, "CYGWIN", platform)),
       }
     : {};
-  return {
-    ...baseEnv,
-    ...windowsNoGlob,
-    ...appendGitConfig(gitMaintenanceEnvironment(), [
-      ["core.hooksPath", os.devNull],
-      ["core.fsmonitor", "false"],
-    ]),
-  };
+  return appendGitConfig(gitMaintenanceEnvironment({ ...baseEnv, ...windowsNoGlob }), [
+    ["core.hooksPath", os.devNull],
+    ["core.fsmonitor", "false"],
+  ]);
 }
 
 export async function runGit(
@@ -165,7 +164,7 @@ async function runOwnedGitCommand<
       // Unknown option values (such as --server-option origin) cannot select a remote.
       const [remote, refspec, ...extra] = args
         .slice(1)
-        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg));
+        .filter((arg) => !REPAIRABLE_FETCH_FLAGS.has(arg) && !arg.startsWith("--negotiation-tip="));
       if (
         remote !== "origin" ||
         extra.length > 0 ||
@@ -204,11 +203,12 @@ async function withGitRefAdmission<
   signal?: AbortSignal,
   refMutationDirectory?: string,
 ): Promise<T> {
+  const registration = args[0] === "worktree" && args[1] === "add" && !args.includes("--detach");
   const mutatesRefs =
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
     args[0] === "merge" ||
-    (args[0] === "worktree" && args[1] === "add" && !args.includes("--detach")) ||
+    registration ||
     (args[0] === "symbolic-ref" && args.length === 3 && !args[1]?.startsWith("-")) ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
@@ -232,17 +232,44 @@ async function withGitRefAdmission<
             ),
             windowsEncoding: resolveWindowsConsoleEncoding(),
           });
+    commonDir = gitPathOutput(commonDir);
   }
   let entered = false;
+  // Registration has no subprocess deadline until admitted. Cancel only its queued
+  // request; an admitted Git writer must retain ownership through native settlement.
+  const waiting = registration ? new AbortController() : undefined;
+  const notice = waiting
+    ? setTimeout(() => {
+        createSubsystemLogger("agents/worktrees").warn(
+          "Managed worktree registration is waiting for repository repair or another Git operation (30-second wait limit).",
+        );
+      }, 1_000)
+    : undefined;
+  const deadline = waiting
+    ? setTimeout(
+        () =>
+          waiting.abort(
+            new GitCommandTimeoutError(
+              "Managed worktree registration timed out waiting for repository repair or another Git operation. Retry creating the workspace after that operation finishes.",
+            ),
+          ),
+        30_000,
+      )
+    : undefined;
+  const endWait = () => {
+    clearTimeout(notice);
+    clearTimeout(deadline);
+  };
   try {
     return await enqueueGitRefMutation(
       cwd,
-      commonDir.trim(),
+      commonDir,
       () => {
         entered = true;
+        endWait();
         return run(args);
       },
-      signal,
+      waiting ? (signal ? AbortSignal.any([signal, waiting.signal]) : waiting.signal) : signal,
     );
   } catch (error) {
     if (!entered && signal?.aborted && error === signal.reason) {
@@ -250,6 +277,8 @@ async function withGitRefAdmission<
       return await run(args);
     }
     throw error;
+  } finally {
+    endWait();
   }
 }
 
@@ -301,6 +330,22 @@ export async function requireGit(
   return requireGitCommandOutput(`git ${args.join(" ")}`, result).trim();
 }
 
+function gitPathOutput(output: string): string {
+  // Remove one LF or CRLF; all other whitespace belongs to the filesystem path.
+  return output.endsWith("\n") ? output.slice(0, output.endsWith("\r\n") ? -2 : -1) : output;
+}
+
+export async function requireGitPath(
+  cwd: string,
+  args: string[],
+  options: Parameters<typeof runGit>[2] = {},
+): Promise<string> {
+  const result = await runGit(cwd, args, options);
+  return normalizeGitPathForFilesystem(
+    gitPathOutput(requireGitCommandOutput(`git ${args.join(" ")}`, result)),
+  );
+}
+
 export async function requireGitBuffer(
   cwd: string,
   args: string[],
@@ -319,12 +364,7 @@ export async function resolveGitMetadataPath(
   name: string,
   options: GitCommandOptions = {},
 ): Promise<string> {
-  return path.resolve(
-    cwd,
-    normalizeGitPathForFilesystem(
-      await requireGit(cwd, ["rev-parse", "--git-path", name], options),
-    ),
-  );
+  return path.resolve(cwd, await requireGitPath(cwd, ["rev-parse", "--git-path", name], options));
 }
 
 function parseWorktreeList(output: string): WorktreeListEntry[] {
@@ -400,9 +440,7 @@ export async function resolveGitRepositoryPaths(
   sourceRoot: string,
   options: Parameters<typeof runGit>[2] = {},
 ): Promise<{ canonicalRoot: string; commonDir: string }> {
-  const commonRaw = normalizeGitPathForFilesystem(
-    await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
-  );
+  const commonRaw = await requireGitPath(sourceRoot, ["rev-parse", "--git-common-dir"], options);
   const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   // Repository identity needs only the primary checkout, not every linked HEAD and branch.
   const primary = worktreePaths(await readGitWorktreeList(sourceRoot, options)).next().value;

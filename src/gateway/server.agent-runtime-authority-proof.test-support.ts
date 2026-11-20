@@ -80,6 +80,31 @@ export function installAuthorityProofKernel() {
   return { kernel: () => kernel, harness: () => harness };
 }
 
+/** Configure the provider of the pinned proof model, as a real Gateway's catalog would carry it. */
+export async function configureProofModelProvider() {
+  const [{ refreshPreparedModelRuntimeSnapshots }, config] = await Promise.all([
+    import("../agents/prepared-model-runtime.js"),
+    import("../config/io.js"),
+  ]);
+  await resetPreparedModelCatalogStateForTest();
+  const anthropic: ModelProviderConfig = {
+    baseUrl: "https://anthropic.example.test/v1",
+    models: [
+      modelDefinition("claude-opus-4-6", {
+        name: "Proof model fixture",
+        input: ["text", "image"],
+        reasoning: false,
+        contextWindow: 128_000,
+      }),
+    ],
+  };
+  await config.writeConfigFile({ models: { providers: { anthropic } } });
+  config.clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(config.getRuntimeConfig(), {
+    gatewayLifecycle: true,
+  });
+}
+
 export function installAuthorityProofGateway() {
   const { kernel } = installAuthorityProofKernel();
   return () => kernel().gatewayRequestContext;
@@ -156,27 +181,7 @@ export function installAgentAuthorityProofFixture() {
     testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-6" } };
     if (options?.imageCapable) {
       // Keep catalog preparation and media writing real; only inference is mocked.
-      const [{ refreshPreparedModelRuntimeSnapshots }, config] = await Promise.all([
-        import("../agents/prepared-model-runtime.js"),
-        import("../config/io.js"),
-      ]);
-      await resetPreparedModelCatalogStateForTest();
-      const anthropic: ModelProviderConfig = {
-        baseUrl: "https://anthropic.example.test/v1",
-        models: [
-          modelDefinition("claude-opus-4-6", {
-            name: "Proof image fixture",
-            input: ["text", "image"],
-            reasoning: false,
-            contextWindow: 128_000,
-          }),
-        ],
-      };
-      await config.writeConfigFile({ models: { providers: { anthropic } } });
-      config.clearRuntimeConfigSnapshot();
-      await refreshPreparedModelRuntimeSnapshots(config.getRuntimeConfig(), {
-        gatewayLifecycle: true,
-      });
+      await configureProofModelProvider();
     }
     await prepareGatewayReplyRuntimeForTest();
     if (options?.imageCapable) {

@@ -281,6 +281,37 @@ it.each([
   }
 });
 
+it.each([false, true])(
+  "publishes recomputed Codex obligations in a different order (guidance changed: %s)",
+  async (rewordGuidance) => {
+    const { env, readConfig, writeSource, recordPending, ioFor } = fixture();
+    const source = {
+      ...gateway(18789),
+      plugins: { entries: { codex: { config: { retained: "authored" } } } },
+    };
+    writeSource(source);
+    const obligation = (confirm: boolean): DeferredPluginMigration => ({
+      pluginId: "codex",
+      configPaths: [["plugins", "entries", "codex", "config"]],
+      reason: confirm
+        ? "The installed plugin has not confirmed that its saved data and settings are ready for this version."
+        : "The configured plugin package is missing or has not converged.",
+      command: confirm ? "openclaw doctor --fix" : "openclaw update repair",
+    });
+    const other = pendingMigration("another-owner");
+    const expected = [obligation(false), other];
+    await recordPending(expected);
+
+    await ioFor(expected).writeConfigFile(gateway(18790), {
+      ...repairOptions,
+      beforeCommit: () => recordPending([other, obligation(rewordGuidance)]),
+    });
+
+    expect(readConfig()).toMatchObject({ ...source, ...gateway(18790) });
+    expect(readDeferredPluginMigrations({ env })).toEqual([other, obligation(rewordGuidance)]);
+  },
+);
+
 it("protects include-owned inputs claimed after mutation planning", async () => {
   const { root, configPath, env, readRaw, recordPending, ioFor } = fixture();
   const includePath = path.join(root, "session.json");

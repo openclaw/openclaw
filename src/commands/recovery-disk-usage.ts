@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { collectUpdateCleanupInventoryAsync } from "./doctor-session-sqlite-recovery-inventory.js";
@@ -66,7 +66,7 @@ export async function collectRecoveryDiskUsage(params: {
         : item.captureSource === "doctor"
           ? "doctorCaptures"
           : "updateCaptures";
-    const category = /^(?:unmanifested-|orphan-)/u.test(item.reason)
+    const category = /^(?:unmanifested-|unreceipted-|orphan-)/u.test(item.reason)
       ? "unmanifestedOrOrphan"
       : item.outcome === "candidate"
         ? "retirable"
