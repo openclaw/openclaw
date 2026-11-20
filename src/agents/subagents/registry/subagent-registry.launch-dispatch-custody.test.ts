@@ -14,6 +14,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createCollectorLaunchCallbacks } from "../spawn/subagent-spawn-collector.js";
 import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns, waitForSubagentRetirementPublication } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { takeDeferredArmedSubagentResume } from "./subagent-registry-spawn-acceptance.js";
@@ -239,24 +240,37 @@ it.each(["landed", "not-landed"] as const)(
     } else {
       expect(image.get(runId)?.launchDispatch).toMatchObject({ idempotencyKey: runId });
     }
+    const registryWarn = vi.spyOn(subagentRegistryLog, "warn");
     const dispatchAgent = await restartFrom(image);
     await testing.sweepOnceForTests();
     await testing.sweepOnceForTests();
     expect(dispatchAgent).not.toHaveBeenCalled();
+    const restartSettles = registryWarn.mock.calls.filter(
+      ([message]) => message === "Settling subagent interrupted by Gateway restart",
+    );
     if (twin === "landed") {
       // The start landed: an accepted running collector, never aborted or relaunched.
       expect(abortCalls).toEqual([]);
-      // Upstream #185730 restores rows as history and reconstructs no child execution, so
-      // the crash-restored running collector is neither settled as orphaned nor failed.
+      // With its launch marker cleared it is a plain child of the crashed process, so
+      // upstream #200807's restart sweeper settles it exactly once with the crash
+      // interruption, which a resumed parent's collector wait reads (O3).
       const restored = durable().get(gatewayRunId);
       expect(restored?.launchDispatch).toBeUndefined();
-      expect(restored?.execution.status).toBe("running");
-      expect(restored?.execution.outcome).toBeUndefined();
+      expect(restored?.execution).toMatchObject({
+        status: "terminal",
+        outcome: { status: "error", error: expect.stringContaining("did not survive the restart") },
+      });
+      expect(restored?.collectorCompletion).toMatchObject({ status: "failed" });
       expect(restored?.collectorLaunchCleanupPending).toBeUndefined();
+      expect(restartSettles).toEqual([
+        [expect.any(String), expect.objectContaining({ runId: gatewayRunId })],
+      ]);
     } else {
-      // Not landed: the dispatched marker fails closed instead of relaunching.
+      // Not landed: the dispatched marker fails closed instead of relaunching, and its
+      // launch owner settles it, never the restart sweeper.
       expect(successfulAborts).toEqual([runId]);
       expect(durable().get(runId)).toMatchObject({ collectorCompletion: { status: "failed" } });
+      expect(restartSettles).toEqual([]);
     }
   },
 );
