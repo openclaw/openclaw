@@ -497,6 +497,68 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledExactlyOnceWith("github");
   });
 
+  it("swaps Installed for the added skill's switch once the inventory names it", async () => {
+    const { container, query, render } = createView(true);
+    const onToggle = vi.fn();
+    const added = createSkill({
+      skillKey: "github",
+      name: "github",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "github",
+        ownerHandle: "openclaw",
+        installedVersion: "1.0.0",
+        installedAt: 123,
+        originPath: "/tmp/.clawhub/origin.json",
+        lockPath: "/tmp/workspace/.clawhub/lock.json",
+      },
+    });
+    const opened = {
+      surface: "discovery",
+      clawhubInstallMessage: { ref: "@openclaw/github", kind: "success", text: "Installed" },
+      clawhubDetailRef: "@openclaw/github",
+      clawhubDetail: {
+        ...githubDetail(),
+        registry: "https://clawhub.ai",
+        card: { status: "available", content: "# GitHub skill card" },
+      },
+      onToggle,
+    } satisfies Parameters<typeof createProps>[0];
+    // Before the inventory names it, the dialog can only say it was added.
+    render({ ...opened, report: skillReport([]), mutationSkills: [] });
+    const { dialog } = await getRenderedModalDialog(container);
+    expect(normalizeText(expectDefined(query(".skill-page__actions"), "actions"))).toBe(
+      "Installed",
+    );
+
+    render({ ...opened, report: skillReport([added]), mutationSkills: [added] });
+    await Promise.resolve();
+    const toggle = expectDefined(
+      query('.skill-page__actions input[role="switch"]'),
+      "added skill switch",
+    );
+    expect(normalizeText(expectDefined(query(".skill-page__actions"), "actions"))).toBe("Enabled");
+    toggle.click();
+    expect(onToggle).toHaveBeenCalledExactlyOnceWith("github", false);
+
+    render({
+      ...opened,
+      report: skillReport([added]),
+      mutationSkills: [added],
+      messages: { github: { kind: "error", message: "Could not disable GitHub" } },
+    });
+    await waitForFast(() => {
+      expect(query('.skill-reader-dialog [role="alert"]')?.textContent ?? "").toContain(
+        "Could not disable GitHub",
+      );
+      expect(dialog.querySelector(".sidebar-markdown")?.textContent).toContain("GitHub skill card");
+      expect(dialog.open).toBe(true);
+      expect(dialog.querySelector('input[role="switch"]')).toBe(toggle);
+    });
+  });
+
   it("updates the latest ClawHub version in an open detail dialog", async () => {
     const { container, query, render } = createView(true);
     const detail = {
@@ -681,9 +743,7 @@ describe("renderSkills", () => {
         .querySelector<HTMLAnchorElement>('a[href*="security-audit"]')
         ?.getAttribute("aria-label"),
     ).toBe("Full security report");
-    expect(query(".skill-page .sidebar-markdown")).toBeNull();
-    findButton(container, "Skill card")?.click();
-    expect(onDetailTabChange).toHaveBeenCalledWith("card");
+    expect(text()).toContain("Skill card");
 
     render({
       report,
