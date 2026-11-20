@@ -424,6 +424,28 @@ exec ${JSON.stringify(native)} "$@"
       const initial = await check([leaf], "1/5");
       expect(initial.result.status, initial.result.stderr).toBe(0);
       expect(initial.builds).toEqual([]);
+      const firstConfig = TSGO_CORE_TEST_SHARDS[0].config;
+      const originalFirstConfig = read(firstConfig);
+      const firstOptions: {
+        files: string[];
+        compilerOptions: { tsBuildInfoFile: string };
+      } = JSON.parse(originalFirstConfig);
+      const secondOptions: { compilerOptions: { tsBuildInfoFile: string } } = JSON.parse(
+        read(TSGO_CORE_TEST_SHARDS[1].config),
+      );
+      for (const [buildInfo, message] of [
+        [secondOptions.compilerOptions.tsBuildInfoFile, "shared tsBuildInfoFile"],
+        [undefined, "missing compilerOptions.tsBuildInfoFile"],
+      ] as const) {
+        json(firstConfig, {
+          ...firstOptions,
+          compilerOptions: { ...firstOptions.compilerOptions, tsBuildInfoFile: buildInfo },
+        });
+        const rejected = await check([leaf], undefined, 0);
+        expect(rejected.result.status).not.toBe(0);
+        expect(rejected.result.stderr).toContain(message);
+      }
+      write(firstConfig, originalFirstConfig);
       const extension = "extensions/example/value.ts";
       write(extension, "export type ExtensionValue = number;\n");
       const noncoreConsumer = "test/noncore-consumer.ts";

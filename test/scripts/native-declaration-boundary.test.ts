@@ -25,8 +25,10 @@ const moduleOptions = { module: "NodeNext", moduleResolution: "NodeNext", target
 it("keeps roots, options, and input inventories separate across a config-reading batch", () => {
   const root = tempRoot("config-batch");
   for (const [file, contents] of Object.entries({
-    "alpha/base.json": '{"compilerOptions":{"strict":true}}',
-    "beta/base.json": '{"compilerOptions":{"strict":false}}',
+    "alpha/base.json":
+      '{"compilerOptions":{"strict":true,"tsBuildInfoFile":"../alpha.tsbuildinfo"}}',
+    "beta/base.json":
+      '{"compilerOptions":{"strict":false,"tsBuildInfoFile":"../beta.tsbuildinfo"}}',
     "alpha/tsconfig.json": '{"extends":"./base.json","files":["entry.ts"]}',
     "beta/tsconfig.json": '{"extends":"./base.json","files":["entry.ts"]}',
     "alpha/entry.ts": "export const alpha = 1;",
@@ -43,6 +45,7 @@ it("keeps roots, options, and input inventories separate across a config-reading
   ] as const) {
     expect(parsed.fileNames).toEqual([path.join(root, name, "entry.ts")]);
     expect(parsed.options.strict).toBe(strict);
+    expect(parsed.options.tsBuildInfoFile).toBe(path.join(root, `${name}.tsbuildinfo`));
     expect(parsed.configFiles).toEqual([
       path.join(root, name, "base.json"),
       path.join(root, name, "tsconfig.json"),

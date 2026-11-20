@@ -7,6 +7,7 @@ import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveRepoToolBinPath, resolveTypeCheckTool } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
+import { createNativeTypeScriptConfigReader } from "./lib/native-typescript-config.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
   expandTsgoExecutionGraphs,
@@ -17,7 +18,6 @@ import {
   TSGO_CORE_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const canonicalCoreTestConfig = "test/tsconfig/tsconfig.core.test.json";
 
 function normalizeFilePath(filePath: string, cwd: string) {
@@ -96,21 +96,6 @@ async function runCompilerQuery(
   return stdout!;
 }
 
-async function readGraphConfig(
-  config: string,
-  cwd: string,
-): Promise<{
-  compilerOptions?: { tsBuildInfoFile?: string };
-  files?: string[];
-}> {
-  return JSON.parse(
-    await runCompilerQuery(tsgoPath, config, "--showConfig", `${config} config expansion`, cwd),
-  ) as {
-    compilerOptions?: { tsBuildInfoFile?: string };
-    files?: string[];
-  };
-}
-
 export type CoreTsgoGraph = {
   name: string;
   config: string;
@@ -143,16 +128,22 @@ export async function checkCoreTsgoGraphBoundary(
 async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
   const normalize = (file: string) => normalizeFilePath(file, cwd);
   const testRootPattern = /\.test\.(?:ts|tsx)$/u;
-  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig, cwd)).files ?? [])
-    .map(normalize)
-    .filter((file) => testRootPattern.test(file));
+  let canonicalRoots: string[];
   const shardConfigs = [];
-  for (const shard of TSGO_CORE_TEST_SHARDS) {
-    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config, cwd) });
+  {
+    // Config expansion needs no source graph; close its shared compiler before file listing.
+    using reader = createNativeTypeScriptConfigReader({ cwd });
+    canonicalRoots = reader
+      .read(canonicalCoreTestConfig)
+      .fileNames.map(normalize)
+      .filter((file) => testRootPattern.test(file));
+    for (const shard of TSGO_CORE_TEST_SHARDS) {
+      shardConfigs.push({ ...shard, expanded: reader.read(shard.config) });
+    }
   }
   const shardRoots = shardConfigs.map((shard) => ({
     name: shard.name,
-    roots: (shard.expanded.files ?? []).map(normalize).filter((file) => testRootPattern.test(file)),
+    roots: shard.expanded.fileNames.map(normalize).filter((file) => testRootPattern.test(file)),
   }));
   // Shard size is a cost signal no single change owns: report it, never fail on it.
   reportLimitViolations(
@@ -169,7 +160,7 @@ async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
 
   const buildInfoOwners = new Map<string, string[]>();
   for (const shard of shardConfigs) {
-    const buildInfo = shard.expanded.compilerOptions?.tsBuildInfoFile;
+    const buildInfo = shard.expanded.options.tsBuildInfoFile;
     if (!buildInfo) {
       shardViolations.push(`${shard.name}: missing compilerOptions.tsBuildInfoFile`);
       continue;
@@ -198,8 +189,8 @@ async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
     graphs.push({
       ...graph,
       files,
-      roots: (shardConfigs.find((shard) => shard.config === graph.config)?.expanded.files ?? [])
-        .map((file) => normalize(path.resolve(cwd, path.dirname(graph.config), file)))
+      roots: (shardConfigs.find((shard) => shard.config === graph.config)?.expanded.fileNames ?? [])
+        .map(normalize)
         .filter((file) => testRootPattern.test(file)),
     });
     const extensionFiles = files.filter(

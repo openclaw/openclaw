@@ -38,6 +38,7 @@ const repositoryScriptEntries = [
   "scripts/perf/audit-retention-fixture.mjs!",
   "scripts/perf/file-log-main-thread-measure.mjs!",
   "scripts/perf/session-history-page-reads-measure.ts!",
+  "scripts/perf/core-tsgo-boundary-measure.mts!",
   "scripts/diagnostics/windows-link-service.mjs!",
   "scripts/boat-release-runner.mjs!",
   "scripts/build-iroh.mjs!",
