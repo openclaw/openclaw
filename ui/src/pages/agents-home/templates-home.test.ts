@@ -187,7 +187,7 @@ describe("Templates discovery", () => {
     "/templates",
     "/templates/workflow-operator",
     "/templates/packages/%40openclaw%2Fworkflow-operator",
-  ])("rejects direct visits to %s while Labs is disabled", async (pathname) => {
+  ])("rejects direct visits to %s while Templates is explicitly disabled", async (pathname) => {
     const { context, page, request, ensureConfigLoaded } = createPage({ pathname });
     const location = { pathname, search: "", hash: "" };
     const result = await templatesRoute.loader!(
@@ -202,7 +202,7 @@ describe("Templates discovery", () => {
     expect(request.mock.calls.some(([method]) => method.startsWith("templates."))).toBe(false);
   });
 
-  it("removes discovery when the Labs toggle is disabled during a visit", async () => {
+  it("removes discovery when Templates is disabled during a visit", async () => {
     const { page, setTemplatesEnabled } = createPage({ templatesEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-templates-entry]")).toHaveLength(1));
     setTemplatesEnabled(false);

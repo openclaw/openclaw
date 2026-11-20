@@ -1,7 +1,9 @@
 import { readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { buffer } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -23,10 +25,41 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 let instance: OpenClawTestInstance;
 const captures: string[][] = [];
+const catalogRequests: string[] = [];
 const suite = createControlUiE2eSuite({
   name: "Tool workflow graduation on a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
+    const catalog = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          catalogRequests.push(`${request.method} ${request.url}`);
+          response.setHeader("content-type", "application/json");
+          response.end(
+            JSON.stringify({
+              complete: true,
+              items: [],
+              nextCursor: null,
+              completeCategoryEntries: true,
+              sections: [],
+              featured: [
+                {
+                  name: "@openclaw/research-briefing",
+                  displayName: "Research Briefing",
+                  updatedAt: 2,
+                  family: "template",
+                  channel: "official",
+                  isOfficial: true,
+                  ownerHandle: "openclaw",
+                  ownerOfficial: true,
+                  latestVersion: "1.0.0",
+                },
+              ],
+            }),
+          );
+        }),
+    });
     const model = await startOpenAiResponsesModelServer({
       modelId: "workflow-preferred",
       bindError: "Tool workflow provider did not bind",
@@ -41,7 +74,15 @@ const suite = createControlUiE2eSuite({
           responseId: `workflow-response-${captures.length}`,
         });
       },
-    });
+    }).catch((error: unknown) =>
+      runQaGatewayFixture(
+        async (): Promise<never> => {
+          throw error;
+        },
+        () => catalog.releaseListener(),
+        () => catalog.claim.release(),
+      ),
+    );
     const modelConfig = createOpenAiResponsesModelConfig({
       baseUrl: model.baseUrl,
       providerId: "openai",
@@ -64,12 +105,18 @@ const suite = createControlUiE2eSuite({
       runQaGatewayFixture(
         () => instance?.cleanup(),
         () => model.close(),
+        () => catalog.releaseListener(),
+        () => catalog.claim.release(),
       );
     try {
       instance = await createOpenClawTestInstance({
         name: "labs-graduation",
         entrypoint: ["dist/index.js"],
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
+        env: {
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          VITEST: undefined,
+          OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${catalog.claim.port}`,
+        },
         config: {
           ...modelConfig,
           models: { ...modelConfig.models, catalogRefresh: { enabled: false } },
@@ -137,6 +184,14 @@ suite.define(() => {
           await page.goto(labs.href);
           await waitForControlUiGatewayReady(page);
           await page.getByRole("switch", { name: "Decision assistance", exact: true }).waitFor();
+          const labsSurface = page.locator("openclaw-labs-page .settings-section");
+          const labsFrame = await takeControlUiScreenshotFrame(page, labsSurface, [labsSurface], {
+            animations: "disabled",
+          });
+          await writeFile(path.join(artifacts, "labs-after-clean.png"), labsFrame.png);
+          expect(await page.getByRole("switch", { name: "Templates", exact: true }).count()).toBe(
+            0,
+          );
           expect(await page.getByRole("switch", { name: "Code Mode", exact: true }).count()).toBe(
             0,
           );
@@ -145,11 +200,40 @@ suite.define(() => {
               .getByRole("switch", { name: "Tool search for all models", exact: true })
               .count(),
           ).toBe(0);
-          const labsSurface = page.locator("openclaw-labs-page .settings-section");
-          const labsFrame = await takeControlUiScreenshotFrame(page, labsSurface, [labsSurface], {
+          const beforeTemplates = captures.length;
+          expect(catalogRequests).toHaveLength(0);
+          await page.getByRole("button", { name: "Back to app", exact: true }).click();
+          await page.getByRole("link", { name: "Customize", exact: true }).click();
+          const templateLink = page.getByRole("link", { name: "Templates", exact: true });
+          await templateLink.click();
+          await page.getByRole("heading", { name: "Research Briefing", exact: true }).waitFor();
+          const templates = page.locator("[data-templates-explore]");
+          const templatesFrame = await takeControlUiScreenshotFrame(page, templates, [templates], {
             animations: "disabled",
           });
-          await writeFile(path.join(artifacts, "labs-after-clean.png"), labsFrame.png);
+          await writeFile(path.join(artifacts, "templates-after-clean.png"), templatesFrame.png);
+          expect(captures).toHaveLength(beforeTemplates);
+          expect(catalogRequests.every((request) => request.startsWith("GET "))).toBe(true);
+          expect(
+            JSON.parse(await readFile(instance.configPath, "utf8")).gateway.controlUi.experimental
+              ?.templates,
+          ).toBeUndefined();
+          for (const enabled of [false, true]) {
+            const change = await instance.cli([
+              "config",
+              "set",
+              "gateway.controlUi.experimental.templates",
+              String(enabled),
+            ]);
+            expect(change.code, change.stderr).toBe(0);
+            await expect.poll(() => templateLink.count()).toBe(enabled ? 1 : 0);
+            if (!enabled) {
+              await expect(client.request("templates.catalog.search", {})).rejects.toThrow(
+                /Templates is disabled/,
+              );
+            }
+          }
+          expect(instance.child?.pid).toBe(pid);
           const tools = new URL("settings/ai-agents?section=tools", browserUrl);
           await page.goto(tools.href);
           await waitForControlUiGatewayReady(page);

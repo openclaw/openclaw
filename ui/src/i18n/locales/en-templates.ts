@@ -42,7 +42,8 @@ const enTemplates = {
     empty: "No templates match your search.",
     emptyUnfiltered: "No templates yet.",
     unavailable: "Couldn’t load templates from ClawHub. Try again.",
-    disabled: "Templates is turned off. Turn it on in Settings → Labs.",
+    disabled:
+      "Templates is turned off in Gateway configuration. Ask an administrator to enable it.",
     retry: "Retry",
     add: "Add",
     addNamed: "Add {name}",

@@ -5,7 +5,6 @@ import {
   type LabFeature,
   type LabFeatureDefinition,
 } from "./labs-feature-state.ts";
-import { TEMPLATES_LAB_FEATURE } from "./templates-lab-feature.ts";
 
 export const LAB_FEATURES = (
   [
@@ -29,7 +28,6 @@ export const LAB_FEATURES = (
       id: "chatBubbles",
       configPath: ["gateway", "controlUi", "experimental", "chatBubbles"],
     },
-    TEMPLATES_LAB_FEATURE,
     {
       ...BOOLEAN_GATE,
       id: "hostDesktop",

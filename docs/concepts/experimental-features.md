@@ -27,7 +27,6 @@ available for user-installed browser code.
 | ----------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | Codex harness           | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer` | You want native Codex app-server 0.143.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution) |
 | Cloud workers           | `cloudWorkers.desktop`                                                  | You want to watch or control desktop-capable cloud worker environments from the Control UI                                        | [Cloud device desktop](/gateway/cloud-workers#desktop-interactive)                     |
-| Templates               | `gateway.controlUi.experimental.templates`                              | You want to explore and add official ClawHub agents from the Control UI                                                           | [Templates](/cli/templates)                                                            |
 | This computer’s desktop | `desktop.host.enabled`                                                  | You want to watch or control the Gateway host through its VNC or Screen Sharing server                                            | [Desktop](/gateway/configuration-reference#desktop)                                    |
 | OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
 | Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
@@ -41,7 +40,7 @@ config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Composer predictions,
 Usage-ranked tool index,
-Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
+This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. The Cloud device desktop lab
 controls access to existing desktop-capable workers; changing a profile’s
 `settings.desktop` affects only newly provisioned workers.
@@ -56,12 +55,12 @@ by default, while an existing explicit
 config path remains an advanced opt-out, not a Labs requirement. It does not
 disable bundled views or backend operations.
 
-Templates is off by default. Turning it on permits official starter discovery and
-Add in Agents, Gateway catalog/Add methods, and local CLI Add. Add creates an
-ordinary agent and installs its requirements; repeating Add creates another
-agent. Turning the switch off blocks new Add operations, but existing agents
-continue running. Local project authoring and inspection do not require the
-switch. An Add already admitted before the switch changes can finish safely.
+<a id="templates" />Templates has graduated from Labs and is available by
+default at **Customize → Templates**, with no replacement settings switch. The
+historical `gateway.controlUi.experimental.templates` key remains an advanced
+opt-out: existing explicit `false` stays off, while unset or `true` enables
+discovery and Add. Existing agents are unaffected. Installation still requires
+its normal authority, review, and consent. See [Templates](/cli/templates).
 
 <a id="code-mode" />Code Mode has graduated from Labs. Its default is unchanged:
 an absent `tools.codeMode` uses `"auto"` for catalog-preferred models only.

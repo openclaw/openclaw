@@ -192,13 +192,6 @@ describe("LabsPage", () => {
 
   it.each([
     [
-      "Templates",
-      "templates",
-      false,
-      experimental({ templates: true }),
-      experimental({ templates: null }),
-    ],
-    [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",
       false,
@@ -206,7 +199,6 @@ describe("LabsPage", () => {
       hostEnabled(false),
     ],
     ["Speech bubbles", "chatBubbles", true, {}, experimental({ chatBubbles: true })],
-    ["Templates", "templates", true, {}, experimental({ templates: true })],
     [
       "Desktop on the computer running OpenClaw",
       "hostDesktop",
