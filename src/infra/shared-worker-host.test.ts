@@ -11,6 +11,7 @@ import {
   type HostedWorkerEndpoint,
 } from "./shared-worker-host.js";
 import { getTrackedWorkerPoolSnapshot } from "./worker-cpu.js";
+import { closeDefaultRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
 
 const sqliteStore = resolveRuntimeProcessEntrypointUrl("sqliteStore");
@@ -90,8 +91,9 @@ it("detaches an idle endpoint logically and releases the host after the last one
   shared.endpoint.retiring("idle_timeout");
   await shared.endpoint.terminate();
   expect(await shared.exited).toEqual({ code: 0, error: undefined });
-  // The released host exits physically before a replacement may start.
-  await expect.poll(() => claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
+  // The last endpoint's retirement joins the physical host, so the native source can close.
+  expect(claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
+  await closeDefaultRetainedNativeWorkerSource();
   expect(
     getTrackedWorkerPoolSnapshot().workerCensus.some(
       (row) => row.kind === "shared-worker-host.worker.js",
@@ -168,3 +170,24 @@ it.runIf(process.platform === "linux")(
     }
   },
 );
+
+it("fails endpoints and frees the slot when the host constructor is refused", async () => {
+  initializeGatewayResourceProfile({ profile: "lean" });
+  const previous = process.env.NODE_OPTIONS;
+  // Node refuses a Worker whose inherited NODE_OPTIONS are invalid; no native Worker exists.
+  process.env.NODE_OPTIONS = "--openclaw-invalid-shared-host-option";
+  let agent: ReturnType<typeof carrier>;
+  try {
+    agent = carrier("sqlite-store:agent");
+  } finally {
+    if (previous === undefined) {
+      delete process.env.NODE_OPTIONS;
+    } else {
+      process.env.NODE_OPTIONS = previous;
+    }
+  }
+  const outcome = await agent.exited;
+  expect(outcome.code).not.toBe(0);
+  expect(outcome.error?.message).toMatch(/^Shared worker host failed:/);
+  expect(claimsSharedHostSlot(sqliteStore, "sqlite-store:agent")).toBe(true);
+});

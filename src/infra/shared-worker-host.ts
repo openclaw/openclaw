@@ -10,6 +10,7 @@ import {
 import {
   createRetainedOperation,
   type RetainedNativeWorker,
+  type RetainedOperation,
 } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
@@ -114,6 +115,7 @@ class SharedWorkerHost {
   readonly control: MessagePort;
   readonly endpoints = new Map<number, HostedWorkerEndpoint>();
   failure?: Error;
+  private physicalStop?: RetainedOperation<void>;
   private servicing = false;
 
   constructor() {
@@ -143,23 +145,68 @@ class SharedWorkerHost {
     this.control.on("message", (reply: SharedWorkerHostReply) => this.receive(reply));
     this.control.unref();
     this.worker.unref();
-    this.worker.on("error", (error) => this.fail(error));
-    // Execution exit is observable synchronously; every endpoint settles before the join.
+    this.worker.on("error", (error) => {
+      this.fail(error);
+      // A refused constructor has no native Worker and no exit event to join.
+      this.observePhysicalStop();
+    });
+    // Execution exit is observable synchronously; live endpoints fail before the join.
     this.worker.on("execution-exit", (code) => {
-      const failure =
-        this.failure ?? new Error(`Shared worker host exited with code ${code ?? "unknown"}`);
-      this.failure = failure;
+      this.failure ??= new Error(`Shared worker host exited with code ${code ?? "unknown"}`);
       this.control.close();
       // Map iteration tolerates each endpoint removing itself.
       for (const endpoint of this.endpoints.values()) {
-        endpoint.finish(code ?? 1, failure);
+        if (!endpoint.awaitingHostJoin) {
+          endpoint.finish(code ?? 1, this.failure);
+        }
       }
     });
-    this.worker.once("exit", () => {
-      if (state.host === this) {
-        state.host = undefined;
+    this.worker.once("exit", (code) => this.joined(code));
+  }
+
+  /** Physical join: the last logically stopped endpoint settles only now. */
+  private joined(code: number | undefined): void {
+    this.failure ??= new Error("Shared worker host exited");
+    this.control.close();
+    for (const endpoint of this.endpoints.values()) {
+      if (endpoint.awaitingHostJoin) {
+        endpoint.finish(0);
+      } else {
+        endpoint.finish(code ?? 1, this.failure);
       }
-    });
+    }
+    if (state.host === this) {
+      state.host = undefined;
+    }
+  }
+
+  private stopPhysically(): void {
+    if (this.physicalStop) {
+      return;
+    }
+    const stopping = this.worker.stop();
+    this.physicalStop = stopping;
+    void stopping.result.then(
+      () => this.observePhysicalStop(),
+      () => this.observePhysicalStop(),
+    );
+  }
+
+  /** Native stop outcomes are retained, so synchronous callers see them through service(). */
+  private observePhysicalStop(): void {
+    const outcome = this.physicalStop?.read();
+    if (!outcome || outcome.status === "pending") {
+      return;
+    }
+    if (outcome.status === "fulfilled") {
+      this.joined(this.worker.executionExitCode);
+      return;
+    }
+    // The supervisor could not confirm exit: stops fail without claiming a join; a retry restarts.
+    this.physicalStop = undefined;
+    for (const endpoint of this.endpoints.values()) {
+      endpoint.rejectStop(outcome.error);
+    }
   }
 
   hasEndpoint(key: string): boolean {
@@ -177,20 +224,8 @@ class SharedWorkerHost {
 
   /** Every hosted endpoint fails explicitly; the next claim starts a replacement host. */
   fail(cause: Error): void {
-    if (this.failure) {
-      return;
-    }
-    this.failure = new Error(`Shared worker host failed: ${cause.message}`, { cause });
-    void this.worker.stop().result.catch(() => undefined);
-  }
-
-  /** Release isolate-wide state physically once no endpoint remains. */
-  releaseIfIdle(): void {
-    if (this.endpoints.size === 0 && !this.failure) {
-      this.failure = new Error("Shared worker host retired after its last endpoint stopped");
-      // Exit clears the owner; until then claims refuse so only one host isolate exists.
-      void this.worker.stop().result.catch(() => undefined);
-    }
+    this.failure ??= new Error(`Shared worker host failed: ${cause.message}`, { cause });
+    this.stopPhysically();
   }
 
   receive(reply: SharedWorkerHostReply): void {
@@ -201,8 +236,15 @@ class SharedWorkerHost {
     if (reply.type === "started") {
       endpoint.markStarted();
     } else if (reply.type === "stopped") {
-      endpoint.finish(0);
-      this.releaseIfIdle();
+      if (this.endpoints.size > 1 || this.failure) {
+        endpoint.finish(0);
+        return;
+      }
+      // The last endpoint's retirement joins the physical host, releasing isolate-wide state.
+      // Until then claims refuse, so only one host isolate exists.
+      endpoint.awaitingHostJoin = true;
+      this.failure = new Error("Shared worker host retired after its last endpoint stopped");
+      this.stopPhysically();
     } else if (reply.type === "failed") {
       this.fail(new Error(`${endpoint.kind} endpoint failed: ${reply.reason}`));
     }
@@ -216,6 +258,7 @@ class SharedWorkerHost {
     this.servicing = true;
     try {
       this.worker.service();
+      this.observePhysicalStop();
       let received;
       while (!this.failure && (received = receiveMessageOnPort(this.control))) {
         // SAFETY: Only the host worker writes this private control channel.
@@ -244,8 +287,9 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
   executionExitCode?: number;
   terminalFailure?: Error;
   private readonly port: MessagePort;
-  private readonly stopped = createRetainedOperation<void>(() => this.service());
+  private stopped = createRetainedOperation<void>(() => this.service());
   private stopRequested = false;
+  awaitingHostJoin = false;
   private logicalStop = false;
   private physicalStop = false;
   private stopDeadline?: NodeJS.Timeout;
@@ -326,9 +370,14 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
   }
 
   stop() {
+    if (this.stopped.operation.read().status === "rejected") {
+      this.stopped = createRetainedOperation<void>(() => this.service());
+    }
     if (!this.stopRequested && !this.executionStopped) {
       this.stopRequested = true;
       if (this.logicalStop && !this.physicalStop && !this.host.failure) {
+        // An idle pool unreferenced this port; the pending stop keeps the process alive.
+        this.port.ref();
         this.host.send({ type: "stop", id: this.id });
         this.stopDeadlineAt = performance.now() + ENDPOINT_STOP_DEADLINE_MS;
         this.stopDeadline = setTimeout(() => {
@@ -340,6 +389,14 @@ export class HostedWorkerEndpoint extends EventEmitter implements RetainedNative
       }
     }
     return this.stopped.operation;
+  }
+
+  /** The host could not confirm physical exit; a later stop retries it. */
+  rejectStop(error: unknown): void {
+    if (!this.executionStopped) {
+      this.stopRequested = false;
+      this.stopped.reject(error);
+    }
   }
 
   terminate(): Promise<void> {
