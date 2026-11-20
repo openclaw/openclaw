@@ -21,12 +21,15 @@ export function createSkillPageRoute(options: {
 }) {
   const { context } = options;
   const [location, setLocation] = createSignal<RouteLocation>(context.router.getState().location);
-  // Equal addresses keep one value, so returning to the same page reads nothing again.
-  const key = createMemo(() => {
-    const page = skillPageForLocation(location(), context.basePath);
-    return page ? JSON.stringify(page) : "";
+  // Search and hash changes keep the page value when the address still names the same skill.
+  const page = createMemo(() => skillPageForLocation(location(), context.basePath), {
+    equals: (left, right) =>
+      left === right ||
+      (left?.kind === "installed" &&
+        right?.kind === "installed" &&
+        left.skillKey === right.skillKey) ||
+      (left?.kind === "clawhub" && right?.kind === "clawhub" && left.ref === right.ref),
   });
-  const page = createMemo(() => (key() ? (JSON.parse(key()) as SkillPageRef) : null));
   const listRoute = (): "skills" | "skill-settings" =>
     options.surface() === "discovery" ? "skills" : "skill-settings";
   const agentSearch = (route: ReturnType<typeof listRoute>) => {
