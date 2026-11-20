@@ -46,7 +46,8 @@ export function sessionShareGatewayEnabled(config: SessionShareConfigSnapshot): 
     config.plugins?.enabled !== false &&
     config.plugins?.entries?.["session-share"]?.enabled !== false &&
     isRecord(share) &&
-    share.gateway === true
+    share.gateway === true &&
+    config.gateway?.sessionControl?.publicationReadEnabled === true
   );
 }
 
