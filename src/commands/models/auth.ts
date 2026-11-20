@@ -311,7 +311,7 @@ async function runProviderAuthMethod(
     profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
     existingProfiles: params.existingProfiles,
-    matchesPersonalAccount: params.method.matchesPersonalAccount,
+    method: params.method,
     allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
   const profiles = resolvedIdentity.profiles;

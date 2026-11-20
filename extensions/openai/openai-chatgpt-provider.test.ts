@@ -148,7 +148,7 @@ describe("OpenAI provider Codex transport hooks", () => {
               chatgpt_account_id: accountId,
               chatgpt_user_id: "user-one",
             },
-            "https://api.openai.com/profile": { email: "dev@example.com" },
+            "https://api.openai.com/profile": { email: "dev@example.com", email_verified: true },
           }),
         ).toString("base64url")}.signature`;
       const login = async (
@@ -175,9 +175,33 @@ describe("OpenAI provider Codex transport hooks", () => {
       });
       expect(personalAgain[0]?.profileId).toBe("openai:dev@example.com");
       expect(businessAgain[0]?.profileId).toBe("openai:dev@example.com:acct-business");
-      const matcher = buildOpenAIProvider().auth.find(
-        (method) => method.id === methodId,
-      )!.matchesPersonalAccount!;
+      const method = buildOpenAIProvider().auth.find((candidate) => candidate.id === methodId)!;
+      const matcher = method.matchesPersonalAccount!;
+      const canReplace = method.canReplaceGeneratedProfile!;
+      const personalCredential = personal[0]!.credential;
+      if (personalCredential.type !== "oauth") {
+        throw new Error("Expected OAuth credential");
+      }
+      const imported = {
+        ...personal[0]!,
+        credential: { ...personalCredential, access: "import-without-workspace-claim" },
+      };
+      expect((await login("acct-business", [imported]))[0]?.profileId).toBe(business[0]?.profileId);
+      expect(canReplace(business[0]!.credential, personalCredential)).toBe(false);
+      expect(canReplace(personalCredential, imported.credential)).toBe(false);
+
+      // A failed refresh retains metadata, not the original access-token claims.
+      const fence = "openclaw-oauth-refresh-fence:v1:" + "a".repeat(32) + ":failed:";
+      const failed = {
+        ...personalCredential,
+        access: fence + "access:" + "b".repeat(64),
+        refresh: fence + "refresh:" + "c".repeat(64),
+        expires: 1,
+      };
+      expect(matcher(personalAgain[0]!.credential, failed)).toBe(false);
+      expect(canReplace(personalCredential, failed)).toBe(true);
+      expect(canReplace(personalCredential, { ...failed, email: "other@example.com" })).toBe(false);
+      expect(canReplace(businessAgain[0]!.credential, failed)).toBe(false);
       for (const [incoming] of [personalAgain, businessAgain]) {
         expect(
           existing

@@ -17,6 +17,7 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
   readStringValue,
   uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -406,9 +407,10 @@ function buildOpenAICodexAuthResult(
   )?.credential;
   const occupantAccountId =
     occupant?.type === "oauth"
-      ? resolveOpenAICodexAuthIdentity({ access: occupant.access }).accountId
+      ? (resolveOpenAICodexAuthIdentity({ access: occupant.access }).accountId ??
+        normalizeOptionalString(occupant.accountId))
       : undefined;
-  // Without both account claims, keep the existing profile naming behavior.
+  // Without both workspace IDs, keep the existing profile naming behavior.
   if (
     profile &&
     identity.accountId &&

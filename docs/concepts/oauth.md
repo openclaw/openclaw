@@ -195,10 +195,12 @@ openclaw models auth login --provider openai
 ```
 
 ChatGPT workspaces under the same email can coexist in one agent. Sign in once
-for each workspace and choose that workspace on OpenAI's sign-in page. When both
-tokens identify different workspaces, OpenClaw saves the second workspace in a
-separate auth profile instead of replacing the first. Signing in again reuses the
-matching workspace profile; existing profile IDs do not change.
+for each workspace and choose that workspace on OpenAI's sign-in page. When the
+new sign-in and the saved profile identify different workspaces, OpenClaw saves
+the second workspace in a separate auth profile instead of replacing the first.
+Signing in again reuses a verified matching profile without changing its ID.
+If the generated ID is already in use and OpenClaw cannot confirm it is safe to
+replace, sign in from the CLI with a different `--profile-id`.
 
 You can also choose an explicit profile ID with `--profile-id openai:<name>`
 when running the local login flow. Do not use `openai-codex:<name>` for new profiles. Doctor migrates

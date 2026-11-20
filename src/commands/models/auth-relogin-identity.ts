@@ -35,7 +35,7 @@ export function resolveReloginProfileIdentity(params: {
   profiles: ProviderAuthResult["profiles"];
   requestedProfileId?: string;
   existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
-  matchesPersonalAccount?: AccountMatcher;
+  method?: Pick<ProviderAuthMethod, "matchesPersonalAccount" | "canReplaceGeneratedProfile">;
   allowMissingReusedProfile?: boolean;
 }) {
   const requestedProfileId = params.requestedProfileId?.trim();
@@ -55,9 +55,34 @@ export function resolveReloginProfileIdentity(params: {
     };
   }
 
-  const matcher = params.matchesPersonalAccount;
+  const canReplaceGeneratedProfile = params.method?.canReplaceGeneratedProfile;
+  const generated = {
+    profiles: params.profiles,
+    ...(canReplaceGeneratedProfile && {
+      validateCurrentCredential: (
+        profileId: string,
+        current: AuthProfileCredential | undefined,
+      ) => {
+        if (!current) {
+          return;
+        }
+        const profile = params.profiles.find((candidate) => candidate.profileId === profileId);
+        // The writer supplies the authoritative row, including other providers.
+        if (
+          !profile ||
+          current.provider !== profile.credential.provider ||
+          !canReplaceGeneratedProfile(profile.credential, current)
+        ) {
+          throw new Error(
+            "The automatic auth profile ID is already in use. Use a different profile ID with --profile-id when signing in from the CLI.",
+          );
+        }
+      },
+    }),
+  };
+  const matcher = params.method?.matchesPersonalAccount;
   if (!matcher || !params.existingProfiles || params.profiles.length !== 1) {
-    return { profiles: params.profiles };
+    return generated;
   }
   const returnedProfile = expectDefined(params.profiles[0], "auth profile");
   const matchingProfileIds: string[] = [];
@@ -67,11 +92,11 @@ export function resolveReloginProfileIdentity(params: {
         matchingProfileIds.push(profileId);
       }
     } catch {
-      return { profiles: params.profiles };
+      return generated;
     }
   }
   if (matchingProfileIds.length !== 1) {
-    return { profiles: params.profiles };
+    return generated;
   }
 
   const reusedProfileId = expectDefined(matchingProfileIds[0], "matched auth profile id");
