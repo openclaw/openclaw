@@ -213,7 +213,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
       await page.goto(
         new URL(pathForPluginCatalogEntry(inspection.catalog.plugin.id), server.baseUrl).href,
       );
-      await detail.getByRole("heading", { name: "README", exact: true }).waitFor();
+      await detail.getByRole("heading", { level: 2, name: /^readme$/iu }).waitFor();
       await checkInsets("plugin-phone");
       for (const width of [820, 1400]) {
         await page.setViewportSize({ width, height: 1000 });
