@@ -440,7 +440,9 @@ export async function updateGitInstall(params: {
     },
   });
   const steps = [...cloneSteps, ...result.steps];
-  const packageRoot = installTarget?.packageRoot;
+  const packageRoot =
+    installTarget?.packageRoot ??
+    (result.status === "ok" ? await findGlobalPackageLinkedTo(gitRoot, effectiveTimeout) : null);
   if (packageRoot && result.status === "ok" && result.root) {
     // `openclaw` on PATH resolves through the global package path; it now runs the release.
     const warning = await exposeGlobalPackageThroughRelease(packageRoot, result.root);
@@ -464,29 +466,64 @@ export async function updateGitInstall(params: {
   };
 }
 
+/** npm's global package when an earlier switch to Git linked it to this checkout. */
+async function findGlobalPackageLinkedTo(checkout: string, timeoutMs: number) {
+  const target = await resolveGlobalInstallTarget({
+    manager: "npm",
+    runCommand: runCommandWithTimeout,
+    timeoutMs,
+  }).catch(() => null);
+  const packageRoot = target?.packageRoot;
+  if (!packageRoot || !(await fs.lstat(packageRoot).catch(() => null))?.isSymbolicLink()) {
+    return null;
+  }
+  const [linked, real] = await Promise.all(
+    [packageRoot, checkout].map((dir) => fs.realpath(dir).catch(() => null)),
+  );
+  return linked && linked === real ? packageRoot : null;
+}
+
 /**
  * Point the global npm package's `openclaw.mjs`, which its bin shims run, at the release link's
  * CLI, so `openclaw` on PATH runs the selected release. The rest of the package stays: this
  * updater and a running Gateway still load from it, and an old service definition may still name
  * its `dist/index.js`. Its disk space stays used until `npm uninstall -g openclaw` (accepted).
+ *
+ * An updater before #200578 switched to Git by linking the global package to the checkout, which
+ * it then rebuilt in place. Releases never rebuild the checkout, so that link is replaced by a
+ * directory holding only the entry (writing through it would edit the checkout). A process killed
+ * between the unlink and the rename leaves no global package; the next update writes it again.
  */
 async function exposeGlobalPackageThroughRelease(
   packageRoot: string,
   slot: string,
 ): Promise<string | undefined> {
   const release = path.join(slot, "dist", "entry.js");
-  const entry = path.join(packageRoot, "openclaw.mjs");
-  const stage = `${entry}.release-${process.pid}`;
+  const linked = (await fs.lstat(packageRoot)).isSymbolicLink();
+  const stage = `${packageRoot}.release-${process.pid}`;
+  const entry = linked ? path.join(stage, "openclaw.mjs") : stage;
   try {
+    if (linked) {
+      await fs.mkdir(stage);
+      await fs.writeFile(
+        path.join(stage, "package.json"),
+        `${JSON.stringify({ name: "openclaw", private: true, bin: { openclaw: "openclaw.mjs" } })}\n`,
+      );
+    }
     await fs.writeFile(
-      stage,
+      entry,
       `#!/usr/bin/env node\n// Starts the OpenClaw Git release that ${slot} selects.\nawait import(${JSON.stringify(pathToFileURL(release).href)});\n`,
       { mode: 0o755 },
     );
-    await fs.rename(stage, entry);
+    if (linked) {
+      await fs.unlink(packageRoot);
+      await fs.rename(stage, packageRoot);
+    } else {
+      await fs.rename(stage, path.join(packageRoot, "openclaw.mjs"));
+    }
     return undefined;
   } catch (error) {
-    await fs.rm(stage, { force: true }).catch(() => {});
-    return `${entry} could not start ${release} (${String(error)}); \`openclaw\` on PATH still starts the npm package. Run \`npm uninstall -g openclaw\`, then start OpenClaw with ${release}.`;
+    await fs.rm(stage, { recursive: true, force: true }).catch(() => {});
+    return `${packageRoot} could not start ${release} (${String(error)}); \`openclaw\` on PATH still starts the npm package. Run \`npm uninstall -g openclaw\`, then start OpenClaw with ${release}.`;
   }
 }

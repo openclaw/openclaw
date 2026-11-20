@@ -28,9 +28,10 @@ import { runPackageUpdateDoctor } from "./update-command-package.js";
 const { bindExecutionGuards, executionParams, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
+// Git releases run Doctor in the release itself; only package updates delegate it.
 it.each([
   { kind: "package", fault: "requester-reassigned" },
-  { kind: "git", fault: "migrated" },
+  { kind: "package", fault: "migrated" },
 ] as const)(
   "delegates $kind Doctor without reusing its suspended parent ($fault)",
   async ({ kind, fault }) => {
