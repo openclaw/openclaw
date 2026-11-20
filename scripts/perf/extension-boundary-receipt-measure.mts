@@ -60,12 +60,24 @@ if (ids.length === 0 || missing.length > 0) {
 }
 const projects = prepareExtensionBoundaryProjects(root, ids);
 const metadata = projects.flatMap((project) => project.metadataInputs);
-const counts = { exists: 0, realpath: 0, nativeRealpath: 0, compilerProcesses: 0 };
+const counts = {
+  exists: 0,
+  realpath: 0,
+  nativeRealpath: 0,
+  compilerProcesses: 0,
+  relativePaths: 0,
+};
 childProcess.spawn = new Proxy(childProcess.spawn, {
   apply(target, receiver, args) {
     if (Array.isArray(args[1]) && args[1].includes("--api")) {
       counts.compilerProcesses++;
     }
+    return Reflect.apply(target, receiver, args);
+  },
+});
+path.relative = new Proxy(path.relative, {
+  apply(target, receiver, args) {
+    counts.relativePaths++;
     return Reflect.apply(target, receiver, args);
   },
 });
