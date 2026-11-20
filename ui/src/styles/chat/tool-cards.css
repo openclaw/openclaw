@@ -579,22 +579,20 @@
   background: transparent;
 }
 
-.chat-inspection-group {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: start;
-  gap: 8px;
-}
-
-.chat-inspection-group > .chat-tool-msg-collapse {
-  width: fit-content;
-}
-
 .row.chat-inspection {
   width: fit-content;
   align-items: start;
   gap: 8px;
   margin-top: 8px;
+}
+
+.row.chat-img {
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.chat-img > div {
+  width: auto;
 }
 
 .chat-activity-group__body .chat-tool-msg-collapse.is-open {

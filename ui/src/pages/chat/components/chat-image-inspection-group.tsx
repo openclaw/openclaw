@@ -50,7 +50,7 @@ export function ImageInspectionGroup(props: {
         imageCount={inspections().reduce((count, item) => count + item.state.images.length, 0)}
       />
       <Show when={expanded()}>
-        <div class="chat-inspection-group">
+        <div class="row chat-inspection chat-img">
           <For each={inspections()} keyed={(item) => item.key}>
             {(item) => (
               <ToolMessage
