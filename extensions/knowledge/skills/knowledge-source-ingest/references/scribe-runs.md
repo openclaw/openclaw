@@ -7,6 +7,16 @@ react, edit, pin or change anything in Slack.
 
 ## Learn from Slack
 
+The token, opt-in and coverage rules below follow the owner's decision that the
+scribe reads with the bot token by default, and with the user token or in
+direct messages only when the owner opts in
+([#202411](https://github.com/openclaw/openclaw/pull/202411)). Omitting
+`readAs` reads with the user token whenever one is configured, so every call
+names its token ([#202410](https://github.com/openclaw/openclaw/pull/202410)).
+The re-read window, thread revisits, always-partial snapshots and names taken
+only from `read` results address review of the first version of this scribe
+([#202411](https://github.com/openclaw/openclaw/pull/202411)).
+
 The prompt names how far back to start (today, or the last 7 or 30 days, in the
 owner's time zone), whether the Slack user token may be used, and whether
 direct messages and group DMs are included.

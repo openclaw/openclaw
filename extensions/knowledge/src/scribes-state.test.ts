@@ -678,37 +678,30 @@ describe("Slack readiness", () => {
   };
   const running = { enabled: true, configured: true, running: true };
 
-  it("needs a configured, running default Slack account, and reports its tokens", async () => {
-    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", tokens: undefined });
-    expect(await read(() => status({ ...running, running: false }))).toMatchObject({
-      slack: "needs-sign-in",
+  const has = (bot: boolean, userToken: boolean) => ({
+    botTokenStatus: bot ? "available" : "missing",
+    userTokenStatus: userToken ? "available" : "missing",
+  });
+  // A user-only account (no bot token) is ready and says it has no bot token.
+  it.each([
+    [{ running: false }, "needs-sign-in", undefined],
+    [{ configured: false }, "needs-sign-in", undefined],
+    [has(true, false), "ready", { bot: true, user: false }],
+    [has(true, true), "ready", { bot: true, user: true }],
+    [has(false, true), "ready", { bot: false, user: true }],
+  ] as const)("reads Slack account %j as %s with tokens %j", async (account, slack, tokens) => {
+    expect(await read(() => status({ ...running, ...account }))).toEqual({
+      slack,
+      tokens: tokens && { slack: tokens },
     });
-    expect(await read(() => status({ ...running, configured: false }))).toMatchObject({
-      slack: "needs-sign-in",
-    });
-    const bot = { ...running, botTokenStatus: "available" };
-    expect(await read(() => status({ ...bot, userTokenStatus: "missing" }))).toEqual({
-      slack: "ready",
-      tokens: { slack: { bot: true, user: false } },
-    });
-    expect(await read(() => status({ ...bot, userTokenStatus: "available" }))).toEqual({
-      slack: "ready",
-      tokens: { slack: { bot: true, user: true } },
-    });
-    // A user-only account (posting as the user, no bot token) is ready and says it has no bot.
-    expect(
-      await read(() =>
-        status({ ...running, botTokenStatus: "missing", userTokenStatus: "available" }),
-      ),
-    ).toEqual({ slack: "ready", tokens: { slack: { bot: false, user: true } } });
   });
 
-  it("leaves Slack unknown when channels.status can't be read", async () => {
-    expect(
-      await read(() => {
-        throw new Error("missing scope");
-      }),
-    ).toEqual({ slack: undefined, tokens: undefined });
+  it("needs a Slack account, and leaves Slack unknown when channels.status can't be read", async () => {
+    expect(await read(() => status())).toEqual({ slack: "needs-sign-in", tokens: undefined });
+    const unreadable = () => {
+      throw new Error("missing scope");
+    };
+    expect(await read(unreadable)).toEqual({ slack: undefined, tokens: undefined });
   });
 });
 

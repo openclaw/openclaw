@@ -3,7 +3,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { openStartDialog, pluginButton } from "./scribe-dialog.js";
 import { defaultOptions, scribeById, scribeSetup, setupPrompt } from "./scribes-catalog.js";
-import type { ScribeDetection } from "./scribes-state.js";
+import type { AccountTokens, PluginReadiness } from "./scribes-state.js";
 
 const slack = scribeById("slack")!;
 const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -22,11 +22,11 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const open = (detection: ScribeDetection) =>
+const open = (tokens?: AccountTokens, readiness: PluginReadiness = "ready") =>
   openStartDialog({
     scribe: slack,
     agentName: "Main",
-    detection,
+    detection: { plugins: { slack: readiness }, ...(tokens && { tokens: { slack: tokens } }) },
     canWrite: true,
     basePath: "/ui",
     start: async () => {},
@@ -37,10 +37,7 @@ const startButton = (dialog: HTMLDialogElement) =>
   [...dialog.querySelectorAll("button")].find((button) => button.textContent === "Start")!;
 
 it("offers the Slack user token only when the account has one, and DMs on request", () => {
-  const without = open({
-    plugins: { slack: "ready" },
-    tokens: { slack: { bot: true, user: false } },
-  });
+  const without = open({ bot: true, user: false });
   expect(without.textContent).toContain("Slack connected.");
   expect(box(without, "scribe-slack-user-token").disabled).toBe(true);
   expect(without.textContent).toContain("No Slack user token is configured");
@@ -49,10 +46,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
   );
   document.body.replaceChildren();
 
-  const withToken = open({
-    plugins: { slack: "ready" },
-    tokens: { slack: { bot: true, user: true } },
-  });
+  const withToken = open({ bot: true, user: true });
   expect(box(withToken, "scribe-slack-user-token").disabled).toBe(false);
   box(withToken, "scribe-slack-user-token").click();
   box(withToken, "scribe-slack-dms").click();
@@ -70,10 +64,7 @@ it("offers the Slack user token only when the account has one, and DMs on reques
 });
 
 it("asks the owner to turn on the user token when the Slack account has no bot token", () => {
-  const dialog = open({
-    plugins: { slack: "ready" },
-    tokens: { slack: { bot: false, user: true } },
-  });
+  const dialog = open({ bot: false, user: true });
   expect(dialog.textContent).toContain("This Slack account has no bot token");
   const tokenBox = box(dialog, "scribe-slack-user-token");
   expect(tokenBox.checked).toBe(false);
@@ -86,7 +77,7 @@ it("asks the owner to turn on the user token when the Slack account has no bot t
 });
 
 it("blocks starting until the Slack account runs, and connects it on the Channels page", () => {
-  const dialog = open({ plugins: { slack: "needs-sign-in" } });
+  const dialog = open(undefined, "needs-sign-in");
   expect(dialog.textContent).toContain(
     "Slack plugin installed, not connected to your Slack account",
   );
