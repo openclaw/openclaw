@@ -654,6 +654,18 @@ describe("callGateway url resolution", () => {
             ? { message: expect.stringMatching(/^(?!.*fixture-).*tui --url/s) }
             : {}),
         });
+        if (failure === "different origin") {
+          // #202038: the hint must not claim that `devices approve --latest` approves;
+          // it only previews, so the message must direct users to the printed request id.
+          await expect(request).rejects.toMatchObject({
+            message: expect.stringContaining(
+              "openclaw devices approve --latest` to preview the pending request",
+            ),
+          });
+          await expect(request).rejects.toMatchObject({
+            message: expect.stringContaining("openclaw devices approve <requestId>`"),
+          });
+        }
       }
       if (failure === "different origin") {
         expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({

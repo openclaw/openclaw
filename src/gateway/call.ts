@@ -552,7 +552,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
       throw new GatewayStoredDeviceAuthUnavailableError(
         [
           "No stored device auth for this gateway origin.",
-          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices) or run \`openclaw devices approve --latest\` on the gateway host, then retry.`,
+          `Run \`openclaw tui${bootstrap.sshTunnel ? "" : ` --url ${projectGatewayUrlForDiagnostics(url)}`}\` to send a pairing request, approve it in that gateway's Control UI (Settings -> Devices), or on the gateway host run \`openclaw devices approve --latest\` to preview the pending request, then run the printed \`openclaw devices approve <requestId>\` command, then retry.`,
         ].join("\n"),
       );
     }

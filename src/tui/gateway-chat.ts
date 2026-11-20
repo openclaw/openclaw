@@ -270,7 +270,7 @@ export class GatewayChatClient implements TuiBackend {
     ) {
       error.message = [
         error.message,
-        "Pairing request sent. Approve it in that gateway's Control UI (Settings -> Devices), or run `openclaw devices approve --latest` on the gateway host, then retry.",
+        "Pairing request sent. Approve it in that gateway's Control UI (Settings -> Devices), or on the gateway host run `openclaw devices approve --latest` to preview the pending request, then run the printed `openclaw devices approve <requestId>` command, then retry.",
       ].join("\n");
     }
     materializeErrorStack(error);
