@@ -82,6 +82,21 @@ it("renders gateway DNS-SD records", () => {
   }
 });
 
+it("keeps long hostnames as valid DNS labels", () => {
+  const dnsLabelRe = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+  // 62 chars + "-gateway" overflows 63, so truncation must not leave a trailing hyphen.
+  vi.spyOn(os, "hostname").mockReturnValue("a".repeat(62));
+  const txt = renderZoneText();
+
+  const instanceLabel = /_openclaw-gw\._tcp IN PTR ([^.]+)\._openclaw-gw\._tcp/.exec(txt)?.[1];
+  expect(instanceLabel).toBeDefined();
+  expect(dnsLabelRe.test(instanceLabel!)).toBe(true);
+
+  const srvTarget = /IN SRV 0 0 18789 (\S+)/.exec(txt)?.[1];
+  expect(srvTarget).toBeDefined();
+  expect(dnsLabelRe.test(srvTarget!)).toBe(true);
+});
+
 it.each(["EACCES", "EIO"])("preserves the zone on %s", async (code) => {
   const error = Object.assign(new Error("cannot read existing zone"), { code });
   vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => {
