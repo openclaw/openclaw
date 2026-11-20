@@ -239,7 +239,10 @@ it("checks each agent's own sandbox image and leaves roles without a sandbox unp
         { name: "operator", requiresSandbox: false },
       ],
     });
-    expect(status.linked ? status.roles[1]?.sandbox : "unlinked").toBeUndefined();
+    const operator = status.linked
+      ? status.roles.find((role) => role.name === "operator")
+      : undefined;
+    expect(operator?.defined ? operator.sandbox : "undefined role").toBeUndefined();
   } finally {
     await service.stop();
   }

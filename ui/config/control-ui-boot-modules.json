@@ -769,6 +769,7 @@
   "ui/src/lib/chat/thinking.ts",
   "ui/src/lib/chat/tool-display-icon.ts",
   "ui/src/lib/composer-input.ts",
+  "ui/src/lib/config-change.ts",
   "ui/src/lib/config/applied-refresh.ts",
   "ui/src/lib/config/config-gateway-read.ts",
   "ui/src/lib/config/config-mutation-error.ts",
