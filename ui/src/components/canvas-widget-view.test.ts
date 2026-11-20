@@ -398,41 +398,51 @@ describe("Canvas widget view", () => {
     expect(sibling.scrollTop).toBe(0);
   });
 
-  it("opens a guest widget automatically when its result commits", async () => {
-    vi.useFakeTimers();
-    const pending = createDeferred<CanvasDocumentViewResult>();
-    client.request.mockReturnValueOnce(pending.promise);
-    const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    await settle(view);
-    const events = gateways.get(view)!.eventListeners;
-    expect(events.size).toBe(1);
-    expect(client.request).toHaveBeenLastCalledWith(
-      "canvas.document.view",
-      { docId: view.docId, sessionKey: view.sessionKey },
-      { timeoutMs: 30_000 },
-    );
-    pending.reject(
-      new GatewayProtocolRequestError({
-        code: "UNAVAILABLE",
-        message: "Waiting for the widget result.",
-        retryable: true,
-        details: { type: "canvas_widget_pending" },
-      }),
-    );
-    await settle(view);
-    expect(notice(view)).toContain("Waiting for the widget result");
-    expect(alert(view)).toBeNull();
-    expect(events.size).toBe(1);
-    commitWidget(view, "agent:main:another");
-    expect(client.request).toHaveBeenCalledOnce();
-    commitWidget(view);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await settle(view);
-    expect(client.request).toHaveBeenCalledTimes(2);
-    expect(view.documentHtml).toBe(documentView.html);
-    expect(alert(view)).toBeNull();
-    expect(events.size).toBe(0);
-  });
+  it.each(["pending result", "sandbox startup"])(
+    "opens a guest widget after recoverable %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      const pending = createDeferred<CanvasDocumentViewResult>();
+      client.request.mockReturnValueOnce(pending.promise);
+      const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
+      await settle(view);
+      const events = gateways.get(view)!.eventListeners;
+      expect(events.size).toBe(1);
+      expect(client.request).toHaveBeenLastCalledWith(
+        "canvas.document.view",
+        { docId: view.docId, sessionKey: view.sessionKey },
+        { timeoutMs: 30_000 },
+      );
+      pending.reject(
+        new GatewayProtocolRequestError({
+          code: "UNAVAILABLE",
+          message:
+            failure === "pending result"
+              ? "Waiting for the widget result."
+              : "Sandbox host temporarily unavailable.",
+          retryable: true,
+          ...(failure === "pending result" ? { details: { type: "canvas_widget_pending" } } : {}),
+        }),
+      );
+      await settle(view);
+      expect(notice(view)).toContain(
+        failure === "pending result" ? "Waiting for the widget result" : "reconnects automatically",
+      );
+      expect(alert(view)).toBeNull();
+      expect(events.size).toBe(failure === "pending result" ? 1 : 0);
+      commitWidget(view, "agent:main:another");
+      expect(client.request).toHaveBeenCalledOnce();
+      commitWidget(view);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(client.request).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1);
+      await settle(view);
+      expect(client.request).toHaveBeenCalledTimes(2);
+      expect(view.documentHtml).toBe(documentView.html);
+      expect(alert(view)).toBeNull();
+      expect(events.size).toBe(0);
+    },
+  );
 
   it("replaces an in-flight guest lookup when its result commits", async () => {
     vi.useFakeTimers();

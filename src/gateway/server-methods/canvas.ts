@@ -72,12 +72,16 @@ async function respondWithCanvasHtml(
     assertActive();
     const [html, sandboxPort] = await Promise.all([
       readHtml(),
-      context.getMcpAppSandboxPort?.() ?? context.ensureSandboxHostPort?.(),
+      // Bind failures can recover; a failed source must keep its own classification.
+      Promise.resolve(context.getMcpAppSandboxPort?.() ?? context.ensureSandboxHostPort?.()).catch(
+        () => undefined,
+      ),
     ]);
     // Revalidate caller and host, then use the post-await policy snapshot for this reply.
     const config = assertActive();
     if (sandboxPort === undefined) {
-      throw new Error(unavailableMessage);
+      respondError(respond, ErrorCodes.UNAVAILABLE, unavailableMessage, { retryable: true });
+      return;
     }
     const result: CanvasDocumentViewResult = {
       html,
