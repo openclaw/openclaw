@@ -148,19 +148,25 @@ it("projects transient model waits and clears them across later model calls", as
   ]);
 });
 
-it("shows one transient model-wait notice for repeated Codex retries", async () => {
+it("shows one neutral model-wait notice for repeated Codex retries", async () => {
   const onItemEvent = vi.fn();
-  const codexRetry = { stream: "run_status", data: { phase: "retrying", reason: "codex_retry" } };
+  const codexRetry = { phase: "retrying", reason: "codex_retry" };
   mockEvents(
     { stream: "run_status", data: { phase: "retrying", reason: "rate_limit" } },
-    codexRetry,
-    codexRetry,
+    {
+      stream: "run_status",
+      data: { ...codexRetry, message: "Connection interrupted. The provider is retrying." },
+    },
+    {
+      stream: "run_status",
+      data: { ...codexRetry, message: "Rate limited. The provider is retrying." },
+    },
   );
 
   await execute({ onItemEvent });
 
   expect(onItemEvent.mock.calls.map(([payload]) => payload)).toEqual([
-    modelWait("update", "The model is busy. Retrying…"),
+    modelWait("update", "Still working. Retrying…"),
   ]);
 });
 

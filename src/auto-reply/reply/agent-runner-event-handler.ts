@@ -84,7 +84,7 @@ export function createAgentRunEventHandler(params: {
           ...(modelWaitPhase
             ? {
                 progressText: retrying
-                  ? "The model is busy. Retrying…"
+                  ? "Still working. Retrying…"
                   : reason === "slot"
                     ? "Waiting for a free model slot"
                     : "Waiting for the local model to respond",
