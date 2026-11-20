@@ -86,14 +86,13 @@ remote setups keep their connection and native onboarding behavior.
 The dashboard then walks the same steps as the Mac app: **Welcome to OpenClaw**,
 **Where should your assistant run?** (the Gateway it is connected to, with
 **Use a different Gateway** and **Review permissions** in the Mac app), and
-**Connect your AI**. That page lists the AI the Gateway detected and the same
-choices as native setup: one **ChatGPT** choice (an existing Codex login on the
-Gateway host, otherwise sign-in), other provider sign-ins, an API key or token,
-local model setup, and install links when nothing is found. Nothing is tested or
-saved until you pick one; OpenClaw then asks it a real test question and keeps it
-only when it answers. Errors show one short sentence with the Gateway's message
-under **Show details**. An existing configured model is kept and shown as
-**You're all set!**. See [Connect your AI](/start/onboarding#connect-your-ai).
+**Connect your AI**. That page lists one row per provider (ChatGPT first, then
+Claude, local models and other providers), and each opens its own card for
+sign-in, keys and the test. Nothing is tested or saved until you pick one;
+OpenClaw then asks it a real test question and keeps it only when it answers.
+Errors show one short sentence with the Gateway's message under **Show
+details**. An existing configured model is kept and shown as **You're all
+set!**. See [AI connection options](/start/onboarding#ai-connection-options).
 
 After inference works, OpenClaw continues its existing guided conversation for
 optional setup, including memory import and channels. You can dismiss the

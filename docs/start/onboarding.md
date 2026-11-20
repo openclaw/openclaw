@@ -152,13 +152,25 @@ You can return to **Settings → OpenClaw** later.
 
 ## AI connection options
 
-The dashboard's first-run setup uses the same steps and choices as the Mac app:
-**Welcome to OpenClaw**, **Where should your assistant run?**, then **Connect
-your AI**. It lists what the Gateway detected (CLI logins, saved API keys and
-sign-ins, loaded local models) and the provider sign-ins, with one **ChatGPT** choice: it uses an existing Codex login on the Gateway
-host when there is one, and otherwise signs in to ChatGPT. If that login fails its test, the same choice signs in instead. The card also offers the other choices the Mac shows: provider sign-ins, an API key or token, setting up a local model, and install links when nothing is found. Nothing is tested, installed, or saved until you pick one. A configured
-model is kept and shown as **You're all set!**. Errors show one short sentence
-with the Gateway's full message under **Show details**.
+The dashboard's first-run setup uses the same steps as the Mac app: **Welcome to
+OpenClaw**, **Where should your assistant run?**, then **Connect your AI**. That
+page lists one row per provider, and each row opens its own card:
+
+- **ChatGPT** (first): uses an existing Codex login on the Gateway host when there
+  is one, and tests it right away; otherwise, or when that test fails, it offers
+  **Sign in with ChatGPT**.
+- **Claude**: uses an existing Claude Code login on the Gateway host, otherwise a
+  Claude API key.
+- **Run a model locally**: local models the Gateway found, local model servers
+  such as LM Studio, and download links for apps such as Ollama.
+- **Another provider**: every other sign-in and API key, plus any other AI the
+  Gateway found.
+
+**Check again** looks for newly installed apps and logins. Nothing is tested,
+installed or saved until you pick a provider; OpenClaw then asks it a real test
+question and saves it only when it answers. A configured model is kept and shown
+as **You're all set!**. Errors show one short sentence with the Gateway's full
+message under **Show details**.
 
 Change models later in the provider and model settings, or choose **Connection… →
 Gateways** to switch Gateways. AI setup always runs on the Gateway host, even when
