@@ -44,6 +44,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { completeSetupFirstAgent } from "./setup-first-agent.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import {
   fixture,
@@ -327,6 +328,53 @@ it("activates and restores setup credentials off-thread while preserving later n
       key: "fixture-next",
     });
     expect(restored.usageStats?.neighbor?.lastUsed).toBe(42);
+  });
+});
+
+it("provisions the first agent during native provider sign-in before the UI handoff", async () => {
+  const setup = await fixture({ codex: true, fresh: true, skipBootstrap: false });
+  const selectedModel = "meta/muse-spark-1.3";
+  setupMuseProvider(setup, selectedModel, {
+    executionEnvironment: "host-only",
+    verifySetup: async () => {},
+  });
+  installRuntime.mockImplementation(async ({ cfg, beforePersistentEffect }) => {
+    await beforePersistentEffect?.();
+    return {
+      installed: true,
+      status: "installed",
+      pluginId: "muse",
+      cfg: {
+        ...cfg,
+        plugins: { ...cfg.plugins, entries: { ...cfg.plugins?.entries, muse: { enabled: true } } },
+      },
+    };
+  });
+  vi.mocked(setup.prompter.select).mockResolvedValue("continue");
+  const result = await setup.runWithMetadata(() =>
+    activateSetupInference({
+      kind: "provider-auth",
+      authChoice: "muse-code",
+      completeFirstAgent: true,
+      nativeSessionCatalogsEnabled: false,
+      surface: "cli",
+      runtime: createNonExitingRuntime(),
+      prompter: setup.prompter,
+    }),
+  );
+  expect(result).toMatchObject({ ok: true, modelRef: selectedModel });
+  expect((await readConfigFileSnapshot()).sourceConfig.agents?.entries?.main).toMatchObject({
+    name: "main",
+    workspace: setup.workspace,
+    nativeRuntimeConsent: ["muse"],
+  });
+  expect(await fs.readFile(path.join(setup.workspace, "BOOTSTRAP.md"), "utf8")).toContain(
+    "The user's request always comes first.",
+  );
+  await expect(completeSetupFirstAgent({ modelRef: selectedModel })).resolves.toEqual({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    bootstrapPending: true,
   });
 });
 

@@ -231,7 +231,7 @@ describe("ModelSetupPage first-run inference", () => {
       ]);
       expect(context.navigate).toHaveBeenCalledWith("chat", {
         pathname: "/openclaw/chat/main",
-        search: "?draft=Wake%20up%2C%20my%20friend!",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
       });
     });
   });
@@ -277,7 +277,7 @@ describe("ModelSetupPage first-run inference", () => {
       continueSetup.click();
       expect(context.navigate).toHaveBeenCalledWith("chat", {
         pathname: "/openclaw/chat/main",
-        search: "?draft=Wake%20up%2C%20my%20friend!",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
       });
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "openclaw.setup.verify",
@@ -349,7 +349,7 @@ describe("ModelSetupPage first-run inference", () => {
           ]);
           expect(context.navigate).toHaveBeenCalledWith("chat", {
             pathname: "/openclaw/chat/main",
-            search: "?draft=Wake%20up%2C%20my%20friend!",
+            search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
           });
         });
         expect(context.navigate).not.toHaveBeenCalledWith("chat");
@@ -616,7 +616,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       ]);
       expect(relaunched.context.navigate).toHaveBeenCalledWith("chat", {
         pathname: "/openclaw/chat/main",
-        search: "?draft=Wake%20up%2C%20my%20friend!",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
       });
     });
     expect(original.request).toHaveBeenCalledOnce();
@@ -678,7 +678,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       expect(activationCount).toBe(2);
       expect(context.navigate).toHaveBeenCalledWith("chat", {
         pathname: "/openclaw/chat/main",
-        search: "?draft=Wake%20up%2C%20my%20friend!",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
       });
     });
     resolveFirstActivation?.(activated("openai/new", { gatewayRestartRequired: true }));
