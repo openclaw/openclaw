@@ -401,10 +401,10 @@ it("relists an unchanged provider when a running Gateway adopts a hosted catalog
       models: { catalogRefresh: { url: sourceUrl } },
     };
     const input = catalogInput({ ...fixture, config });
-    let stored: ReturnType<typeof storedCatalog> | undefined;
+    const hosted: { stored?: ReturnType<typeof storedCatalog> } = {};
     setRemoteModelCatalogOverlaySourcesForTest({
       bundledGeneratedAt: () => 1,
-      readStoredCatalog: () => stored,
+      readStoredCatalog: () => hosted.stored,
     });
     expect(await prepareRemoteModelCatalogStartupSnapshot({ env: fixture.env })).toBeNull();
     const listings = () => fs.readFileSync(fixture.marker, "utf8").split("start\n").length - 1;
@@ -415,7 +415,7 @@ it("relists an unchanged provider when a running Gateway adopts a hosted catalog
     await published.loadFullModelCatalog!({ refresh: true, wait: true });
     const before = listings();
 
-    stored = storedCatalog(100);
+    hosted.stored = storedCatalog(100);
     expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
     // Neither the provider's config nor its credentials changed; adoption still relists it.
     expect(listings()).toBe(before + 1);
