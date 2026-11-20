@@ -196,9 +196,16 @@ export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise
   }
 }
 
-/** A Startup-folder login item installed in place of the Scheduled Task. */
-export async function isStartupEntryOnly(env: GatewayServiceEnv): Promise<boolean> {
-  return !(await isRegisteredScheduledTask(env)) && (await isStartupEntryInstalled(env));
+/**
+ * Read-only: a Startup-folder login item installed in place of the Scheduled Task.
+ * Only confirmed task absence counts; an unknown probe keeps inspection failures visible.
+ */
+export async function isConfirmedStartupEntryOnly(
+  env: GatewayServiceEnv,
+  timeoutMs?: number,
+): Promise<boolean> {
+  const probe = probeScheduledTaskState(resolveTaskName(env), timeoutMs);
+  return probe.status === "missing" && (await isStartupEntryInstalled(env));
 }
 
 export async function launchFallbackTaskScript(

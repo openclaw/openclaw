@@ -522,8 +522,8 @@ export async function auditGatewayServiceConfig(params: {
         params.expectedCommand,
       ).catch(async (error: unknown) => {
         // A Startup-folder login item has no Task Scheduler definition to compare.
-        const { isStartupEntryOnly } = await import("./schtasks-runtime.js");
-        if (!(await isStartupEntryOnly(params.env))) {
+        const { isConfirmedStartupEntryOnly } = await import("./schtasks-runtime.js");
+        if (!(await isConfirmedStartupEntryOnly(params.env, params.timeoutMs))) {
           throw error;
         }
       });

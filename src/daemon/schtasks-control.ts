@@ -35,9 +35,9 @@ import {
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
+  isRegisteredScheduledTask,
   isScheduledTaskDefinitelyNotRunning,
   isStartupEntryInstalled,
-  isStartupEntryOnly,
   launchFallbackTaskScript,
   readScheduledTaskRuntime,
   removeStartupEntries,
@@ -388,7 +388,7 @@ async function shouldControlStartupEntry(env: GatewayServiceEnv): Promise<boolea
     }
     return true;
   }
-  return await isStartupEntryOnly(env);
+  return !(await isRegisteredScheduledTask(env)) && (await isStartupEntryInstalled(env));
 }
 
 export async function stopScheduledTask(params: GatewayServiceControlArgs): Promise<void> {
