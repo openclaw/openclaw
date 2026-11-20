@@ -245,9 +245,8 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             model,
             prompt: req.prompt,
             n: 1,
-            // The dedicated endpoint takes aspect_ratio for every image model and rejects
-            // unsupported values itself. Resolution stays Gemini-only: edits infer it from
-            // the reference image, and other models reject values outside their own set.
+            // Every dedicated-endpoint model takes aspect_ratio. Resolution stays Gemini-only:
+            // edits infer it from the reference image, and models reject tiers outside their set.
             ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
             ...(imageConfig.image_size ? { resolution: imageConfig.image_size } : {}),
             ...(inputReferences.length > 0 ? { input_references: inputReferences } : {}),

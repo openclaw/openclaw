@@ -180,15 +180,13 @@ describe("openrouter image generation provider", () => {
     });
   });
 
-  it("forwards the requested aspect ratio for non-Gemini canonical requests", async () => {
+  it("forwards aspect ratio but not resolution for non-Gemini canonical requests", async () => {
     respond({ data: [{ b64_json: "cG5nLW9uZQ==" }] });
 
     await generateImage({
       model: "bytedance-seed/seedream-5-5",
       inputImages: [{ buffer: Buffer.from("source-image"), mimeType: "image/png" }],
       aspectRatio: "16:9",
-      // Edits infer a resolution from the reference image size. It stays Gemini-only
-      // because other models reject values outside their own set (Seedream: no 4K).
       resolution: "4K",
     });
 
