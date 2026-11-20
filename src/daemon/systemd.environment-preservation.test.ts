@@ -252,7 +252,10 @@ it.skipIf(process.platform === "win32").each([
       );
     }
     const generatedFiles = [...rewrittenUnit.matchAll(/^EnvironmentFile=-?(.*)$/gm)].map(
-      (match): [string, boolean] => [match[1], true],
+      (match): [string, boolean] => [
+        expectDefined(match[1], "generated environment file path"),
+        true,
+      ],
     );
     const rewrittenSnapshot = snapshot({
       ...plan,
@@ -324,7 +327,7 @@ it.skipIf(process.platform === "win32")(
           ([key, value]) => `${key}=${value}`,
         ),
         environmentFiles: [...unit.matchAll(/^EnvironmentFile=-?(.*)$/gm)].map((match) => [
-          match[1],
+          expectDefined(match[1], "generated environment file path"),
           true,
         ]),
       });
