@@ -143,6 +143,9 @@ it.skipIf(!available).each([true, false])(
         await writeFile(path.join(proof, stage + ".png"), frame.png);
         await page.waitForTimeout(600);
       };
+      await dialog.evaluate((element) =>
+        Promise.all(element.getAnimations().map((animation) => animation.finished)),
+      );
       const bounds = await card.boundingBox();
       expect(bounds?.width).toBe(620);
       expect(bounds?.height).toBe(565);
@@ -204,6 +207,7 @@ it.skipIf(!available).each([true, false])(
       }
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       expect(await gateway.getRequests("templates.drafts.publish")).toHaveLength(0);
+      await page.clock.install();
       await gateway.setMethodDelay("templates.drafts.publish", "forever");
       await card.getByRole("button", { name: "Publish", exact: true }).click();
       await dialog.waitFor({ state: "hidden" });
@@ -228,6 +232,8 @@ it.skipIf(!available).each([true, false])(
           publication: { ...publication, publicationStatus: "published" },
         },
       });
+      // Pending publications refresh through the owner's 30-second polling interval.
+      await page.clock.runFor(30_000);
       await compact.getByText("Published", { exact: true }).waitFor({ timeout: 10_000 });
       await capture("published", compact);
       expect(await compact.getByRole("button", { name: "Copy link", exact: true }).count()).toBe(1);
