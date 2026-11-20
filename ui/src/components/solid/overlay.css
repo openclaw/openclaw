@@ -181,6 +181,8 @@
   font: inherit;
   font-weight: var(--control-ui-font-weight-normal);
   text-align: start;
+  /* Settled surfaces keep the computed scale that geometry readers wait for. */
+  scale: 1;
 }
 
 /* Zero specificity: every caller's own size budget wins regardless of load order. */
