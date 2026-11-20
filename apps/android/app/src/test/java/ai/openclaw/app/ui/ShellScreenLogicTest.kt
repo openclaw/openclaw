@@ -681,7 +681,6 @@ class ShellScreenLogicTest {
       settingsSections(
         listOf(
           settingsRow(SettingsRoute.Voice),
-          settingsRow(SettingsRoute.SystemAgent),
           settingsRow(SettingsRoute.Gateway),
           settingsRow(SettingsRoute.Appearance),
           settingsRow(SettingsRoute.ProvidersModels),

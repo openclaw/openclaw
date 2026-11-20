@@ -67,12 +67,12 @@ class AndroidScreenshotModeTest {
   }
 
   @Test
-  fun openClawSceneTargetsSystemAgentSettings() {
+  fun legacyOpenClawSceneOpensOrdinaryChat() {
     val scene = AndroidScreenshotScene.fromRawValue("openclaw")
 
     assertEquals(AndroidScreenshotScene.OpenClaw, scene)
-    assertEquals(HomeDestination.Settings, scene.homeDestination)
-    assertEquals(SettingsRoute.SystemAgent, scene.settingsRoute)
+    assertEquals(HomeDestination.Chat, scene.homeDestination)
+    assertNull(scene.settingsRoute)
   }
 
   @Test

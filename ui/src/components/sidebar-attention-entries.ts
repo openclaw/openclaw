@@ -2,7 +2,6 @@ import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/in
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
-import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icon-data.ts";
 import {
   resolveScopeUpgradeDismissal,
@@ -31,7 +30,6 @@ export type SidebarAttentionItem = SidebarInboxEntryBase<"automations" | "system
   arrivedAtMs?: number;
   action:
     | { kind: "navigate"; routeId: NavigationRouteId; search?: string }
-    | { kind: "askCustodian"; alert: CustodianAlert }
     | { kind: "openClawIdRecovery"; label: string }
     | { kind: "openClawIdBrowserApproval"; remote: boolean; label: string };
   inlineAction?: { label: string; routeId: NavigationRouteId };

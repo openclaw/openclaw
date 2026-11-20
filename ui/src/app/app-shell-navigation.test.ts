@@ -44,7 +44,6 @@ it.each(["palette", "/settings/general", "/config"])(
       activeSessionKey: "",
       routeState: {},
       lastWorkspaceLocation: null,
-      custodianMinimizeRequestId: 0,
       lastConcreteRouteId: undefined,
       didConsiderNativeRouteRestore: false,
       settingsSearchQuery: "",
@@ -67,7 +66,6 @@ it.each(["palette", "/settings/general", "/config"])(
         sessionItems: [],
         catalogItems: [],
         desktopAvailable: false,
-        custodianAvailable: false,
       })[0];
       const routeId = item?.action.slice(4);
       assert(routeId && isRouteId(routeId), "Settings palette action is missing");
@@ -117,7 +115,6 @@ function titledSessionNavigation(face: "chat" | "dashboard") {
       committedSessionKey: key,
     },
     lastWorkspaceLocation: null,
-    custodianMinimizeRequestId: 0,
     lastConcreteRouteId: face,
     didConsiderNativeRouteRestore: true,
     settingsSearchQuery: "",

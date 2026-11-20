@@ -258,7 +258,7 @@ export type SettingsSearchBlock = {
 // Management surfaces (sessions, worktrees, activity, memory import) are
 // workspace destinations, not settings; model setup is a subpage of Models.
 const SETTINGS_NAVIGATION_GROUPS = [
-  { labelKey: null, routes: ["custodian", "profile", "appearance", "notifications"] },
+  { labelKey: null, routes: ["profile", "appearance", "notifications"] },
   { labelKey: "nav.settingsGroupDevice", routes: ["device", "device-permissions"] },
   {
     labelKey: "nav.settingsGroupConnections",
@@ -283,7 +283,16 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "labs", "advanced", "debug", "logs", "updates", "about"],
+    routes: [
+      "infrastructure",
+      "labs",
+      "advanced",
+      "debug",
+      "logs",
+      "system-history",
+      "updates",
+      "about",
+    ],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -419,7 +428,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   terminal: ["terminal", "terminal.title", "terminal.open"],
   dashboard: navigationPresentation("layoutDashboard", "chat"),
   dashboards: navigationPresentation("dashboards", "dashboards"),
-  custodian: navigationPresentation("lobster", "custodian"),
+  custodian: navigationPresentation("messageSquare", "chat"),
+  "system-history": ["history", "systemHistory.title", "systemHistory.description"],
   config: ["settings", "nav.settings", "subtitles.config"],
   profile: navigationPresentation("circleUser", "profile"),
   communications: navigationPresentation("send", "communications"),

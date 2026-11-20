@@ -8,10 +8,7 @@ import {
 import type { CommandPaletteItem } from "./command-palette-catalog-search.ts";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState } from "./command-palette-state.ts";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  DESKTOP_PANEL_TOGGLE_EVENT,
-} from "./panel-toggle-contract.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
 
@@ -55,8 +52,6 @@ export function selectItem(item: CommandPaletteItem, props: CommandPaletteProps)
     props.onSelectSession?.(item.action.slice(SESSION_ACTION_PREFIX.length));
   } else if (item.action === "panel:desktop") {
     window.dispatchEvent(new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
-  } else if (item.action === "panel:custodian") {
-    window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
   } else {
     props.onSlashCommand?.(item.action);
   }

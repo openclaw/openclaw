@@ -11,7 +11,6 @@ import type { AssistantPanelOwner } from "./assistant-panel-controller.ts";
 import { AssistantPanelLoading } from "./assistant-panel-loading.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { LazyViewError } from "./solid/lazy-view-error.tsx";
-import { askBrandLabel } from "./theme-brand-label.ts";
 
 // Reuse the resolved renderer across context-only remounts of the same host.
 const Content = lazy(() => import("./assistant-panel-content-solid.tsx"), {
@@ -32,10 +31,6 @@ export function AssistantPanelView(props: {
     return typeof destination === "string" ? undefined : destination.params;
   };
   const target = () => session() ?? state().homeTarget();
-  const destinationKind = () => {
-    const destination = state().destination();
-    return typeof destination === "string" ? destination : "session";
-  };
   const style = () =>
     dock() === "bottom"
       ? `height:${state().dockLayout.height}px`
@@ -69,14 +64,7 @@ export function AssistantPanelView(props: {
       </Show>
       <header class="rail-header assistant-panel-header" onMouseDown={beginNativeWindowDrag}>
         <div class="assistant-panel-title">
-          <openclaw-mascot
-            mood={
-              state().destination() === "custodian" && state().props.store?.sending
-                ? "thinking"
-                : "idle"
-            }
-            prop:size={16}
-          />
+          <openclaw-mascot mood="idle" prop:size={16} />
           {session() ? (
             <button
               type="button"
@@ -87,7 +75,7 @@ export function AssistantPanelView(props: {
               {session()?.label}
             </button>
           ) : undefined}
-          <For each={["home", "custodian"] as const}>
+          <For each={["home"] as const}>
             {(destination) => (
               <>
                 {" "}
@@ -98,7 +86,7 @@ export function AssistantPanelView(props: {
                     aria-pressed={state().destination() === destination ? "true" : "false"}
                     onClick={() => state().openDestination(destination)}
                   >
-                    {destination === "home" ? t("assistantPanel.home") : askBrandLabel(t)}
+                    {t("assistantPanel.home")}
                   </button>
                 ) : undefined}{" "}
               </>
@@ -189,7 +177,6 @@ export function AssistantPanelView(props: {
                 <Content
                   hidden={!contentActive()}
                   active={contentActive()}
-                  destination={destinationKind()}
                   sessionKey={target().sessionKey}
                   agentId={target().agentId}
                   sessionContext={session()?.context}
@@ -197,8 +184,6 @@ export function AssistantPanelView(props: {
                   pageRouteId={state().props.pageRouteId}
                   pageSessionKey={state().props.pageSessionKey}
                   pageAgentId={state().props.pageAgentId}
-                  store={state().props.store}
-                  onStore={(store) => state().acceptStore(store)}
                 />
               </Loading>
             </Errored>

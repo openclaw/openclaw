@@ -48,6 +48,7 @@ const APP_ROUTE_DEFINITIONS = {
   dashboard: { path: "/dashboard" },
   dashboards: { path: "/dashboards" },
   custodian: { path: "/custodian" },
+  "system-history": { path: "/settings/system-history" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
   meetings: { path: "/meetings" },

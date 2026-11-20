@@ -26,17 +26,12 @@ separately. Without a complete lint report, a deadline does not establish that
 the checks finished. Diagnostic collection does not require inference;
 the original update check remains the reported failure.
 
-In the Control UI, a failed attempt opens **Ask OpenClaw** with its recorded
-details and asks it to investigate before retrying. A lost connection or
-verification timeout is presented as an unknown outcome. The tab remembers the
-latest 32 investigated attempt identities, scoped to their Gateway and profile.
-Status checks, switching between those scopes, and reloading the same tab do not
-automatically send those investigations again. If the browser cannot read or
-save that history, the failure details remain visible without an automatic
-diagnostic request. Ask OpenClaw manually or run `openclaw triage` on the host.
-If the Gateway or agent is
-unavailable, use `openclaw triage` on the Gateway host. Automatic diagnosis keeps
-your unsent composer draft, including when its conversation session must restart.
+In the Control UI, inspect a failed attempt in **Settings → Updates**. A lost
+connection or verification timeout remains an unknown outcome until reconciled.
+Status checks and reloads never start an agent investigation or retry an update.
+**Ask your agent** prepares an editable, unsent Home question containing bounded
+recorded facts, preserving your existing draft. If inference is unavailable,
+use the direct recovery controls or run `openclaw triage` on the Gateway host.
 
 **Control UI → Settings → Updates** keeps the latest recorded attempt visible,
 including its time, before/after identities, reason code, failing step, and
@@ -57,7 +52,7 @@ accepted ownership; check `openclaw update status` and
 `openclaw gateway status --deep` before retrying.
 
 For a final failed attempt, **Report update failure** is separate from **Retry**
-and **Ask OpenClaw**. It previews a bounded report containing the OpenClaw
+and **Ask your agent**. It previews a bounded report containing the OpenClaw
 version, platform, update target, failed phase, sanitized diagnostics, and
 verified rollback outcome. The report excludes secrets, tokens, chat content,
 raw logs, private absolute paths, and recovery commands. Nothing is submitted

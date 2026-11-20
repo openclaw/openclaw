@@ -6,7 +6,6 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute, pluginSettingsIdFromPath } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
-import { askBrandLabel } from "../components/theme-brand-label.ts";
 import { i18n, t } from "../i18n/index.ts";
 
 const SETTINGS_SUBPAGE_OWNER_ROUTES: Partial<
@@ -73,9 +72,6 @@ export function settingsNavigationLabelForRoute(
 ): string {
   if (routeId === "device" && snapshot) {
     return t(deviceSettingsGroupLabelKey(snapshot));
-  }
-  if (routeId === "custodian") {
-    return askBrandLabel();
   }
   return titleForRoute(routeId);
 }

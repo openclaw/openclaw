@@ -301,6 +301,10 @@ fun ShellScreen(
                 onSelectTab = nav::selectTab,
                 onOpenSettingsRoute = nav::openSettingsRoute,
                 onOpenCommand = { commandOpen = true },
+                onOpenHome = {
+                  viewModel.switchChatSession(viewModel.mainSessionKey.value)
+                  nav.selectTab(Tab.Chat)
+                },
               )
             }
 
@@ -1231,6 +1235,7 @@ private fun SettingsShellScreen(
   onRouteChange: (SettingsRoute) -> Unit,
   onBack: () -> Unit,
   onOpenCommand: () -> Unit,
+  onOpenHome: () -> Unit,
 ) {
   // Detail destinations own their own refreshes; opening an operational page must
   // not start all of the Settings Home subscriptions and requests.
@@ -1344,11 +1349,11 @@ private fun SettingsShellScreen(
       item {
         ClawPanel(contentPadding = PaddingValues(horizontal = ClawTheme.spacing.xs)) {
           SettingsListRow(
-            title = SettingsRoute.SystemAgent.title,
-            value = nativeText("Setup, status, and repair"),
-            icon = SettingsRoute.SystemAgent.icon,
+            title = nativeText("Talk to your agent"),
+            value = nativeText("Your work, setup, and integrations in one conversation"),
+            icon = ClawIcons.Chat,
             iconTint = ClawTheme.colors.accent,
-            onClick = { onRouteChange(SettingsRoute.SystemAgent) },
+            onClick = onOpenHome,
           )
         }
       }

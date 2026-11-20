@@ -16,7 +16,6 @@ it("opens meeting transcripts from search without querying agent chat history", 
     sessionItems: [],
     catalogItems: [],
     desktopAvailable: false,
-    custodianAvailable: false,
   });
   expectItem(items, { label: "Meetings", action: "nav:meetings" });
 });

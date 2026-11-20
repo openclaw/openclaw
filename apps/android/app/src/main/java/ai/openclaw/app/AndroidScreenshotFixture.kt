@@ -314,10 +314,6 @@ internal object AndroidScreenshotFixture {
           cronRuns()
         }
 
-        "openclaw.chat" -> {
-          systemAgentChat(paramsJson)
-        }
-
         else -> {
           error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
         }
@@ -500,48 +496,6 @@ internal object AndroidScreenshotFixture {
           ),
         ),
     )
-
-  private fun systemAgentChat(paramsJson: String?): String {
-    val message =
-      paramsJson
-        ?.let { Json.parseToJsonElement(it).jsonObject["message"] }
-        ?.jsonPrimitive
-        ?.contentOrNull
-    return buildJsonObject {
-      put("sessionId", JsonPrimitive("android-screenshot-openclaw"))
-      put(
-        "reply",
-        JsonPrimitive(
-          if (message == null) {
-            "I can check Gateway status, repair configuration, change models, or connect channels."
-          } else {
-            "I’ll keep this conversation separate from ordinary agent chat."
-          },
-        ),
-      )
-      put("action", JsonPrimitive("none"))
-      if (message == null) {
-        putJsonObject("question") {
-          put("id", JsonPrimitive("help"))
-          put("header", JsonPrimitive("OpenClaw"))
-          put("question", JsonPrimitive("What should we look at first?"))
-          putJsonArray("options") {
-            addJsonObject {
-              put("label", JsonPrimitive("Check status"))
-              put("description", JsonPrimitive("Review the Gateway and active services."))
-              put("recommended", JsonPrimitive(true))
-              put("reply", JsonPrimitive("Check Gateway status"))
-            }
-            addJsonObject {
-              put("label", JsonPrimitive("Review setup"))
-              put("description", JsonPrimitive("Inspect models, channels, and configuration."))
-              put("reply", JsonPrimitive("Review setup"))
-            }
-          }
-        }
-      }
-    }.toString()
-  }
 
   private fun cronList(): String =
     buildJsonObject {

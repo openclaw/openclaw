@@ -1362,9 +1362,8 @@ with a sticky header. If copying fails, the button clears any earlier success ch
 file and session links work in either view, including Enter and Space keyboard
 activation. Following a link closes the expanded view so you can use its destination.
 
-The **Ask OpenClaw** panel supports table scrolling, copying, expansion, and web
-links. Its session links open with a click or Enter. Space does not activate
-those links, and workspace-file references do not open a preview.
+The **Home** dock uses the ordinary chat renderer, including the same table,
+file-preview, session-link, and keyboard behavior as the full conversation.
 
 ### Mermaid diagrams
 

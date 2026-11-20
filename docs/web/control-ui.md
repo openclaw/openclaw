@@ -420,7 +420,7 @@ If a narration subscription encounters a retryable failure or times out, it retr
 
 Failed narration releases use the same backoff, including while the tab is hidden. If a session is needed again, its queued release is canceled and its subscription is renewed safely. Closing the Gateway connection cancels release retries.
 
-Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
+Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Contextual Settings help opens the regular Home conversation only when requested, with an unsent question.
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
 
@@ -884,7 +884,7 @@ is absent from the window, its agent's most recent session supplies the preview.
 - [Sessions and sidebar](/web/control-ui/sessions-and-sidebar) — sidebar zones, session menus, and the New session page.
 - [Systems workspace](/web/control-ui/sessions-and-sidebar#systems-workspace) — contextual machine navigation and a desktop-first workspace.
 - [Chat](/web/control-ui/chat) — composer controls, the session rail, transcript rendering, and hosted embeds.
-- [Panels and docks](/web/control-ui/panels) — Ask OpenClaw, the Home dock, the operator terminal, and the browser panel.
+- [Panels and docks](/web/control-ui/panels) — the Home dock, the operator terminal, and the browser panel.
 - [Settings](/web/control-ui/settings) — identity, appearance, plugins, updates, MCP, activity, and meetings.
 - [Feature and RPC reference](/web/control-ui/feature-reference) — every capability with the Gateway RPC behind it.
 - [Offline and reconnect](/web/control-ui/offline-and-reconnect) — what survives a dropped connection.

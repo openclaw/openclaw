@@ -12,19 +12,7 @@ import {
   createApplicationGateway,
   createApplicationGatewaySnapshot,
 } from "../../test-helpers/application-context-fixtures.ts";
-import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
 import { createChannelsState } from "../channels/view.test-support.ts";
-import { CustodianSessionStore } from "./custodian-session-store.ts";
-import "./custodian-page.tsx";
-
-type TestCustodianPage = HTMLElement & {
-  onboarding: boolean;
-  store: CustodianSessionStore;
-  updateComplete: Promise<boolean>;
-};
 
 type ContextHarness = {
   context: ApplicationContext;
@@ -182,7 +170,9 @@ export function createContext(
         return () => agentListeners.delete(listener);
       },
       refreshList: vi.fn(),
+      ensureList: vi.fn(),
     },
+    sessions: { state: { result: null } },
     agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
     acquireChannels: () => channels,
     overlays,
@@ -242,21 +232,4 @@ export function createContext(
       }
     },
   };
-}
-
-export async function mountPage(
-  context: ApplicationContext,
-  options: { onboarding?: boolean } = {},
-): Promise<{
-  page: TestCustodianPage;
-  provider: ApplicationContextProvider;
-}> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
-  page.store = new CustodianSessionStore();
-  page.onboarding = options.onboarding ?? true;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
 }

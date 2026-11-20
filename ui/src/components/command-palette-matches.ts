@@ -41,7 +41,6 @@ export function createCommandPaletteMatches(
         snapshot.sessionItems,
         catalogItems(),
         snapshot.desktopAvailable,
-        snapshot.custodianAvailable,
         snapshot.primaryModelSearch,
         snapshot.mode === "compose",
       ] as const;
@@ -55,7 +54,6 @@ export function createCommandPaletteMatches(
       sessionItems,
       preparedCatalog,
       desktopAvailable,
-      custodianAvailable,
       primaryModelSearch,
       hidden,
     ] = matchInputs();
@@ -67,7 +65,6 @@ export function createCommandPaletteMatches(
           sessionItems,
           catalogItems: preparedCatalog,
           desktopAvailable,
-          custodianAvailable,
           primaryModelSearch,
         });
   });

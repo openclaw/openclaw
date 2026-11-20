@@ -115,7 +115,7 @@ Chat status and model listings identify a selected personal credential as **pers
 
 The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login` to choose a provider and method, or supply `login <provider> --method <id>` directly. Use `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 
-Ask OpenClaw (Custodian) requires administrator access and a working configured inference route. Ask it to manage your personal model accounts, or enter `model accounts`. In the Control UI it opens **Settings → Profile → Connected accounts**. In a terminal it gives the CLI commands. If Custodian is unavailable, open **Connected accounts** or use the CLI directly. The handoff makes no change by itself. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.
+In the Control UI, open **Settings → Profile → Connected accounts** to manage your personal model accounts, or use the CLI directly. These recovery controls do not require working inference. Your regular Home agent can explain the choices without signing in for you. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.
 
 ### Where credentials are stored
 

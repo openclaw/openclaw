@@ -3,6 +3,9 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createApplicationAgent } from "../../app/create-agent.ts";
+import { captureHomeHelpTarget, openHomeHelp } from "../../app/home-help.ts";
+import { t } from "../../i18n/index.ts";
 import { canDeleteAgent, deleteAgent } from "../../lib/agents/delete-agent.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
@@ -509,7 +512,8 @@ export function createAgentsPageState(
     const access = {
       settings: settingsAccess(),
       canDeleteAgent: Boolean(selectedAgentId && canDeleteAgent(context, selectedAgentId)),
-      canCreateAgent: canCall("openclaw.chat", "operator.admin"),
+      canCreateAgent: canCall("agents.create", "operator.admin"),
+      canPlanAgents: canCall("chat.send", "operator.write"),
       canPatchConfig: canCall("config.patch", "operator.admin"),
       canUpdateConfig: canCall("config.set", "operator.admin"),
       canUpdateIdentity: canCall("agents.update", "operator.admin"),
@@ -611,10 +615,10 @@ export function createAgentsPageState(
           void context.runtimeConfig.refresh({ background: true });
         }
       },
+      onPlanAgents: () =>
+        openHomeHelp(context, captureHomeHelpTarget(context), t("agentPlanning.question")),
       onCreateAgent: () => {
-        if (canCall("openclaw.chat", "operator.admin")) {
-          context.navigate("custodian", { search: "?intent=new-agent" });
-        }
+        void createApplicationAgent(context);
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),

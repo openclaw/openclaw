@@ -175,7 +175,6 @@ export function ApplicationShell(props: {
         host={props.host}
         revision={props.host.shellRevision()}
         desktopPanelAvailable={view().desktopPanelAvailable}
-        custodianPanelAvailable={view().custodianPanelAvailable}
         nativeEmbed={view().nativeEmbed}
       />
       <div
@@ -449,7 +448,6 @@ export function ApplicationShell(props: {
               "content--new-session": view().activeRoute === "new-session",
               "content--connecting": view().initialGatewayConnection,
               "content--systems": view().activeRoute === "systems",
-              "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
               "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
@@ -553,18 +551,13 @@ export function ApplicationShell(props: {
         <openclaw-assistant-panel
           ref={(element) => (props.host.elements.assistantPanel = element)}
           inert={view().navDrawerOpen}
-          prop:custodianAvailable={view().custodianPanelAvailable && !view().nativeEmbed}
           prop:homeAvailable={view().homePanelAvailable && !view().nativeEmbed}
-          prop:custodianSuppressed={view().activeRoute === "custodian"}
           prop:pageSessionKey={(props.host.shellRevision(), props.host.activeSessionKey)}
           prop:getPrimaryChatPane={view().callbacks.getPrimaryChatPane}
           prop:pageAgentId={view().selectedAgentId}
           prop:pageRouteId={view().activeRoute}
           prop:pageRouteFailed={
             (props.host.shellRevision(), props.host.routeState.routeFailed === true)
-          }
-          prop:minimizeRequestId={
-            (props.host.shellRevision(), props.host.custodianMinimizeRequestId)
           }
         />
         <ShellRequestedComponent

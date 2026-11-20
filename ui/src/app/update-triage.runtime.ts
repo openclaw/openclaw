@@ -1,12 +1,11 @@
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { t } from "../i18n/index.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 import { formatUiExternalText } from "../lib/format-error.ts";
 import { clampText } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { custodianAlertStore } from "../pages/custodian/custodian-alert-store.ts";
 import type { ApplicationContext } from "./context.ts";
+import { captureHomeHelpTarget, openHomeHelp } from "./home-help.ts";
 import type { UpdateFailureTriage, UpdateTriageAdmission } from "./update-overlay-helpers.ts";
 
 registerSettingsEnglish();
@@ -17,10 +16,10 @@ export function presentUpdateFailureTriage(
   failure: UpdateFailureTriage,
   admission: UpdateTriageAdmission,
 ): void {
-  if (!admission.isCurrent()) {
+  if (!admission.isCurrent() || !admission.admit()) {
     return;
   }
-  if (!canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")) {
+  if (!canCallGatewayMethod(context.gateway.snapshot, "chat.send", "operator.write")) {
     context.navigate("updates");
     return;
   }
@@ -51,21 +50,9 @@ export function presentUpdateFailureTriage(
   const facts = [...details, t("updates.triage.hostHint")].map((fact) =>
     clampText(formatUiExternalText(fact), 240),
   );
-  custodianAlertStore.present(
-    {
-      id: failure.id,
-      title,
-      facts,
-      question: clampText(
-        t("updates.triage.question", { outcome: title, facts: facts.join("\n") }),
-        2_400,
-      ),
-      action: {
-        label: t("updates.reviewUpdate"),
-        target: { kind: "navigate", routeId: "updates" },
-      },
-    },
-    admission,
+  openHomeHelp(
+    context,
+    captureHomeHelpTarget(context),
+    clampText(t("updates.triage.question", { outcome: title, facts: facts.join("\n") }), 2_400),
   );
-  window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }));
 }

@@ -3,7 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activated,
@@ -20,6 +23,8 @@ import {
   wizardNotFound,
 } from "./model-setup-fixtures.test-support.ts";
 
+const firstAgent = { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true };
+
 const suite = createControlUiE2eSuite({
   name: "Control UI first-run wizard cancellation ownership",
   startServerBeforeBrowser: true,
@@ -29,7 +34,14 @@ const receiptKey = "openclaw.modelSetup.pendingActivation.v1";
 const detection = makeDetection({ authOptions: [providerLogin] });
 
 const gatewayOptions = {
-  featureMethods: [rpc.detect, rpc.activate, rpc.auth, rpc.next, rpc.cancel],
+  featureMethods: [
+    ...defaultControlUiFeatureMethods,
+    rpc.detect,
+    rpc.activate,
+    rpc.auth,
+    rpc.next,
+    rpc.cancel,
+  ],
   methodResponses: {
     [rpc.detect]: detection,
     [rpc.auth]: runningWizard(),
@@ -71,7 +83,14 @@ suite.define(() => {
         setupContext({ viewport: { width: 1280, height: 800 } }),
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
-            featureMethods: [rpc.detect, rpc.activate, rpc.next, rpc.cancel, "openclaw.chat"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              rpc.detect,
+              rpc.activate,
+              rpc.next,
+              rpc.cancel,
+              "openclaw.chat",
+            ],
             methodResponses: {
               [rpc.detect]: {
                 ...detection,
@@ -100,7 +119,7 @@ suite.define(() => {
                     initialValue: false,
                   }),
                   decision === "Yes"
-                    ? activated("provider/selected")
+                    ? activated("provider/selected", { firstAgent })
                     : { done: true, status: "cancelled", error: "Model setup was declined." },
                 ],
               },
@@ -123,6 +142,7 @@ suite.define(() => {
             kind: "openai-api-key",
             agentId: "main",
             modelRef: "provider/selected",
+            completeFirstAgent: true,
           });
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("heading", { name: "Review model setup" }).waitFor();
@@ -140,8 +160,8 @@ suite.define(() => {
 
           await button(dialog.locator("openclaw-modal-actions"), decision).click();
           if (decision === "Yes") {
-            await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
-            await page.getByText("Your reviewed model is ready.", { exact: true }).waitFor();
+            await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
+            await page.locator("openclaw-chat-page").waitFor();
           } else {
             if (decision === "No") {
               await dialog

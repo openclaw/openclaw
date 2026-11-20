@@ -196,15 +196,26 @@ export function Agents(props: AgentsProps) {
   );
   // Defaults apply to every agent, so this row stays out of the per-agent tab bar.
   const agentDefaultsRow = () => (
-    <Show when={props.access.settings.reads.config}>
-      <div class="settings-group">
-        <SettingsNavRow
-          title={t("agents.defaults.title")}
-          description={t("agents.defaults.description")}
-          onClick={props.onOpenAgentDefaults}
-        />
-      </div>
-    </Show>
+    <>
+      <Show when={props.access.canPlanAgents}>
+        <div class="settings-group">
+          <SettingsNavRow
+            title={t("agentPlanning.title")}
+            description={t("agentPlanning.description")}
+            onClick={() => props.onPlanAgents()}
+          />
+        </div>
+      </Show>
+      <Show when={props.access.settings.reads.config}>
+        <div class="settings-group">
+          <SettingsNavRow
+            title={t("agents.defaults.title")}
+            description={t("agents.defaults.description")}
+            onClick={props.onOpenAgentDefaults}
+          />
+        </div>
+      </Show>
+    </>
   );
   return (
     <>

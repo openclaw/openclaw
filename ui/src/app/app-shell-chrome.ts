@@ -14,7 +14,6 @@ import { registryFor } from "../components/overlay-registry.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   LINK_READER_PANEL_TOGGLE_EVENT,
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
   DEBUG_OVERLAY_REQUEST_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -78,7 +77,7 @@ import {
   type ShellNavigationElements,
   type ShellNavigationSurfaces,
 } from "./navigation-surface.ts";
-import { isCustodianPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
+import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -158,7 +157,6 @@ export class ShellChromeOwner {
       [BROWSER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredBrowserToggle],
       [LINK_READER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredLinkReaderToggle],
       [DESKTOP_PANEL_TOGGLE_EVENT, this.panels.handleDeferredDesktopToggle],
-      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
       [HOME_PANEL_TOGGLE_EVENT, this.handleAssistantToggleBeforeMount],
       [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
     ] as const) {
@@ -564,16 +562,12 @@ export class ShellChromeOwner {
     if (host.elements.assistantPanel?.isConnected) {
       return;
     }
-    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
-    if (!(home ? isHomePanelAvailable : isCustodianPanelAvailable)(host.context?.gateway)) {
+    if (!isHomePanelAvailable(host.context?.gateway)) {
       event.preventDefault();
       return;
     }
     // Native commands can arrive before the eager frame's first render.
-    const descriptor = lazyShellEvent(
-      home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT,
-      event,
-    );
+    const descriptor = lazyShellEvent(HOME_PANEL_TOGGLE_EVENT, event);
     this.pendingLazyAction = descriptor;
     persistLazyShellAction(descriptor);
     host.invalidate();

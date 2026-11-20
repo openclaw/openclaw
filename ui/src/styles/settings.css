@@ -1485,7 +1485,7 @@ textarea.settings-input {
    one column, so the title stays put from page to page. */
 @media not all and (max-width: 640px) {
   .shell--settings.shell--mobile-nav:not(.shell--floating-header) {
-    .content:not(.content--custodian) {
+    .content {
       --content-inline-padding: var(--space-6);
       --settings-header-inline-padding: 0;
       padding: var(--space-6) var(--space-6) var(--space-7);

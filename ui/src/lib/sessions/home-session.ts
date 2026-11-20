@@ -1,7 +1,46 @@
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
-import { isUiGlobalSessionKey, parseAgentSessionKey } from "./session-key.ts";
+import { listSelectableAgents } from "../agents/display.ts";
+import {
+  buildAgentMainSessionKey,
+  isUiGlobalSessionKey,
+  parseAgentSessionKey,
+  normalizeAgentId,
+  resolveUiConfiguredMainKey,
+  resolveUiConversationIdentity,
+  resolveUiDefaultAgentId,
+} from "./session-key.ts";
+
+/** Home and contextual help use the sidebar's one agent selection. */
+export function selectedHomeTarget(
+  context: Pick<ApplicationContext, "agents" | "gateway" | "agentSelection"> | undefined,
+  defaults: {
+    agentsList?: ApplicationContext["agents"]["state"]["agentsList"];
+    hello?: ApplicationGatewaySnapshot["hello"];
+  } = {
+    agentsList: context?.agents.state.agentsList,
+    hello: context?.gateway.snapshot.hello,
+  },
+) {
+  const agents = listSelectableAgents(defaults.agentsList?.agents ?? []);
+  const selected = normalizeAgentId(context?.agentSelection.state.selectedId ?? "");
+  const defaultId = resolveUiDefaultAgentId(defaults);
+  const agentId =
+    agents.find((agent) => agent.id === selected)?.id ??
+    agents.find((agent) => agent.id === defaultId)?.id ??
+    agents[0]?.id ??
+    defaultId;
+  return {
+    ...resolveUiConversationIdentity(
+      defaults,
+      buildAgentMainSessionKey({ agentId, mainKey: resolveUiConfiguredMainKey(defaults) }),
+      agentId,
+    ),
+    agentId,
+  };
+}
 
 export function homeSessionRequiresConfirmation(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello">,

@@ -39,16 +39,12 @@ defineSolidBridge<AssistantPanelProps, Methods>(
   {
     properties: {
       context: { default: undefined, attribute: false },
-      custodianAvailable: { default: false, type: Boolean },
       homeAvailable: { default: false, type: Boolean },
-      custodianSuppressed: { default: false, type: Boolean },
       pageSessionKey: { default: "" },
       getPrimaryChatPane: { default: undefined, attribute: false },
       pageAgentId: { default: "" },
       pageRouteId: { default: "chat" },
       pageRouteFailed: { default: false, type: Boolean },
-      minimizeRequestId: { default: 0, type: Number },
-      store: { default: undefined, attribute: false },
     },
     propertyChanged: (host) => controls.get(host)?.inputsChanged(),
     methods: {

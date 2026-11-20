@@ -196,7 +196,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)

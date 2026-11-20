@@ -22,7 +22,6 @@ import type { PluginListResult } from "../lib/plugins/index.ts";
 import { settingsNavigationLabelForRoute } from "../lib/settings-navigation.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icon-data.ts";
-import { askBrandLabel } from "./theme-brand-label.ts";
 
 registerRouteSubtitlesEnglish();
 
@@ -97,10 +96,7 @@ function navigationItem(
   };
 }
 
-function getCommandPaletteBaseItems(
-  desktopAvailable: boolean,
-  custodianAvailable: boolean,
-): CommandPaletteItem[] {
+function getCommandPaletteBaseItems(desktopAvailable: boolean): CommandPaletteItem[] {
   return [
     navigationItem("new-session", t("newSession.title"), "plus"),
     navigationItem("sessions", t("palette.items.sessions"), "fileText"),
@@ -121,23 +117,19 @@ function getCommandPaletteBaseItems(
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
-    ...(
-      [
-        [desktopAvailable, "desktop", "palette.items.desktop", "monitor"],
-        [custodianAvailable, "custodian", "nav.askOpenClaw", "lobster"],
-      ] as const
-    ).flatMap(([available, panel, labelKey, icon]) =>
-      available
-        ? [
-            {
-              id: `panel-${panel}`,
-              label: panel === "custodian" ? askBrandLabel() : t(labelKey),
-              icon,
-              category: "navigation" as const,
-              action: `panel:${panel}`,
-            },
-          ]
-        : [],
+    ...([[desktopAvailable, "desktop", "palette.items.desktop", "monitor"]] as const).flatMap(
+      ([available, panel, labelKey, icon]) =>
+        available
+          ? [
+              {
+                id: `panel-${panel}`,
+                label: t(labelKey),
+                icon,
+                category: "navigation" as const,
+                action: `panel:${panel}`,
+              },
+            ]
+          : [],
     ),
   ];
 }
@@ -148,13 +140,11 @@ export function filterCommandPaletteItems(params: {
   sessionItems: readonly CommandPaletteItem[];
   catalogItems: readonly CommandPaletteItem[];
   desktopAvailable: boolean;
-  custodianAvailable: boolean;
   primaryModelSearch?: boolean;
 }): CommandPaletteItem[] {
-  const baseItems = getCommandPaletteBaseItems(
-    params.desktopAvailable,
-    params.custodianAvailable,
-  ).filter((item) => params.includeSlashCommands || item.category !== "search");
+  const baseItems = getCommandPaletteBaseItems(params.desktopAvailable).filter(
+    (item) => params.includeSlashCommands || item.category !== "search",
+  );
   if (!params.query) {
     return baseItems;
   }

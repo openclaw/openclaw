@@ -183,7 +183,7 @@ describe("settings sidebar search", () => {
   });
 
   it.each(["OpenClaw", "Moonbase"])(
-    "links Ask %s and follows branding publications",
+    "keeps System history identifiable with %s branding",
     (brandName) => {
       const original = currentThemeBranding();
       const onNavigate = vi.fn();
@@ -194,11 +194,11 @@ describe("settings sidebar search", () => {
           flush();
         }
         const link = container.querySelector<HTMLAnchorElement>(
-          '.settings-sidebar__item[href="/custodian"]',
+          '.settings-sidebar__item[href="/settings/system-history"]',
         );
-        expect(link?.textContent?.trim()).toBe(`Ask ${brandName}`);
+        expect(link?.textContent?.trim()).toBe("System history");
         link?.click();
-        expect(onNavigate).toHaveBeenCalledWith("custodian");
+        expect(onNavigate).toHaveBeenCalledWith("system-history");
       } finally {
         setCurrentThemeBranding(original);
         flush();
@@ -355,7 +355,8 @@ describe("settings sidebar search", () => {
     expect(allLabels).not.toContain("Activity");
     expect(allLabels).not.toContain("Sessions");
     expect(allLabels).toContain("Privacy & security");
-    expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("System history")).toBe(allLabels.indexOf("Logs") + 1);
+    expect(allLabels.indexOf("Updates")).toBe(allLabels.indexOf("System history") + 1);
     expect(allLabels.indexOf("About")).toBe(allLabels.indexOf("Updates") + 1);
 
     enterQuery("  ThEmE  ");

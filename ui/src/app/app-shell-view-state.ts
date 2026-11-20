@@ -41,15 +41,10 @@ import {
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
 import { readGatewayOperatorAccess } from "./operator-access.ts";
-import {
-  isCustodianPanelAvailable,
-  isDesktopPanelAvailable,
-  isHomePanelAvailable,
-} from "./panel-availability.ts";
+import { isDesktopPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { resolveProfileAppearancePrefs } from "./server-prefs-profile.ts";
 import { NAV_WIDTH_MAX, normalizeCatalogOpenTarget } from "./settings.ts";
 import type { ShellLayoutOwner } from "./shell-layout-owner.ts";
-import { currentThemeBranding } from "./theme-branding.ts";
 
 export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElements {
   mobileGatewayStatus: GatewayStatusProps | null;
@@ -60,7 +55,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly navigationRevision: () => number;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
-  readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;
@@ -121,7 +115,6 @@ export function readShellView(host: ShellViewHost) {
   const terminalAvailable = isTerminalAvailable(gatewaySnapshot, config.terminalEnabled ?? false);
   const desktopPanelAvailable = isDesktopPanelAvailable(gatewaySnapshot);
   const homePanelAvailable = isHomePanelAvailable(context.gateway);
-  const custodianPanelAvailable = isCustodianPanelAvailable(context.gateway);
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
   const reloadRequired = gatewaySnapshot.phase === "reload-required";
@@ -168,7 +161,7 @@ export function readShellView(host: ShellViewHost) {
       activeRoute === "cron");
   const settingsTakeover = settingsRoute && !host.onboardingMode && !nativeEmbed;
   const onboarding = host.onboardingMode;
-  const memoryImportActive = onboarding && activeRoute !== "custodian";
+  const memoryImportActive = onboarding;
   // Drawer motion invalidates only the bindings that read its presentation.
   const navDrawerOpen = () => {
     host.navigationRevision();
@@ -412,7 +405,6 @@ export function readShellView(host: ShellViewHost) {
     terminalAvailable,
     desktopPanelAvailable,
     homePanelAvailable,
-    custodianPanelAvailable,
     activeRoute,
     workboardLayout,
     sessionRoute,
@@ -438,12 +430,9 @@ export function readShellView(host: ShellViewHost) {
       if (initialGatewayConnection) {
         return t("connection.workspace.header");
       }
-      // The brand alone: "Ask OpenClaw" has no centered room beside History's three-button pill.
-      return activeRoute === "custodian"
-        ? currentThemeBranding().brandName
-        : pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
-            pluginPageLabel(context, host.routeState.location),
-          );
+      return pageTitleForRoute(activeRoute, context.nativeDeviceSettings?.snapshot, () =>
+        pluginPageLabel(context, host.routeState.location),
+      );
     },
     get navCollapsed() {
       return navCollapsed();

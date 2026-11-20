@@ -922,7 +922,7 @@ const startupEnglish = {
     back: "Back",
     forward: "Forward",
     settings: "Settings",
-    askOpenClaw: "Ask OpenClaw",
+    askOpenClaw: "Ask your agent",
     askBrand: "Ask {brand}",
     settingsGroupDevice: "This Mac",
     settingsGroupThisComputer: "This computer",
@@ -1127,6 +1127,11 @@ const startupEnglish = {
     dockBottom: "Dock assistant sidebar at bottom",
     dockRight: "Dock assistant sidebar at right",
   },
+  systemHistory: {
+    title: "System history",
+    description: "Read-only configuration changes and earlier setup conversations.",
+  },
+  agentPlanning: {},
   custodian: {
     title: {},
     subtitleCaretaker: {},

@@ -46,13 +46,13 @@ it.each([false, true])(
     expect(query(".plugin-capabilities")).toBeNull();
     const actions = query(".plugin-catalog-detail__actions")!;
     const primaryButton = actions.querySelector<HTMLButtonElement>("button.primary")!;
-    expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask OpenClaw" : "Install");
+    expect(primaryButton.textContent?.trim()).toBe(installed ? "Ask your agent" : "Install");
     expect(actions.querySelectorAll("button.primary")).toHaveLength(1);
     expect(actions.querySelector("button")).toBe(primaryButton);
     primaryButton.click();
     expect(onInstall).not.toHaveBeenCalled();
     const ask = [...actions.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.trim() === "Ask OpenClaw",
+      (button) => button.textContent?.trim() === "Ask your agent",
     )!;
     ask.click();
     expect(onAskPlugin).toHaveBeenCalledTimes(installed ? 2 : 1);

@@ -2,7 +2,6 @@ import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
-import { isCustodianPanelAvailable } from "../app/panel-availability.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -16,7 +15,6 @@ import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.
 import { showToast } from "../lib/toast.ts";
 import "../styles/sidebar-attention-floating.css";
 import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.tsx";
@@ -200,25 +198,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
         if (item.action.kind === "openClawIdRecovery") {
           context.sidebarAttention.refreshOpenClawId();
         }
-      }
-      return;
-    }
-    try {
-      const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
-      if (!isCurrentPanel(generation, scope)) {
-        return;
-      }
-      custodianAlertStore.present(item.action.alert);
-      if (isCustodianPanelAvailable(context.gateway)) {
-        window.dispatchEvent(
-          new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: true } }),
-        );
-      } else {
-        (props.onNavigate ?? context.navigate)("custodian");
-      }
-    } catch (error) {
-      if (isCurrentPanel(generation, scope)) {
-        showToast({ message: formatUiError(error), severity: "error" });
       }
     }
   }

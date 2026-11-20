@@ -1009,7 +1009,7 @@ img.chat-avatar {
 }
 
 :is(.chat-thread, .chat-session-rail__thread) .chat-bubble {
-  letter-spacing: 0; /* Custodian shares .chat-bubble but keeps the application-wide tracking. */
+  letter-spacing: 0;
 }
 
 .chat-group.workspace-conflict .chat-group-messages {

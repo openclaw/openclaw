@@ -43,7 +43,6 @@ export function ShellLazyOverlays(props: {
   host: ShellLazyOverlayHost;
   revision: number;
   desktopPanelAvailable: boolean;
-  custodianPanelAvailable: boolean;
   nativeEmbed: boolean;
 }): SolidJSX.Element {
   const sendShortcut = createMemo(() => {
@@ -79,7 +78,6 @@ export function ShellLazyOverlays(props: {
               props.host.shellComponentMounted(element);
             }}
             desktopAvailable={props.desktopPanelAvailable}
-            custodianAvailable={props.custodianPanelAvailable}
             onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
               props.host.shellNavigation.navigate(routeId, options)
             }

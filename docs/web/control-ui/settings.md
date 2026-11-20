@@ -335,7 +335,7 @@ Plugins can bundle multiple MCP servers. The metadata rail shows available relea
 documentation. Security audits link to ClawHub.
 
 Installed, disabled plugins put **Enable** first as the primary action, followed
-by **Ask OpenClaw**. Enabled plugins put primary **Ask OpenClaw** first, followed
+by **Ask your agent**. Enabled plugins put primary **Ask your agent** first, followed
 by **Disable**. Both rows then offer **Uninstall** when removable and an icon
 button for **Settings**. Uninstalled plugins put **Install** first. **Install**
 starts installation immediately and accepts the staged plugin’s declared
@@ -492,7 +492,7 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 
 ## Settings
 
-Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
+Inside **Settings**, the dedicated sidebar starts with a **Search settings** field for quickly finding settings sections. Administrators can inspect configuration changes and earlier setup conversations in **System history**.
 
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to
@@ -748,12 +748,9 @@ credentials through this page. Files are copied below `memory/imports/` in the
 selected workspace, where the active memory plugin can index them. Sources are
 never changed.
 
-For a narrower conversational path, open **Settings → Ask OpenClaw** and say
-`import memory`. The chat wizard copies only new detected memory into the
-existing default agent workspace; it does not choose another destination agent
-or replace conflicts. It reports each source's confirmed copy count and warns
-when a failure may have happened after a partial copy. Use the dedicated Import
-Memory page when you need destination selection, a file preview, or replacement.
+Ask your Home agent for guidance, or use the dedicated Import Memory page for
+destination selection, a file preview, and explicit replacement of conflicts.
+Opening a conversation does not start an import or transfer old setup history.
 
 If an error says that apply completed but its result could not be returned,
 inspect the migration report and destination files before starting another

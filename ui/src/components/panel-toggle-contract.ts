@@ -10,7 +10,6 @@ export const BROWSER_PANEL_TOGGLE_EVENT = "openclaw:browser-toggle";
 export const DESKTOP_PANEL_TOGGLE_EVENT = "openclaw:desktop-toggle";
 export const PORTAL_PANEL_TOGGLE_EVENT = "openclaw:portal-toggle";
 export const HOME_PANEL_TOGGLE_EVENT = "openclaw:home-toggle";
-export const CUSTODIAN_PANEL_TOGGLE_EVENT = "openclaw:custodian-toggle";
 export const DEBUG_OVERLAY_REQUEST_EVENT = "openclaw:debug-overlay-request";
 export const KEYBOARD_SHORTCUTS_REQUEST_EVENT = "openclaw:keyboard-shortcuts-request";
 export const LINK_READER_PANEL_TOGGLE_EVENT = "openclaw:link-reader-panel-toggle";

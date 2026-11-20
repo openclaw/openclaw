@@ -83,11 +83,9 @@ see raw vs. injected sizes and truncation status.
 The Control UI can import existing local memory from Codex, Claude Code, and
 Hermes.
 Open **Settings** → **Import Memory**, choose the destination agent, review the
-detected files, and confirm the import. For the existing default agent, you can
-instead open **Settings → Ask OpenClaw** and say `import memory`; this narrower
-chat wizard requires completed onboarding, copies only new detected memory, and
-reports per-source failures or possible partial copies. OpenClaw copies only
-Markdown memory:
+detected files, and confirm the import. Your regular Home agent can explain the
+choices; the dedicated import controls own the destination and confirmation.
+OpenClaw copies only Markdown memory:
 
 - Codex: the consolidated `MEMORY.md` and `memory_summary.md` files under
   `~/.codex/memories` (or `CODEX_HOME/memories`). Raw rollout and transcript

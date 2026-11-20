@@ -19,7 +19,6 @@ import {
 } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { cronPage } from "./sidebar-attention-store.test-support.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
@@ -216,20 +215,14 @@ describe("model auth attention", () => {
     expect(items.some((entry) => entry.kind === "modelAuthExpired")).toBe(true);
   });
 
-  it("presents expired providers to the custodian with raw status", () => {
+  it("opens provider sign-in directly without a working model", () => {
     const item = authItems("main")[0];
     expect(item).toMatchObject({
       label: "OpenAI",
       inlineAction: { label: "Review account", routeId: "model-providers" },
     });
     const action = item?.action;
-    expect(action).toMatchObject({ kind: "askCustodian" });
-    if (action?.kind !== "askCustodian") {
-      throw new Error("expected model auth custodian action");
-    }
-    expect(action.alert.facts).toEqual(["OpenAI: missing"]);
-    expect(action.alert.question).toContain("OpenAI: missing");
-    expect(action.alert.action?.target).toEqual({
+    expect(action).toEqual({
       kind: "navigate",
       routeId: "model-providers",
     });
@@ -379,7 +372,7 @@ describe("sidebar attention refresh ownership", () => {
     expect(above.hidden).toBe(true);
   });
 
-  it("wraps panel focus across collapsed details, expanded actions and an empty tab", async () => {
+  it("wraps panel focus across direct recovery actions and an empty tab", async () => {
     const request = respond({
       "cron.list": cronResponse(),
       "cron.status": cronStatus(0),
@@ -393,10 +386,9 @@ describe("sidebar attention refresh ownership", () => {
     });
     await waitForFast(() => expect(issues(element, "button__count")?.textContent).toBe("1"));
     await openPanel(element, trigger);
-    const details = attention(element, "modelAuthExpired") as HTMLDetailsElement;
+    const details = attention(element, "modelAuthExpired")!;
     const first = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__more")!;
-    const summary = details.querySelector("summary")!;
-    const dismiss = summary.querySelector<HTMLButtonElement>("button")!;
+    const dismiss = details.querySelector<HTMLButtonElement>("button")!;
     const wrap = (from: HTMLElement, shiftKey = false) => {
       from.focus();
       const event = new KeyboardEvent("keydown", {
@@ -409,16 +401,10 @@ describe("sidebar attention refresh ownership", () => {
       expect(event.defaultPrevented).toBe(true);
     };
 
-    expect(details.open).toBe(false);
     wrap(first, true);
     expect(document.activeElement).toBe(dismiss);
 
-    summary.click();
-    expect(details.open).toBe(true);
-    const ask = details.querySelector<HTMLButtonElement>(
-      ".sidebar-issues-panel__body .sidebar-issues-panel__action:not(.sidebar-issues-panel__action--primary)",
-    )!;
-    wrap(ask);
+    wrap(dismiss);
     expect(document.activeElement).toBe(first);
 
     element.querySelector<HTMLButtonElement>("#sidebar-issues-tab-mentions")!.click();
@@ -906,25 +892,10 @@ describe("sidebar attention refresh ownership", () => {
       ).some((label) => label?.includes("Ask OpenClaw")),
     ).toBe(false);
 
-    const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
-    const dispatch = vi.spyOn(window, "dispatchEvent");
-    try {
-      const alertAction = panel.querySelector<HTMLButtonElement>(
-        '[data-attention-kind="modelAuthExpired"] .sidebar-issues-panel__action:not(.sidebar-issues-panel__action--primary)',
-      )!;
-      expect(alertAction.textContent?.trim()).toBe("Ask OpenClaw");
-      alertAction.click();
-      await waitForFast(() =>
-        expect(dispatch).toHaveBeenCalledWith(
-          expect.objectContaining({ type: CUSTODIAN_PANEL_TOGGLE_EVENT, detail: { open: true } }),
-        ),
-      );
-      expect(custodianAlertStore.alert?.id).toBe("modelAuthExpired:agent:main\nopenai");
-      expect(issues(element, "panel")).toBeNull();
-    } finally {
-      custodianAlertStore.dismiss();
-    }
-    await openPanel(element, trigger);
+    const authLink = panel.querySelector<HTMLAnchorElement>(
+      '[data-attention-kind="modelAuthExpired"] a',
+    );
+    expect(authLink?.getAttribute("href")).toContain("/settings/model-providers");
 
     emit("cron");
     await waitForFast(() => expect(attention(element, "cronFailed")).toBeNull());

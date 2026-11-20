@@ -22,10 +22,7 @@ import {
   transcriptResult,
 } from "./command-palette.test-support.ts";
 import "./command-palette.tsx";
-import {
-  CUSTODIAN_PANEL_TOGGLE_EVENT,
-  DESKTOP_PANEL_TOGGLE_EVENT,
-} from "./panel-toggle-contract.ts";
+import { DESKTOP_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 
 const modelGateway = (request: (method: string, params: unknown) => unknown) =>
   createGateway(true, {
@@ -592,23 +589,22 @@ describe("CommandPalette search", () => {
     expect(palette.isOpen).toBe(false);
   });
 
-  it.each([
-    ["desktop", true, "Desktop", DESKTOP_PANEL_TOGGLE_EVENT],
-    ["openclaw", false, "Ask OpenClaw", CUSTODIAN_PANEL_TOGGLE_EVENT],
-  ] as const)("opens the %s panel action", async (query, desktop, label, event) => {
-    const { palette } = await mountSearch();
-    palette.desktopAvailable = desktop;
-    palette.custodianAvailable = !desktop;
-    await searchPalette(palette, query);
-    const listener = vi.fn();
-    window.addEventListener(event, listener);
-    try {
-      findPaletteOption(palette, label, true)?.click();
-    } finally {
-      window.removeEventListener(event, listener);
-    }
-    expect(listener).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ detail: { open: true } }),
-    );
-  });
+  it.each([["desktop", true, "Desktop", DESKTOP_PANEL_TOGGLE_EVENT]] as const)(
+    "opens the %s panel action",
+    async (query, desktop, label, event) => {
+      const { palette } = await mountSearch();
+      palette.desktopAvailable = desktop;
+      await searchPalette(palette, query);
+      const listener = vi.fn();
+      window.addEventListener(event, listener);
+      try {
+        findPaletteOption(palette, label, true)?.click();
+      } finally {
+        window.removeEventListener(event, listener);
+      }
+      expect(listener).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ detail: { open: true } }),
+      );
+    },
+  );
 });

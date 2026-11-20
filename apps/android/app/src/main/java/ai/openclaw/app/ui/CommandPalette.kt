@@ -211,7 +211,6 @@ internal fun commandItems(
             when (route) {
               SettingsRoute.Home -> nativeText("Gateway, voice, notifications, privacy")
               SettingsRoute.ProvidersModels -> verbatimText(providerSubtitle)
-              SettingsRoute.SystemAgent -> nativeText("Setup, status, and repair")
               else -> checkNotNull(route.category).title
             }
           CommandItem(action, route.title, subtitle, route.icon)

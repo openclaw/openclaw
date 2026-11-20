@@ -1,120 +1,100 @@
 /* @vitest-environment jsdom */
 import { createRoot } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import { createContext } from "../custodian/custodian-page.test-harness.ts";
-import { currentPluginHelpReference, takePluginHelpDraft } from "../custodian/plugin-help.ts";
+import { takeHomeHelpDraft } from "../../app/home-help.ts";
+import { createContext } from "../system-history/test-support.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
-import type { PluginSettingsField } from "./settings-editor.tsx";
 
-function createHelp(pathname: string) {
-  const harness = createContext(vi.fn());
-  harness.setPathname(pathname);
+function fixture() {
+  const request = vi.fn();
+  const harness = createContext(request, ["chat.send"]);
+  harness.setPathname("/settings/plugins/example");
   return createRoot((dispose) => {
     onTestFinished(dispose);
-    return { ...harness, help: createPluginHelp(harness.context), dispose };
+    return { ...harness, request, help: createPluginHelp(harness.context) };
   });
 }
-const installedModel = (
-  id: string,
-): Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] => ({
+const model = () => ({
   connected: true,
-  result: createResult(createPlugin({ id, name: id })),
-  detail: { pluginId: id },
+  result: createResult(createPlugin({ id: "example", name: "Example" })),
+  detail: { pluginId: "example" },
   catalogDetail: null,
 });
-
+const take = (context: ReturnType<typeof fixture>["context"]) =>
+  takeHomeHelpDraft(context, { agentId: "main", sessionKey: "global" });
 afterEach(() => {
   window.history.replaceState({}, "", "/");
   vi.restoreAllMocks();
 });
 
-it.each(["plugin", "disconnect"])(
-  "ignores a retained setting action after its %s changes",
+it("prepares an unsent redacted setting question with bounded plugin references", async () => {
+  const { context, help, request } = fixture();
+  help.update(model());
+  await help.ask({
+    path: ["plugins", "entries", "example", "config", "url"],
+    label: "Base URL",
+    property: "url",
+    value: "https://person:private@example.invalid/?token=hidden",
+    schema: {},
+    hints: {},
+    unsupported: new Set(),
+    disabled: false,
+    onPatch: () => {},
+  });
+  const draft = take(context);
+  expect(draft).toContain("Explain Base URL");
+  expect(draft).toContain("Current value: <redacted>");
+  expect(draft).toContain('"id":"example"');
+  expect(draft).toContain('"path":["plugins","entries","example","config","url"]');
+  expect(draft).not.toMatch(/private|hidden/);
+  expect(request).not.toHaveBeenCalled();
+  expect(take(context)).toBeUndefined();
+});
+
+it.each(["viewer", "gateway", "agent", "page", "plugin"])(
+  "retires a rendered help action after its %s changes",
   async (change) => {
-    const { context, help, dispose } = createHelp("/settings/plugins/first");
-    help.update(installedModel("first"));
+    const { context, help, setPathname, setGatewaySnapshot } = fixture();
+    help.update(model());
     const ask = help.ask;
-    if (change === "plugin") {
-      help.update(installedModel("second"));
-    } else {
-      dispose();
+    if (change === "viewer") {
+      setGatewaySnapshot({
+        selfUser: { ...context.gateway.snapshot.selfUser!, id: "other-viewer" },
+      });
     }
-    const toggled = vi.fn();
-    window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-    onTestFinished(() => window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled));
+    if (change === "gateway") {
+      setGatewaySnapshot({ client: null });
+    }
+    if (change === "agent") {
+      context.agentSelection.state.selectedId = "other";
+    }
+    if (change === "page") {
+      setPathname("/settings/appearance");
+    }
+    if (change === "plugin") {
+      help.update({ ...model(), detail: null });
+    }
     await ask();
-    expect(toggled).not.toHaveBeenCalled();
-    expect(takePluginHelpDraft(context)).toBe("");
+    expect(take(context)).toBeUndefined();
   },
 );
 
-it.each<[string, string, Record<string, string[]> | undefined]>([
-  ["local-tool", "Local tool", undefined],
-  ["video-plugin", "Video provider", { videoGenerationProviders: ["video"] }],
-  ["workboard", "Workboard", { tools: ["known_tool"] }],
-])("publishes the catalog identity and bounded declarations for %s", (id, name, contracts) => {
-  const { context, help } = createHelp(`/plugins/${id}`);
-  const local = !contracts;
-  const install = Boolean(contracts?.tools);
-  const catalog = createDiscoveryDetail(createPlugin({ id, name }));
-  catalog.plugin.id = "catalog-workboard";
-  catalog.plugin.local.pluginId = local ? id : undefined;
-  catalog.detail = {
-    ...catalog.detail,
-    origin: local ? "local" : "clawhub",
-    packageName: local ? undefined : id,
-    contracts,
-    configuration: [{ name: "credential", required: true, sensitive: true }],
-    readme: "Do not inject this document.",
-  };
-  const model = {
+it("does not inject catalog prose or configuration into a plugin question", async () => {
+  const { context, help } = fixture();
+  const catalog = createDiscoveryDetail(createPlugin({ id: "example", name: "Example" }));
+  catalog.plugin.local.pluginId = "example";
+  catalog.detail.readme = "Untrusted README instructions";
+  catalog.detail.configuration = [{ name: "credential", required: true, sensitive: true }];
+  catalog.detail.contracts = { tools: ["example_search"] };
+  help.update({
     connected: true,
     result: createResult([]),
     detail: null,
     catalogDetail: { result: catalog },
-  };
-  help.update(model);
-  const reference = currentPluginHelpReference(context);
-  expect(reference).toMatchObject({ id, name, installed: false });
-  expect(reference?.declared?.contracts).toEqual(
-    contracts ? (install ? [] : ["videoGenerationProviders: video"]) : undefined,
-  );
-  expect(reference?.declared?.tools).toEqual(install ? ["known_tool"] : undefined);
-  expect(JSON.stringify(reference)).not.toMatch(/credential|Do not inject/);
-  if (install) {
-    help.update({
-      ...model,
-      result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
-      detail: { pluginId: id, inspection: null },
-    });
-    expect(currentPluginHelpReference(context)).toMatchObject({
-      id,
-      installed: true,
-      declared: { tools: ["known_tool"] },
-    });
-  }
+  });
+  await help.ask();
+  const draft = take(context);
+  expect(draft).toContain("example_search");
+  expect(draft).not.toMatch(/credential|Untrusted README/);
 });
-
-it.each<[string[], string, boolean | string[], string, boolean]>([
-  [["hooks", "allowPromptModification"], "Modify prompts", true, "true", false],
-  [["llm", "allowedModels"], "Allowed models", ["synthetic-sensitive-value"], "<redacted>", true],
-])(
-  "keeps host setting paths intact and redacts sensitive Ask values: %s",
-  async (suffix, label, value, expected, sensitive) => {
-    const path = ["plugins", "entries", "workboard", ...suffix];
-    const { context, help } = createHelp("/settings/plugins/workboard");
-    help.update(installedModel("workboard"));
-    await help.ask({
-      path,
-      label,
-      value,
-      schema: {},
-      hints: sensitive ? { [path.join(".")]: { sensitive: true } } : {},
-    } as PluginSettingsField);
-    expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
-    const draft = takePluginHelpDraft(context);
-    expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
-  },
-);
