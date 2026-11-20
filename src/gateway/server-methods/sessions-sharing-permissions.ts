@@ -57,7 +57,7 @@ export function projectSessionMemberPermissions(params: {
   profiles: ReturnType<typeof listResidentUserProfileDisplayFacts>;
 }): SessionMemberPermission[] {
   const visibility = resolveSessionVisibility(params.target.entry);
-  if (visibility === "draft" || !params.client) {
+  if (!params.client) {
     return [];
   }
   const pathname = profileCatalogPath({});
@@ -121,16 +121,18 @@ export function projectSessionMemberPermissions(params: {
         creator: false,
         admin: false,
         member: { present: Boolean(member), access: member?.access },
-        visibility,
+        // Draft visibility suspends access; its sharing editor still shows the saved bounded grant.
+        visibility: visibility === "draft" ? "read-only" : visibility,
       });
       permissions.push({
         identityId: profile.profileId,
+        invitation: member ? "member" : "available",
         level: access.access === "suggest" || access.access === "send" ? access.access : "read",
         options: levels.slice(0, levels.indexOf(ceiling) + 1),
       });
       continue;
     }
-    if (visibility === "shared") {
+    if (visibility === "shared" || visibility === "draft") {
       continue;
     }
     // With no named policy, the profile has no configured scope ceiling. A device can still be narrower.

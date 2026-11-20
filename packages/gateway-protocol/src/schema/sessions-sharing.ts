@@ -98,6 +98,8 @@ export const SessionMembersListResultSchema = closedObject({
 
 export const SessionMemberPermissionSchema = closedObject({
   identityId: NonEmptyString,
+  /** Ceiling-role membership, including legacy grants with no stored access. Absent for ordinary roles. */
+  invitation: Type.Optional(stringLiteralUnion(["available", "member"])),
   level: SessionMemberPermissionLevelSchema,
   options: Type.Array(SessionMemberPermissionLevelSchema, {
     minItems: 1,

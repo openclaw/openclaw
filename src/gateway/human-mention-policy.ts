@@ -537,6 +537,10 @@ export function createHumanMentionPolicy(params: {
       if (eligibleDirectory?.key !== key) {
         const users = directory.profiles.flatMap(({ id, logins }) => {
           const candidate = recipientProfile(id, target, cfg, canInvite);
+          const policy = candidate && resolveOperatorRolePolicyForProfile(candidate.profileId, cfg);
+          const ceiling =
+            policy?.sessions.others === "invited" ? policy.sessions.maxInvitedAccess : undefined;
+          const levels = ["read", "suggest", "send"] as const;
           return candidate
             ? [
                 {
@@ -548,6 +552,9 @@ export function createHumanMentionPolicy(params: {
                   avatarUrl: candidate.avatarUrl,
                   logins,
                   online: false,
+                  ...(canInvite && ceiling
+                    ? { inviteAccessOptions: levels.slice(0, levels.indexOf(ceiling) + 1) }
+                    : {}),
                 },
               ]
             : [];
@@ -586,6 +593,7 @@ export function createHumanMentionPolicy(params: {
             : candidate.displayName,
         avatarUrl: candidate.avatarUrl,
         online: online.has(candidate.profileId),
+        inviteAccessOptions: canInvite ? candidate.inviteAccessOptions : undefined,
       }));
       const ranking = prepared?.readRanking?.();
       const speakers = new Map<string, number>();

@@ -313,6 +313,12 @@ export function prepareProjectedSessionPresentation(
           ).get(profileId)?.hidden ?? false)
         : undefined;
     viewerFacts.sharingRole = sharingRole;
+    const access = sharing.accessForTarget(value);
+    viewerFacts.invitedAccess =
+      access.invitedAccessCeiling &&
+      (access.access === "read" || access.access === "suggest" || access.access === "send")
+        ? access.access
+        : undefined;
     // Summary modes omit this diagnostic; their disclosure still uses current sharing facts.
     viewerFacts.sendDisabledReason =
       rowMode === "sidebar" || rowMode === "dashboard"
@@ -529,7 +535,8 @@ export function prepareProjectedSessionPresentation(
       ? visibility.swarmKey
       : excludedSwarmKeys && JSON.stringify([...excludedSwarmKeys]);
     recipientFacts[7] = recipientView?.workspaceReadDisabledReason;
-    recipientFacts.length = 8;
+    recipientFacts[8] = recipientView?.invitedAccess;
+    recipientFacts.length = 9;
     const variants = signature === undefined ? undefined : views?.get(signature);
     const current = variants?.find((cached) => sameFacts(cached.facts, recipientFacts));
     if (current) {

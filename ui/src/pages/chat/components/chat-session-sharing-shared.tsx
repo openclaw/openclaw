@@ -375,18 +375,16 @@ export function projectChatSessionSharingRoster(
 ): ChatSessionSharingRosterRow[] {
   const result = input.state?.result;
   const identities = new Map(result?.identities.map((identity) => [identity.id, identity]));
-  const invitedMembers = new Set(
-    result?.members
-      .filter((member) => member.access !== undefined)
-      .map((member) => member.identityId),
-  );
   const invitationOnly =
     input.session?.visibility !== "read-only" && input.session?.visibility !== "suggest";
   const rows: ChatSessionSharingRosterRow[] = (result?.permissions ?? [])
     .flatMap((permission) => {
       const identity = identities.get(permission.identityId);
-      const invitedAccess = invitedMembers.has(permission.identityId);
-      return identity && identity.id !== result?.owner?.id && (!invitationOnly || invitedAccess)
+      const invitedAccess = permission.invitation === "member";
+      return identity &&
+        identity.id !== result?.owner?.id &&
+        permission.invitation !== "available" &&
+        (!invitationOnly || invitedAccess)
         ? [
             {
               identity,
