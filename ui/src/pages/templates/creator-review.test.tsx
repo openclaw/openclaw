@@ -105,7 +105,7 @@ it.each(["copied", "denied", "blocked"])(
     const verificationUrl = "https://clawhub.example/cli/device";
     const userCode = "ZYXW-2345";
     const { agentId, draftId, sessionKey: sourceSessionKey } = target;
-    const started = createDeferred<void>();
+    const started = createDeferred();
     let approved = false;
     const call = vi.fn(async (method: string, params: Record<string, unknown>) => {
       if (method === "templates.drafts.signIn") {
@@ -143,7 +143,7 @@ it.each(["copied", "denied", "blocked"])(
       throw new Error("Unexpected " + method);
     });
     const page = mountInline(creatorContext(call, true));
-    const write = createDeferred<void>();
+    const write = createDeferred();
     const writeText = vi.fn(() => write.promise);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const replace = vi.fn();
