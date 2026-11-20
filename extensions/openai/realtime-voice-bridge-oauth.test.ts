@@ -70,8 +70,10 @@ const mockOAuthOnly = () =>
 // Discord passes its realtime provider block (silence and reasoning settings) as providerConfig.
 const DISCORD_PROVIDER_CONFIG = { model: GA_MODEL, silenceDurationMs: 650, reasoningEffort: "low" };
 
+const logger = { debug: vi.fn(), warn: vi.fn() };
+
 function createBridge(providerConfig: Record<string, unknown> = DISCORD_PROVIDER_CONFIG) {
-  return buildOpenAIRealtimeVoiceProvider().createBridge({
+  return buildOpenAIRealtimeVoiceProvider({ logger }).createBridge({
     cfg,
     agentId: "main",
     providerConfig,
@@ -103,7 +105,11 @@ async function connectReady(bridge: ReturnType<typeof createBridge>) {
 }
 
 describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
-  beforeEach(resetTestState);
+  beforeEach(() => {
+    resetTestState();
+    logger.debug.mockReset();
+    logger.warn.mockReset();
+  });
   afterEach(restoreTestEnvironment);
 
   it("connects OAuth-only installs with the ChatGPT account and the full session policy", async () => {
@@ -144,7 +150,7 @@ describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
     }
   });
 
-  it("keeps Platform auth ahead of OAuth on the direct socket", async () => {
+  it("prefers the ChatGPT subscription over a Platform key profile", async () => {
     mockProfiles({
       configured: ["api_key", "oauth"],
       resolved: { api_key: "test-api-key-profile", oauth: OAUTH_TOKEN },
@@ -152,26 +158,82 @@ describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
     const bridge = createBridge();
     const { headers } = await connectReady(bridge);
     try {
-      expect(headers.Authorization).toBe("Bearer test-api-key-profile");
-      expect(headers).not.toHaveProperty("chatgpt-account-id");
-      expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-        expect.objectContaining({ profileTypes: ["oauth"] }),
-      );
+      expect(headers.Authorization).toBe(`Bearer ${OAUTH_TOKEN}`);
+      expect(headers["chatgpt-account-id"]).toBe("account-123");
+      expect(logger.debug).toHaveBeenCalledWith("OpenAI realtime auth: ChatGPT subscription");
     } finally {
       await bridge.close();
     }
   });
 
-  it("fails with the existing error when a configured Platform source is unavailable", async () => {
-    mockProfiles({ configured: ["api_key", "oauth"], resolved: { oauth: OAUTH_TOKEN } });
+  it("uses a key configured on the voice provider ahead of the subscription", async () => {
+    mockOAuthOnly();
+    const bridge = createBridge({ ...DISCORD_PROVIDER_CONFIG, apiKey: "test-api-key-voice" });
+    const { headers } = await connectReady(bridge);
+    try {
+      expect(headers.Authorization).toBe("Bearer test-api-key-voice");
+      expect(headers).not.toHaveProperty("chatgpt-account-id");
+      expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalled();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("falls back to the Platform key profile without a subscription", async () => {
+    mockProfiles({ configured: ["api_key"], resolved: { api_key: "test-api-key-profile" } });
+    const bridge = createBridge();
+    const { headers } = await connectReady(bridge);
+    try {
+      expect(headers.Authorization).toBe("Bearer test-api-key-profile");
+      expect(headers).not.toHaveProperty("chatgpt-account-id");
+      expect(logger.debug).toHaveBeenCalledWith("OpenAI realtime auth: Platform API key");
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it("keeps the existing error when only an unavailable Platform source is configured", async () => {
+    mockProfiles({ configured: ["api_key"], resolved: {} });
     await expect(createBridge().connect()).rejects.toThrow(
       "OpenAI Realtime voice requires an OpenAI Platform API key",
     );
     expect(FakeWebSocket.instances).toHaveLength(0);
-    expect(resolveProviderAuthProfileApiKeyMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({ profileTypes: ["oauth"] }),
-    );
   });
+
+  it.each([401, 403])(
+    "retries once with the Platform key when OpenAI refuses the ChatGPT sign-in (%i)",
+    async (status) => {
+      mockProfiles({
+        configured: ["api_key", "oauth"],
+        resolved: { api_key: "test-api-key-profile", oauth: OAUTH_TOKEN },
+      });
+      const bridge = createBridge();
+      const connecting = bridge.connect();
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+      FakeWebSocket.instances[0]?.emit("error", new Error(`Unexpected server response: ${status}`));
+      await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+      const retry = FakeWebSocket.instances[1];
+      if (!retry) {
+        throw new Error("expected a Platform-key retry socket");
+      }
+      openSocket(retry);
+      emitServerEvent(retry, { type: "session.updated" });
+      await connecting;
+      try {
+        const headers = (retry.args[1] as { headers: Record<string, string> }).headers;
+        expect(headers.Authorization).toBe("Bearer test-api-key-profile");
+        expect(headers).not.toHaveProperty("chatgpt-account-id");
+        expect(logger.warn).toHaveBeenCalledWith(
+          "OpenAI realtime rejected the ChatGPT sign-in; retrying with the OpenAI Platform API key",
+        );
+        expect(logger.debug).toHaveBeenLastCalledWith(
+          "OpenAI realtime auth: Platform API key after the ChatGPT sign-in was rejected",
+        );
+      } finally {
+        await bridge.close();
+      }
+    },
+  );
 
   it("names both credentials when neither is configured", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
@@ -200,7 +262,7 @@ describe("OpenAI GA realtime direct socket over ChatGPT OAuth", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it("reports a rejected ChatGPT sign-in instead of a rejected API key", async () => {
+  it("reports a rejected ChatGPT sign-in when no Platform key can take over", async () => {
     mockOAuthOnly();
     const connecting = createBridge().connect();
     await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));

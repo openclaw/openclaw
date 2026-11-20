@@ -43,11 +43,13 @@ changing config.
 
 <Note>
 Released GPT-Live browser and Gateway-relay WebRTC try an OpenClaw ChatGPT OAuth
-profile first and fall back to Platform API-key auth. Ordinary GA browser
-Realtime and direct GA backend sockets (Voice Call, Gateway relay, Discord) try
-Platform auth first and fall back to OAuth only when no Platform credential
-source is configured. Custom realtime endpoints and unlisted or private realtime
-routes require Platform API-key auth.
+profile first and fall back to Platform API-key auth. Direct GA backend sockets
+(Voice Call, Gateway relay, Discord) do the same unless the realtime provider has
+its own configured key, and retry once with the Platform key when OpenAI refuses
+the ChatGPT sign-in. Ordinary GA browser Realtime tries Platform auth first and
+falls back to OAuth only when no Platform credential source is configured.
+Custom realtime endpoints and unlisted or private realtime routes require
+Platform API-key auth.
 
 Platform auth is resolved in this order: configured realtime API key, `openai`
 API-key profile, then `OPENAI_API_KEY`. Unlisted or private realtime routes and

@@ -234,12 +234,15 @@ sidebarTitle: "Voice and speech"
     unavailable Platform credential fails instead of falling back to OAuth.
 
     GA Voice Call, Gateway relay, and Discord realtime voice open a direct
-    backend WebSocket to `wss://api.openai.com/v1/realtime`. It uses the same
-    Platform auth order and falls back to the ChatGPT OAuth subscription profile
-    (sent with its `chatgpt-account-id`) only when no Platform credential source
-    is configured. A custom realtime `baseUrl` never receives the OAuth token and
-    still requires Platform auth. Gateway-controlled GA browser Talk and iOS
-    client-owned WebRTC require Platform auth.
+    backend WebSocket to `wss://api.openai.com/v1/realtime`. A key configured on
+    the realtime provider (`...providers.openai.apiKey`) wins. Otherwise the
+    socket uses the ChatGPT OAuth subscription profile (sent with its
+    `chatgpt-account-id`) first and falls back to an `openai` API-key profile,
+    then `OPENAI_API_KEY`. When OpenAI refuses the ChatGPT sign-in at session
+    start, the socket retries once with the Platform key and logs a warning. A
+    custom realtime `baseUrl` never receives the OAuth token and still requires
+    Platform auth. Gateway-controlled GA browser Talk and iOS client-owned WebRTC
+    require Platform auth.
 
     #### GPT-Live API
 

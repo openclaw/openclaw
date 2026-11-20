@@ -111,12 +111,14 @@ route: `cove` is a Codex GPT-Live voice, and selecting it with `gpt-live-1`
 falls back to `marin`. See [OpenAI voice and speech](/providers/openai/voice-and-speech).
 
 GA realtime models (`gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, `gpt-realtime-2`)
-use the direct WebSocket bridge with a Platform API key when one is configured.
-When no Platform credential source is configured, the same bridge uses the
-OpenClaw ChatGPT OAuth profile (`openclaw models auth login --provider openai`),
-so consult routing, wake names, barge-in, `silenceDurationMs` and
-`reasoningEffort` work the same way on either account. A configured but
-unavailable Platform key fails instead of switching to OAuth.
+use the direct WebSocket bridge. A key set on the voice provider
+(`voice.realtime.providers.openai.apiKey`) is used first. Otherwise the bridge
+uses the OpenClaw ChatGPT OAuth profile (`openclaw models auth login --provider
+openai`) and falls back to the `openai` API-key profile or `OPENAI_API_KEY`. If
+OpenAI refuses the ChatGPT sign-in when the session starts, the bridge retries
+once with the Platform key and logs a warning. Consult routing, wake names,
+barge-in, `silenceDurationMs` and `reasoningEffort` work the same way on either
+account.
 
 GPT-Live owns response timing and interruption. Discord plays its continuous
 audio without waiting for a completed-response event, and does not add local

@@ -63,7 +63,8 @@ export type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest &
     callId?: string;
     gaSessionPolicy?: RealtimeGaSessionPolicy;
     voice?: OpenAIRealtimeVoice;
-    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn">;
+    logger: Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "warn"> &
+      Partial<Pick<import("openclaw/plugin-sdk/plugin-entry").PluginLogger, "debug">>;
   };
 
 export const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2.1";
@@ -491,21 +492,25 @@ export const OPENAI_REALTIME_CHATGPT_SIGN_IN_REJECTED =
   "OpenAI Realtime rejected the ChatGPT sign-in. Sign in again or configure an OpenAI Platform API key";
 
 /**
- * Auth for a direct GA socket to api.openai.com. Platform auth wins; the ChatGPT
- * subscription profile is used only when no Platform source is configured, so an
- * explicitly configured but unavailable key fails instead of switching accounts.
+ * Auth for a direct GA socket to api.openai.com when no key is configured on the
+ * voice provider itself. The ChatGPT subscription wins, matching the Codex GPT-Live
+ * route; the Platform API-key profile and OPENAI_API_KEY are the fallback.
  */
+/** A ChatGPT sign-in that OpenAI refused at socket startup (expired, revoked, or no realtime access). */
+export function isOpenAIRealtimeSubscriptionRejection(error: unknown): boolean {
+  const record = asOptionalObjectRecord(error);
+  const status = record?.status ?? record?.statusCode;
+  return (
+    isOpenAIRealtimeStartupAuthFailure(error) ||
+    status === 403 ||
+    readRealtimeErrorDetail(error).toLowerCase().includes("unexpected server response: 403")
+  );
+}
+
 export async function requireOpenAIRealtimeSocketAuth(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   runtime: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeSocketAuth> {
-  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
-  if (platformAuth) {
-    return { type: "api-key", token: platformAuth };
-  }
-  if (await hasOpenAIRealtimePlatformAuthInputAsync(params, runtime)) {
-    throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-  }
   const { resolveAgentDir } = runtime;
   const subscriptionAuth = await resolveOpenAIChatGptSubscriptionAuth(
     {
@@ -518,7 +523,15 @@ export async function requireOpenAIRealtimeSocketAuth(
   if (subscriptionAuth) {
     return subscriptionAuth;
   }
-  throw new Error(OPENAI_REALTIME_SOCKET_AUTH_REQUIRED);
+  const platformAuth = await resolveOpenAIRealtimePlatformAuth(params, runtime);
+  if (platformAuth) {
+    return { type: "api-key", token: platformAuth };
+  }
+  throw new Error(
+    (await hasOpenAIRealtimePlatformAuthInputAsync(params, runtime))
+      ? OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED
+      : OPENAI_REALTIME_SOCKET_AUTH_REQUIRED,
+  );
 }
 
 export async function resolveOpenAIQuicksilverBridgeAuth(

@@ -80,7 +80,10 @@ describe("OpenAI realtime voice browser authentication", () => {
   });
 
   it("resolves native bridge API-key profiles in the requested agent scope", async () => {
-    resolveProviderAuthProfileApiKeyMock.mockResolvedValueOnce("test-api-key-profile");
+    resolveProviderAuthProfileApiKeyMock.mockImplementation(
+      async ({ profileTypes }: { profileTypes?: readonly string[] }) =>
+        profileTypes?.includes("api_key") ? "test-api-key-profile" : undefined,
+    );
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = {
       agents: { entries: { main: {}, "voice-agent": {} } },
@@ -357,7 +360,12 @@ describe("OpenAI realtime voice browser authentication", () => {
     await expect(bridge.connect()).rejects.toThrow(
       "OpenAI Realtime voice requires an OpenAI Platform API key",
     );
-    expect(resolveProviderAuthProfileApiKeyMock).toHaveBeenCalledTimes(1);
+    // Subscription lookups (oauth, token) run first, then one Platform key-profile lookup.
+    expect(
+      resolveProviderAuthProfileApiKeyMock.mock.calls.filter(([params]) =>
+        (params as { profileTypes?: readonly string[] }).profileTypes?.includes("api_key"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("treats pre-ready auth errors as a single startup failure", async () => {
