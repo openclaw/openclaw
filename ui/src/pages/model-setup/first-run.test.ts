@@ -89,6 +89,13 @@ describe("model setup first-run redirect", () => {
       ["/", "", "", "", true],
       ["/chat", "", "", "", true],
       ["/openclaw/", "", "", "/openclaw", true],
+      ["/index.html", "?draft=hello", "#anchor", "", true],
+      ["/ui/index.html", "", "", "/ui", true],
+      ["/ui/INDEX.HTML", "", "", "/ui", true],
+      ["/ui/unknown/index.html", "", "", "/ui", false],
+      ["/ui/other.html", "", "", "/ui", false],
+      ["/index.html", "?session=agent%3Amain%3Amain", "", "", false],
+      ["/ui/index.html", "", "#session=agent%3Amain%3Amain", "/ui", false],
       ["/beam/unfinished-share-5", "", "", "", false],
       ["/settings/unknown/page", "", "", "", false],
       ["/chat", "?session=agent%3Amain%3Amain", "", "", false],
@@ -104,6 +111,22 @@ describe("model setup first-run redirect", () => {
       expect(isDefaultChatLanding({ pathname, search, hash }, basePath)).toBe(expected);
     }
   });
+
+  it.each(["", "/ui", "/portable/control"])(
+    "starts first-run setup from the index document at %s",
+    async (basePath) => {
+      const location = { pathname: `${basePath}/index.html`, search: "", hash: "" };
+      const { context, replace } = createConnectedContext();
+      const dispose = await startModelSetupFirstRunRedirectAfterLocation({
+        context,
+        enabled: isDefaultChatLanding(location, basePath),
+        history: { location: () => location, replace: vi.fn() },
+        initialLocationReady: Promise.resolve(location),
+      });
+      expect(replace).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+      dispose();
+    },
+  );
 
   it("installs a released session deep link without registering the first-run gate", async () => {
     const releasedLocation = {

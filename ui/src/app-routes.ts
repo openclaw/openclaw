@@ -12,6 +12,7 @@ import {
   agentRouteFromPath,
   canonicalPluginTabLocation,
   dynamicRouteFromPath,
+  isApplicationEntryPath,
   isSessionRouteId,
   pathForAgentPanel,
   pathForRoute,
@@ -168,7 +169,7 @@ function canonicalRouteLocation(
   location: RouteLocation,
   basePath: string,
 ): RouteLocation {
-  if (location.pathname === basePath || location.pathname === `${basePath}/`) {
+  if (isApplicationEntryPath(location.pathname, basePath)) {
     return { ...location, pathname: pathForRoute("chat", basePath) };
   }
   return (
