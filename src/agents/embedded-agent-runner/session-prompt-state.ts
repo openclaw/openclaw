@@ -23,7 +23,6 @@ import {
   type CacheTtlCheckpoint,
   type CacheTtlProjectionInput,
 } from "./cache-ttl-checkpoint.js";
-import { log } from "./logger.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 import { promptDelta } from "./session-prompt-delta.js";
@@ -327,9 +326,6 @@ export function prepareSessionPublicationToolListing(
   );
 }
 
-// Once per series and tool set: a node that attaches mid-series would otherwise log every turn.
-const loggedUnsentTools = new WeakMap<object, string>();
-
 /** The series' first request pins tools and definitions; unbuilt pinned tools refuse calls. */
 export function prepareSessionToolSurface(
   params: ToolSurfaceInput & { admitNewTools?: boolean },
@@ -363,17 +359,6 @@ export function prepareSessionToolSurface(
     };
   }
   const built = new Map(params.tools.map((tool) => [tool.name, tool]));
-  const pinnedNames = new Set(pinned.map((pin) => pin.name));
-  const unsent = params.tools
-    .filter((tool) => !pinnedNames.has(tool.name))
-    .map((tool) => tool.name);
-  const unsentKey = `${historyId}:${unsent.join(",")}`;
-  if (unsent.length > 0 && loggedUnsentTools.get(params.state) !== unsentKey) {
-    loggedUnsentTools.set(params.state, unsentKey);
-    log.warn(
-      `tools built after the session pin wait for the next prompt series: ${unsent.join(", ")}`,
-    );
-  }
   return pinned.map((pin) => {
     const tool = built.get(pin.name);
     return tool ? copyAgentToolMetadata(tool, { ...tool, ...pin }) : refusePinnedTool(pin);
