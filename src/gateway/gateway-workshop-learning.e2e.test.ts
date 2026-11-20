@@ -52,6 +52,9 @@ async function withResponsesProvider(
 }
 
 const GATEWAY_ENV = {
+  // Both provider fixtures are local, even when the host routes HTTP through a proxy.
+  NO_PROXY: "127.0.0.1,localhost,::1",
+  no_proxy: "127.0.0.1,localhost,::1",
   OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
