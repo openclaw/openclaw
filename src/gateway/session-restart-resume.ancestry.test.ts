@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRegistryLog } from "../agents/subagents/registry/subagent-registry-lifecycle-log.js";
@@ -147,12 +148,17 @@ it.each([false, true])("isolates failed ancestry (direct owner: %s)", (directOwn
         ),
       };
     });
+    const brokenWorker = expectDefined(claims[1], "broken claim").worker;
+    const healthyRoots = [
+      expectDefined(roots[0], "first root").sessionKey,
+      expectDefined(roots[2], "last root").sessionKey,
+    ];
     const failure = new Error("ancestry metadata unavailable");
     const read = sessionEntryReads.readSessionEntryReadOnlyInWorker;
     const reads = vi
       .spyOn(sessionEntryReads, "readSessionEntryReadOnlyInWorker")
       .mockImplementation((scope) =>
-        scope.sessionKey === claims[1].worker ? Promise.reject(failure) : read(scope),
+        scope.sessionKey === brokenWorker ? Promise.reject(failure) : read(scope),
       );
     const warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const resume = vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockReturnValue({
@@ -169,7 +175,7 @@ it.each([false, true])("isolates failed ancestry (direct owner: %s)", (directOwn
         {},
       ]);
       expect(warn).toHaveBeenCalledWith(expect.any(String), {
-        sessionKey: claims[1].worker,
+        sessionKey: brokenWorker,
         error: failure,
       });
       for (const { worker, claim } of claims) {
@@ -182,7 +188,7 @@ it.each([false, true])("isolates failed ancestry (direct owner: %s)", (directOwn
         log: { warn() {} },
       });
       expect(resume.mock.calls.map(([, options]) => options.sessionKey).toSorted()).toEqual(
-        [roots[0].sessionKey, roots[2].sessionKey].toSorted(),
+        healthyRoots.toSorted(),
       );
       expect(roots.map((root) => loadExactSessionEntry(root)?.entry.resumeAfterRestart)).toEqual([
         undefined,

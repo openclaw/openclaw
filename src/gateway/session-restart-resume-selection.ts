@@ -49,13 +49,15 @@ export async function selectLiveRestartResumeSessions(
   const select = async (input: (typeof inputs)[number]) => {
     const root = input.parked
       ? input
-      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch((error) => {
-          subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
-            sessionKey: input.sessionKey,
-            error,
-          });
-          return undefined;
-        });
+      : await resolveRootSubagentRequester(input.sessionKey, input.agentId).catch(
+          (error: unknown) => {
+            subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+              sessionKey: input.sessionKey,
+              error,
+            });
+            return undefined;
+          },
+        );
     if (!root) {
       return;
     }

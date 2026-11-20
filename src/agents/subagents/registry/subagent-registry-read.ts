@@ -143,13 +143,15 @@ export async function listLiveSubagentRootSessions(): Promise<SubagentRootReques
       continue;
     }
     requests.push(
-      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch((error) => {
-        subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
-          sessionKey: entry.childSessionKey,
-          error,
-        });
-        return undefined;
-      }),
+      resolveRootSubagentRequester(entry.childSessionKey, entry.childAgentId).catch(
+        (error: unknown) => {
+          subagentRegistryLog.warn("failed to resolve live subagent restart ancestry", {
+            sessionKey: entry.childSessionKey,
+            error,
+          });
+          return undefined;
+        },
+      ),
     );
   }
   const roots = new Map<string, SubagentRootRequester>();
