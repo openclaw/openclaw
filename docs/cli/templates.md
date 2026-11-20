@@ -34,7 +34,7 @@ path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
-surface. Browse official and community Templates in the Control UI under **Pages → Templates** (`/templates`).
+surface. Browse official and community Templates in the Control UI under **Customize → Templates** (`/templates`).
 
 ## Add an unpublished local project to a running Gateway
 
@@ -65,7 +65,7 @@ apply. Paths refer to directories on the Gateway host, not the caller's machine.
 
 ## Import a Template archive in the Control UI
 
-Open **Pages → Templates**, click **+ Import** (the Import
+Open **Customize → Templates**, click **+ Import** (the Import
 icon in the header on mobile), and select a `.tgz` built with
 `openclaw templates build`. The file is read from your
 browser's computer, not from a path on the Gateway. Uploads are limited to 1 MiB
@@ -164,7 +164,7 @@ its result into later helper turns; users do not need to paste the review JSON.
 The host uses the requesting session's existing setup-change approval policy;
 an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
 installation retain the original administrator connection, cancellation, and
-revocation checks and use the same installer as **Pages → Templates**. The helper cannot override a Gateway opt-out, install local paths, publish Templates, or gain shell access.
+revocation checks and use the same installer as **Customize → Templates**. The helper cannot override a Gateway opt-out, install local paths, publish Templates, or gain shell access.
 
 The result names the actual agent and workspace and reports complete or partial
 installation, readiness requirements, and dependency and automation receipts.

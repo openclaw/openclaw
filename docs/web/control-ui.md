@@ -808,7 +808,7 @@ read succeeds. Failed summary reads show **Failed** instead of an unexplained
 with **Refresh** available; previously loaded jobs remain visible while a
 refresh is pending or fails.
 
-Open **Pages → Templates**, or visit `/templates`, to browse official and community
+Open **Customize → Templates**, or visit `/templates`, to browse official and community
 Templates. Select a Template to review its contents before adding it as a new agent.
 
 To browse sessions across agents, choose the **Show all** tile in the agent

@@ -675,7 +675,7 @@ Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
 ## Templates
 
-Open **Pages → Templates** to browse official and community Templates from
+Open **Customize → Templates** to browse official and community Templates from
 ClawHub. Search the catalog, review the files and
 capabilities a Template will install, then select **Add** to create its agent.
 Opening a catalog entry keeps the selected published version in its detail link,

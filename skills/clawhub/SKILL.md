@@ -46,7 +46,7 @@ openclaw skills install my-skill --version 1.2.3
 
 ## Discover and add Templates
 
-Use **Pages → Templates** or fetch the public ClawHub registry:
+Use **Customize → Templates** or fetch the public ClawHub registry:
 
 ```text
 GET https://clawhub.ai/api/v1/packages?family=template&limit=100
@@ -60,7 +60,7 @@ categories and representative entries with package names and short descriptions;
 distinguish category filters from categories with published entries. Discovery
 is read-only; the `plugins` tool searches plugins, not Templates.
 
-When asked to install a Template, select its published release in **Pages →
+When asked to install a Template, select its published release in **Customize →
 Templates → Add**. If the Gateway operator has disabled Templates, you can still
 read the public registry, but cannot add a Template on that Gateway. Review
 workspace files, skills/plugins, MCP servers, and automations, and complete required

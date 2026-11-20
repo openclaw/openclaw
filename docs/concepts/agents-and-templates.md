@@ -120,7 +120,7 @@ You can also write a Template by hand. See
 
 ## Start from someone else's Template
 
-Published Templates live on [ClawHub](/clawhub). Open **Pages → Templates** in
+Published Templates live on [ClawHub](/clawhub). Open **Customize → Templates** in
 the Control UI to browse and search them. If someone shares a ClawHub reference,
 you can also add the Template from the command line:
 

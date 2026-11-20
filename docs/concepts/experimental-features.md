@@ -58,7 +58,7 @@ by default, while an existing explicit
 config path remains an advanced opt-out, not a Labs requirement. It does not
 disable bundled views or backend operations.
 
-[Templates](/cli/templates) are available by default under **Pages → Templates**
+[Templates](/cli/templates) are available by default under **Customize → Templates**
 and in the CLI. An explicit `gateway.controlUi.experimental.templates: false`
 still disables discovery and new Add operations.
 
