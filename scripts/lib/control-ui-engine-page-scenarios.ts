@@ -35,7 +35,7 @@ import {
 } from "../../ui/src/test-helpers/transcripts.test-support.ts";
 import { parityBaseScenario, parityWorkboardScenario } from "../control-ui-parity/fixtures.ts";
 import { dataActivityScenarios } from "./control-ui-data-activity-scenarios.ts";
-import { dataCatalogScenarios } from "./control-ui-data-catalog-scenarios.ts";
+import { dataCatalogScenarios, dataCatalogSkillCard } from "./control-ui-data-catalog-scenarios.ts";
 import {
   engineProbeInitScript,
   waitForEngineTranscript,
@@ -377,6 +377,29 @@ const workboardCardMenu: PageAction = {
     return { opened: true };
   },
 };
+
+export async function openInstalledDiscoverySkills(page: Page) {
+  await page.getByRole("button", { name: "Installed skills (1,000)", exact: true }).click();
+  const installed = '.skill-discovery [data-catalog-section="installed"]';
+  await ready(page, "skills", {
+    ready: `${installed} [data-skill-id]`,
+    rows: {
+      selector: `${installed} [data-skill-id]`,
+      minimum: 1000,
+      totalSelector: `${installed} [role="listitem"][aria-setsize]`,
+    },
+  });
+}
+
+export async function filterInstalledDiscoverySkills(page: Page) {
+  await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
+  await page.waitForFunction(() => {
+    const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
+    return rows.length === 1 && rows[0]?.getAttribute("data-skill-id") === "local:data-skill-0999";
+  });
+  await frames(page);
+  return { matchingSkills: 1 };
+}
 
 const definitions: Partial<Record<RouteId, PageDefinition>> = {
   settings: {
@@ -731,7 +754,7 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
       "The measured action edits the access value; provider activation and verification are excluded.",
   },
   plugins: {
-    ready: "openclaw-plugins-page .plugin-catalog-card",
+    ready: "openclaw-plugins-page .plugin-catalog-card[data-plugin-id]",
     source: requiredScenario(dataCatalogScenarios, "data-catalog-category-first-render"),
     action: {
       label: "Open the Tools catalog category",
@@ -877,32 +900,17 @@ const definitions: Partial<Record<RouteId, PageDefinition>> = {
     },
   },
   skills: {
-    ready: ".skill-discovery .skill-installed-shelf",
+    // The default view summarizes the full installed inventory alongside one registry page.
+    ready: '.skill-installed-shelf data[value="1000"]',
+    rows: {
+      selector:
+        '.skill-discovery [data-catalog-section="clawhub"] [aria-busy="false"] [data-skill-id]',
+      minimum: 20,
+    },
     action: {
       label: "Filter 1,000 installed skills to one match from discovery",
-      prepare: async (page) => {
-        await page.locator(".skill-discovery .skill-installed-shelf").click();
-        await page.waitForFunction(() => {
-          const discovery = document.querySelector(".skill-discovery");
-          const total = Number(
-            discovery?.querySelector("[aria-setsize]")?.getAttribute("aria-setsize") ?? 0,
-          );
-          return (
-            total >= 1000 || (discovery?.querySelectorAll("[data-skill-id]").length ?? 0) >= 1000
-          );
-        });
-      },
-      run: async (page) => {
-        await page.locator(".skill-discovery input[type=search]").fill("Data skill 0999");
-        await page.waitForFunction(() => {
-          const rows = document.querySelectorAll(".skill-discovery [data-skill-id]");
-          return (
-            rows.length === 1 && rows[0]?.getAttribute("data-skill-id") === "local:data-skill-0999"
-          );
-        });
-        await frames(page);
-        return { matchingSkills: 1 };
-      },
+      prepare: openInstalledDiscoverySkills,
+      run: filterInstalledDiscoverySkills,
     },
   },
   "skill-settings": {
@@ -1393,6 +1401,7 @@ function createPageFixture(
           "skills.workshop.list",
           "skills.workshop.changes",
           "skills.workshop.read",
+          ...(id === "skills" ? ["skills.skillCard"] : []),
           "skills.search",
           "secrets.store.set",
           "users.setDisplayName",
@@ -1518,7 +1527,40 @@ function createPageFixture(
           content: "# Census skill\n\nReview source and verify behavior.\n",
           files: ["SKILL.md"],
         },
-        "skills.search": { results: [] },
+        ...(id === "skills"
+          ? {
+              "skills.skillCard": {
+                cases: [
+                  {
+                    match: { skillKey: dataCatalogSkillCard.skillKey },
+                    response: dataCatalogSkillCard,
+                  },
+                ],
+              },
+            }
+          : {}),
+        "skills.search":
+          id === "skills"
+            ? {
+                cases: [
+                  { match: { query: "Data skill 0999", limit: 20 }, response: { results: [] } },
+                  {
+                    match: { limit: 20 },
+                    response: {
+                      results: Array.from({ length: 20 }, (_, index) => ({
+                        slug: `registry-skill-${index}`,
+                        installRef: `@census/registry-skill-${index}`,
+                        displayName: `Registry skill ${index}`,
+                        summary: "Synthetic registry skill for discovery.",
+                        registry: "https://clawhub.example.invalid",
+                        ownerHandle: "census",
+                        score: 1,
+                      })),
+                    },
+                  },
+                ],
+              }
+            : { results: [] },
         "models.authStatus": {
           ts: time,
           providers: [
