@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errno.js";
+import { sleep } from "../utils/sleep.js";
 import { getHostExecMemoryBudget } from "./child-memory.js";
 
 const cgroupMount = "/sys/fs/cgroup";
@@ -8,17 +10,26 @@ const controllers = ["cpu", "io", "memory"];
 
 export type ProcessExecutionIntent = "agent-tool" | "gateway-internal";
 
+function sessionExecCgroup(directory: string, scopeKey: string): string {
+  return path.join(
+    directory,
+    `session-${createHash("sha256").update(scopeKey).digest("hex").slice(0, 32)}`,
+  );
+}
+
 /** Startup prepares the shared fallback before publishing an active aggregate policy. */
 export function prepareAgentExecCgroupScope(directory: string, scopeKey?: string): string {
   const scope = scopeKey?.trim();
-  const leaf = path.join(
-    directory,
-    scope ? `session-${createHash("sha256").update(scope).digest("hex").slice(0, 32)}` : "unscoped",
+  return prepareAgentExecCgroupDirectory(
+    scope ? sessionExecCgroup(directory, scope) : path.join(directory, "unscoped"),
   );
+}
+
+function prepareAgentExecCgroupDirectory(leaf: string): string {
   fs.mkdirSync(leaf, { recursive: true });
   // All commands in one session share this ceiling; command cancellation still
   // belongs to its existing process-tree owner. The parent keeps the total budget.
-  const aggregateLimits = fs.readFileSync(path.join(directory, "io.max"), "utf8").trim();
+  const aggregateLimits = fs.readFileSync(path.join(path.dirname(leaf), "io.max"), "utf8").trim();
   for (const line of aggregateLimits.split("\n")) {
     const [device, ...fields] = line.split(/\s+/u);
     if (!device) {
@@ -32,6 +43,97 @@ export function prepareAgentExecCgroupScope(directory: string, scopeKey?: string
     fs.writeFileSync(path.join(leaf, "io.max"), [device, ...limits].join(" "));
   }
   return leaf;
+}
+
+function joinAgentExecCgroup(directory: string): void {
+  try {
+    fs.writeFileSync(path.join(directory, "cgroup.procs"), "0");
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT") || !path.basename(directory).startsWith("session-")) {
+      throw error;
+    }
+    // Teardown can remove an empty leaf after preparation but before this join.
+    prepareAgentExecCgroupDirectory(directory);
+    fs.writeFileSync(path.join(directory, "cgroup.procs"), "0");
+  }
+}
+
+let execCgroupCleanup = Promise.resolve();
+
+/** Reclaim before rmdir: removal alone leaves the cache charged to the parent. */
+export function reclaimAgentExecCgroup(directory: string | undefined): Promise<void> {
+  if (
+    process.platform !== "linux" ||
+    !directory ||
+    !/^session-[a-f0-9]{32}$/u.test(path.basename(directory))
+  ) {
+    return Promise.resolve();
+  }
+  execCgroupCleanup = execCgroupCleanup.then(async () => {
+    try {
+      const events = await fs.promises.readFile(path.join(directory, "cgroup.events"), "utf8");
+      if (
+        !/^populated 0$/mu.test(events) ||
+        (await fs.promises.readFile(path.join(directory, "cgroup.procs"), "utf8")).trim()
+      ) {
+        return;
+      }
+      // Serialize reclaim and yield between writes. The budget bounds retries;
+      // a single kernel reclaim write is not interruptible by a userspace timer.
+      const deadline = performance.now() + 250;
+      do {
+        const current = (
+          await fs.promises.readFile(path.join(directory, "memory.current"), "utf8")
+        ).trim();
+        if (Number(current) <= 1024 ** 2) {
+          break;
+        }
+        try {
+          await fs.promises.writeFile(path.join(directory, "memory.reclaim"), current, {
+            flag: fs.constants.O_WRONLY,
+          });
+        } catch (error) {
+          if (hasErrnoCode(error, "ENOENT")) {
+            process.emitWarning(
+              "Agent exec memory.reclaim unavailable; removing the empty session cgroup without reclaiming its cache.",
+            );
+            break;
+          }
+          if (!hasErrnoCode(error, "EAGAIN")) {
+            throw error;
+          }
+        }
+        await sleep(50);
+      } while (performance.now() < deadline);
+      // New arrivals make rmdir fail with EBUSY; reclaim itself cannot kill them.
+      await fs.promises.rmdir(directory);
+    } catch (error) {
+      if (
+        !hasErrnoCode(error, "ENOENT") &&
+        !hasErrnoCode(error, "EBUSY") &&
+        !hasErrnoCode(error, "ENOTEMPTY")
+      ) {
+        process.emitWarning(`Agent exec cgroup cleanup failed: ${String(error)}`);
+      }
+    }
+  });
+  return execCgroupCleanup;
+}
+
+/** Helpers enter in their own process; their outside owner retires the session leaf. */
+export async function releaseAgentExecCgroupScope(scopeKey?: string): Promise<void> {
+  const scope = scopeKey?.trim();
+  if (process.platform !== "linux" || !scope) {
+    return;
+  }
+  try {
+    const root = resolveGatewayServiceCgroupDirectory();
+    if (root) {
+      await reclaimAgentExecCgroup(sessionExecCgroup(path.join(root, "agent-exec"), scope));
+    }
+  } catch {
+    // Unavailable delegation never owned a session cgroup.
+  }
 }
 
 /** Delegation is a kernel capability, resolved from this process's own service leaf. */
@@ -153,7 +255,7 @@ export function enterAgentExecCgroup(scopeKey?: string): void {
   const directory = getAgentExecCgroup(scopeKey);
   if (directory) {
     try {
-      fs.writeFileSync(path.join(directory, "cgroup.procs"), "0");
+      joinAgentExecCgroup(directory);
     } catch (error) {
       process.emitWarning(`Agent exec cgroup placement failed: ${String(error)}`);
     }
@@ -167,7 +269,7 @@ export function spawnInAgentExecCgroup<T>(directory: string | undefined, spawn: 
   }
   let moved = false;
   try {
-    fs.writeFileSync(path.join(directory, "cgroup.procs"), "0");
+    joinAgentExecCgroup(directory);
     moved = true;
   } catch (error) {
     process.emitWarning(`Agent exec cgroup placement failed: ${String(error)}`);

@@ -9,7 +9,11 @@ import {
 } from "../../test/helpers/promise.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { initializeGatewayExecCgroup } from "./linux-exec-cgroup-startup.js";
-import { getAgentExecCgroup, spawnInAgentExecCgroup } from "./linux-exec-cgroup.js";
+import {
+  getAgentExecCgroup,
+  reclaimAgentExecCgroup,
+  spawnInAgentExecCgroup,
+} from "./linux-exec-cgroup.js";
 import { createProcessSupervisor } from "./supervisor/supervisor.js";
 import { createStubChildAdapter } from "./supervisor/supervisor.test-support.js";
 
@@ -21,6 +25,7 @@ const fixture = vi.hoisted(() => ({
   mkdir: vi.fn(),
   write: vi.fn<(file: string, value: string) => void>(),
   spawn: vi.fn(),
+  remove: vi.fn<(directory: string) => void>(),
 }));
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -38,7 +43,15 @@ vi.mock("node:fs", async (importOriginal) => {
       writeFileSync: fixture.write,
       promises: {
         ...original.promises,
+        readFile: async (file: string) => {
+          const value = fixture.files[file];
+          if (value === undefined) {
+            throw Object.assign(new Error(`Missing ${file}`), { code: "ENOENT" });
+          }
+          return value;
+        },
         writeFile: async (file: string, value: string) => fixture.write(file, value),
+        rmdir: async (directory: string) => fixture.remove(directory),
       },
       mkdirSync: fixture.mkdir,
       accessSync: (file: string) => {
@@ -92,10 +105,161 @@ afterEach(async () => {
   fixture.files["/proc/self/cgroup"] = "0::/\n";
   await initializeGatewayExecCgroup("/state");
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllEnvs();
-  for (const mock of [fixture.write, fixture.mkdir, fixture.spawn]) {
+  for (const mock of [fixture.write, fixture.mkdir, fixture.spawn, fixture.remove]) {
     mock.mockReset();
   }
+});
+
+it("reclaims after exec extinction without blocking completion or shutdown", async ({ signal }) => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const directory = getAgentExecCgroup("completed-session")!;
+  fixture.files[`${directory}/cgroup.procs`] = "";
+  fixture.files[`${directory}/cgroup.events`] = "populated 0\nfrozen 0\n";
+  fixture.files[`${directory}/memory.current`] = "19219978649";
+  const operations: string[] = [];
+  const entered = createDeferred();
+  const release = createDeferred();
+  vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file, value) => {
+    if (file === `${directory}/memory.reclaim`) {
+      if (typeof value !== "string") {
+        throw new Error("Expected a byte count");
+      }
+      operations.push(`reclaim ${value}`);
+      entered.resolve();
+      await release.promise;
+      fixture.files[`${directory}/memory.current`] = "0";
+    }
+  });
+  fixture.remove.mockImplementation((target) => {
+    expect(target).toBe(directory);
+    operations.push("remove");
+  });
+  const adapter = createStubChildAdapter();
+  adapter.pid = undefined;
+  fixture.spawn.mockResolvedValue({ adapter, ready: Promise.resolve() });
+  const supervisor = createProcessSupervisor();
+  const run = await supervisor.spawn({
+    mode: "child",
+    argv: ["fixture"],
+    executionIntent: "agent-tool",
+    executionScopeKey: "completed-session",
+  });
+  expect(operations).toEqual([]);
+  adapter.settle(0);
+  try {
+    await withinTest(entered.promise, signal);
+    await withinTest(
+      Promise.all([run.wait(), run.waitForExtinction?.(), supervisor.shutdown()]),
+      signal,
+    );
+    expect(operations).toEqual(["reclaim 19219978649"]);
+  } finally {
+    release.resolve();
+    await vi.runAllTimersAsync();
+  }
+  expect(operations).toEqual(["reclaim 19219978649", "remove"]);
+});
+
+it.each(["process", "descendant", "busy race", "missing reclaim", "partial reclaim", "macOS"])(
+  "handles session cgroup teardown with %s",
+  async (mode) => {
+    vi.useFakeTimers();
+    await initializeGatewayExecCgroup("/state");
+    const directory = getAgentExecCgroup("teardown")!;
+    fixture.files[`${directory}/cgroup.procs`] = mode === "process" ? "123\n" : "";
+    fixture.files[`${directory}/cgroup.events`] =
+      `populated ${mode === "descendant" ? 1 : 0}\nfrozen 0\n`;
+    fixture.files[`${directory}/memory.current`] = String(2 * 1024 ** 3);
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const reclaims: string[] = [];
+    fixture.write.mockImplementation((file, value) => {
+      if (file !== `${directory}/memory.reclaim`) {
+        throw new Error(`Unexpected write ${file}`);
+      }
+      reclaims.push(value);
+      if (mode === "missing reclaim") {
+        throw Object.assign(new Error("unsupported"), { code: "ENOENT" });
+      }
+      if (mode === "partial reclaim") {
+        throw Object.assign(new Error("partial reclaim"), { code: "EAGAIN" });
+      }
+      fixture.files[`${directory}/memory.current`] = "0";
+    });
+    fixture.remove.mockImplementation(() => {
+      if (mode === "busy race") {
+        throw Object.assign(new Error("new exec joined"), { code: "EBUSY" });
+      }
+    });
+    if (mode === "macOS") {
+      mockProcessPlatform("darwin");
+    }
+    const cleanup = reclaimAgentExecCgroup(directory);
+    await vi.runAllTimersAsync();
+    await cleanup;
+    const untouched = ["process", "descendant", "macOS"].includes(mode);
+    expect(reclaims).toHaveLength(untouched ? 0 : mode === "partial reclaim" ? 5 : 1);
+    expect(fixture.remove).toHaveBeenCalledTimes(untouched ? 0 : 1);
+    expect(warning).toHaveBeenCalledTimes(mode === "missing reclaim" ? 1 : 0);
+  },
+);
+
+it("serializes reclamation across completed sessions", async () => {
+  vi.useFakeTimers();
+  await initializeGatewayExecCgroup("/state");
+  const directories = [getAgentExecCgroup("first")!, getAgentExecCgroup("second")!];
+  for (const directory of directories) {
+    fixture.files[`${directory}/cgroup.procs`] = "";
+    fixture.files[`${directory}/cgroup.events`] = "populated 0\n";
+    fixture.files[`${directory}/memory.current`] = String(2 * 1024 ** 3);
+  }
+  const entered = createDeferred();
+  const release = createDeferred();
+  const writes: string[] = [];
+  vi.spyOn(fs.promises, "writeFile").mockImplementation(async (file) => {
+    if (typeof file !== "string") {
+      throw new Error("Expected a cgroup path");
+    }
+    writes.push(file);
+    if (writes.length === 1) {
+      entered.resolve();
+      await release.promise;
+    }
+    fixture.files[file.replace("memory.reclaim", "memory.current")] = "0";
+  });
+  const cleanups = directories.map(reclaimAgentExecCgroup);
+  await entered.promise;
+  expect(writes).toEqual([`${directories[0]}/memory.reclaim`]);
+  release.resolve();
+  await vi.runAllTimersAsync();
+  await Promise.all(cleanups);
+  expect(writes).toEqual(directories.map((directory) => `${directory}/memory.reclaim`));
+  expect(fixture.remove.mock.calls).toEqual(directories.map((directory) => [directory]));
+});
+
+it("recreates an empty session leaf removed between launch preparation and broker join", async () => {
+  await initializeGatewayExecCgroup("/state");
+  const directory = getAgentExecCgroup("joining-session")!;
+  const write = fixture.write.getMockImplementation()!;
+  let joined = false;
+  let removed = true;
+  fixture.mkdir.mockClear();
+  fixture.write.mockImplementation((file, value) => {
+    if (file === `${directory}/cgroup.procs`) {
+      if (removed) {
+        removed = false;
+        throw Object.assign(new Error("retired before join"), { code: "ENOENT" });
+      }
+      joined = true;
+    }
+    write(file, value);
+  });
+  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+  spawnInAgentExecCgroup(directory, () => expect(joined).toBe(true));
+  expect(fixture.mkdir).toHaveBeenCalledWith(directory, { recursive: true });
+  expect(warning).not.toHaveBeenCalled();
 });
 
 it.each(["owned", "internal", "external", "nested Gateway", "write failure"])(

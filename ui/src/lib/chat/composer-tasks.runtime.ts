@@ -34,7 +34,15 @@ type Current = {
  * the user accepts it; accepting replaces the draft as one editor history step, so undo
  * restores the previous draft with its mentions.
  */
-export function createComposerTasks(presented: () => boolean) {
+export function createComposerTasks(pane: {
+  /** Mounted built-in composers; a replacement composer mounts none and so cannot run tasks. */
+  readonly taskPresenters: number;
+  readonly composerComposing: boolean;
+  readonly composerTextarea: HTMLTextAreaElement | null;
+  /** The mounted composer's send, as Enter; null without a built-in composer. */
+  readonly sendDraft: (() => boolean) | null;
+}) {
+  const presented = () => pane.taskPresenters > 0;
   const [state, setState] = createStore<{
     card: ComposerTaskCard | null;
     /** The one-row receipt after Use; it lasts until the draft changes, a send, or dismissal. */
@@ -60,6 +68,7 @@ export function createComposerTasks(presented: () => boolean) {
 
   function start(options: {
     title: string;
+    startedAt?: number;
     signal: AbortSignal;
     actionKey?: string;
     retry?: () => void;
@@ -80,7 +89,7 @@ export function createComposerTasks(presented: () => boolean) {
       draft.card = {
         kind: "working",
         title: options.title,
-        startedAt: Date.now(),
+        startedAt: options.startedAt ?? Date.now(),
         steps: [],
         summary: null,
         actionKey: options.actionKey ?? null,
@@ -107,16 +116,32 @@ export function createComposerTasks(presented: () => boolean) {
           }
         });
       },
-      propose(text: string, proposal: { title: string }): Promise<ComposerProposalOutcome> {
+      propose(
+        text: string,
+        proposal: { title: string; insert?: boolean; send?: boolean },
+      ): Promise<ComposerProposalOutcome> {
         if (!live()) {
           return Promise.resolve("dismissed");
         }
         const { promise, resolve } = Promise.withResolvers<ComposerProposalOutcome>();
         current!.resolve = resolve;
         current!.phase = "proposal";
-        setState((draft) => {
-          draft.card = { kind: "proposal", title: proposal.title, text };
-        });
+        // Mid-composition the proposal waits for Use, like a locked editor.
+        const target =
+          (proposal.insert || proposal.send) && !pane.composerComposing
+            ? pane.composerTextarea
+            : null;
+        // A locked or composing editor keeps the proposal, so Use writes it once writable.
+        if (target && writable(target)) {
+          apply(target, text, proposal.title);
+          if (proposal.send) {
+            pane.sendDraft?.();
+          }
+        } else {
+          setState((draft) => {
+            draft.card = { kind: "proposal", title: proposal.title, text };
+          });
+        }
         return promise;
       },
       fail(message: string): boolean {
@@ -137,19 +162,27 @@ export function createComposerTasks(presented: () => boolean) {
     };
   }
 
-  function accept(target: HTMLTextAreaElement | null) {
-    const card = state.card;
+  function writable(target: HTMLTextAreaElement) {
     // Dictation and pending goals lock the editor; the proposal waits until it is writable.
-    if (!target || target.readOnly || target.disabled || card?.kind !== "proposal") {
-      return false;
-    }
+    return !target.readOnly && !target.disabled;
+  }
+
+  function apply(target: HTMLTextAreaElement, text: string, title: string) {
     settle("accepted");
-    replaceDraft(target, card.text);
-    written = card.text;
+    replaceDraft(target, text);
+    written = text;
     // After the replacement's own input event, which retires an older receipt.
     setState((draft) => {
-      draft.accepted = { title: card.title };
+      draft.accepted = { title };
     });
+  }
+
+  function accept(target: HTMLTextAreaElement | null) {
+    const card = state.card;
+    if (!target || !writable(target) || card?.kind !== "proposal") {
+      return false;
+    }
+    apply(target, card.text, card.title);
     return true;
   }
 
@@ -196,8 +229,12 @@ export function createComposerTasks(presented: () => boolean) {
     },
     start,
     /** A proposal without a working phase. */
-    offer(text: string, title: string, signal: AbortSignal) {
-      return start({ title, signal }).propose(text, { title });
+    offer(
+      text: string,
+      proposal: { title: string; insert?: boolean; send?: boolean },
+      signal: AbortSignal,
+    ) {
+      return start({ title: proposal.title, signal }).propose(text, proposal);
     },
     accept,
     /** Dismiss a proposal or failure, or cancel working, and retire the receipt. */

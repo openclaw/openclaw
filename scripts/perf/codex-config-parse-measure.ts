@@ -7,7 +7,6 @@
  * sampling runs separately and includes collected objects. No app-server is spawned.
  */
 import assert from "node:assert/strict";
-import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
@@ -20,6 +19,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../src/config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../src/config/runtime-source-projection.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -99,9 +99,6 @@ function run() {
     );
   }
 }
-function bytes(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + bytes(child), 0);
-}
 run();
 const inspector = new Session();
 inspector.connect();
@@ -127,7 +124,7 @@ try {
       sample,
       cpuUsPerRequest: (cpu.user + cpu.system) / iterations,
       wallUsPerRequest: (wallMs * 1000) / iterations,
-      sampledBytesPerRequest: bytes(profile.head) / iterations,
+      sampledBytesPerRequest: sumSampledHeapBytes(profile.head) / iterations,
       hostLoad,
     });
   }

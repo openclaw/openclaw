@@ -568,7 +568,7 @@ export function recoveryConsumptionFixture(
   };
   const recoveryRun = {
     ...run("900", RECEIPT_RECOVERY_WORKFLOW, p, "main"),
-    name: "Full Release Receipt Recovery",
+    name: "Receipt Recovery 12345678-1234-4123-8123-123456789abc",
   };
   runs.set("900", recoveryRun);
   const sealer = job(9000, "Recover original qualification receipts", "900");

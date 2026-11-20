@@ -1,27 +1,29 @@
 import { writeFile } from "node:fs/promises";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
-import type {
-  ClawHubTemplateCatalogDetail,
-  ClawHubTemplateCatalogEntry,
-} from "../../../../src/templates/clawhub-source.ts";
+import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
-import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
-import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
-import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../test-helpers/control-ui-e2e-context.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   canRunPlaywrightChromium,
-  installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
+import {
+  agentsList,
+  auditUrl,
+  installTemplateCatalogGateway,
+  publishedAtMs,
+  skillExcerpt,
+  soulExcerpt,
+  workflowOperator,
+} from "./templates-catalog-gateway.test-support.ts";
 
 const proofDir = createControlUiE2eArtifactDir("templates-catalog");
 const capture = async (page: Page, name: string, content: Locator, scrollTo?: Locator) => {
@@ -50,18 +52,6 @@ const viewports = [
   { name: "desktop", width: 1440, height: 900 },
 ] as const;
 
-const workflowOperator = {
-  packageName: "@openclaw/workflow-operator",
-  displayName: "Workflow Operator",
-  summary: "Runs approved work across your tools.",
-  latestVersion: "1.2.0",
-  channel: "official",
-  official: true,
-  ownerHandle: "openclaw",
-  downloads: 1200,
-  installs: 200,
-  updatedAtMs: 1_790_000_000_000,
-} satisfies ClawHubTemplateCatalogEntry;
 const summaryFreeTemplate: ClawHubTemplateCatalogEntry = { ...workflowOperator };
 delete summaryFreeTemplate.summary;
 const researchTemplate = {
@@ -69,13 +59,6 @@ const researchTemplate = {
   packageName: "@maker/release-scout",
   displayName: "Release Scout",
 };
-const auditUrl = "https://clawhub.ai/openclaw/templates/workflow-operator/security-audit";
-const publishedAtMs = 1_780_000_000_000;
-const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
-const skillExcerpt =
-  "Research trips and compare destinations against the approved itinerary. ".repeat(24);
-const config = { gateway: { controlUi: { experimental: { templates: true } } } };
-const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
 let browser: Browser;
 let server: ControlUiE2eServer;
@@ -107,116 +90,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     });
     onTestFinished(() => context.close());
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      automaticallyFetchFavicons: linkPreviews,
-      historyMessages: [
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "Try [Workflow Operator](/templates/packages/%40openclaw%2Fworkflow-operator) or [another reference](/templates/packages/%40openclaw%2Fworkflow-operator).",
-            },
-          ],
-        },
-      ],
-      heldMethods: loading ? ["templates.catalog.search"] : [],
-      featureMethods: [
-        "openclaw.chat",
-        "templates.catalog.search",
-        "templates.catalog.detail",
-        "templates.catalog.preview",
-        "templates.add.apply",
-        "plugins.list",
-        "plugins.catalog.get",
-      ],
-      methodResponses: {
-        "plugins.catalog.get": {
-          ...inspection.catalog,
-          plugin: {
-            ...inspection.catalog.plugin,
-            local: {
-              present: false,
-              installed: false,
-              enabled: false,
-              state: "not-installed",
-              action: "install",
-            },
-          },
-        } satisfies PluginDiscoveryDetailResult,
-        "config.get": sourceConfigSnapshot(config),
-        "agents.list": agentsList,
-        "templates.catalog.search": {
-          entries: [entry],
-          overview: {
-            featured: catalogEntries,
-            sections: [{ category: "research", entries: catalogEntries }],
-          },
-        },
-        "templates.catalog.detail": {
-          detail: {
-            ...entry,
-            ...detailPublisher,
-            version: "1.2.0",
-            agentId: "workflow-operator",
-            agentName: "Workflow Operator",
-            workspaceFiles: 2,
-            skills: 1,
-            plugins: 1,
-            mcpServers: 0,
-            scheduledJobs: 0,
-            createdAtMs: publishedAtMs,
-            categories: ["research", "productivity"],
-            security: { verdict: "benign", auditUrl },
-            contents: {
-              instructions: [
-                { name: "SOUL.md", source: "workspace/SOUL.md", excerpt: soulExcerpt },
-                { name: "AGENTS.md", source: "workspace/AGENTS.md" },
-              ],
-              skills: [
-                {
-                  name: "Trip research",
-                  source: "clawhub",
-                  ref: "@openclaw/trip-research",
-                  version: "2.0.0",
-                  excerpt: skillExcerpt,
-                },
-              ],
-              integrations: [
-                {
-                  name: "@openclaw/workflow-tools",
-                  kind: "plugin",
-                  source: "clawhub",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
-                },
-              ],
-              automations: [],
-            },
-          } satisfies ClawHubTemplateCatalogDetail,
-        },
-        "plugins.list": {
-          plugins: [
-            {
-              id: "workflow-tools",
-              name: "Workflow Tools",
-              packageName: "@openclaw/workflow-tools",
-              clawhubPackage: "@openclaw/workflow-tools",
-              version: "1.2.0",
-              installed: true,
-              enabled: true,
-              state: "enabled",
-            },
-          ],
-          diagnostics: [],
-          mutationAllowed: true,
-        },
-        "templates.add.apply": {
-          agentId: "workflow-operator",
-          status: "complete",
-          readiness: { ready: false, requirements: [{ kind: "oauth", owner: "workflows" }] },
-        },
-      },
+    const gateway = await installTemplateCatalogGateway(page, {
+      entry,
+      detailPublisher,
+      loading,
+      linkPreviews,
+      catalogEntries,
     });
     await page.goto(`${server.baseUrl}templates`);
     return { page, gateway };
@@ -351,37 +230,102 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(Number(official));
   }
 
-  it("shows dependency origins and versions without treating another plugin version as installed", async () => {
-    const { page, gateway } = await fixture();
-    await gateway.setMethodResponse("plugins.list", {
-      plugins: [
-        {
-          id: "workflow-tools",
-          name: "Workflow Tools",
-          clawhubPackage: "@openclaw/workflow-tools",
-          version: "1.1.0",
-          installed: true,
-          enabled: true,
-          state: "enabled",
+  it.each(["installed", "catalog", "unavailable artwork"])(
+    "shows %s plugin branding without registry labels or matching the wrong installed version",
+    async (source) => {
+      const { page, gateway } = await fixture();
+      await gateway.setMethodResponse("plugins.list", {
+        plugins:
+          source === "catalog"
+            ? [
+                {
+                  id: "workflow-tools",
+                  name: "Uninstalled official entry",
+                  clawhubPackage: "@openclaw/workflow-tools",
+                  origin: "official",
+                  installed: false,
+                  enabled: false,
+                  state: "not-installed",
+                },
+              ]
+            : [
+                {
+                  id: "workflow-tools",
+                  name: "Workflow Tools",
+                  clawhubPackage: "@openclaw/workflow-tools",
+                  version: "1.1.0",
+                  hasIcon: true,
+                  installed: true,
+                  enabled: true,
+                  state: "enabled",
+                },
+              ],
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+      const imageUrl = "https://icons.example.test/workflow.png";
+      await gateway.setMethodResponse("plugins.catalog.get", {
+        ...inspection.catalog,
+        plugin: {
+          ...inspection.catalog.plugin,
+          catalog: { ...inspection.catalog.plugin.catalog, name: "Workflow Tools", imageUrl },
         },
-      ],
-      diagnostics: [],
-      mutationAllowed: true,
-    });
-    const detail = await openDetail(page);
-    await capture(page, "dependency-provenance", detail.getByRole("heading", { name: "Skills" }));
-    // Skill rows carry the Skills navigation glyph, not the docs book.
-    expect(
-      await detail
-        .locator(".plugin-capabilities")
-        .filter({ has: page.getByRole("heading", { name: "Skills" }) })
-        .locator(".plugin-capability__icon path")
-        .evaluateAll((paths) => paths.map((path) => path.getAttribute("d"))),
-    ).toEqual(iconData.sparkles.children.map(([, attributes]) => attributes.d));
-    await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
-    await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
-    expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
-  });
+        detail: { ...inspection.catalog.detail, packageName: "@openclaw/workflow-tools" },
+      });
+      await page.route(/\/__openclaw__\/(?:plugin-icon|catalog-icon)\//u, (route) =>
+        route.fulfill({
+          status: source === "unavailable artwork" ? 404 : 200,
+          contentType: "image/svg+xml",
+          body: '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect width="36" height="36" rx="8" fill="#4361ee"/><path d="m8 18 7 7 13-14" fill="none" stroke="#fff" stroke-width="4"/></svg>',
+        }),
+      );
+      const iconResponse = page.waitForResponse((response) =>
+        /\/__openclaw__\/(?:plugin-icon|catalog-icon)\//u.test(response.url()),
+      );
+      const detail = await openDetail(page);
+      await iconResponse;
+      const artwork = detail.locator(".plugin-capability__icon img");
+      if (source === "unavailable artwork") {
+        expect(await artwork.count()).toBe(0);
+        expect(
+          await detail
+            .locator(".plugin-capability__disclosure")
+            .filter({ hasText: "Workflow Tools" })
+            .locator(".plugin-capability__icon svg")
+            .count(),
+        ).toBe(1);
+      } else {
+        await artwork.waitFor();
+        await page.waitForFunction(() =>
+          Array.from(
+            document.querySelectorAll<HTMLImageElement>(".plugin-capability__icon img"),
+          ).some((image) => image.complete && image.naturalWidth > 0),
+        );
+      }
+      await capture(
+        page,
+        `dependency-provenance-${source}`,
+        detail.getByRole("heading", { name: "Skills" }),
+      );
+      // Skill rows carry the Skills navigation glyph, not the docs book.
+      expect(
+        await detail
+          .locator(".plugin-capabilities")
+          .filter({ has: page.getByRole("heading", { name: "Skills" }) })
+          .locator(".plugin-capability__icon path")
+          .evaluateAll((paths) => paths.map((path) => path.getAttribute("d"))),
+      ).toEqual(iconData.sparkles.children.map(([, attributes]) => attributes.d));
+      const rows = detail.locator(".plugin-capabilities");
+      expect((await rows.allTextContents()).join(" ")).not.toContain("ClawHub · Version");
+      await detail.getByText("Workflow Tools", { exact: true }).waitFor();
+      expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
+      if (source === "catalog") {
+        expect(await gateway.getRequests("plugins.catalog.get", { version: "1.2.0" })).toHaveLength(
+          1,
+        );
+      }
+    },
+  );
 
   it.each([viewports[0], viewports[3]])(
     "shows the release audit and facts in the plugin page's rail at $name width",
@@ -505,10 +449,21 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         `bundled-provenance-${viewport.name}`,
         detail.getByRole("heading", { name: "Skills" }),
       );
-      expect(await detail.getByText("Bundled with template", { exact: true }).count()).toBe(2);
-      await detail.getByText("ClawHub · Version 2.0.0", { exact: true }).waitFor();
-      await detail.getByText("ClawHub · Version 1.2.0", { exact: true }).waitFor();
+      expect(await detail.getByText("Bundled with template", { exact: true }).count()).toBe(0);
+      expect(
+        (await detail.locator(".plugin-capabilities").allTextContents()).join(" "),
+      ).not.toContain("ClawHub · Version");
       expect(await detail.getByText("Installed", { exact: true }).count()).toBe(1);
+      // The status shares the chevron's line at every width instead of stacking above it.
+      const control = detail.locator(".settings-row__control", {
+        has: page.locator(".plugin-connection-status"),
+      });
+      const status = (await control.locator(".plugin-connection-status").boundingBox())!;
+      const chevron = (await control.locator(".settings-row__chevron").boundingBox())!;
+      expect(
+        Math.abs(status.y + status.height / 2 - (chevron.y + chevron.height / 2)),
+      ).toBeLessThanOrEqual(1);
+      expect(chevron.x).toBeGreaterThanOrEqual(status.x + status.width);
       expect(await detail.textContent()).not.toContain("undefined");
       expect(await detail.locator(".templates-add-review").count()).toBe(0);
       await capture(page, `template-detail-no-review-${viewport.name}`, detail);
@@ -581,6 +536,12 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
         .locator(".plugin-catalog-chips")
         .evaluate((element) => getComputedStyle(element).flexWrap),
     ).toBe("wrap");
+    // All and the eleven category filters each have a distinct glyph.
+    const chipIcons = await page
+      .locator(".plugin-catalog-chips .plugin-catalog-chip svg")
+      .evaluateAll((icons) => icons.map((icon) => icon.innerHTML));
+    expect(chipIcons).toHaveLength(12);
+    expect(new Set(chipIcons).size).toBe(chipIcons.length);
     const searchWidth = await page
       .locator(".plugin-catalog-search")
       .evaluate((element) => element.getBoundingClientRect().width);
@@ -714,8 +675,8 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("shows disabled automation declarations in details and the inline preview", async () => {
-    const { page, gateway } = await fixture();
+  it("opens automation instructions from the template row and describes the schedule in both views", async () => {
+    const { page, gateway } = await fixture(undefined, undefined, undefined, false, "dark");
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
         ...workflowOperator,
@@ -726,24 +687,50 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
           skills: [],
           integrations: [],
           automations: [
-            { name: "Weekly brief", schedule: "0 9 * * 1", timezone: "UTC", enabled: false },
+            {
+              name: "Weekly brief",
+              schedule: "0 9 * * 1",
+              timezone: "UTC",
+              enabled: false,
+              message: "Summarize last week's work.\n\nList anything still waiting on a decision.",
+            },
+            {
+              name: "Midweek nudge",
+              schedule: "0 21 * * 3",
+              timezone: "UTC",
+              enabled: false,
+              message: "Remind me of anything due before Friday.",
+            },
           ],
         },
       },
     });
     const detail = await openDetail(page);
-    const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
-    await capture(page, "paused-automation-detail", automation);
-    expect.soft(await automation.textContent()).toContain("Disabled");
+    const automations = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
+    const row = automations.getByRole("button", { name: /Weekly brief/ });
+    await row.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-detail", automations);
+    await row.click();
+    const dialog = page.getByRole("dialog", { name: "Weekly brief", exact: true });
+    await dialog.getByText("List anything still waiting on a decision.").waitFor();
+    await dialog.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await capture(page, "paused-automation-dialog", dialog);
+    await dialog.getByRole("button", { name: "Close", exact: true }).click();
+    await dialog.waitFor({ state: "hidden" });
+    await automations.getByRole("button", { name: /Midweek nudge/ }).click();
+    await page
+      .getByRole("dialog", { name: "Midweek nudge", exact: true })
+      .getByText("Wednesday at 9:00 PM · UTC · Disabled", { exact: true })
+      .waitFor();
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
-    const row = shell.getByRole("button", { name: /Weekly brief/ });
-    expect.soft(await row.textContent()).toContain("Disabled");
-    await row.click();
+    const previewRow = shell.getByRole("button", { name: /Weekly brief/ });
+    await previewRow.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
+    await previewRow.click();
+    await shell.getByText("Monday at 9:00 AM · UTC · Disabled", { exact: true }).waitFor();
     await capture(page, "paused-automation-preview", shell);
-    expect.soft(await shell.textContent()).toContain("Disabled");
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 

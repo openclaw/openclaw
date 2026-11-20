@@ -24,6 +24,19 @@ response settle before the execution ends, preserving each call's own result.
 Stop, timeouts, and permission revocation can still cancel those calls while
 they settle. The handoff does not start another model request.
 
+Without a registered wake source, `sessions_yield` returns `nothing_pending`
+and keeps the model turn open. The model should reply to the user or start the
+work it intended to await. Keeping a spawned session does not keep its completed
+task alive: a new human message in that session needs its own continuation source.
+The tool stays available because the turn can start children or background work
+later; its availability does not imply that a wait has been registered.
+
+Gateway maintenance settles older unreachable yielded session lifecycles with a
+recorded failure, including runs absent from the subagent registry. It preserves active
+execution, queued input, retained continuations and wake-armed process completion.
+Restart recovery reports the missing continuation without attributing its loss to
+the restart.
+
 ## Ownership through the handoff
 
 | Phase                | Owner                                         | Required handoff                                                                                                                                                       |

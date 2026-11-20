@@ -26,6 +26,7 @@ import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
+import { publishMemberProfileRoleChanges } from "./member-role-change.js";
 import { createMemberRolePresetActivation } from "./member-role-presets.js";
 import { createOwnerExpiryTimer } from "./owner-expiry.js";
 import { armLocalExpiry, createPeopleExpiry, ownerLifecycleEvents } from "./owner-lifecycle.js";
@@ -122,6 +123,7 @@ export function createOpenClawIdService(params: {
   let lifecycle = new AbortController();
   // A full stop ends this Gateway's OpenClaw ID lifetime; late loads must not resume it.
   let closed = false;
+  const enabled = () => !closed && isOpenClawIdEnabled(params.getConfig());
   let stopAuthorityChanges: (() => void) | undefined;
   const peopleListeners = new Set<() => void>();
   const peopleChanged = () => {
@@ -131,10 +133,9 @@ export function createOpenClawIdService(params: {
   // Reuse the single-deadline scheduler; expiry is derived from the committed record.
   const peopleExpiry = createPeopleExpiry({
     next: () => authority?.nextPeopleExpiry(),
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     changed: peopleChanged,
   });
-  const armPeopleExpiry = peopleExpiry.arm;
   // Serializes start/stop so overlapping config reloads apply in order.
   let queue: Promise<void> = Promise.resolve();
   const ownerExpiry = createOwnerExpiryTimer({
@@ -153,6 +154,13 @@ export function createOpenClawIdService(params: {
     log: params.log,
   });
 
+  const stopRoleChanges = publishMemberProfileRoleChanges({
+    enabled: () => enabled() && Boolean(authority?.current()?.authority),
+    changed: peopleChanged,
+    publish: () => publicationRetry.request(),
+    warn: params.log.warn,
+  });
+
   // The removal effects load once; they also start remembering run custody.
   const getEffects = () => (effectsPromise ??= loadEffects?.());
 
@@ -163,7 +171,7 @@ export function createOpenClawIdService(params: {
       loadingAuthority ??= params.createAuthority
         ? params.createAuthority()
         : import("./authority.js").then(({ createOpenClawIdAuthority }) =>
-            createOpenClawIdAuthority(),
+            createOpenClawIdAuthority(undefined, enabled),
           );
       authority = await loadingAuthority;
     }
@@ -179,7 +187,7 @@ export function createOpenClawIdService(params: {
     if (firstObserver) {
       stopAuthorityChanges = current.onPeopleChanged(() => {
         peopleChanged();
-        armPeopleExpiry();
+        peopleExpiry.arm();
       });
     }
     // Installing a listener is not hydration: every concurrent consumer joins the same load.
@@ -187,7 +195,7 @@ export function createOpenClawIdService(params: {
     await current.load();
     // Reads must not replace a due People timer with the next, still-future deadline.
     if (firstObserver && observing === stopAuthorityChanges) {
-      armPeopleExpiry();
+      peopleExpiry.arm();
       await armOwnerExpiry(current);
     }
     return current;
@@ -248,10 +256,10 @@ export function createOpenClawIdService(params: {
       status = { state: "off" };
       return;
     }
+    const owner = await getAuthority();
+    await owner.initializeMemberProfileRoles();
     localPrincipals.publish();
-    if (authority) {
-      await armOwnerExpiry(await getAuthority());
-    }
+    await armOwnerExpiry(owner);
     const settings = resolveSettings(config, params.getStateDir());
     if ("missing" in settings) {
       await stopRuntime();
@@ -351,6 +359,7 @@ export function createOpenClawIdService(params: {
       recoveryFailure ??
       (await publishClaw({
         record,
+        readMemberProfiles: owner.memberProfiles,
         relayUrl: config.relayUrl,
         client,
         signer,
@@ -502,7 +511,7 @@ export function createOpenClawIdService(params: {
   const localPrincipals = createTunnelPrincipalPublisher({
     authority: getAuthority,
     current: () => authority,
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     warn: (message) => params.log.warn(message),
   });
 
@@ -624,10 +633,10 @@ export function createOpenClawIdService(params: {
     return await check({ channel, request, config, signal, gatewayKey });
   };
 
-  const ownerLinkStatus = async (options?: { includeSandboxBackend?: true }) => {
+  const ownerLinkStatus = async (options?: { includeSandboxReadiness?: true }) => {
     const { readOwnerLinkStatus } = await import("./owner-link-view.js");
     return readOwnerLinkStatus({
-      includeSandboxBackend: options?.includeSandboxBackend,
+      includeSandboxReadiness: options?.includeSandboxReadiness,
       enabled: isOpenClawIdEnabled(params.getConfig()),
       getAuthority,
       getEffects,
@@ -646,7 +655,7 @@ export function createOpenClawIdService(params: {
     ...params,
     getAuthority,
     gatewayKey,
-    enabled: () => !closed && isOpenClawIdEnabled(params.getConfig()),
+    enabled,
     holdCode: rebindPublication.hold,
     restartRemoteAccess: () =>
       (queue = queue.then(restartForRebind, restartForRebind)).then(() => status),
@@ -656,9 +665,7 @@ export function createOpenClawIdService(params: {
 
   return {
     /** Subscribes to committed People changes and time-derived invite/owner expiry. */
-    onPeopleChanged(listener: () => void): () => void {
-      return registerListener(peopleListeners, listener);
-    },
+    onPeopleChanged: (listener: () => void) => registerListener(peopleListeners, listener),
     ...connectionAccess,
     /** Records display claims produced by the Gateway's verified sign-in flow, never RPC params. */
     async recordVerifiedAccount(account: OpenClawIdAccount): Promise<void> {
@@ -829,13 +836,12 @@ export function createOpenClawIdService(params: {
     },
 
     /** Reads the saved device-token bindings; device-token checks wait for it. */
-    loadTokenBindings(): Promise<void> {
-      return tokenBindings.loadAtStart();
-    },
+    loadTokenBindings: () => tokenBindings.loadAtStart(),
 
     /** Stops everything this owner started. */
     stop(): Promise<void> {
       closed = true;
+      stopRoleChanges();
       const stop = async () => {
         stopLocalAuthority();
         await stopRuntime();

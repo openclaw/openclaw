@@ -45,7 +45,6 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     AbortSignal,
     { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
   >();
-  host.style.display = "contents";
   const currentSession = () =>
     context ? findUiSessionRow(context, host.sessionKey, host.agentId) : undefined;
   const retireAction = (signal: AbortSignal) => {
@@ -60,6 +59,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         sessionKey: host.sessionKey,
         agentId: host.agentId ?? session?.agentId,
         session: session ? structuredClone(session) : undefined,
+        draft: host.composer?.draft,
       });
     } catch (error) {
       retireAction(entry.signal);
@@ -211,17 +211,22 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
             return [];
           }
           let action = actionLifetimes.get(entry.signal);
+          const attach = !action;
           if (!action) {
             action = { entry, abort: new AbortController() };
             actionLifetimes.set(entry.signal, action);
           }
-          return [
-            {
-              entry,
-              state,
-              signal: AbortSignal.any([lifetime.signal, entry.signal, action.abort.signal]),
-            },
-          ];
+          const current = {
+            entry,
+            state,
+            signal: AbortSignal.any([lifetime.signal, entry.signal, action.abort.signal]),
+          };
+          // A new lifetime is a new presentation of this chat: once per lifetime, after this
+          // render settles, the action may show work it started earlier for the chat.
+          if (attach && entry.value.placement === "composer" && entry.value.attach) {
+            queueMicrotask(() => attachAction(current));
+          }
+          return [current];
         }) ?? []
     );
   });
@@ -276,6 +281,40 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
     // An earlier concurrent invocation can fail after this one starts.
     void promise.catch(() => setActionRead({ promise }));
     setActionRead({ promise });
+  };
+  const attachAction = (current: Action) => {
+    const runtime = context?.plugins;
+    if (
+      !runtime ||
+      !host.composer ||
+      current.signal.aborted ||
+      !host.presented ||
+      !host.isConnected
+    ) {
+      return;
+    }
+    void runControlUiPluginAction({
+      runtime,
+      id: current.entry.key,
+      placement: current.entry.value.placement,
+      sessionKey: host.sessionKey,
+      agentId: host.agentId,
+      session: currentSession(),
+      composer: host.composer,
+      signal: current.signal,
+      isCurrent: () => host.isConnected && host.presented,
+      phase: "attach",
+      retry: () => {
+        const next = actions().find((action) => action.entry.key === current.entry.key);
+        if (next) {
+          runAction(next);
+        }
+      },
+    }).catch((error: unknown) => {
+      if (!current.signal.aborted) {
+        runtime.reportError(current.entry.pluginId, error);
+      }
+    });
   };
   const accessories = (kind: "session-header") => (
     <For
