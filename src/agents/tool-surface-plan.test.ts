@@ -220,26 +220,26 @@ describe("resolveAgentToolSurfacePlan", () => {
       toolsAllow: [" MESSAGE "],
     },
     {
-      name: "Tool Search",
+      name: "isolated cron run Tool Search",
       config: { tools: { codeMode: false, toolSearch: true } },
+      sessionKey: "agent:main:cron:job-1:run:run-1",
     },
     {
-      name: "automatic model Tool Search",
-      config: {},
-      model: { toolSearchMode: "tools" },
+      name: "directory Tool Search",
+      config: { tools: { codeMode: false, toolSearch: { enabled: true, mode: "directory" } } },
     },
   ] satisfies Array<{
     name: string;
     config: OpenClawConfig;
     toolsAllow?: string[];
-    model?: { toolSearchMode: "tools" };
+    sessionKey?: string;
   }>)("does not add $name controls to a completion-private message-only run", (run) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
       config: run.config,
       forceDirectMessageTool: true,
       toolsAllow: run.toolsAllow ?? ["message"],
-      model: run.model,
+      sessionKey: run.sessionKey,
     });
     const result = applyAgentToolSurfaceCatalog({
       tools: [createStubTool("message")],
@@ -253,6 +253,30 @@ describe("resolveAgentToolSurfacePlan", () => {
     expect(plan.codeModeControlsEnabled).toBe(false);
     expect(plan.toolSearchControlsEnabled).toBe(false);
     expect(result.tools.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
+  // A stranded-reply retry or a completion relay runs in the shared session; on a fixed
+  // listing its message-only allowlist gates calls instead of replacing the session's tools.
+  it.each([
+    { name: "Tool Search", config: { tools: { codeMode: false, toolSearch: true } } },
+    { name: "automatic model Tool Search", config: {}, model: { toolSearchMode: "tools" } },
+  ] satisfies Array<{
+    name: string;
+    config: OpenClawConfig;
+    model?: { toolSearchMode: "tools" };
+  }>)("keeps the session's $name listing for a message-only reply", (run) => {
+    const plan = (toolsAllow?: string[]) =>
+      resolveAgentToolSurfacePlan({
+        ...basePlanParams,
+        config: run.config,
+        sessionKey: "agent:main:dashboard:shared",
+        forceDirectMessageTool: true,
+        toolsAllow,
+        model: run.model,
+      });
+
+    expect(plan(["message"])).toEqual(plan());
+    expect(plan(["message"]).toolSearchControlsEnabled).toBe(true);
   });
 
   it.each([

@@ -62,7 +62,12 @@ describe("Tool Search runtime snapshot selection", () => {
   it("returns the resolved snapshot unchanged for direct-message-only tool surfaces", () => {
     const { runtimeConfig, sourceConfig } = createRuntimeConfigPair();
     expect(
-      resolveSurface(sourceConfig, { model: { toolSearchMode: "tools" }, toolsAllow: ["message"] }),
+      resolveSurface(sourceConfig, {
+        model: { toolSearchMode: "tools" },
+        toolsAllow: ["message"],
+        // An isolated cron run lists no fixed set, so its message-only reply lists message alone.
+        sessionKey: "agent:main:cron:job-1:run:run-1",
+      }),
     ).toBe(runtimeConfig);
   });
 

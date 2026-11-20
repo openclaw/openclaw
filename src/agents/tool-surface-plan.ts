@@ -10,6 +10,7 @@ import {
 import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
+import { listsFixedToolSet } from "./tool-search-config.js";
 import type { ToolSearchConfig } from "./tool-search-protocol.js";
 import {
   applyToolSchemaDirectoryCatalog,
@@ -38,13 +39,29 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
   const restrictions = params.toolsAllow
     ? (readToolAllowlistIntersection(params.toolsAllow) ?? [params.toolsAllow])
     : [];
-  // Private completion replies have one message capability. Ordinary forced
-  // delivery keeps message direct while other tools can still use discovery.
+  const sessionPlan = resolveToolSurfacePlan(params, restrictions, false);
+  // Private completion replies have one message capability. A fixed listing keeps the
+  // session's tools and refuses calls the allowlist omits; elsewhere message is listed alone.
   const completionPrivateMessageOnly =
     params.forceDirectMessageTool &&
     restrictions.some(
       (allow) => allow.length === 1 && normalizeToolPolicyName(allow[0] ?? "") === "message",
+    ) &&
+    !listsFixedToolSet(
+      sessionPlan.toolSearchConfig,
+      sessionPlan.toolSearchControlsEnabled,
+      params.sessionKey,
     );
+  return completionPrivateMessageOnly
+    ? resolveToolSurfacePlan(params, restrictions, true)
+    : sessionPlan;
+}
+
+function resolveToolSurfacePlan(
+  params: AgentToolSurfacePlanParams,
+  restrictions: readonly (readonly string[])[],
+  completionPrivateMessageOnly: boolean,
+) {
   const codeModeConfig = resolveCodeModeConfig(
     params.config,
     params.agentId,
