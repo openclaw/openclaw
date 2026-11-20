@@ -35,3 +35,11 @@ export function sessionMemberSideTableFacts(members: readonly SessionMember[]) {
       : {}),
   };
 }
+
+export function sessionMemberSharingFacts(sessionKey: string, members: readonly SessionMember[]) {
+  return {
+    sessionKey,
+    identityIds: members.map((member) => member.identityId),
+    memberAccess: sessionMemberAccessFacts(members),
+  };
+}
