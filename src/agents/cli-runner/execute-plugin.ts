@@ -36,6 +36,7 @@ import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
+import { buildCliBeforeAgentFinalizeRelay } from "./before-agent-finalize.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -590,6 +591,7 @@ export async function executePluginOwnedProcess(params: {
               ),
             }
           : {}),
+        ...buildCliBeforeAgentFinalizeRelay(params.context, assertCurrent),
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
