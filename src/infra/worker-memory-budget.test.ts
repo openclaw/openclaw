@@ -103,6 +103,15 @@ describe("worker memory budget", () => {
     },
   );
 
+  it("applies a hosted-slot predicate registered after the pool", () => {
+    const options: Parameters<typeof setup>[0] = { usageMiB: 0 };
+    const { budget } = setup(options);
+    budget.registerPool({}, transcriptUrl, 2);
+    expect(budget.snapshot().floorBytes).toBe(38 * MiB);
+    options.hosted = (url) => url === transcriptUrl.href;
+    expect(budget.snapshot().floorBytes).toBe(0);
+  });
+
   it("reserves direct family floors once seen, minus carriers the shared host claims", () => {
     const direct = new Map([["sqlite-store.worker.js", 1]]);
     const unhosted = setup({ usageMiB: 0, live: { direct } }).budget.snapshot();
