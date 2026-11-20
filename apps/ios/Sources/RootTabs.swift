@@ -89,6 +89,8 @@ struct RootTabs: View {
     // Swipe-up hides the current problem until it changes or resolves.
     @State private var isGatewayToastSwipeDismissed: Bool = false
     @State private var showOnboarding: Bool = false
+    @State private var hasSavedGateway: Bool?
+    @State private var gatewayRegistryRefreshID = UUID()
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
     @State private var didApplyInitialChatSession: Bool = false
@@ -636,7 +638,23 @@ struct RootTabs: View {
     }
 
     private func rootGatewayLifecycle(_ content: some View) -> some View {
-        self.rootGatewayProblemLifecycle(content)
+        let refreshID: UUID? = self.hasConnectedOnce || self.appModel.isLocalGatewayFixtureEnabled
+            ? nil : self.gatewayRegistryRefreshID
+        return self.rootGatewayProblemLifecycle(content)
+            .task(id: refreshID) {
+                guard let refreshID else { return }
+                // Keychain lookup and registry decoding must not run during view evaluation.
+                let hasSavedGateway = await Task.detached(priority: .userInitiated) {
+                    !GatewaySettingsStore.loadGatewayRegistry().entries.isEmpty
+                }.value
+                guard !Task.isCancelled, refreshID == self.gatewayRegistryRefreshID else { return }
+                self.hasSavedGateway = hasSavedGateway
+            }
+            .onReceive(NotificationCenter.default.publisher(for: GatewaySettingsStore.gatewayRegistryDidChange)
+                .receive(on: DispatchQueue.main)) { _ in
+                self.hasSavedGateway = nil
+                self.gatewayRegistryRefreshID = UUID()
+            }
             .onChange(of: self.gatewayController.gateways.count) { _, _ in self.maybeShowQuickSetup() }
             .onChange(of: self.appModel.gatewayServerName) { _, newValue in
                 if newValue != nil {
@@ -686,7 +704,8 @@ struct RootTabs: View {
     }
 
     private func rootPresentation(_ content: some View) -> some View {
-        content
+        let offersNewUserGuide = self.hasNeverHadGateway
+        return content
             .sheet(isPresented: self.$showGatewayProblemDetails) {
                 if let gatewayProblem = self.appModel.lastGatewayProblem {
                     GatewayProblemDetailsSheet(
@@ -721,7 +740,7 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: true,
-                    offersNewUserGuide: self.hasNeverHadGateway,
+                    offersNewUserGuide: offersNewUserGuide,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
@@ -933,15 +952,19 @@ extension RootTabs {
         }
     }
 
-    /// First-run help applies only until a Gateway is saved or has ever connected.
     private var hasNeverHadGateway: Bool {
-        !self.hasConnectedOnce && !self.hasExistingGatewayConfig()
+        !self.appModel.isLocalGatewayFixtureEnabled && Self.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: self.hasConnectedOnce,
+            hasSavedGateway: self.hasSavedGateway,
+            hasRuntimeOrLegacyGatewayConfig: self.hasRuntimeOrLegacyGatewayConfig)
     }
 
     private func hasExistingGatewayConfig() -> Bool {
-        if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
+        self.hasRuntimeOrLegacyGatewayConfig || GatewaySettingsStore.activeGatewayEntry() != nil
+    }
 
+    private var hasRuntimeOrLegacyGatewayConfig: Bool {
+        if self.appModel.activeGatewayConnectConfig != nil { return true }
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }
 

@@ -295,6 +295,19 @@ struct RootTabsPresentationTests {
         #expect(route == .none)
     }
 
+    @Test func `first gateway help requires a loaded empty registry and no configured route`() {
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: nil, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: true, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: true))
+        #expect(!RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: true, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+        #expect(RootTabs.shouldOfferFirstGatewaySetup(
+            hasConnectedOnce: false, hasSavedGateway: false, hasRuntimeOrLegacyGatewayConfig: false))
+    }
+
     @Test func `fresh install presents onboarding`() {
         let route = RootTabs.startupPresentationRoute(
             gatewayConnected: false,
