@@ -124,8 +124,14 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
   it("shares sealed history during rewrite and detaches only writable SDK exposure", async () => {
     const { directory, target } = await persistedTarget("sealed-rewrite");
     const seed = await SessionManager.openAsync(target, directory);
-    const first = await seed.appendMessageAsync(toolResult("read", "unchanged", 1));
-    const last = await seed.appendMessageAsync(toolResult("read", "replace", 2));
+    const first = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "unchanged", 1)),
+      "first seed entry",
+    );
+    const last = expectDefined(
+      await seed.appendMessageAsync(toolResult("read", "replace", 2)),
+      "last seed entry",
+    );
     const manager = await SessionManager.openAsync(target);
     const original = manager[sessionManagerReadTranscriptBranch]()[0];
     if (original?.type !== "message" || original.message.role !== "toolResult") {
