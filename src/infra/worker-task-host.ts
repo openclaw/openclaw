@@ -188,11 +188,17 @@ export function createWorkerTaskHost(
     receiveMessage: receiveWorkerMemoryPort,
     observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
     captureWorkerStartObserver,
-    workerStarted(worker, pool) {
+    workerStarted(worker, pool, cap, options, policyOwner) {
       if (owner.databaseAccess !== "read-only") {
         trackSqliteDatabaseAdmissionWorker(worker);
       }
-      attributeWorkerToPool(worker, pool, workerClass);
+      attributeWorkerToPool(worker, pool, workerClass, {
+        floor: policyOwner.retainOneIdleWorker ? 1 : 0,
+        cap,
+        pointReadCap: cap + 1,
+        idleTimeoutMs: options.idleTimeoutMs ?? 60_000,
+        burstIdleTimeoutMs: options.burstIdleTimeoutMs,
+      });
     },
     workerRetiring(worker, reason) {
       const admission = admissions.get(worker);
