@@ -201,7 +201,7 @@ const SYSTEM_AGENT_TOOL_ACTIONS = [
   "plugin_uninstall",
 ] as const;
 
-const SystemAgentToolSchema = Type.Object({
+export const SystemAgentToolSchema = Type.Object({
   action: stringEnum([...SYSTEM_AGENT_TOOL_ACTIONS]),
   path: Type.Optional(
     Type.String({
@@ -324,7 +324,7 @@ const SIMPLE_ACTIONS = new Map<string, SystemAgentOperation>([
   ["gateway_restart", { kind: "gateway-restart" }],
 ]);
 
-function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
+export function operationForAction(params: Record<string, unknown>): SystemAgentOperation {
   const action = readToolStringParam(params, "action", { required: true });
   const simple = SIMPLE_ACTIONS.get(action);
   if (simple) {

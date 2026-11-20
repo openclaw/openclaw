@@ -1,7 +1,11 @@
 // Host-owned authorization for exact delegated OpenClaw changes.
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import type { SystemAgentOperation, SystemAgentOperatorProposal } from "./operation-types.js";
+import {
+  recordSystemAgentOperationRequester,
+  type SystemAgentOperation,
+  type SystemAgentOperatorProposal,
+} from "./operation-types.js";
 import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 
 export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
@@ -50,6 +54,7 @@ export function classifySystemAgentApprovalText(message: string): SystemAgentApp
 export function resolvePendingOperatorProposal(
   pending: SystemAgentOperation | null,
   proposalRef: SystemAgentProposalRef,
+  options: { requesterAgentId?: string; description?: string } = {},
 ): SystemAgentOperatorProposal | null {
   const operation = pending ?? proposalRef.operation;
   if (!operation || !isPersistentSystemAgentOperation(operation)) {
@@ -59,7 +64,13 @@ export function resolvePendingOperatorProposal(
   if (proposalRef.current && proposalRef.current !== hash) {
     return null;
   }
-  return { operation, hash };
+  // Validate the original proposal before recording requester provenance in its approval identity.
+  const recorded = recordSystemAgentOperationRequester(operation, options.requesterAgentId);
+  return {
+    operation: recorded,
+    hash: recorded === operation ? hash : hashSystemAgentOperation(recorded),
+    ...(options.description ? { description: options.description } : {}),
+  };
 }
 
 export async function resolveOperatorApprovalDecision<T>(params: {

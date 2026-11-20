@@ -39,7 +39,11 @@ import {
   requireSystemAgentInferenceRoute,
   requireSystemAgentPersistentApplyInference,
 } from "./inference-guard.js";
-import { isSystemAgentNavigationOperation } from "./operation-types.js";
+import {
+  isSystemAgentConfigOperation,
+  isSystemAgentNavigationOperation,
+  recordSystemAgentOperationRequester,
+} from "./operation-types.js";
 import {
   getRegularAgentSetupNotice,
   resolveTuiAgentId,
@@ -60,7 +64,6 @@ import {
   type SystemAgentOperationResult,
 } from "./operations.js";
 import {
-  hashSystemAgentOperation,
   classifySystemAgentApprovalText,
   resolveOperatorApprovalDecision,
   resolvePendingOperatorProposal,
@@ -104,6 +107,7 @@ export class SystemAgentChatEngine {
   private pendingDescription?: string;
   private proposalResolution: "approved" | "declined" | undefined;
   private turnQueue: Promise<unknown> = Promise.resolve();
+  private operationInput = false;
 
   private get inferenceRuntime() {
     if (!this.inference) {
@@ -130,27 +134,15 @@ export class SystemAgentChatEngine {
 
   propose(operation: SystemAgentOperation): string {
     this.clearPendingProposals();
-    this.pending = this.recordCreateAgentRequester(operation);
+    this.pending = recordSystemAgentOperationRequester(operation, this.options.requesterAgentId);
     return describeSystemAgentPersistentOperation(this.pending);
   }
 
   getPendingOperatorProposal(): SystemAgentOperatorProposal | null {
-    const proposal = resolvePendingOperatorProposal(
-      this.pending,
-      this.inference?.session.proposalRef ?? {},
-    );
-    if (!proposal) {
-      return null;
-    }
-    const operation = this.recordCreateAgentRequester(proposal.operation);
-    // Request provenance participates in approval identity, but reading the
-    // operator projection must not transfer ownership of a host-seeded plan.
-    const described = this.pendingDescription
-      ? { ...proposal, description: this.pendingDescription }
-      : proposal;
-    return operation === proposal.operation
-      ? described
-      : { ...described, operation, hash: hashSystemAgentOperation(operation) };
+    return resolvePendingOperatorProposal(this.pending, this.inference?.session.proposalRef ?? {}, {
+      requesterAgentId: this.options.requesterAgentId,
+      description: this.pendingDescription,
+    });
   }
 
   async resolveOperatorApproval(
@@ -251,6 +243,17 @@ export class SystemAgentChatEngine {
         reply,
         sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
       );
+    });
+  }
+
+  /** The requesting agent selects an operation; only the host may approve it. */
+  async handleOperation(operation: SystemAgentOperation): Promise<SystemAgentChatReply> {
+    return await this.enqueueTurn(async () => {
+      if (!this.options.operatorApprovalOnly) {
+        throw new Error("Typed operations require the host approval owner.");
+      }
+      this.operationInput = true;
+      return await this.runOperation(operation, isSystemAgentConfigOperation(operation));
     });
   }
 
@@ -498,12 +501,13 @@ export class SystemAgentChatEngine {
       operation,
       result,
       text: capture.read(),
-      exactConfig,
+      exactConfig: exactConfig || this.operationInput,
       surface: this.options.surface,
+      allowAgentHandoff: !this.operationInput,
       resolveAssistantTurn: (text) => this.resolveAssistantTurn(text, false),
       loadOverview: () => this.loadOverview(),
     });
-    if (operation.kind === "template-install") {
+    if (operation.kind === "template-install" && !this.operationInput) {
       this.inferenceRuntime.session.templateResult = reply.text;
     }
     return reply;
@@ -514,6 +518,11 @@ export class SystemAgentChatEngine {
     approvalArmed: boolean,
     uiContext?: SystemAgentChatParams["context"],
   ): Promise<SystemAgentChatReply> {
+    if (this.operationInput) {
+      throw new Error(
+        "Return this operation's outcome to the requesting agent; do not start another conversation.",
+      );
+    }
     await this.requireVerifiedInference();
     const agentTurn = this.options.runAgentTurn ?? runSystemAgentTurn;
     const loopInput = formatSystemAgentTurnInput(
@@ -565,7 +574,10 @@ export class SystemAgentChatEngine {
     operation: SystemAgentOperation,
     exactConfig = false,
   ): Promise<SystemAgentChatReply> {
-    const recordedOperation = this.recordCreateAgentRequester(operation);
+    const recordedOperation = recordSystemAgentOperationRequester(
+      operation,
+      this.options.requesterAgentId,
+    );
     if (!exactConfig) {
       await this.requireVerifiedInference();
     }
@@ -738,17 +750,5 @@ export class SystemAgentChatEngine {
       this.inference.session.proposalRef.current = undefined;
       this.inference.session.proposalRef.operation = undefined;
     }
-  }
-
-  private recordCreateAgentRequester(operation: SystemAgentOperation): SystemAgentOperation {
-    const requesterAgentId = this.options.requesterAgentId?.trim();
-    if (
-      operation.kind !== "create-agent" ||
-      !requesterAgentId ||
-      operation.requesterAgentId === requesterAgentId
-    ) {
-      return operation;
-    }
-    return { ...operation, requesterAgentId };
   }
 }

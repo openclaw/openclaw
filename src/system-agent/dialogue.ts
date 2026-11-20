@@ -230,6 +230,7 @@ export async function finishSystemAgentPersistentOperation(params: {
   text: string;
   exactConfig: boolean;
   surface?: "cli" | "gateway";
+  allowAgentHandoff?: boolean;
   resolveAssistantTurn: (text: string) => Promise<{ text: string }>;
   loadOverview: () => Promise<SystemAgentOverview>;
 }): Promise<SystemAgentChatReply> {
@@ -260,8 +261,12 @@ export async function finishSystemAgentPersistentOperation(params: {
     verify === null
   ) {
     const setupNotice = getRegularAgentSetupNotice(await params.loadOverview(), result.agentId);
-    if (setupNotice) {
-      return { text: `${baseText}\n\n${setupNotice}`, action: "none", applied: true };
+    if (setupNotice || params.allowAgentHandoff === false) {
+      return {
+        text: setupNotice ? `${baseText}\n\n${setupNotice}` : baseText,
+        action: "none",
+        applied: true,
+      };
     }
     return {
       text: [
