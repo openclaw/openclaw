@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { createRouter, definePage } from "@openclaw/uirouter";
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -13,6 +13,7 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { SimulatorPreview } from "./simulator-preview.tsx";
 import { renderSolid } from "./systems-route-view.tsx";
 import { createSystems } from "./systems-state.ts";
 import { systemMeasurements } from "./systems-telemetry.ts";
@@ -272,5 +273,89 @@ it("keeps a live Simulator capture through telemetry and inventory polls", async
   } finally {
     mounted.unmount();
     context.runtimeConfig.dispose();
+  }
+});
+
+it("retires Simulator control before replacing a capture and retains the text draft", async () => {
+  const client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  const firstStop = Promise.withResolvers<void>();
+  let starts = 0;
+  let stops = 0;
+  let acts = 0;
+  vi.spyOn(client, "request").mockImplementation(async (method, params) => {
+    expect(method).toBe("node.invoke");
+    const { command, params: input } = params as {
+      command: string;
+      params: { action: string };
+    };
+    if (command === "simulator.act") {
+      acts += 1;
+      return { payload: { ok: true } };
+    }
+    if (input.action === "stop") {
+      stops += 1;
+      if (stops === 1) {
+        await firstStop.promise;
+      }
+      return { payload: { ok: true } };
+    }
+    if (input.action === "start") {
+      starts += 1;
+      return {
+        payload: { sessionId: `session-${starts}`, sequence: 0, width: 402, height: 874 },
+      };
+    }
+    return {
+      payload: {
+        sessionId: `session-${starts}`,
+        sequence: 1,
+        jpegBase64: "AA==",
+        width: 402,
+        height: 874,
+      },
+    };
+  });
+  const [canControl, setCanControl] = createSignal(true);
+  const mounted = mountSolid(() =>
+    createComponent(SimulatorPreview, {
+      nodeId: "sim",
+      client,
+      presented: true,
+      get canControl() {
+        return canControl();
+      },
+    }),
+  );
+  try {
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector(".simulator-preview img")).not.toBeNull(),
+    );
+    const input = mounted.container.querySelector<HTMLInputElement>(
+      ".simulator-preview__text input",
+    )!;
+    input.value = "draft";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+
+    setCanControl(false);
+    flush();
+    await waitForSolid(() => expect(stops).toBe(1));
+    expect(starts).toBe(1);
+    expect(mounted.container.querySelector(".simulator-preview__text")).toBeNull();
+    expect(acts).toBe(0);
+
+    firstStop.resolve();
+    await waitForSolid(() => expect(starts).toBe(2));
+    setCanControl(true);
+    flush();
+    await waitForSolid(() => expect(starts).toBe(3));
+    await waitForSolid(() =>
+      expect(
+        mounted.container.querySelector<HTMLInputElement>(".simulator-preview__text input")?.value,
+      ).toBe("draft"),
+    );
+  } finally {
+    firstStop.resolve();
+    mounted.unmount();
   }
 });
