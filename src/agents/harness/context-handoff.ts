@@ -2,7 +2,11 @@ import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-c
 import { IMAGE_BLOCK_TOKENS } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
-import { resolveMaxActiveTranscriptBytes } from "../../context-engine/transcript-byte-limit.js";
+import {
+  BOUNDED_CONTEXT_NOTICE,
+  resolveMaxActiveTranscriptBytes,
+} from "../../context-engine/transcript-byte-limit.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { log } from "../embedded-agent-runner/logger.js";
@@ -159,7 +163,10 @@ export function bindHandoff(
     const signal = assertStart(request.signal);
     request.assertCurrent();
     const requested = floorPositiveFiniteNumber(request.tokenBudget);
-    const tokenBudget = Math.min(requested || hostTokens, hostTokens, HANDOFF_TOKEN_CAP);
+    // The active exchange must fit the real delivery allowance; only discardable history
+    // takes the fixed handoff cap.
+    const allowance = Math.min(requested || hostTokens, hostTokens);
+    const tokenBudget = Math.min(allowance, HANDOFF_TOKEN_CAP);
     const maxBytes = Math.min(maxActiveBytes, tokenBudget * 4, HANDOFF_MAX_BYTES);
     const recorder = input.userTurnTranscriptRecorder;
     const admittedKey =
@@ -202,7 +209,7 @@ export function bindHandoff(
     if (prepareMedia) {
       for (const message of [...history, ...active]) {
         if (message.role === "user" || message.role === "assistant") {
-          const prepared = await prepareMedia({ message, maxChars: tokenBudget * 4 });
+          const prepared = await prepareMedia({ message, maxChars: allowance * 4 });
           preparedMedia.set(message, prepared);
           extraBytes.set(
             message,
@@ -224,16 +231,17 @@ export function bindHandoff(
       };
     };
     const activeTokens = active.reduce((sum, message) => sum + item(message).tokens, 0);
-    if (activeTokens > tokenBudget) {
+    if (activeTokens > allowance) {
       throw new Error("Active native continuation exceeds the history delivery allowance");
     }
+    const historyTokens = Math.max(0, Math.min(tokenBudget, allowance - activeTokens));
     const summary =
       facts.summary ?? history.findLast((message) => message.role === "compactionSummary");
     const selection = selectHandoff({
       items: history.filter((message) => message !== summary).map(item),
       summary: summary && item(summary),
-      maxBytes: Math.min(maxBytes, (tokenBudget - activeTokens) * 4),
-      maxTokens: tokenBudget - activeTokens,
+      maxBytes: Math.min(maxBytes, historyTokens * 4),
+      maxTokens: historyTokens,
       priorOmitted: facts.omittedCount,
       priorOmittedIds: facts.omittedIds,
       sessionKey,
@@ -244,9 +252,15 @@ export function bindHandoff(
       );
     }
     if (selection.notice) {
+      const data = { phase: "context_bounded" as const, message: BOUNDED_CONTEXT_NOTICE };
+      // Host-prepared seed notices bypass the native projector that publishes run events
+      // (#181835), so channel conversations' Control UI panes still see the warning.
+      if (input.runId) {
+        emitAgentEvent({ runId: input.runId, sessionKey, stream: "compaction", data });
+      }
       // Advisory observer; its failure must not abort the turn (#177453).
       try {
-        await input.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+        await input.onAgentEvent?.({ stream: "compaction", data });
       } catch (error) {
         log.warn(`bounded handoff observer failed: ${formatErrorMessage(error)}`);
       }

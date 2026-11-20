@@ -3,6 +3,8 @@ import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { BOUNDED_CONTEXT_NOTICE } from "../../context-engine/transcript-byte-limit.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { parseCliReseedPrompt } from "../cli-runner/reseed-envelope.js";
 import { buildCliSessionHistoryPrompt } from "../cli-runner/session-history.js";
@@ -127,26 +129,75 @@ it("bounds a tool-heavy transcript without a model call and tolerates a failing 
         config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "2mb" } } } },
         contextTokenBudget: 100_000,
         onAgentEvent: observer,
+        runId: "handoff-run",
       },
       () => {},
       async (run) => run(),
       undefined,
       { capabilities: { prepareContextMedia } },
     );
+    const published: unknown[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "handoff-run") {
+        published.push(event);
+      }
+    });
     const seeded = await bound!.prepareBoundedSeed!({
       assertCurrent: () => {},
       tokenBudget: 1_500,
-    });
+    }).finally(stop);
     expect(JSON.stringify(seeded[0])).toContain("[OpenClaw context handoff]");
     expect(JSON.stringify(seeded[0])).toContain("sessions_history");
     // Omitted turns are named by the transcript entry ids sessions_history accepts.
     expect(JSON.stringify(seeded[0])).toMatch(/Newest omitted messageIds: [0-9a-f-]{8,}/);
     expect(JSON.stringify(seeded)).toContain("follow-up 12");
-    expect(observer).toHaveBeenCalledWith({
-      stream: "compaction",
-      data: { phase: "context_bounded" },
-    });
+    const data = { phase: "context_bounded", message: BOUNDED_CONTEXT_NOTICE };
+    expect(observer).toHaveBeenCalledWith({ stream: "compaction", data });
+    // Channel conversations' Control UI panes observe the Gateway event, not the observer.
+    expect(published).toContainEqual(
+      expect.objectContaining({ sessionKey: target.sessionKey, stream: "compaction", data }),
+    );
     expect(prepareContextMedia).toHaveBeenCalled();
+  });
+});
+
+it("fits an active exchange against the delivery allowance, not the history cap", async () => {
+  await withOpenClawTestState({ label: "handoff-active" }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    const target = {
+      agentId: "main",
+      sessionId: "handoff-active",
+      sessionKey: "agent:main:handoff-active",
+      storePath: state.statePath("sessions.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target, state.workspaceDir);
+    await manager.appendMessageAsync(makeUserMessage("Goal: keep the refresh exchange", 1));
+    const exchange: AgentMessage[] = [
+      makeUserMessage("Run the long tool", 2),
+      {
+        role: "toolResult",
+        toolCallId: "call-big",
+        toolName: "exec",
+        content: [{ type: "text", text: "y".repeat(80_000) }],
+        isError: false,
+        timestamp: 3,
+      },
+    ];
+    const bound = bindHandoff(
+      {
+        sessionTarget: target,
+        workspaceDir: state.workspaceDir,
+        config: { agents: { defaults: { compaction: { maxActiveTranscriptBytes: "2mb" } } } },
+        contextTokenBudget: 100_000,
+        pluginRuntimeRefreshMessages: exchange,
+      },
+      () => {},
+      async (run) => run(),
+    );
+    const seeded = await bound!.prepareBoundedSeed!({ assertCurrent: () => {} });
+    expect(seeded.slice(-2)).toEqual(exchange);
+    expect(JSON.stringify(seeded)).toContain("Goal: keep the refresh exchange");
   });
 });
 
