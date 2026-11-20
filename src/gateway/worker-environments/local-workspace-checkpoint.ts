@@ -20,6 +20,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { assertLocalWorkspaceDirectory } from "./local-workspace-checkout.js";
 import {
+  commitLocalWorkspaceReconciliation,
+  type LocalWorkspaceCheckpointRecord,
+} from "./local-workspace-conflict-resolution.js";
+import {
   withLocalWorkspaceReconciliation,
   type LocalWorkspaceStore,
 } from "./local-workspace-store.js";
@@ -30,11 +34,11 @@ import type {
   LocalWorkspacePreparedEntry,
   LocalWorkspaceRejectedResult,
 } from "./local-workspace-store.types.js";
-import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
+import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
 import {
   applyStagedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
@@ -553,15 +557,36 @@ export function applyLocalWorkspaceCheckpoint(params: {
     ref: string,
     patch: Parameters<LocalWorkspaceStore["update"]>[1],
   ) => Promise<void>;
-  checkpoint?: LocalWorkspaceManifestCheckpoint;
+  checkpoint?: LocalWorkspaceCheckpointRecord;
   target: LocalWorkspaceSyncTarget;
   refreshBaseCommit?: string;
   rawManifest: string;
   manifestRef: string;
   beforeCommit: () => void;
+  reconciliation: {
+    snapshot: {
+      current: WorkerWorkspaceManifest;
+      currentManifestRaw: string;
+      currentManifestRef: string;
+      baseManifestRaw?: string;
+      baseManifestRef?: string;
+    };
+    refresh?: boolean;
+    baselineDocument?: () => Promise<{ rawManifest: string; manifestRef: string }>;
+    worktreePath: string;
+    projectionPath: string;
+    baselineRef?: string | null;
+  };
 }): ReturnType<typeof applyStagedWorkerWorkspace> {
   params.current();
-  let conflictPaths: string[] | undefined;
+  let accepted:
+    | {
+        conflictPaths: string[];
+        resolvedCanonicalPaths?: string[];
+        manifest: WorkerWorkspaceManifest;
+        manifestRef: string;
+      }
+    | undefined;
   const acceptance = {
     journal: {
       load: async () => undefined,
@@ -582,48 +607,42 @@ export function applyLocalWorkspaceCheckpoint(params: {
       abort: async () => {
         await params.update({ journal_json: null, journal_pack: null });
       },
-      commit: async () => {
+      commit: async (manifestRef) => {
         params.beforeCommit();
-        if (!conflictPaths) {
+        if (!accepted) {
           throw new Error("Local workspace acceptance is missing");
         }
-        // A conflicting result remains a durable pending receipt. No guest
-        // bytes are discarded or silently replaced by the canonical side.
-        try {
-          if (conflictPaths.length) {
-            await params.update({ journal_json: null, journal_pack: null });
-          } else if (params.refreshBaseCommit && params.target === "canonical") {
-            await params.update({
-              pending_target: "projection",
-              journal_json: null,
-              journal_pack: null,
-            });
-          } else {
-            const patch = {
-              ...(params.refreshBaseCommit ? { base_commit: params.refreshBaseCommit } : {}),
-              pending_target: null,
-              journal_json: null,
-              journal_pack: null,
-            };
-            if (params.checkpoint) {
-              await params.update(patch, {
-                ...params.checkpoint,
-                fingerprintsFromCheckpoint: params.checkpoint.fingerprints ? true : undefined,
-              });
-            } else {
-              await params.replaceBaseline(params.rawManifest, params.manifestRef, patch);
-            }
-          }
-        } catch (error) {
-          throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
-        }
+        // commitLocalWorkspaceReconciliation records the accepted publication and
+        // wraps its own failures as indeterminate publication outcomes.
+        await commitLocalWorkspaceReconciliation({
+          conflictPaths: accepted.conflictPaths,
+          resolvedCanonicalPaths: accepted.resolvedCanonicalPaths,
+          resolvedManifest: accepted.manifest,
+          resolvedManifestRef: accepted.manifestRef || manifestRef,
+          checkpoint: params.checkpoint,
+          snapshot: params.reconciliation.snapshot,
+          refresh: params.reconciliation.refresh ?? Boolean(params.refreshBaseCommit),
+          target: params.target,
+          assertCurrent: params.application.assertCurrent,
+          update: params.update,
+          replaceBaseline: params.replaceBaseline,
+          baselineDocument: params.reconciliation.baselineDocument,
+          worktreePath: params.reconciliation.worktreePath,
+          projectionPath: params.reconciliation.projectionPath,
+          baselineRef: params.reconciliation.baselineRef,
+        });
       },
     },
     acceptance: {
-      kind: "checkpoint",
-      publish: async (paths) => {
+      kind: "checkpoint" as const,
+      publish: async (value: {
+        conflictPaths: string[];
+        resolvedCanonicalPaths?: string[];
+        manifest: WorkerWorkspaceManifest;
+        manifestRef: string;
+      }) => {
         params.current();
-        conflictPaths = paths;
+        accepted = value;
       },
     },
   } satisfies Pick<Parameters<typeof applyStagedWorkerWorkspace>[0], "journal" | "acceptance">;
@@ -642,9 +661,9 @@ export function applyLocalWorkspaceCheckpoint(params: {
         ...acceptance,
         journal: {
           ...acceptance.journal,
-          commit: () => {
+          commit: (manifestRef) => {
             markPhase("acceptance");
-            return acceptance.journal.commit();
+            return acceptance.journal.commit(manifestRef);
           },
         },
         onPhase: (phase) => {

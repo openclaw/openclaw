@@ -58,6 +58,13 @@ export type WorkspacePreflightInput = {
   buildCacheInputs?: string[];
 };
 
+export type WorkspaceGuestVersion = {
+  sha256?: string;
+  mode?: number;
+  type?: string;
+  target?: string;
+};
+
 export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
   if (left === right) {
     return true;

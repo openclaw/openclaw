@@ -196,13 +196,18 @@ export async function preflightWorkspaceApplyImpl(
         applyPaths.add(entryPath);
       }
     } else if (!sameEntry(local, currentNodes.get(entryPath))) {
-      conflicts.add(entryPath);
-      const current = currentNodes.get(entryPath);
-      if (
-        (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
-        (current !== undefined && current.type !== "directory" && local?.type === "directory")
-      ) {
-        blockingConflicts.add(entryPath);
+      // A recorded acknowledgement is the only preflight acceptance. The copy
+      // layer still verifies the live guest bytes against the recorded version.
+      const isExplicitlyAccepted = Boolean(params.acknowledgedPaths?.includes(entryPath));
+      if (!isExplicitlyAccepted) {
+        conflicts.add(entryPath);
+        const current = currentNodes.get(entryPath);
+        if (
+          (current?.type === "directory" && local !== undefined && local.type !== "directory") ||
+          (current !== undefined && current.type !== "directory" && local?.type === "directory")
+        ) {
+          blockingConflicts.add(entryPath);
+        }
       }
     }
   }

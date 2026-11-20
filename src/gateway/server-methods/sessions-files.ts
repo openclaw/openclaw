@@ -60,6 +60,7 @@ import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
+import { writeSessionFileWithConflictRecovery } from "./sessions-file-managed-write.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 import {
@@ -483,40 +484,34 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           throw new Error("Start this cloud session before editing its repository files.");
         }
         const worktreeId = loaded.entry.worktree?.id;
-        const writeLocalFile = async () => {
-          const write = (assertCurrent = authorize) =>
-            setSessionWorkspaceFile({
-              ...params,
-              root: loaded.root,
-              fileRoot: loaded.fileRoot,
-              assertCurrent,
-            });
-          if (!worktreeId || !loaded.root) {
-            return await write();
-          }
-          const { withSettledLocalWorkspacePath } =
-            await import("../worker-environments/local-workspace-projection.js");
-          return await withSettledLocalWorkspacePath(
-            { cwd: loaded.root, assertCurrent: authorize },
-            async (custody) => {
-              const update = await write(() => {
-                authorize();
-                custody?.assertCurrent();
-              });
-              if (update.status === "updated") {
-                await custody?.synchronizeProjection?.();
-              }
-              return update;
-            },
-          );
-        };
+        let acknowledgedInCustody = false;
         const update = repository
           ? await repository.inspect(
               "set",
               { path: params.path, content: params.content, expectedHash: params.expectedHash },
               authorize,
             )
-          : await writeLocalFile();
+          : await (async () => {
+              if (worktreeId && loaded.root) {
+                const result = await writeSessionFileWithConflictRecovery({
+                  root: loaded.root,
+                  fileRoot: loaded.fileRoot,
+                  worktreeId,
+                  requestedPath: params.path,
+                  content: params.content,
+                  expectedHash: params.expectedHash,
+                  assertCurrent: authorize,
+                });
+                acknowledgedInCustody = result.acknowledgedInCustody;
+                return result.update;
+              }
+              return await setSessionWorkspaceFile({
+                ...params,
+                root: loaded.root,
+                fileRoot: loaded.fileRoot,
+                assertCurrent: authorize,
+              });
+            })();
         assertSourceCurrent();
         if (update.status === "missing") {
           respondSessionFileNotFound(respond, params.path);
@@ -542,6 +537,16 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
             }),
           );
           return;
+        }
+        if (!repository && !acknowledgedInCustody && loaded.root && update.file.workspacePath) {
+          const { acknowledgeLocalWorkspaceConflict } =
+            await import("../worker-environments/local-workspace-conflict-acknowledgement.js");
+          await acknowledgeLocalWorkspaceConflict({
+            cwd: loaded.root,
+            worktreeId: loaded.entry?.worktree?.id,
+            path: update.file.workspacePath,
+            assertCurrent: authorize,
+          });
         }
         const workspaceDir = repository ? undefined : resolveAgentWorkspaceDir(loaded.cfg, agentId);
         if (

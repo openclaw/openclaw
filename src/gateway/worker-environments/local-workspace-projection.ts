@@ -30,6 +30,12 @@ import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
 import { localWorkspaceProjectionPath } from "./local-workspace-checkout.js";
 import { removeLocalWorkspaceCheckpointCapture } from "./local-workspace-checkpoint.js";
+import {
+  acknowledgeConflictInState,
+  acknowledgeConflictInStore,
+} from "./local-workspace-conflict-acknowledgement.js";
+import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
+import type { LocalWorkspaceConflictRecord } from "./local-workspace-conflict-resolution.js";
 import { finishLocalWorkspaceHandoff } from "./local-workspace-handoff.js";
 import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
 import { runLocalWorkspaceProjection } from "./local-workspace-projection-operation.js";
@@ -189,6 +195,7 @@ export async function withSettledLocalWorkspace<T>(
       LocalWorkspaceOwner,
       "agentId" | "sessionKey" | "sessionId" | "lifecycleRevision"
     >;
+    allowConflict?: boolean;
   },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
@@ -261,6 +268,13 @@ async function settleLocalWorkspace<T>(
       if (!row) {
         return await operation({
           worktreeId: params.worktree.id,
+          acknowledgeConflict: (conflictPath, reviewedGuestVersion) =>
+            acknowledgeConflictInStore(
+              store,
+              conflictPath,
+              reviewedGuestVersion,
+              store.assertCurrent,
+            ),
           assertCurrent: store.assertCurrent,
           workerAuthority: store.workerAuthority,
         });
@@ -309,10 +323,18 @@ async function settleLocalWorkspace<T>(
           } else if (params.restoreSnapshot) {
             await state.restoreSnapshot();
           } else if (state.current().baseline_ref) {
-            await state.synchronize("canonical");
-            // Archive one accepted namespace, including canonical edits and deletions.
-            if (params.retireRuntime) {
-              await state.synchronize("projection");
+            try {
+              await state.synchronize("canonical");
+              // Archive one accepted namespace, including canonical edits and deletions.
+              if (params.retireRuntime) {
+                await state.synchronize("projection");
+              }
+            } catch (error) {
+              // An acknowledged Files save can still leave other paths pending;
+              // the caller reports that save separately from remaining conflicts.
+              if (!params.allowConflict || !(error instanceof LocalWorkspaceConflictError)) {
+                throw error;
+              }
             }
           }
           if (params.retireRuntime) {
@@ -322,29 +344,39 @@ async function settleLocalWorkspace<T>(
             await quiescence?.retire();
           }
           const current = state.current();
+          const checkpoint = current.checkpoint_json
+            ? (JSON.parse(current.checkpoint_json) as {
+                conflicts?: LocalWorkspaceConflictRecord;
+              }) // SAFETY: Checkpoint JSON deserializes to a record.
+            : undefined;
           quiescence?.markPhase("operation.callback");
-          return await operation(
-            current.baseline_ref
+          return await operation({
+            worktreeId: worktree.id,
+            projectionRevision: current.revision,
+            conflicts: checkpoint?.conflicts,
+            acknowledgeConflict: (conflictPath, reviewedGuestVersion) =>
+              acknowledgeConflictInState(
+                state,
+                conflictPath,
+                reviewedGuestVersion,
+                owner.assertCurrent,
+              ),
+            markPhase: quiescence?.markPhase,
+            ...(current.baseline_ref
               ? {
-                  worktreeId: worktree.id,
                   projectionPath: current.projection_path,
-                  projectionRevision: current.revision,
                   prepareArchive: state.prepareArchive,
                   canonicalPaths: state.canonicalPaths,
                   resume: quiescence?.resume,
                   synchronizeProjection: () => state.synchronize("projection"),
-                  markPhase: quiescence?.markPhase,
                   assertCurrent: state.current,
                   workerAuthority: state.workerAuthority,
                 }
               : {
-                  worktreeId: worktree.id,
-                  projectionRevision: current.revision,
-                  markPhase: quiescence?.markPhase,
                   assertCurrent: store.assertCurrent,
                   workerAuthority: store.workerAuthority,
-                },
-          );
+                }),
+          });
         },
         {
           reason: params.retireRuntime
@@ -359,7 +391,7 @@ async function settleLocalWorkspace<T>(
 }
 
 export async function withSettledLocalWorkspacePath<T>(
-  params: { cwd: string; assertCurrent?: () => void },
+  params: { cwd: string; assertCurrent?: () => void; allowConflict?: boolean },
   operation: (custody?: LocalWorkspaceCustody) => Promise<T>,
 ): Promise<T> {
   const context = captureWorktreeRunEndContext(process.env);
@@ -367,10 +399,7 @@ export async function withSettledLocalWorkspacePath<T>(
   const record = await readLiveRegistryWorktreeByPath(context, params.cwd);
   params.assertCurrent?.();
   return record
-    ? await withSettledLocalWorkspace(
-        { worktree: record, env, assertCurrent: params.assertCurrent },
-        operation,
-      )
+    ? await withSettledLocalWorkspace({ worktree: record, env, ...params }, operation)
     : await operation();
 }
 

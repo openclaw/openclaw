@@ -458,6 +458,26 @@ export async function getSessionWorkspaceFile(
   };
 }
 
+export async function resolveSessionWorkspaceCandidatePath(params: {
+  root: string;
+  fileRoot?: string;
+  filePath: string;
+}): Promise<string | undefined> {
+  const candidates = resolveSessionFileCandidates({
+    root: params.root,
+    fileRoot: params.fileRoot,
+    filePath: params.filePath,
+  });
+  for (const candidate of candidates) {
+    const candidatePath = workspaceRelativePath(params.root, candidate);
+    const stat = await statWorkspacePath(params.root, candidatePath);
+    if (stat?.isFile) {
+      return candidatePath;
+    }
+  }
+  return undefined;
+}
+
 export async function setSessionWorkspaceFile(params: {
   root?: string;
   fileRoot?: string;
@@ -480,20 +500,11 @@ export async function setSessionWorkspaceFile(params: {
   if (!params.root) {
     return { status: "missing" as const };
   }
-  const candidates = resolveSessionFileCandidates({
+  const browserPath = await resolveSessionWorkspaceCandidatePath({
     root: params.root,
     fileRoot: params.fileRoot,
     filePath: params.path,
   });
-  let browserPath: string | undefined;
-  for (const candidate of candidates) {
-    const candidatePath = workspaceRelativePath(params.root, candidate);
-    const stat = await statWorkspacePath(params.root, candidatePath);
-    if (stat?.isFile) {
-      browserPath = candidatePath;
-      break;
-    }
-  }
   if (!browserPath) {
     return { status: "missing" as const };
   }

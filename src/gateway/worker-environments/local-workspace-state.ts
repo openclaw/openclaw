@@ -24,6 +24,7 @@ import {
   type LocalWorkspaceSyncTarget as Direction,
 } from "./local-workspace-checkpoint.js";
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
+import type { LocalWorkspaceCheckpointRecord } from "./local-workspace-conflict-resolution.js";
 import {
   admitLocalWorkspaceSourcePaths,
   createLocalWorkspaceManifestReader,
@@ -358,7 +359,7 @@ export function projectionOperations(
         );
       }
       const checkpoint = current().checkpoint_json
-        ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+        ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceCheckpointRecord) // SAFETY: Owner-written checkpoint.
         : undefined;
       if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
         throw new Error("Local workspace checkpoint no longer matches its baseline");
@@ -388,10 +389,12 @@ export function projectionOperations(
           ) {
             throw new Error("Local workspace result no longer matches its accepted baseline");
           }
+          const baseRef = checkpoint?.baseManifestRef;
+          const currentRef = checkpoint?.currentManifestRef;
           if (
             checkpoint &&
-            (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
-              snapshot.currentManifestRef !== checkpoint.currentManifestRef)
+            ((baseRef && snapshot.baseManifestRef !== baseRef) ||
+              (currentRef && snapshot.currentManifestRef !== currentRef))
           ) {
             throw new Error("Local workspace checkpoint payload changed");
           }
@@ -407,8 +410,18 @@ export function projectionOperations(
               current: snapshot.current,
               assertCurrent,
               workerAuthority,
-              freezeTarget: target === "projection" ? quiescence?.pause : undefined,
+              // Resolved imports write into the guest checkout for either target.
+              // Hold the existing guest pause through acceptance so a background
+              // guest process cannot race the verified bytes.
+              freezeTarget: quiescence?.pause,
               onPhase: markPhase,
+              priorConflicts: checkpoint?.conflicts,
+              acknowledgedPaths: checkpoint?.acknowledgedPaths
+                ? new Set(checkpoint.acknowledgedPaths)
+                : undefined,
+              resolvedPaths: checkpoint?.resolvedPaths
+                ? new Set(checkpoint.resolvedPaths)
+                : undefined,
             },
             current,
             update,
@@ -419,6 +432,14 @@ export function projectionOperations(
             rawManifest: snapshot.currentManifestRaw,
             manifestRef: snapshot.currentManifestRef,
             beforeCommit: () => markPhase?.("acceptance"),
+            reconciliation: {
+              snapshot,
+              refresh,
+              baselineDocument,
+              worktreePath: owner.worktree.path,
+              projectionPath: current().projection_path,
+              baselineRef: selected.baseline_ref,
+            },
           });
           if (!refresh || !current().pending_target) {
             await quiescence?.resume();
@@ -727,5 +748,6 @@ export function projectionOperations(
       await store.delete(current(), owner.workerAuthority);
     },
     rememberPaused: (value: string | null) => update({ paused_runtimes_json: value }),
+    update,
   };
 }

@@ -19,7 +19,10 @@ import {
   MAX_WORKSPACE_RESULT_CHANGED_PATHS,
   WorkspaceResultLimitError,
 } from "./workspace-inventory-limits.js";
-import type { WorkspaceReconciliationPreparation } from "./workspace-manifest-comparison.js";
+import type {
+  WorkspaceGuestVersion,
+  WorkspaceReconciliationPreparation,
+} from "./workspace-manifest-comparison.js";
 import type { WorkspaceReconciliationOperations } from "./workspace-manifest-computation.js";
 import {
   captureWorkspaceManifest,
@@ -53,6 +56,9 @@ type WorkspaceApplyParameters = {
   additionalPaths?: ReadonlySet<string>;
   journal: WorkerWorkspaceReconciliationJournalAdapter;
   assertCurrent?: () => void;
+  priorConflicts?: Readonly<Record<string, WorkspaceGuestVersion>>;
+  acknowledgedPaths?: ReadonlySet<string>;
+  resolvedPaths?: ReadonlySet<string>;
   workerAuthority?: WorktreeWorkerAuthority;
   /** Holds every target writer through acceptance or rollback. */
   freezeTarget?: () => Promise<void>;
@@ -64,10 +70,19 @@ type WorkspaceApplyParameters = {
           manifestRef: string;
           manifest: WorkerWorkspaceManifest;
           conflictPaths: string[];
+          resolvedCanonicalPaths?: string[];
         }) => Promise<void>;
       }
     | { kind: "exact-target"; verify: () => Promise<void> }
-    | { kind: "checkpoint"; publish: (conflictPaths: string[]) => Promise<void> };
+    | {
+        kind: "checkpoint";
+        publish: (accepted: {
+          manifestRef: string;
+          manifest: WorkerWorkspaceManifest;
+          conflictPaths: string[];
+          resolvedCanonicalPaths?: string[];
+        }) => Promise<void>;
+      };
 };
 
 export function applyStagedWorkerWorkspace(
@@ -166,9 +181,35 @@ export async function applyStagedWorkerWorkspace(
         : preparedPaths;
     const inspectPaths = () => {
       params.onPhase?.("preflight");
-      return preflightWorkspaceApply({ root, ...preflightInput });
+      return preflightWorkspaceApply({
+        root,
+        ...preflightInput,
+        priorConflicts: params.priorConflicts,
+        acknowledgedPaths: params.acknowledgedPaths ? [...params.acknowledgedPaths] : undefined,
+        resolvedPaths: params.resolvedPaths ? [...params.resolvedPaths] : undefined,
+      });
     };
     const preflight = await inspectPaths();
+    const resolvedCanonicalPathsFor = (
+      accepted: WorkerWorkspaceManifest,
+      finalPreflight: Awaited<ReturnType<typeof inspectPaths>>,
+      conflictPaths: string[],
+    ): string[] => {
+      const admittedPaths = new Set(accepted.entries.map((entry) => entry.path));
+      const candidatePaths = new Set<string>([
+        ...(params.priorConflicts
+          ? Object.keys(params.priorConflicts)
+          : (params.acknowledgedPaths ?? [])),
+        ...(params.resolvedPaths ?? []),
+      ]);
+      return [...candidatePaths].filter(
+        (entryPath) =>
+          (admittedPaths.has(entryPath) || params.priorConflicts?.[entryPath] !== undefined) &&
+          (params.acknowledgedPaths?.has(entryPath) || params.resolvedPaths?.has(entryPath)) &&
+          !conflictPaths.includes(entryPath) &&
+          !finalPreflight.applyPaths.has(entryPath),
+      );
+    };
     const acceptReconciled = async (
       reconcile: Extract<typeof acceptance, { kind: "reconcile" | "checkpoint" }>,
       preparedPreflight?: Awaited<ReturnType<typeof inspectPaths>>,
@@ -179,7 +220,17 @@ export async function applyStagedWorkerWorkspace(
         const finalPreflight = preparedPreflight ?? (await inspectPaths());
         params.assertCurrent?.();
         const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
-        await reconcile.publish(conflictPaths);
+        const resolvedCanonicalPaths = resolvedCanonicalPathsFor(
+          params.current,
+          finalPreflight,
+          conflictPaths,
+        );
+        await reconcile.publish({
+          manifest: params.current,
+          manifestRef: params.currentManifestRef,
+          conflictPaths,
+          resolvedCanonicalPaths,
+        });
         params.assertCurrent?.();
         await params.journal.commit(params.currentManifestRef);
         return { conflictPaths };
@@ -208,8 +259,13 @@ export async function applyStagedWorkerWorkspace(
         await verifyLocalStable();
       }
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+      const resolvedCanonicalPaths = resolvedCanonicalPathsFor(
+        actual.manifest,
+        finalPreflight,
+        conflictPaths,
+      );
       params.assertCurrent?.();
-      await reconcile.publish?.({ ...actual, conflictPaths });
+      await reconcile.publish?.({ ...actual, conflictPaths, resolvedCanonicalPaths });
       params.assertCurrent?.();
       await params.journal.commit(actual.manifestRef);
       return {
