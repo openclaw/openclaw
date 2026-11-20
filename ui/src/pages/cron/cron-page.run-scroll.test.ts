@@ -29,14 +29,14 @@ it.each([true, false])(
         "cron.runs": (params) => {
           const request = asOptionalRecord(params);
           return runPage(
-            request?.runId
+            typeof request?.runId === "string"
               ? [
                   {
                     jobId: String(request.id),
-                    runId: String(request.runId),
+                    runId: request.runId,
                     ts: 10,
                     action: "finished",
-                    summary: String(request.runId),
+                    summary: request.runId,
                   },
                 ]
               : [],
@@ -67,8 +67,11 @@ it.each([true, false])(
       expect(page.cron.cronEditingJob?.configRevision).toBe(
         sameJob ? "original-revision" : "refreshed-revision",
       );
-      if (sameJob) expect(page.cron.cronEditingJob).toBe(editingSnapshot);
-      else expect(page.cron.cronEditingJob).not.toBe(editingSnapshot);
+      if (sameJob) {
+        expect(page.cron.cronEditingJob).toBe(editingSnapshot);
+      } else {
+        expect(page.cron.cronEditingJob).not.toBe(editingSnapshot);
+      }
     } finally {
       page.remove();
     }
