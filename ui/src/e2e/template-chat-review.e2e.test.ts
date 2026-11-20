@@ -112,7 +112,7 @@ it.skipIf(!available).each(["default", "opt-out"] as const)(
       if (setting === "opt-out") {
         await inline
           .getByText(
-            "Your private draft is saved. Your Gateway administrator has turned off Templates.",
+            "Your private draft is saved. Templates are turned off. Ask your Gateway administrator to enable them.",
             { exact: true },
           )
           .waitFor();
