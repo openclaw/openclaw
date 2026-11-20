@@ -1,15 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  Errored,
-  For,
-  latest,
-  lazy,
-  Loading,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, Errored, For, latest, Loading, onSettled, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -44,7 +34,6 @@ import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
-// Imported here, not by the lazy card, so it stays in this sheet instead of a separate tiny file.
 import "../../styles/custodian-setup-card.css";
 import {
   adjustTextareaHeight,
@@ -60,6 +49,7 @@ import { CustodianAlertCard } from "./custodian-alert-card.tsx";
 import { custodianAlertStore } from "./custodian-alert-store.ts";
 import { CustodianEventNudgeView } from "./custodian-nudge.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
+import { CustodianSetupCard } from "./custodian-setup-card.tsx";
 import {
   createPluginHelpRequest,
   currentPluginHelpReference,
@@ -67,11 +57,6 @@ import {
 } from "./plugin-help.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
 import type { CustodianMessage } from "./transcript.ts";
-
-// First-run setup renders only during onboarding; keep it out of the chat boot bundle.
-const CustodianSetupCard = lazy(() =>
-  import("./custodian-setup-card.tsx").then((module) => ({ default: module.CustodianSetupCard })),
-);
 
 registerPluginManagementEnglish();
 
@@ -369,9 +354,7 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
   );
   const setupCard = () => (
     <Show when={props.onboarding}>
-      <Loading>
-        <CustodianSetupCard store={store()} actions={actions().setup} />
-      </Loading>
+      <CustodianSetupCard store={store()} actions={actions().setup} />
     </Show>
   );
   const transcriptNotice = (status: CustodianSessionStore["transcript"]["status"]) => (

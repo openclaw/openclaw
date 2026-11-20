@@ -8,8 +8,6 @@ import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./custodian-page.test-harness.ts";
-// The surface lazy-loads the card; load it up front so the first test does not wait on a cold import.
-import "./custodian-setup-card.tsx";
 import { CustodianSessionStore } from "./custodian-session-store.ts";
 
 type Detection = SystemAgentSetupDetectResult;
@@ -93,8 +91,6 @@ async function mountSetup(request: Request) {
   const harness = setupContext(request);
   const mounted = await mountPage(harness.context);
   await settled(mounted.page);
-  // The card is lazy-loaded so it stays out of the chat boot bundle.
-  await waitForSolid(() => expect(mounted.page.querySelector(".custodian-setup")).not.toBeNull());
   return { ...harness, ...mounted };
 }
 async function settled(page: Page, expected = () => true) {
