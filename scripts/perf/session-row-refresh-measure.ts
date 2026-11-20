@@ -15,7 +15,7 @@
  * session-actor-replica.ts without swapping the checkout or dependency installation.
  * --changed uses three agents and replaces no-op events with changed-row events.
  * --owner also replays 10,000 metadata changes through captured real row inputs.
- * --source-base overlays the five changed owner modules saved by basename from the
+ * --source-base overlays the changed owner modules saved by basename from the
  * baseline revision. It leaves the benchmark and dependency installation identical.
  */
 import assert from "node:assert/strict";
@@ -26,6 +26,7 @@ import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { compileFunction } from "node:vm";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -42,6 +43,7 @@ const { values } = parseArgs({
     instrument: { type: "boolean", default: false },
     "replica-base": { type: "string" },
     "cpu-profile": { type: "boolean", default: false },
+    "freeze-fixture": { type: "string" },
   },
 });
 assert(values["state-dir"], "Pass a new isolated --state-dir");
@@ -71,6 +73,8 @@ const changedSources = [
   "src/agents/fast-mode.ts",
   "src/agents/sandbox/runtime-status.ts",
   "src/gateway/session-utils-row.ts",
+  "src/gateway/session-row-identity.ts",
+  "src/gateway/session-row-presentation.ts",
 ];
 assert(sessions >= residentRows);
 const work = {
@@ -87,6 +91,50 @@ type RowParams = Parameters<
 >[0];
 const ownerInputs = new Map<string, RowParams>();
 Reflect.set(globalThis, "sessionRowOwnerInputs", ownerInputs);
+const freezeShapes: object[] = [];
+if (values["freeze-fixture"]) {
+  // Separate diagnostic process: captures real producer rows before any cleanup.
+  const fast = compileFunction("return %HasFastProperties(row)", ["row"]);
+  const sameMap = compileFunction("return %HaveSameMap(a, b)", ["a", "b"]);
+  const shapes = new Map<string, (frozen: object) => void>();
+  Reflect.set(
+    globalThis,
+    "captureSessionRowFreeze",
+    (row: Record<string, unknown>, fields?: string[]) => {
+      const keys = Object.keys(row);
+      const patch = fields !== undefined;
+      const shape = `${patch ? "patch" : "row"}\n${keys.join("\n")}`;
+      const existing = shapes.get(shape);
+      if (existing) {
+        return existing;
+      }
+      if (shapes.size >= 12) {
+        return undefined;
+      }
+      const sample = {
+        patch,
+        fields,
+        beforeFast: fast(row),
+        afterFast: false,
+        rows: 0,
+        fastRows: 0,
+        sharedMaps: 0,
+        entries: keys.map((key) => ({ key, defined: row[key] !== undefined, value: row[key] })),
+      };
+      freezeShapes.push(sample);
+      let previous: object | undefined;
+      const capture = (frozen: object) => {
+        sample.afterFast = fast(frozen);
+        sample.rows++;
+        sample.fastRows += Number(sample.afterFast);
+        sample.sharedMaps += Number(previous !== undefined && sameMap(previous, frozen));
+        previous = frozen;
+      };
+      shapes.set(shape, capture);
+      return capture;
+    },
+  );
+}
 const injections = new Map([
   [
     "src/agents/agent-scope-config.ts",
@@ -122,15 +170,31 @@ registerHooks({
         ? path.join(values["source-base"], path.basename(relative))
         : undefined);
     const captureOwner = values.owner && relative === "src/gateway/session-utils-row.ts";
+    const captureFreeze =
+      values["freeze-fixture"] && relative === "src/gateway/session-row-identity.ts";
     if (
       !injection &&
       !baseline &&
       !captureOwner &&
+      !captureFreeze &&
       !(values.changed && relative && changedSources.includes(relative))
     ) {
       return nextLoad(url, context);
     }
     let source = readFileSync(baseline || new URL(url), "utf8");
+    if (captureFreeze) {
+      source = source.replace(
+        "export function freezeSessionRow(",
+        "function freezeSessionRowCaptured(",
+      );
+      source += `
+export function freezeSessionRow(...args: Parameters<typeof freezeSessionRowCaptured>) {
+  const capture = globalThis.captureSessionRowFreeze(args[0], args[2]);
+  const row = freezeSessionRowCaptured(...args);
+  capture?.(row);
+  return row;
+}`;
+    }
     if (captureOwner) {
       source = source.replace(
         "export function readSessionRowInputs(",
@@ -210,6 +274,17 @@ const realNow = Date.now;
 Date.now = () => anchor;
 const sampledBytes = (node: HeapProfiler.SamplingHeapProfileNode): number =>
   node.selfSize + node.children.reduce((sum, child) => sum + sampledBytes(child), 0);
+function freezeNativeBytes(node: HeapProfiler.SamplingHeapProfileNode, freezing = false): number {
+  const inFreeze = freezing || node.callFrame.functionName === "freezeSessionRow";
+  return (
+    (inFreeze && node.callFrame.scriptId === "0" ? node.selfSize : 0) +
+    node.children.reduce((sum, child) => sum + freezeNativeBytes(child, inFreeze), 0)
+  );
+}
+const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode) => ({
+  allocatedBytes: sampledBytes(node),
+  freezeNativeBytes: freezeNativeBytes(node),
+});
 try {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg: OpenClawConfig = {
@@ -445,9 +520,10 @@ try {
       const used = process.threadCpuUsage(cpu);
       const memoryAfter = process.memoryUsage();
       const after = getSessionRowSelectionMetrics().materialization;
-      const allocatedBytes = values.allocation
-        ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+      const allocation = values.allocation
+        ? sampledAllocation((await inspector.post("HeapProfiler.stopSampling")).profile.head)
         : undefined;
+      const allocatedBytes = allocation?.allocatedBytes;
       if (values["cpu-profile"]) {
         writeFileSync(
           path.join(root, "owner.cpuprofile"),
@@ -455,8 +531,10 @@ try {
         );
       }
       const digest = createHash("sha256");
+      const rowDigest = createHash("sha256");
       for (const query of queries) {
         digest.update(JSON.stringify(projection.snapshot(query, { now: anchor }).row));
+        rowDigest.update(JSON.stringify(projection.describe(query)!.materialized.row));
       }
       const measuredWork = { ...work };
       let ownerResult;
@@ -503,8 +581,8 @@ try {
         replay(10000);
         const ownerElapsed = performance.now() - ownerStart;
         const ownerUsed = process.threadCpuUsage(ownerCpu);
-        const ownerBytes = values.allocation
-          ? sampledBytes((await inspector.post("HeapProfiler.stopSampling")).profile.head)
+        const ownerAllocation = values.allocation
+          ? sampledAllocation((await inspector.post("HeapProfiler.stopSampling")).profile.head)
           : undefined;
         ownerDurations.sort((a, b) => a - b);
         const ownerDigest = createHash("sha256");
@@ -515,7 +593,7 @@ try {
           iterations: 10000,
           cpuMs: (ownerUsed.user + ownerUsed.system) / 1000,
           elapsedMs: ownerElapsed,
-          allocatedBytes: ownerBytes,
+          ...ownerAllocation,
           medianMs: ownerDurations[5000],
           p95Ms: ownerDurations[9499],
           digest: ownerDigest.digest("hex"),
@@ -578,6 +656,7 @@ try {
         iterations,
         sources,
         digest: digest.digest("hex"),
+        rowDigest: rowDigest.digest("hex"),
         cacheReplacements,
         refreshedRows: projection.materializedCount - countBefore,
         materialization: Object.fromEntries(
@@ -590,6 +669,7 @@ try {
         threadCpuMs: (used.user + used.system) / 1000,
         cpuUsPerOperation: (used.user + used.system) / iterations,
         allocatedBytes,
+        freezeNativeBytes: allocation?.freezeNativeBytes,
         allocatedBytesPerOperation:
           allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
         memoryBefore,
@@ -598,6 +678,9 @@ try {
         hostLoadAfter: loadavg(),
       };
       writeFileSync(path.join(root, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+      if (values["freeze-fixture"]) {
+        writeFileSync(values["freeze-fixture"], `${JSON.stringify(freezeShapes, null, 2)}\n`);
+      }
       console.log(JSON.stringify(result));
     } finally {
       inspector.disconnect();
