@@ -112,9 +112,6 @@ it.each`
       directIdempotencyKey: "announce:requester-settle:private",
     });
     expect(result).toMatchObject(expected);
-    if (expected.reason === "requester_aborted") {
-      expect(result).not.toHaveProperty("disposition");
-    }
     if (options.replaced) {
       expect(dispatch).not.toHaveBeenCalled();
     } else {

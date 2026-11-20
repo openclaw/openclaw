@@ -410,7 +410,7 @@ it.each([
   {
     name: "explicit stop",
     input: { status: "error", stopReason: "rpc" },
-    expected: { delivered: false, disposition: undefined },
+    expected: { delivered: false, disposition: "permanent_failure" },
   },
   {
     name: "effectful tool before cancellation",

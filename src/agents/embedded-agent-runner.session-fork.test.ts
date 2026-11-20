@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
+import { createAiTransportHost, getAiTransportHost, runWithAiTransportHost } from "@openclaw/ai";
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
@@ -166,7 +166,7 @@ it.each([
       const payloads: Array<Record<string, unknown>> = [];
       let toolsRemaining = 0;
       let beforeProviderResponse: (() => void) | undefined;
-      configureAiTransportHost({
+      const transportHost = createAiTransportHost({
         ...host,
         buildModelFetch: () => async (input, init) => {
           const payload: unknown = await new Request(input, init).json();
@@ -252,7 +252,8 @@ it.each([
           admission.close();
         }
       };
-      try {
+      // Keep synthetic I/O scoped when lazy provider initialization replaces the process default.
+      await runWithAiTransportHost(transportHost, async () => {
         await runParent("Parent question", "fork-parent");
         expect(payloads).toHaveLength(1);
         const original = structuredClone(payloads[0]!);
@@ -426,9 +427,7 @@ it.each([
           /^(?:Session read authority revoked by reset|admitted run authority is no longer active)$/,
         );
         expect(payloads).toHaveLength(beforeReset);
-      } finally {
-        configureAiTransportHost(host);
-      }
+      });
     });
   },
 );
