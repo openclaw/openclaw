@@ -82,13 +82,13 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 });
 
 describe("standalone plugin file startup intent", () => {
-  const warning = "standalone plugin file has a manifest without activation.onStartup";
+  const warning = "standalone plugin file has a manifest that declares no activation";
   const enabled = { entries: { "tool-policy": { enabled: true } } };
 
   it.each([
-    { name: "enabled, manifest omits onStartup", plugins: enabled, warns: true },
+    { name: "enabled, manifest declares no activation", plugins: enabled, warns: true },
     {
-      name: "allowlisted, manifest omits onStartup",
+      name: "allowlisted, manifest declares no activation",
       plugins: { allow: ["tool-policy"] },
       warns: true,
     },
@@ -101,6 +101,12 @@ describe("standalone plugin file startup intent", () => {
     {
       name: "entry disabled",
       plugins: { entries: { "tool-policy": { enabled: false } } },
+      warns: false,
+    },
+    {
+      name: "enabled, onCapabilities hook",
+      plugins: enabled,
+      activation: { onCapabilities: ["hook"] },
       warns: false,
     },
     { name: "plugins disabled", plugins: { ...enabled, enabled: false }, warns: false },
