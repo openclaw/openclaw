@@ -35,6 +35,12 @@ openclaw-assistant-panel {
   top: var(--shell-topbar-height, 0);
 }
 
+/* Desktop webviews draw their caption buttons over the window's top-right
+   corner, where this panel's header actions sit. */
+html.openclaw-native-desktop .assistant-panel--right {
+  --rail-header-padding-end: calc(var(--openclaw-native-window-controls-width, 0px) + 8px);
+}
+
 .assistant-panel-resizer {
   position: absolute;
   z-index: 2;
