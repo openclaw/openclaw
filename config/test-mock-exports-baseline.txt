@@ -355,7 +355,6 @@
 ["extensions/feishu/src/monitor.cleanup.test.ts","./client.js","e7ee501b9cb323b4aa9e7e6478312392f72cf9231e582cbd711fb599fb94f5cb",1]
 ["extensions/feishu/src/monitor.comment.test.ts","./client.js","1ef1822660b3259a2d31c19e3ca6d53513f3f6b1bd63e18696dbd168545ea2cd",1]
 ["extensions/feishu/src/monitor.comment.test.ts","./comment-handler.js","4dbdc6a18ff44c2194325a9e1e75afcb7029af7e219ee55f769024e70d4a2fd3",1]
-["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./bot.js","e96e435e6e6e5648ee663b733631a12c197a43319f6d9a1072fe1f62f88d7b8b",1]
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./client.js","6b4039d72277f03c1d88529996b245f007979c2e4474701b04584c031df05403",1]
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./monitor.transport.js","e76f2e091fe26cb05aafd72c48b2857b73fdb2e37fef40d9e766c098b94dd438",1]
 ["extensions/feishu/src/monitor.dedupe-lifecycle.test.ts","./runtime.js","810cc473f091f79152491c693d2f4c89473ca672814897e0d019da5aa79b531e",1]

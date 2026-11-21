@@ -58,7 +58,7 @@ function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): SidebarPlugin[]
 }
 
 function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boolean }) {
-  // Enabled routes leave out Templates unless its experimental flag is on.
+  // Enabled routes respect the advanced Templates opt-out.
   const pages = () =>
     CUSTOMIZE_PAGES.filter(([route]) => props.host.enabledRouteIds?.includes(route) ?? true);
   return (

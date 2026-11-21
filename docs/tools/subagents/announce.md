@@ -96,6 +96,16 @@ delivery identity; it does not start a new requester-settle attempt.
 Explicit Stop, retired work, and intentional delivery suppression still take
 precedence; cancellation does not revive work those owners have closed.
 
+If Gateway shutdown aborts the requester while a completed child's delivery is in
+flight, an unconsumed result remains pending for startup recovery. A result already
+committed to the requester keeps its receipt and is not delivered again. An
+unconfirmed channel send retains its ambiguous outcome.
+This includes private continuation turns. A consumed private result stays in the
+requester's saved model context even if shutdown aborts the turn before it replies.
+Eligible root requesters resume through normal restart recovery. Spawned requesters
+are not independently resumed; their next turn reads the saved result without
+another completion delivery.
+
 By default, delivery depends on requester depth:
 
 - Top-level requester sessions use a follow-up `agent` call. External conversations use `deliver=true`; WebChat conversations stay in-session with `deliver=false`.
