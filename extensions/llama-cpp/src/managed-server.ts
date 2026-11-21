@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
@@ -306,9 +307,10 @@ export async function ensureLlamaCppModel(params: {
   }
   const artifact = await resolveCachedModelArtifact(localSource, params.cacheDir, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
-  const load =
-    modelPromises.get(destination) ??
-    (async () => {
+  let load = modelPromises.get(destination);
+  if (!load) {
+    const shared = (async () => {
+      // Shared work outlives any caller; only each caller's wait is cancellable.
       const exists = await fsp
         .stat(destination)
         .then((stat) => stat.isFile())
@@ -318,7 +320,7 @@ export async function ensureLlamaCppModel(params: {
         artifact.expectedSha256 &&
         (artifact.expectedSize === undefined ||
           (await fsp.stat(destination)).size === artifact.expectedSize) &&
-        (await sha256File(destination, params.signal)) === artifact.expectedSha256
+        (await sha256File(destination)) === artifact.expectedSha256
       ) {
         await assertGguf(destination);
         return destination;
@@ -339,20 +341,22 @@ export async function ensureLlamaCppModel(params: {
         expectedSha256: artifact.expectedSha256,
         expectedSize: artifact.expectedSize,
         requireServerDigest: !artifact.expectedSha256,
-        signal: params.signal,
         onProgress: params.onProgress,
       });
       await assertGguf(destination);
       return destination;
     })();
-  modelPromises.set(destination, load);
-  try {
-    return await load;
-  } finally {
-    if (modelPromises.get(destination) === load) {
-      modelPromises.delete(destination);
-    }
+    modelPromises.set(destination, shared);
+    // Evict only on settlement so a cancelled waiter cannot start duplicate work.
+    const release = () => {
+      if (modelPromises.get(destination) === shared) {
+        modelPromises.delete(destination);
+      }
+    };
+    void shared.then(release, release);
+    load = shared;
   }
+  return await racePromiseWithAbortSignal(load, params.signal);
 }
 
 async function writePreset(presetPath: string, contents: string): Promise<void> {

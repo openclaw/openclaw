@@ -2,8 +2,10 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, expect, it, vi } from "vitest";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 
 const installMocks = vi.hoisted(() => ({
   ensureLlamaServerInstalled: vi.fn(),
@@ -21,7 +23,13 @@ vi.mock("./llama-server-assets.js", async (importOriginal) => ({
 }));
 
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
+  DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES,
+  DEFAULT_LLAMA_CPP_MODEL_URI,
+} from "./defaults.js";
 import { selectLlamaServerAsset } from "./llama-server-assets.js";
+import * as llamaServerInstall from "./llama-server-install.js";
 import { withHuggingFaceMetadataFixture } from "./managed-server-huggingface.test-support.js";
 import { inspectLlamaServerRuntime } from "./managed-server-inspection.js";
 import {
@@ -556,3 +564,38 @@ it.each(["metrics", "props"] as const)(
     });
   },
 );
+
+it("keeps a shared model load alive for the callers that did not abort", async () => {
+  const cacheDir = tempDirs.make("llama-cpp-shared-abort-");
+  const destination = path.join(cacheDir, DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE);
+  await fs.writeFile(destination, "GGUF");
+  await fs.truncate(destination, DEFAULT_LLAMA_CPP_MODEL_SIZE_BYTES);
+  const hash = createDeferred<string>();
+  const reachedHash = createDeferred<void>();
+  onTestFinished(() => hash.resolve("wrong-digest"));
+  const sha256 = vi.spyOn(llamaServerInstall, "sha256File").mockImplementation((_file, signal) => {
+    reachedHash.resolve();
+    return racePromiseWithAbortSignal(hash.promise, signal);
+  });
+  const load = (signal: AbortSignal) =>
+    ensureLlamaCppModel({
+      source: DEFAULT_LLAMA_CPP_MODEL_URI,
+      cacheDir,
+      download: false,
+      signal,
+    }).catch((error: unknown) => error);
+  const [a, b, c] = [new AbortController(), new AbortController(), new AbortController()];
+  const first = load(a.signal);
+  await reachedHash.promise;
+  const joined = load(b.signal);
+  await setImmediate();
+  a.abort(new Error("A stopped"));
+  expect(await first).toMatchObject({ cause: a.signal.reason });
+  const late = load(c.signal);
+  await setImmediate();
+  b.abort(new Error("B stopped"));
+  expect(await joined).toMatchObject({ cause: b.signal.reason });
+  hash.resolve("wrong-digest");
+  expect(await late).toMatchObject({ message: expect.stringContaining("Model is not cached") });
+  expect(sha256).toHaveBeenCalledTimes(1);
+});
