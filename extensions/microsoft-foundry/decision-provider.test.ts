@@ -1,15 +1,19 @@
+import { attachModelProviderRequestTransport } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { DecisionBatchV2, DecisionProviderContextV2 } from "openclaw/plugin-sdk/decisions";
+import { fetchWithProviderHttpGuard } from "openclaw/plugin-sdk/provider-http";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildFoundryDecisionProvider } from "./decision-provider.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
 }));
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({ fetchWithSsrFGuard: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
+  fetchWithProviderHttpGuard: vi.fn(),
+}));
 
 const id = "microsoft-foundry-systemone";
 const model = "microsoft-decision-1.1";
@@ -58,22 +62,22 @@ function context(extra: Partial<DecisionProviderContextV2> = {}): DecisionProvid
 
 function respond(payload: unknown = reply, status = 200) {
   const release = vi.fn(async () => {});
-  vi.mocked(fetchWithSsrFGuard).mockImplementation(async (request) => {
-    request.beforeRequest?.();
-    return { response: Response.json(payload, { status }), release, finalUrl: request.url };
-  });
+  vi.mocked(fetchWithProviderHttpGuard).mockImplementation(async (request) => ({
+    response: Response.json(payload, { status }),
+    release,
+    finalUrl: request.url,
+  }));
   return release;
 }
 
 beforeEach(() => {
   vi.mocked(getPreparedPluginSecretInput).mockReset().mockReturnValue({ revision: 1 });
-  vi.mocked(fetchWithSsrFGuard).mockReset();
+  vi.mocked(fetchWithProviderHttpGuard).mockReset();
 });
+afterEach(() => vi.unstubAllEnvs());
 
-it("declares a separate plugin-owned route and reads only its prepared credential", () => {
+it("reads only the prepared Foundry Decision credential", () => {
   const route = buildFoundryDecisionProvider(() => cfg);
-  expect(manifest.contracts.decisionProviders).toEqual([route.id]);
-  expect(manifest.modelCatalog.providers[id].authScope).toBe(route.provider?.authScope);
   const resolve = route.provider?.resolveSyntheticAuth;
   expect(resolve).toBeDefined();
   expect(resolve?.({ provider: id, config: cfg })).toBeUndefined();
@@ -101,7 +105,7 @@ it.each([
       status: "unavailable",
       reason: "transport",
     });
-    expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
   },
 );
 
@@ -119,17 +123,18 @@ it("sends one tightly scoped request and decodes mixed results with shared Syste
       usage: { inputTokens: 70, outputTokens: 0 },
     },
   });
-  expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
-  const [request] = vi.mocked(fetchWithSsrFGuard).mock.calls[0]!;
+  expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
+  const [request] = vi.mocked(fetchWithProviderHttpGuard).mock.calls[0]!;
   expect(request).toMatchObject({
     url: `https://${host}/providers/microsoft/v1/systemone`,
     requireHttps: true,
-    policy: { hostnameAllowlist: [host] },
     maxRedirects: 0,
     capture: false,
-    init: { method: "POST", headers: { "api-key": key } },
+    init: { method: "POST" },
   });
-  expect(new Headers(request.init?.headers).get("authorization")).toBeNull();
+  expect(request.policy).toEqual({ hostnameAllowlist: [host] });
+  const headers = new Headers(request.init?.headers);
+  expect([headers.get("api-key"), headers.get("authorization")]).toEqual([key, null]);
   expect(JSON.parse(String(request.init?.body))).toEqual({
     model: deployment,
     state: batch.state.value,
@@ -142,9 +147,9 @@ it("sends one tightly scoped request and decodes mixed results with shared Syste
 });
 
 it("keeps a guarded POST from following a redirect with evidence or credentials", async () => {
-  const { fetchWithSsrFGuard: guardedFetch } = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/ssrf-runtime")
-  >("openclaw/plugin-sdk/ssrf-runtime");
+  // Keep the mock Azure host and real loopback server off the host's ambient proxy.
+  vi.stubEnv("NO_PROXY", `${host},127.0.0.1`);
+  vi.stubEnv("no_proxy", `${host},127.0.0.1`);
   const paths: (string | undefined)[] = [];
   await withServer(
     (request, response) => {
@@ -153,8 +158,8 @@ it("keeps a guarded POST from following a redirect with evidence or credentials"
       response.writeHead(307, { location: "/unexpected-second-arrival" }).end();
     },
     async (origin) => {
-      vi.mocked(fetchWithSsrFGuard).mockImplementation((request) =>
-        guardedFetch({
+      vi.mocked(fetchWithProviderHttpGuard).mockImplementation((request) =>
+        fetchWithSsrFGuard({
           ...request,
           // Only the test can redirect the transport to loopback.
           url: `${origin}/providers/microsoft/v1/systemone`,
@@ -171,9 +176,77 @@ it("keeps a guarded POST from following a redirect with evidence or credentials"
   );
 });
 
+it("keeps the fixed Foundry route while applying prepared proxy and TLS policy", async () => {
+  respond();
+  const prepared = context({
+    model: attachModelProviderRequestTransport(
+      { ...context().model, baseUrl: "https://unused.fixture.test/v1" },
+      {
+        proxy: { mode: "env-proxy", tls: { ca: "fixture-proxy-ca" } },
+        tls: { ca: "fixture-target-ca" },
+      },
+    ),
+  });
+  await expect(
+    buildFoundryDecisionProvider(() => cfg).evaluate(batch, prepared),
+  ).resolves.toMatchObject({
+    status: "ok",
+  });
+  expect(fetchWithProviderHttpGuard).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: `https://${host}/providers/microsoft/v1/systemone`,
+      dispatcherPolicy: {
+        mode: "env-proxy",
+        connect: { ca: "fixture-target-ca" },
+        proxyTls: { ca: "fixture-proxy-ca" },
+      },
+    }),
+  );
+});
+
+it("keeps prepared model headers and auth overrides off the resource-bound wire request", async () => {
+  respond();
+  const preparedModel = attachModelProviderRequestTransport(
+    { ...context().model, headers: { "Api-Key": "wrong-key", Authorization: "Bearer other" } },
+    { auth: { mode: "header", headerName: "Api-Key", value: "wrong-key" } },
+  );
+  await expect(
+    buildFoundryDecisionProvider(() => cfg).evaluate(batch, context({ model: preparedModel })),
+  ).resolves.toMatchObject({ status: "ok" });
+  const headers = new Headers(
+    vi.mocked(fetchWithProviderHttpGuard).mock.calls[0]?.[0].init?.headers,
+  );
+  expect([headers.get("api-key"), headers.get("authorization")]).toEqual([key, null]);
+});
+
+it("does not send if the live resource binding changes while transport is preparing", async () => {
+  let live = cfg;
+  const provider = buildFoundryDecisionProvider(() => live);
+  const send = vi.fn();
+  vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async ({ beforeRequest }) => {
+    live = {
+      plugins: {
+        entries: {
+          "microsoft-foundry": {
+            config: { decision: { resourceHost: host, deployment: "replacement" } },
+          },
+        },
+      },
+    };
+    beforeRequest?.();
+    return send();
+  });
+  await expect(provider.evaluate(batch, context())).resolves.toEqual({
+    status: "unavailable",
+    reason: "transport",
+  });
+  expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
+  expect(send).not.toHaveBeenCalled();
+});
+
 it.each([
-  [307, "transport"],
   [401, "authentication"],
+  [415, "unsupported-input"],
   [429, "rate-limited"],
   [503, "transport"],
 ] as const)("classifies HTTP %s without retry or raw diagnostics", async (status, reason) => {
@@ -182,7 +255,7 @@ it.each([
     status: "unavailable",
     reason,
   });
-  expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
+  expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
 });
 
 it.each([
@@ -204,22 +277,17 @@ it.each([
   });
 });
 
-it("rechecks request admission just before dispatch and propagates caller cancellation", async () => {
-  const send = vi.fn();
-  let allowed = true;
-  vi.mocked(fetchWithSsrFGuard).mockImplementation(async (request) => {
-    allowed = false;
-    request.beforeRequest?.();
-    return send();
-  });
+it("propagates caller cancellation to the admitted HTTP request", async () => {
   const provider = buildFoundryDecisionProvider(() => cfg);
-  expect(await provider.evaluate(batch, context({ isAdmissible: () => allowed }))).toEqual({
-    status: "unavailable",
-    reason: "transport",
-  });
-  expect(send).not.toHaveBeenCalled();
+  const controller = new AbortController();
   const cancelled = new Error("fixture cancellation");
-  await expect(
-    provider.evaluate(batch, context({ signal: AbortSignal.abort(cancelled) })),
-  ).rejects.toBe(cancelled);
+  vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async ({ signal, url }) => {
+    controller.abort(cancelled);
+    signal?.throwIfAborted();
+    return { response: Response.json(reply), finalUrl: url, release: async () => {} };
+  });
+  await expect(provider.evaluate(batch, context({ signal: controller.signal }))).rejects.toBe(
+    cancelled,
+  );
+  expect(vi.mocked(fetchWithProviderHttpGuard).mock.calls[0]?.[0].signal?.reason).toBe(cancelled);
 });
