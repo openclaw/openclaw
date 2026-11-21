@@ -2541,6 +2541,50 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
+  fun retryableConnectFailureHonorsServerDelayAndExplicitReconnectInterruptsIt() =
+    runBlocking {
+      val dispatcher = ReconnectTestDispatcher()
+      val starts = ConcurrentLinkedQueue<Long>()
+      val attempts = Channel<Unit>(Channel.UNLIMITED)
+      val server =
+        startGatewayServer(json = Json) { socket, id, method ->
+          if (method == "connect") {
+            socket.send(
+              """{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"starting","retryable":true,"retryAfterMs":3000}}""",
+            )
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          lifecycleDispatcher = dispatcher,
+          onDisconnected = { message ->
+            if (message == "Connecting…" || message == "Reconnecting…") {
+              starts += dispatcher.nowMs
+              attempts.trySend(Unit)
+            }
+          },
+        )
+      try {
+        connectSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          attempts.receive()
+          dispatcher.advanceNextTimeout()
+          attempts.receive()
+        }
+        assertTrue("Server retry delay: $starts", starts.toList()[1] - starts.toList()[0] in 3_000L..3_600L)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) {
+          harness.session.retryAfterNetworkRestore()
+          attempts.receive()
+          harness.session.reconnect()
+          attempts.receive()
+        }
+        assertEquals("Explicit retries must not advance virtual time", starts.toList()[1], starts.toList()[3])
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
   fun pairingRequiredFailureNotifiesPauseReconnectProblem() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
