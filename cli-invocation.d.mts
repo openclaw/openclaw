@@ -38,6 +38,13 @@ export function isStandaloneRuntimeExecutable(executable?: string): boolean;
 export function getEmbeddedStandaloneRuntimeRoot(): string | undefined;
 export function isEmbeddedStandaloneModule(modulePath: string): boolean;
 export function runtimeHasSourceLoader(): boolean;
+export function getWindowsNativeRedirectStartup():
+  | Readonly<{
+      execArgv: readonly string[];
+      appRoot: string | undefined;
+      stagedRoot: string | undefined;
+    }>
+  | undefined;
 export function resolveStandaloneNpmCliPath(): string | undefined;
 export function resolveRuntimeScriptEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function resolveStandaloneSidecarRoot(executable?: string): string | undefined;
