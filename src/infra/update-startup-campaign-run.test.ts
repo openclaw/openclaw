@@ -314,11 +314,10 @@ describe("automatic campaign handoff failure", () => {
             expect.stringContaining(`deferred after ${failures} identical failures`),
             expect.objectContaining({ reason: "managed-service-stop-failed" }),
           );
-          // A new candidate is not held by the previous target's streak.
-          await expect(attempt(failedAt + hour, "2.0.0-beta.2")).resolves.toBe(1);
-          runAuto.mockClear();
         }
         await expect(attempt(failedAt + wait * hour + 60_000)).resolves.toBe(1);
+        // A new candidate is not held by the previous target's streak.
+        await expect(attempt(failedAt + wait * hour + 60_000, "2.0.0-beta.2")).resolves.toBe(2);
       } finally {
         vi.useRealTimers();
       }
