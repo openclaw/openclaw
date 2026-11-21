@@ -165,10 +165,11 @@ describe("ollama provider models", () => {
     ["minimax-m3", "https://ollama.com", 131_072],
     ["kimi-k3", "https://ollama.com", 1_048_576],
     ["glm-5.2:cloud", localUrl, 131_072],
-    ["unknown:cloud", localUrl, 262_144],
-    ["unknown", "https://ollama.com", 262_144],
-    ["remote-stub", localUrl, 262_144, { remote_host: "https://ollama.com" }],
-    ["remote-model-stub", localUrl, 262_144, { remote_model: "upstream-model" }],
+    // Uncurated cloud models take the shared conservative default, like local models.
+    ["unknown:cloud", localUrl, 16_384],
+    ["unknown", "https://ollama.com", 16_384],
+    ["remote-stub", localUrl, 16_384, { remote_host: "https://ollama.com" }],
+    ["remote-model-stub", localUrl, 16_384, { remote_model: "upstream-model" }],
   ])("discovers %s output limits at %s", async (name, url, maxTokens, remote) => {
     stubDiscovery([{ name, ...remote }], {
       capabilities: completion,

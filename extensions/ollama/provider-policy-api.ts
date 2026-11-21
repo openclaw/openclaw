@@ -116,12 +116,7 @@ export function normalizeConfig({
       continue;
     }
     const maxTokens =
-      providerConfig.maxTokens ??
-      resolveOllamaOutputBudget({
-        modelId: model.id,
-        contextWindow: model.contextWindow,
-        remote,
-      });
+      providerConfig.maxTokens ?? resolveOllamaOutputBudget({ modelId: model.id, remote });
     models.push(maxTokens === undefined ? model : { ...model, maxTokens });
   }
   return { ...providerConfig, baseUrl, models };
