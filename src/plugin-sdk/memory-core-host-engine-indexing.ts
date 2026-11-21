@@ -7,6 +7,7 @@ export {
   remapChunkLines,
   type MemoryChunk,
 } from "../../packages/memory-host-sdk/src/host/markdown-chunks.js";
+export { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter-extract.js";
 export const hashText: (value: string) => string = sha256Hex;
 export { encodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 export { enforceEmbeddingMaxInputTokens } from "../../packages/memory-host-sdk/src/host/embedding-chunk-limits.js";

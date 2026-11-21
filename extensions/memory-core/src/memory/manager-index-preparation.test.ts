@@ -79,3 +79,33 @@ it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
     expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
   },
 );
+
+it.each(["\n", "\r\n", "\r"])(
+  "excludes note frontmatter while retaining citation coordinates (%j)",
+  (ending) => {
+    const { chunks } = prepare(
+      ["---", "status: active", "---", "- Prefer aisle seats. <!-- trigger: flight -->"].join(
+        ending,
+      ),
+    );
+    expect(chunks).toMatchObject([
+      { text: "- Prefer aisle seats.", startLine: 4, endLine: 4, triggers: "flight" },
+    ]);
+    expect(chunks).toHaveLength(1);
+  },
+);
+
+it.each([
+  { content: "---\nstatus: active\n---", source: "memory", texts: [] },
+  { content: "---\nstatus: active", source: "memory", texts: ["---\nstatus: active"] },
+  {
+    content: "---\nstatus: active\n---\nConversation text",
+    source: "sessions",
+    texts: ["---\nstatus: active\n---\nConversation text"],
+  },
+] as const)(
+  "preserves incomplete blocks and session text ($source, $content)",
+  ({ content, source, texts }) => {
+    expect(prepare(content, { source }).chunks.map((chunk) => chunk.text)).toEqual(texts);
+  },
+);
