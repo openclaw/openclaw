@@ -100,7 +100,7 @@
 }
 
 /* Keep wrapped status text on its first line's edge, beside the spinner. */
-.login-gate__body > p:has(> .session-run-spinner) {
+.login-gate__progress {
   display: flex;
   align-items: baseline;
 }
