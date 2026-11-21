@@ -4,6 +4,7 @@ import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { BrowserContextOptions, CDPSession, Page } from "playwright-core";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
 import type { PageState } from "./pw-session-contracts.js";
+import { setFenceHttpCredentials, usesExtensionRelay } from "./pw-session-http-auth.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import {
   assertInteractionCurrent,
@@ -145,8 +146,16 @@ export async function setHttpCredentialsViaPlaywright(
   },
 ): Promise<void> {
   await changePageState(opts, async (page) => {
+    const context = page.context();
+    // The tab's navigation fence intercepts its documents, so it answers their
+    // auth challenges. An extension relay also refuses Playwright's own second
+    // Fetch session, so relay tabs rely on the fence alone.
+    const playwrightAuth = !usesExtensionRelay(context);
     if (opts.clear) {
-      await page.context().setHTTPCredentials(null);
+      setFenceHttpCredentials(context, null);
+      if (playwrightAuth) {
+        await context.setHTTPCredentials(null);
+      }
       return;
     }
     const username = opts.username ?? "";
@@ -154,7 +163,10 @@ export async function setHttpCredentialsViaPlaywright(
     if (!username) {
       throw new Error("username is required (or set clear=true)");
     }
-    await page.context().setHTTPCredentials({ username, password });
+    if (playwrightAuth) {
+      await context.setHTTPCredentials({ username, password });
+    }
+    setFenceHttpCredentials(context, { username, password });
   });
 }
 
