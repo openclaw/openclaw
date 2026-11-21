@@ -67,11 +67,19 @@ function resolveRecordedClawHubPackageNames(record: PluginInstallRecord): string
   ]);
 }
 
+function isCanonicalClawHubChannelRecord(
+  record: PluginInstallRecord,
+  channel: "official" | "community",
+): boolean {
+  return (
+    record.source === "clawhub" &&
+    record.clawhubChannel === channel &&
+    (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai"
+  );
+}
+
 function isOfficialClawHubInstallRecord(record: PluginInstallRecord): boolean {
-  if (record.source !== "clawhub" || record.clawhubChannel !== "official") {
-    return false;
-  }
-  return (record.clawhubUrl ?? "").trim().replace(/\/+$/, "") === "https://clawhub.ai";
+  return isCanonicalClawHubChannelRecord(record, "official");
 }
 
 /** Resolves one package identity from a current trusted official ClawHub install record. */
@@ -83,6 +91,27 @@ export function resolveTrustedOfficialClawHubPackageName(
   }
   const packageNames = resolveRecordedClawHubPackageNames(record);
   return packageNames && new Set(packageNames).size === 1 ? packageNames[0] : undefined;
+}
+
+/**
+ * A consistent community ClawHub listing never claims official authority. Official
+ * catalog ids or packages recorded as community, and any identity conflict, stay invalid.
+ */
+export function isCommunityClawHubInstallRecord(
+  pluginId: string,
+  packageName: string | undefined,
+  record: PluginInstallRecord,
+): boolean {
+  const packageNames = resolveRecordedClawHubPackageNames(record);
+  return Boolean(
+    packageName &&
+    !getOfficialExternalPluginCatalogEntry(pluginId) &&
+    !getOfficialExternalPluginCatalogEntryForPackage(packageName) &&
+    isCanonicalClawHubChannelRecord(record, "community") &&
+    packageNames &&
+    packageNames.length > 0 &&
+    packageNames.every((name) => name === packageName),
+  );
 }
 
 /** Valid registry provenance does not grant official plugin authority. */
