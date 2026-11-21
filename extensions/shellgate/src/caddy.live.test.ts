@@ -73,7 +73,7 @@ describe.skipIf(!caddy)("Shellgate Caddy drop-in live", () => {
         res.end(JSON.stringify({ ...fields(req), body: Buffer.concat(chunks).toString() })),
       );
     });
-    const sockets = new WebSocketServer({ noServer: true });
+    const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
     upstream.on("upgrade", (req, socket, head) => {
       if (req.url === VERIFY_PATH) {
         verificationUpgrades++;
