@@ -314,7 +314,7 @@ export function buildSlackProgressStreamChunks(params: {
     // add it only as a receipt.
     tasks.unshift({
       id: "openclaw_summary",
-      title: params.summaryRow ? compactTitle(title) : summaryTitle,
+      title: summaryTitle,
       status: params.finalInProgressStatus ?? (params.summaryRow ? "in_progress" : "complete"),
     });
   }
