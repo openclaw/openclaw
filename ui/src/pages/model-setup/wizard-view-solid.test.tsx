@@ -272,3 +272,40 @@ it.each([
   // The failure shows only its own sentence: no CLI command and no earlier notes.
   expect(container.textContent).not.toMatch(/openclaw models auth login/);
 });
+
+it.each([
+  ["waiting browser sign-in", "progress", false],
+  ["pasted-address sign-in", "text", true],
+] as const)("shows why an open %s has not finished", async (_name, type, externalAuthInput) => {
+  const message = "Sign-in was not allowed. Go back to the sign-in page and allow access.";
+  const { container } = mountSolid(() => (
+    <ModelSetupWizard
+      {...wizardDefaults}
+      state={{
+        ...stepState({
+          id: "sign-in",
+          type,
+          executor: type === "progress" ? "gateway" : "client",
+          externalUrl: "https://provider.example/sign-in",
+          progressMessage: message,
+          reason: "consent_denied",
+        }),
+        externalAuthInput,
+      }}
+      busy={false}
+      value={undefined}
+    />
+  ));
+  flush();
+  await container.querySelector("openclaw-modal-dialog")!.updateComplete;
+  const alert = container.querySelector("[role=alert]");
+  expect(alert?.textContent).toBe(message);
+  // The waiting dialog keeps its way back to the provider; the paste field shows it beneath.
+  expect(container.querySelector(".wizard-sign-in")?.contains(alert!)).toBe(!externalAuthInput);
+  if (externalAuthInput) {
+    const input = container.querySelector("#model-setup-wizard-text-input")!;
+    expect(input.compareDocumentPosition(alert!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  } else {
+    expect(container.querySelector(".wizard-step__external-link.primary")).not.toBeNull();
+  }
+});

@@ -58,7 +58,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       manual: isRemote,
       onAuth,
       onPrompt,
-      onProgress: (message) => progress.update(message),
+      onProgress: (message, reason) => progress.update(message, reason),
       ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
 

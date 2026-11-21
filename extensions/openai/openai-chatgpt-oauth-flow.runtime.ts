@@ -1,5 +1,10 @@
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { providerAuthFailureFromOAuthError } from "openclaw/plugin-sdk/provider-auth";
+import {
+  ProviderAuthFailure,
+  providerAuthFailureFromOAuthError,
+  type ProviderAuthFailureReason,
+} from "openclaw/plugin-sdk/provider-auth";
 import {
   createOAuthLoginCancelledError,
   createOAuthRefreshError,
@@ -85,8 +90,9 @@ export async function loginOpenAICodex(options: {
   onAuth: (info: { url: string; instructions?: string }) => Promise<void> | void;
   // Manual entry races the browser callback; either can complete the login.
   onManualCodeInput: (callback: { listening: boolean }) => Promise<string>;
-  // A browser refusal keeps the callback listening; this shows why sign-in has not finished.
-  onProgress?: (message: string) => void;
+  // A browser refusal keeps the callback listening and a busy port leaves only manual entry;
+  // `reason` reports either while the manual entry prompt stays open.
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   originator?: string;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -117,22 +123,27 @@ export async function loginOpenAICodex(options: {
   options.assertCurrent?.();
   throwIfOAuthLoginAborted(options.signal);
   let server: Awaited<ReturnType<typeof startCallbackServer>> | undefined;
+  let portBusy = false;
   try {
     server = await startCallbackServer({
       redirectUrl: redirectUri,
       expectedState: state,
       bindOnlyHostname: callbackHost,
       signal: options.signal,
-      onRefusal: (error) => options.onProgress?.(providerAuthFailureFromOAuthError(error).message),
+      onRefusal: (error) => {
+        const failure = providerAuthFailureFromOAuthError(error);
+        options.onProgress?.(failure.message, failure.reason);
+      },
       renderError: (message) => ({
         body: oauthErrorHtml(message),
         contentType: "text/html; charset=utf-8",
       }),
     });
-  } catch {
+  } catch (error) {
     // An unavailable callback port still permits manual entry; retired owners do not.
     options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
+    portBusy = extractErrorCode(error) === "EADDRINUSE";
   }
   const waitForLogin = <T>(promise: Promise<T>) => withOAuthLoginAbort(promise, options.signal);
   try {
@@ -159,6 +170,13 @@ export async function loginOpenAICodex(options: {
     const manualPromise = options
       .onManualCodeInput({ listening: server !== undefined })
       .then((input) => parseOAuthAuthorizationInput(input, { state }).code);
+    if (portBusy) {
+      // Said once the manual entry prompt is open, so setup apps show it beside that field.
+      options.onProgress?.(
+        new ProviderAuthFailure("callback_port_busy").message,
+        "callback_port_busy",
+      );
+    }
     const code = await waitForLogin(
       callbackPromise ? Promise.race([callbackPromise, manualPromise]) : manualPromise,
     );

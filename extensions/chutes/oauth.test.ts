@@ -169,16 +169,31 @@ it("keeps listening after a browser refusal and exchanges the code that follows"
   expect(tokenRequest.get("code")).toBe("code_test");
 });
 
-it("says the callback port is busy before falling back to paste", async () => {
+it("says the callback port is busy beside the paste prompt it falls back to", async () => {
   waitForLocalOAuthCallbackMock.mockRejectedValue(
     Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
   );
   mockFetch();
-  const progress: string[] = [];
+  const events: unknown[][] = [];
+  let state = "";
   await expect(
-    login({ manual: false, onProgress: (message) => progress.push(message) }),
+    login({
+      manual: false,
+      onAuth: async ({ url }) => {
+        state = new URL(url).searchParams.get("state") ?? "";
+      },
+      onPrompt: async () => {
+        events.push(["prompt"]);
+        return `${REDIRECT_URI}?code=code_test&state=${state}`;
+      },
+      onProgress: (...update) => events.push(update),
+    }),
   ).resolves.toMatchObject({ access, refresh });
-  expect(progress).toContain("The sign-in callback could not start because its port is in use.");
+  // Said once the prompt is open, so setup apps show it beside the paste field.
+  expect(events.slice(0, 2)).toEqual([
+    ["prompt"],
+    ["The sign-in callback could not start because its port is in use.", "callback_port_busy"],
+  ]);
 });
 
 it.each([

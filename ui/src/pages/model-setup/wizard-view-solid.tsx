@@ -11,6 +11,7 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import "../../components/modal-dialog.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import type { ModelSetupWizardState } from "./state.ts";
@@ -228,66 +229,76 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                 </Match>
                 <Match when={displayPhase() === "step"}>
                   <Show when={retainedStep()}>
-                    {(state) => (
-                      <>
-                        {/* A pasted-address sign-in shows its error under the field. */}
-                        <Show when={!state().externalAuthInput && state().validationError}>
-                          <InlineAlert
-                            tone="danger"
-                            id="model-setup-wizard-validation-error"
-                            role="alert"
+                    {(state) => {
+                      // A rejected answer, else why the open sign-in has not finished yet (a
+                      // browser refusal or a busy callback port). The waiting sign-in shows
+                      // that reason itself.
+                      const fieldError = () =>
+                        state().validationError ??
+                        (state().step.reason &&
+                        state().step.progressMessage &&
+                        (state().externalAuthInput || !signInStep())
+                          ? formatUiExternalText(state().step.progressMessage!)
+                          : null);
+                      return (
+                        <>
+                          {/* A pasted-address sign-in shows its error under the field. */}
+                          <Show when={!state().externalAuthInput && fieldError()}>
+                            <InlineAlert
+                              tone="danger"
+                              id="model-setup-wizard-validation-error"
+                              role="alert"
+                            >
+                              {fieldError()}
+                            </InlineAlert>
+                          </Show>
+                          <WizardStepControls
+                            presentation="model-setup"
+                            step={state().step}
+                            externalAuthInput={state().externalAuthInput}
+                            signInIcon={props.signInIcon}
+                            brandId={props.state.authBrandId}
+                            providerLabel={props.state.authLabel}
+                            value={props.value}
+                            busy={props.busy || state().busy}
+                            inputId="model-setup-wizard-text-input"
+                            validationErrorId={
+                              fieldError() ? "model-setup-wizard-validation-error" : undefined
+                            }
+                            validationError={fieldError()}
+                            confirmAffirmativeLabel={
+                              props.mode === "prepare" && state().step.type === "confirm"
+                                ? t("modelSetup.wizard.continue")
+                                : undefined
+                            }
+                            leadingAction={
+                              (signInStep() && !state().externalAuthInput) ||
+                              !stepHasPrimary() ? undefined : (
+                                <button type="button" class="btn" onClick={() => props.onCancel()}>
+                                  {t("common.cancel")}
+                                </button>
+                              )
+                            }
+                            onValueChange={(value) => props.onValueChange(value)}
+                            onAnswer={(value) => props.onAnswer(value)}
+                            onAutofocusRef={autofocusRef}
+                          />
+                          <Show
+                            when={
+                              (props.busy || state().busy) &&
+                              state().step.type !== "progress" &&
+                              !state().step.externalUrl &&
+                              !state().step.deviceCode
+                            }
                           >
-                            {state().validationError}
-                          </InlineAlert>
-                        </Show>
-                        <WizardStepControls
-                          presentation="model-setup"
-                          step={state().step}
-                          externalAuthInput={state().externalAuthInput}
-                          signInIcon={props.signInIcon}
-                          brandId={props.state.authBrandId}
-                          providerLabel={props.state.authLabel}
-                          value={props.value}
-                          busy={props.busy || state().busy}
-                          inputId="model-setup-wizard-text-input"
-                          validationErrorId={
-                            state().validationError
-                              ? "model-setup-wizard-validation-error"
-                              : undefined
-                          }
-                          validationError={state().validationError}
-                          confirmAffirmativeLabel={
-                            props.mode === "prepare" && state().step.type === "confirm"
-                              ? t("modelSetup.wizard.continue")
-                              : undefined
-                          }
-                          leadingAction={
-                            (signInStep() && !state().externalAuthInput) ||
-                            !stepHasPrimary() ? undefined : (
-                              <button type="button" class="btn" onClick={() => props.onCancel()}>
-                                {t("common.cancel")}
-                              </button>
-                            )
-                          }
-                          onValueChange={(value) => props.onValueChange(value)}
-                          onAnswer={(value) => props.onAnswer(value)}
-                          onAutofocusRef={autofocusRef}
-                        />
-                        <Show
-                          when={
-                            (props.busy || state().busy) &&
-                            state().step.type !== "progress" &&
-                            !state().step.externalUrl &&
-                            !state().step.deviceCode
-                          }
-                        >
-                          <div class="wizard-step__progress" role="status" aria-busy="true">
-                            <span class="wizard-step__spinner" aria-hidden="true" />
-                            {t("modelSetup.wizard.working")}
-                          </div>
-                        </Show>
-                      </>
-                    )}
+                            <div class="wizard-step__progress" role="status" aria-busy="true">
+                              <span class="wizard-step__spinner" aria-hidden="true" />
+                              {t("modelSetup.wizard.working")}
+                            </div>
+                          </Show>
+                        </>
+                      );
+                    }}
                   </Show>
                 </Match>
               </Switch>

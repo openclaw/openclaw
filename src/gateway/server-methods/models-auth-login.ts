@@ -181,6 +181,13 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                     openUrl,
                     browserOrigin: client.browserOrigin,
                     authPolicy: client.authPolicy,
+                    onRefusal: (failure) =>
+                      runner.pushProgress(
+                        failure.message,
+                        undefined,
+                        failure.message,
+                        failure.reason,
+                      ),
                   })
                 : undefined;
               const assertFlowCurrent = () => {

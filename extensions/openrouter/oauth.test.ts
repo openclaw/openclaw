@@ -200,7 +200,7 @@ it("bounds plain-text OAuth error bodies without response.text()", async () => {
 it("exchanges the local callback code and keeps listening after a refusal", async () => {
   const { run, openUrl, text, progress } = local(async (params) => {
     // Core keeps the listener open after a refusal and reports it as progress.
-    params.onProgress?.(DENIED);
+    params.onProgress?.(DENIED, "consent_denied");
     return { code: "AUTHCODE", state: "state-1" };
   });
   await run();
@@ -213,7 +213,7 @@ it("exchanges the local callback code and keeps listening after a refusal", asyn
       onProgress: expect.any(Function),
     }),
   );
-  expect(progress.update).toHaveBeenCalledWith(DENIED);
+  expect(progress.update).toHaveBeenCalledWith(DENIED, "consent_denied");
   const { url, callback } = authUrl(openUrl.mock.calls[0]![0]);
   expect(callback.searchParams.get("state")).toBe("state-1");
   expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
@@ -228,15 +228,24 @@ it("exchanges the local callback code and keeps listening after a refusal", asyn
 it.each([
   [
     Object.assign(new Error("listen EADDRINUSE"), { code: "EADDRINUSE" }),
-    "The sign-in callback could not start because its port is in use.",
+    ["The sign-in callback could not start because its port is in use.", "callback_port_busy"],
   ],
-  [new Error("OAuth callback timeout"), "OAuth callback not detected; waiting for redirect URL..."],
-])("falls back to a pasted redirect after %s", async (failure, message) => {
+  [
+    new Error("OAuth callback timeout"),
+    ["OAuth callback not detected; waiting for redirect URL..."],
+  ],
+])("falls back to a pasted redirect after %s", async (failure, update) => {
   const { run, openUrl, text, progress } = local(async () => {
     throw failure;
   });
   await expect(run()).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
-  expect(progress.update).toHaveBeenCalledWith(message);
+  expect(progress.update).toHaveBeenCalledWith(...update);
+  if (update[1]) {
+    // A busy port is said once the paste prompt is open, so setup apps show it beside it.
+    expect(progress.update.mock.invocationCallOrder.at(-2)).toBeGreaterThan(
+      text.mock.invocationCallOrder[0]!,
+    );
+  }
   expect(openUrl).toHaveBeenCalledOnce();
   expect(text).toHaveBeenCalledWith(
     expect.objectContaining({ message: "Paste the OpenRouter redirect URL" }),

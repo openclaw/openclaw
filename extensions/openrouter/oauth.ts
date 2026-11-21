@@ -148,7 +148,7 @@ async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderA
             callbackPath: OPENROUTER_OAUTH_CALLBACK_PATH,
             redirectUri: OPENROUTER_OAUTH_REDIRECT_URI,
             successTitle: "OpenRouter authorization received",
-            onProgress: (message) => progress.update(message),
+            onProgress: (message, reason) => progress.update(message, reason),
             ...(ctx.signal ? { signal: ctx.signal } : {}),
           }).then(
             (result) => result.code,
@@ -156,12 +156,19 @@ async function loginOpenRouterOAuth(ctx: ProviderAuthContext): Promise<ProviderA
               if (ctx.signal?.aborted) {
                 throw error;
               }
-              progress.update(
-                extractErrorCode(error) === "EADDRINUSE"
-                  ? new ProviderAuthFailure("callback_port_busy").message
-                  : "OAuth callback not detected; waiting for redirect URL...",
-              );
-              return await promptForCode();
+              const portBusy = extractErrorCode(error) === "EADDRINUSE";
+              if (!portBusy) {
+                progress.update("OAuth callback not detected; waiting for redirect URL...");
+              }
+              const code = promptForCode();
+              // Said once the paste prompt is open, so setup apps show it beside that field.
+              if (portBusy) {
+                progress.update(
+                  new ProviderAuthFailure("callback_port_busy").message,
+                  "callback_port_busy",
+                );
+              }
+              return await code;
             },
           );
       await ctx.openUrl(authorizeUrl).catch(() => undefined);

@@ -11,7 +11,10 @@ import {
   startOAuthLoopbackCallbackServer,
   type OAuthLoopbackCallbackServer,
 } from "../infra/oauth-loopback-callback.js";
-import { providerAuthFailureFromOAuthError } from "../plugins/provider-auth-failure.js";
+import {
+  providerAuthFailureFromOAuthError,
+  type ProviderAuthFailureReason,
+} from "../plugins/provider-auth-failure.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { renderOAuthPage } from "../shared/oauth-page.js";
 import { parseOAuthAuthorizationInput } from "./provider-oauth-runtime.js";
@@ -192,8 +195,8 @@ export async function waitForLocalOAuthCallback(params: {
   progressMessage?: string;
   /** Extra loopback hostname to bind; the redirect URI hostname is always bound. */
   hostname?: string;
-  /** Progress callback invoked after the server begins listening. */
-  onProgress?: (message: string) => void;
+  /** Progress callback; `reason` names a provider refusal that keeps the listener open. */
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   /** Stops and closes the callback listener when the owning login is cancelled. */
   signal?: AbortSignal;
   /**
@@ -217,8 +220,10 @@ export async function waitForLocalOAuthCallback(params: {
     // A refusal keeps the listener open so the user can go back and allow access.
     ...(params.onProgress
       ? {
-          onRefusal: (error) =>
-            params.onProgress?.(providerAuthFailureFromOAuthError(error).message),
+          onRefusal: (error) => {
+            const failure = providerAuthFailureFromOAuthError(error);
+            params.onProgress?.(failure.message, failure.reason);
+          },
         }
       : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist

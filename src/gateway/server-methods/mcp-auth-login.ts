@@ -141,6 +141,8 @@ export const mcpAuthLoginHandlers: GatewayRequestHandlers = {
             ]),
             browserOrigin: client.browserOrigin,
             authPolicy: client.authPolicy,
+            onRefusal: (failure) =>
+              runner.pushProgress(failure.message, undefined, failure.message, failure.reason),
             openUrl: async (url) => {
               login.assertCurrent();
               await prompter.openUrl?.(url);

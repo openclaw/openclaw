@@ -4,6 +4,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderAuthFailure } from "../../plugins/provider-auth-failure.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -48,10 +49,11 @@ function createSession(params: Parameters<typeof createProviderBrowserAuthSessio
   return session;
 }
 
-async function startLogin(timeoutMs = 60_000) {
+async function startLogin(timeoutMs = 60_000, onRefusal?: (failure: ProviderAuthFailure) => void) {
   const opened = createDeferredCore<string>();
   const session = createSession({
     openUrl: async (url) => opened.resolve(url),
+    onRefusal,
   });
   const result = session.authorize({ ...authorization, timeoutMs });
   return { session, result, opened: await opened.promise };
@@ -103,9 +105,12 @@ it("preserves the exact issuer from an accepted browser callback", async () => {
 });
 
 it("keeps the sign-in open after a provider denial so the user can go back and allow", async () => {
-  const login = await startLogin();
+  const refusals: ProviderAuthFailure[] = [];
+  const login = await startLogin(60_000, (failure) => refusals.push(failure));
   const response = callback("state=login-state&error=denied&error_description=%3Cscript%3Esecret");
   expect(response.res.statusCode).toBe(400);
+  // The open sign-in learns why it has not finished; the provider's description stays out.
+  expect(refusals).toMatchObject([{ reason: "consent_denied" }]);
   expect(response.getBody()).toMatch(/Go back to the sign-in page and allow access/);
   expect(response.getBody()).not.toMatch(/script|secret/);
   expect(callback("state=login-state&code=allowed").res.statusCode).toBe(200);

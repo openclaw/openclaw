@@ -428,6 +428,32 @@ describe("WizardSession", () => {
     await session.answer(plainStep.id, "alice");
   });
 
+  test("names a refusal on the open paste prompt, after its progress line stopped", async () => {
+    let progress!: ReturnType<WizardPrompter["progress"]>;
+    const prompted = createDeferredCore();
+    const session = new WizardSession(async (prompter) => {
+      progress = prompter.progress("Starting sign-in");
+      progress.stop();
+      const answer = prompter.text({ message: "Paste the address" });
+      prompted.resolve();
+      await answer;
+    });
+    await nextProgress(session, "Starting sign-in");
+    await prompted.promise;
+    const prompt = await nextStep(session, { type: "text" });
+    const failure = new ProviderAuthFailure("consent_denied");
+    progress.update(failure.message, failure.reason);
+    // Same step id: an answer to the prompt still settles it.
+    const annotated = await nextStep(session, {
+      id: prompt.id,
+      type: "text",
+      progressMessage: failure.message,
+      reason: "consent_denied",
+    });
+    await session.answer(annotated.id, "http://localhost/cb?code=c");
+    await expectTerminal(session);
+  });
+
   test("bridges confirm, progress updates, and notes in order", async () => {
     const initialUpdateQueued = createDeferredCore();
     const halfway = createDeferredCore();

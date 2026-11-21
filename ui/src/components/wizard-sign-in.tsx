@@ -158,7 +158,12 @@ export function ModelSetupSignIn(props: {
     return deadline === undefined ? undefined : Math.ceil((deadline - now()) / 60_000);
   };
   const expired = () => (minutesLeft() ?? 1) <= 0;
-  const stillWaiting = () => props.waiting && slow() && !code();
+  // A browser refusal keeps this sign-in open; the Gateway reports why it has not finished.
+  const refusal = () =>
+    props.step.reason && props.step.progressMessage
+      ? formatUiExternalText(props.step.progressMessage)
+      : undefined;
+  const stillWaiting = () => props.waiting && slow() && !code() && !refusal();
   const lead = () => {
     // A step that waits for Continue carries the provider's own instructions.
     if (!props.waiting && props.step.message) {
@@ -204,6 +209,13 @@ export function ModelSetupSignIn(props: {
           {t("modelSetup.wizard.stillWaiting")}
         </InlineAlert>
       </Show>
+      <Show when={!expired() && refusal()}>
+        {(message) => (
+          <InlineAlert tone="danger" class="wizard-sign-in__callout" role="alert">
+            {message()}
+          </InlineAlert>
+        )}
+      </Show>
       <Show when={expired()}>
         <InlineAlert tone="warning" class="wizard-sign-in__callout" role="alert">
           {t("modelSetup.wizard.deviceCodeExpired")}
@@ -226,7 +238,11 @@ export function ModelSetupSignIn(props: {
           <div class="wizard-sign-in__actions">
             <a
               ref={(element) => props.onAutofocusRef?.(element)}
-              class={["btn", "wizard-step__external-link", { primary: stillWaiting() }]}
+              class={[
+                "btn",
+                "wizard-step__external-link",
+                { primary: stillWaiting() || Boolean(refusal()) },
+              ]}
               autofocus
               data-link-reader-external
               href={url()}

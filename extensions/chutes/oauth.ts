@@ -5,6 +5,7 @@ import {
   generatePkceVerifierChallenge,
   ProviderAuthFailure,
   type OAuthCredential,
+  type ProviderAuthFailureReason,
 } from "openclaw/plugin-sdk/provider-auth";
 import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -206,7 +207,8 @@ export async function loginChutes(params: {
   manual?: boolean;
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
-  onProgress?: (message: string) => void;
+  /** `reason` names a refusal or busy callback port while the sign-in stays open. */
+  onProgress?: (message: string, reason?: ProviderAuthFailureReason) => void;
   signal?: AbortSignal;
 }): Promise<ChutesStoredOAuth> {
   const { verifier, challenge } = generatePkceVerifierChallenge();
@@ -258,12 +260,19 @@ export async function loginChutes(params: {
       if (params.signal?.aborted || error instanceof ProviderAuthFailure) {
         throw error;
       }
-      params.onProgress?.(
-        extractErrorCode(error) === "EADDRINUSE"
-          ? new ProviderAuthFailure("callback_port_busy").message
-          : "OAuth callback not detected; paste redirect URL...",
-      );
-      return await promptForCode();
+      const portBusy = extractErrorCode(error) === "EADDRINUSE";
+      if (!portBusy) {
+        params.onProgress?.("OAuth callback not detected; paste redirect URL...");
+      }
+      const code = promptForCode();
+      // Said once the paste prompt is open, so setup apps show it beside that field.
+      if (portBusy) {
+        params.onProgress?.(
+          new ProviderAuthFailure("callback_port_busy").message,
+          "callback_port_busy",
+        );
+      }
+      return await code;
     });
 
     await params.onAuth({ url });

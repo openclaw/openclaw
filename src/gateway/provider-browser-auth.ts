@@ -2,7 +2,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
-import { ProviderAuthFailure } from "../plugins/provider-auth-failure.js";
+import {
+  ProviderAuthFailure,
+  providerAuthFailureFromOAuthError,
+} from "../plugins/provider-auth-failure.js";
 import type { ProviderAuthContext } from "../plugins/provider-authentication.types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -25,6 +28,7 @@ type PendingAuthorization = {
   reject: (error: Error) => void;
   isCurrent: () => boolean;
   browserBinding?: { cookieName: string; cookieValue: string };
+  onRefusal?: (failure: ProviderAuthFailure) => void;
 };
 
 const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
@@ -78,6 +82,8 @@ export function createProviderBrowserAuthSession(params: {
   authPolicy?: GatewayAuthPolicy;
   /** Bind account-link callbacks to the browser that initiated them. */
   browserBinding?: { cookieName: string; cookieValue: string };
+  /** A provider refusal keeps the sign-in open; this tells the user why it has not finished. */
+  onRefusal?: (failure: ProviderAuthFailure) => void;
 }) {
   const lifetime = new AbortController();
   const browserOriginSignal = params.browserOrigin
@@ -154,6 +160,7 @@ export function createProviderBrowserAuthSession(params: {
     const onAbort = () => callback.reject(requestSignal.reason);
     const pending: PendingAuthorization = {
       browserBinding: params.browserBinding,
+      onRefusal: params.onRefusal,
       accept: callback.resolve,
       reject: callback.reject,
       isCurrent: () =>
@@ -273,7 +280,9 @@ export function handleProviderOAuthCallback(req: IncomingMessage, res: ServerRes
   }
   if (denied) {
     // The attempt stays open: the user can go back to the provider and allow access.
-    respond(res, 400, "Sign-in was not allowed. Go back to the sign-in page and allow access.");
+    const failure = providerAuthFailureFromOAuthError(url.searchParams.get("error") ?? "");
+    pending.onRefusal?.(failure);
+    respond(res, 400, failure.message);
     return true;
   }
   if (pending.browserBinding) {

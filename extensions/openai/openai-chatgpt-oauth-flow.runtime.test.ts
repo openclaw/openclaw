@@ -492,6 +492,7 @@ describe("OpenAI Codex OAuth flow", () => {
             expect(body).toContain("Go back to the sign-in page and allow access.");
             expect(onProgress).toHaveBeenCalledWith(
               "Sign-in was not allowed. Go back to the sign-in page and allow access.",
+              "consent_denied",
             );
             await requestCallback(buildCallbackUrl(url, "after-refusal-code"), agent);
           },
@@ -765,11 +766,12 @@ describe("OpenAI Codex OAuth flow", () => {
       portHolder.listen(1455, resolveOpenAICallbackHost(), resolve);
     });
     const stop = vi.fn();
+    const update = vi.fn();
     const onPrompt = vi.fn(async () => "manual-code");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const controller = new AbortController();
     const login = loginOpenAICodexOAuth({
-      prompter: createTestWizardPrompter({ progress: () => ({ update: vi.fn(), stop }) }),
+      prompter: createTestWizardPrompter({ progress: () => ({ update, stop }) }),
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       oauth: { createVpsAwareHandlers: () => ({ onAuth: async () => {}, onPrompt }) },
       isRemote: false,
@@ -783,6 +785,14 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(onPrompt).toHaveBeenCalledWith({
         message: "Sign in in your browser, then paste the address from its address bar.",
       });
+      // Said after the prompt opened, so setup apps show it beside the paste field.
+      expect(update).toHaveBeenCalledWith(
+        "The sign-in callback could not start because its port is in use.",
+        "callback_port_busy",
+      );
+      expect(update.mock.invocationCallOrder.at(-1)).toBeGreaterThan(
+        onPrompt.mock.invocationCallOrder[0]!,
+      );
     } finally {
       controller.abort();
       vi.useRealTimers();

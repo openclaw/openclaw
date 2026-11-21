@@ -83,10 +83,10 @@ export async function loginOpenAICodexOAuth(params: {
     };
     const creds = await loginOpenAICodex({
       onAuth,
-      // The browser page also says so; after the paste offer the progress line is gone.
-      onProgress: (message) => {
-        if (progressActive) {
-          spin.update(message);
+      // A failure reason still reaches the paste prompt after the progress line ended.
+      onProgress: (message, reason) => {
+        if (progressActive || reason) {
+          spin.update(message, reason);
         }
       },
       onManualCodeInput:

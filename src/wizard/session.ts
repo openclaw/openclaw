@@ -195,9 +195,10 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       let stopped = false;
       session.pushProgress(label, undefined, label);
       return {
-        update: (message) => {
-          if (!stopped) {
-            session.pushProgress(message, undefined, message);
+        update: (message, reason) => {
+          // A refusal outlives the spinner: the prompt that replaced it still shows why.
+          if (!stopped || reason) {
+            session.pushProgress(message, undefined, message, reason);
           }
         },
         stop: (message) => {
@@ -454,8 +455,14 @@ export class WizardSession {
     message: string,
     presentation?: Pick<WizardStep, "title" | "deviceCode">,
     progressMessage?: string,
+    reason?: ProviderAuthFailureReason,
   ) {
     if (this.status !== "running") {
+      return;
+    }
+    if (reason && this.currentStep && wizardStepAwaitsInput(this.currentStep)) {
+      // The open prompt keeps its id, so an answer in flight still settles it.
+      this.currentStep = { ...this.currentStep, progressMessage: message, reason };
       return;
     }
     clearImmediate(this.externalUrlImmediate);
@@ -476,6 +483,7 @@ export class WizardSession {
           : message,
       executor: "gateway",
       ...(progressMessage !== undefined ? { progressMessage } : {}),
+      ...(reason ? { reason } : {}),
       ...(this.pendingExternalUrl ? { externalUrl: this.pendingExternalUrl } : {}),
     };
     if (this.stepDeferred) {
