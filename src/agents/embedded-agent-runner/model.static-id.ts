@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
-import { type ProviderModelIdNormalizationOptions } from "../model-ref-shared.js";
+import type { ProviderModelIdNormalizationOptions } from "../model-ref-shared.js";
 import {
   createStaticProviderModelIdNormalizer,
   normalizeStaticProviderModelId,
