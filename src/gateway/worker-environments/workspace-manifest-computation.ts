@@ -85,6 +85,7 @@ export type WorkspaceManifestValueInputs = {
     stagingRoot: string;
     baseEntries: WorkerWorkspaceManifestEntry[];
     appliedEntries: WorkerWorkspaceManifestEntry[];
+    publicationCopy?: boolean;
   };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
@@ -141,6 +142,7 @@ export type WorkspaceManifestValueOutputs = {
     patch: Uint8Array<ArrayBuffer>;
     baseTree: string;
     basePack: Uint8Array<ArrayBuffer>;
+    publicationPack?: Uint8Array<ArrayBuffer>;
     basePackSha256: string;
   };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{

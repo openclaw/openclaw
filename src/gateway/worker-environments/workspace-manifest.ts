@@ -44,7 +44,10 @@ type WorkerWorkspaceReconciliationPlan = Omit<WorkerWorkspaceReconciliationJourn
 
 export type WorkerWorkspaceReconciliationJournalAdapter = {
   load(): Promise<WorkerWorkspaceReconciliationJournal | undefined>;
-  begin(journal: WorkerWorkspaceReconciliationJournal): Promise<void>;
+  begin(
+    journal: WorkerWorkspaceReconciliationJournal,
+    publicationPack?: Uint8Array<ArrayBuffer>,
+  ): Promise<void>;
   commit(manifestRef: string): Promise<void>;
   abort(): Promise<void>;
 };

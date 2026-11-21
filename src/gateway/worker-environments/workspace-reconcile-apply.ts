@@ -251,6 +251,7 @@ export async function applyStagedWorkerWorkspace(
       stagingRoot: params.stagingRoot,
       baseEntries,
       appliedEntries,
+      publicationCopy: acceptance.kind === "checkpoint",
     });
     // Preparation may run beside guest writes; fence them before confirming the plan.
     await params.freezeTarget?.();
@@ -274,7 +275,7 @@ export async function applyStagedWorkerWorkspace(
       basePack: snapshot.basePack,
     };
     params.assertCurrent?.();
-    await params.journal.begin(journal);
+    await params.journal.begin(journal, snapshot.publicationPack);
     try {
       params.onPhase?.("apply");
       const temporary = await prepareWorkspaceTemporaryDirectory("openclaw-workspace-apply-input-");
