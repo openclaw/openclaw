@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #202427: ChatGPT numeric gate version preserves full User-Agent across stable, beta and development builds.
+26
