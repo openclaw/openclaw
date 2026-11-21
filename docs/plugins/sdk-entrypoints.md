@@ -585,6 +585,14 @@ The lightweight `decisions` subpath exports
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exports `getResourceProfile`,
+`onResourceProfileChange`, and the `ResourceProfile` type. It reads the existing
+Gateway decision without selecting another profile or exposing a setter.
+See [Resource profile](/plugins/sdk-runtime#resource-profile) for lifecycle and
+subscription semantics.
+
 ## Runtime request headers
 
 `openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`

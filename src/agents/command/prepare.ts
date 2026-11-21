@@ -60,6 +60,7 @@ import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../worktrees/run-lease.js";
+import { resolveSessionWorktree } from "../worktrees/session-lifecycle.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
 import { resolveSession } from "./session.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -379,10 +380,20 @@ export async function prepareAgentCommandExecution(
     throw new Error(`Invalid one-shot thinking level. Use one of: ${formatThinkingLevelsHint()}.`);
   }
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
-  const worktreeSource = await resolveWorktreeForPath({
-    sessionEntry: sessionEntryRaw,
-    candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
-  });
+  const worktreeSource =
+    sessionKey && sessionEntryRaw?.worktree
+      ? await resolveSessionWorktree({
+          binding: sessionEntryRaw.worktree,
+          sessionKey,
+          assertCurrent: assertPreparationCurrent,
+          turn: true,
+        }).then((prepared) =>
+          prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
+        )
+      : await resolveWorktreeForPath({
+          sessionEntry: sessionEntryRaw,
+          candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
+        });
   const runLease = worktreeSource
     ? await acquireWorktreeRunLease(worktreeSource.record.id, { source: worktreeSource })
     : undefined;

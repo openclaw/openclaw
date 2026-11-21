@@ -110,16 +110,7 @@ describe("session workspace artifacts", () => {
       }
       return content;
     };
-    const { onOpenManagedArtifact } = sessionWorkspaceFileLinkProps(state, undefined, undefined);
-    return {
-      artifact,
-      request,
-      state,
-      fetchMock,
-      url: `/mount${url}`,
-      loadedContent,
-      onOpenManagedArtifact,
-    };
+    return { artifact, request, state, fetchMock, url: `/mount${url}`, loadedContent };
   }
 
   async function createBinaryArtifact() {
@@ -157,7 +148,9 @@ describe("session workspace artifacts", () => {
     const fixture = createArtifactHost("application/json", "", { id: managedId });
     fixture.state.connected = false;
     const show = vi.spyOn(toast, "showToast").mockReturnValue(true);
-    fixture.onOpenManagedArtifact(managedHref);
+    sessionWorkspaceFileLinkProps(fixture.state, null, undefined).onOpenManagedArtifact(
+      managedHref,
+    );
     expect(show).toHaveBeenCalledWith({
       message: "Reconnect to open this attachment.",
       severity: "error",
@@ -173,7 +166,9 @@ describe("session workspace artifacts", () => {
     createSessionWorkspaceProps(fixture.state).onOpenArtifact(managedId);
     await fixture.loadedContent();
     const original = fixture.state.sessionWorkspaceState!.previews[0]!;
-    fixture.onOpenManagedArtifact(managedHref);
+    sessionWorkspaceFileLinkProps(fixture.state, null, undefined).onOpenManagedArtifact(
+      managedHref,
+    );
     const linked = fixture.state.sessionWorkspaceState!.previews.at(-1)!;
     await linked.readResult;
     expect(fixture.state.sessionWorkspaceState!.previews).toEqual([original]);
@@ -195,7 +190,9 @@ describe("session workspace artifacts", () => {
           : condition === "malformed"
             ? managedHref.replace("/full", "/invalid")
             : managedHref;
-      expect(fixture.onOpenManagedArtifact(href)).toBe(true);
+      expect(
+        sessionWorkspaceFileLinkProps(fixture.state, null, undefined).onOpenManagedArtifact(href),
+      ).toBe(true);
       const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
       await preview.readResult;
       expect(preview.content).toMatchObject({
@@ -208,7 +205,11 @@ describe("session workspace artifacts", () => {
       expect(
         fixture.request.mock.calls.filter(([method]) => method === "artifacts.download"),
       ).toEqual([]);
-      expect(fixture.onOpenManagedArtifact(`https://other.test${managedHref}`)).toBe(false);
+      expect(
+        sessionWorkspaceFileLinkProps(fixture.state, null, undefined).onOpenManagedArtifact(
+          `https://other.test${managedHref}`,
+        ),
+      ).toBe(false);
     },
   );
 
@@ -226,7 +227,9 @@ describe("session workspace artifacts", () => {
         await metadata.promise;
         return { artifacts: [fixture.artifact] };
       });
-      fixture.onOpenManagedArtifact(managedHref);
+      sessionWorkspaceFileLinkProps(fixture.state, null, undefined).onOpenManagedArtifact(
+        managedHref,
+      );
       const preview = fixture.state.sessionWorkspaceState!.previews[0]!;
       await started.promise;
       if (retirement === "close") {

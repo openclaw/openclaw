@@ -2,8 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { captureModelCostPricing } from "../../model-catalog/usage-pricing.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { captureModelCostPricing } from "../../utils/usage-format.js";
 import { resolveResponseUsageLine } from "../reply/agent-runner-usage-line.js";
 import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 

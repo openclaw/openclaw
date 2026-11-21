@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
-import { readImageMetadataFromHeader } from "../media/media-services.js";
 import { optimizeImageDescriptionInput } from "./image-input-normalize.js";
 
 describe("image description input optimization", () => {

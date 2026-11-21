@@ -28,7 +28,7 @@ import {
 import { getTtsCommandSecretTargetIds } from "../command-secret-targets.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { writeOutputAsset } from "../media-output.js";
-import type { CapabilityEnvelope, CapabilityTransport } from "./metadata.js";
+import type { CapabilityEnvelope, CapabilityTransport } from "./result-types.js";
 import {
   pinRuntimeConfigSnapshot,
   providerHasGenericConfig,

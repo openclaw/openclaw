@@ -90,9 +90,9 @@ agent can offer to turn it into an automation.
 ## Package it as a Template
 
 Once an agent does its job well, you can package it so other people can start
-from the same setup. Templates are an experimental feature. Enable **Templates**
-in **Settings → Labs** first, or set `gateway.controlUi.experimental.templates`
-to `true` on a headless installation.
+from the same setup. Templates are available by default, without a Labs opt-in.
+An existing advanced `gateway.controlUi.experimental.templates: false` still
+disables them; see [Templates](/cli/templates).
 
 A Template can include agent instructions, workspace files, skills, plugins,
 MCP servers, and automations. It does not include your memories, conversations,
@@ -122,9 +122,8 @@ You can also write a Template by hand. See
 
 ## Start from someone else's Template
 
-Published Templates live on [ClawHub](/clawhub). Enable **Templates** in
-**Settings → Labs**, then open **Templates** under **Pages** in the Control UI
-to browse and search them. With the same switch on, you can also add a Template
+Published Templates live on [ClawHub](/clawhub). Open **Customize → Templates**
+to browse and search them. If Customize is not pinned, find it in **Pages**. You can also add a Template
 from the command line when someone shares its ClawHub reference:
 
 ```bash

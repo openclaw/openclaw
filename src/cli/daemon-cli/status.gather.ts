@@ -1,4 +1,3 @@
-import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
   isDefaultInstallIdentity,
   resolveConfigPath,
@@ -32,7 +31,6 @@ import {
 } from "../../infra/gateway-boot-lifecycle.js";
 import { isGatewayExternallySupervised } from "../../infra/gateway-supervision.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
-import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
 import type { PortConnection } from "../../infra/ports-types.js";
 import { resolveEnvironmentValue } from "../../infra/process-env.js";
@@ -50,11 +48,7 @@ import {
 import { VERSION } from "../../version.js";
 import { resolveGatewayLocalPortOverride } from "../gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
-import {
-  formatGatewayServiceInstallationDrift,
-  normalizeListenerAddress,
-  type GatewayCrashHistory,
-} from "./shared.js";
+import { formatGatewayServiceInstallationDrift, type GatewayCrashHistory } from "./shared.js";
 import { readDaemonStatusConfig } from "./status.config.js";
 import { inspectDaemonPortStatuses, resolveGatewayStatusSummary } from "./status.gateway.js";
 import { projectDaemonRuntimeStatus } from "./status.projection.js";
@@ -682,34 +676,4 @@ export async function gatherDaemonStatus(
   opts: Parameters<typeof gatherDaemonStatusImpl>[0],
 ): Promise<DaemonStatus> {
   return gatherDaemonStatusImpl(opts);
-}
-
-export function renderPortDiagnosticsForCli({ port }: DaemonStatus, rpcOk?: boolean): string[] {
-  if (!port || port.status === undefined || port.status === "free" || rpcOk === true) {
-    return [];
-  }
-  return formatPortDiagnostics({
-    port: port.port,
-    status: port.status,
-    listeners: port.listeners.map((listener) => ({
-      ...listener,
-      user: listener.user ? terminalText`${listener.user}` : listener.user,
-      command: listener.command ? terminalText`${listener.command}` : listener.command,
-      commandLine: listener.commandLine
-        ? terminalText`${listener.commandLine}`
-        : listener.commandLine,
-      address: listener.address ? terminalText`${listener.address}` : listener.address,
-    })),
-    hints: port.hints.map((hint) => terminalText`${hint}`),
-  });
-}
-
-export function resolvePortListeningAddresses(status: DaemonStatus): string[] {
-  return Array.from(
-    new Set(
-      status.port?.listeners
-        ?.map((l) => (l.address ? normalizeListenerAddress(l.address) : ""))
-        .filter((v): v is string => Boolean(v)) ?? [],
-    ),
-  );
 }
