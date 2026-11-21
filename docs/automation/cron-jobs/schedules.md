@@ -318,7 +318,7 @@ and keeps no command output, so the message must carry what you need to diagnose
 it. In a script, `exec` waits for its command to finish within the script's
 deadline and returns `{ exitCode, output }` with the full exec result; `yieldMs`
 is ignored, because a headless script has no later turn to collect the command.
-A shorter `timeoutSeconds` still applies. To keep a command running, pass `background: true`
+A shorter `timeoutSeconds` still applies. To keep a command running, pass `background: true` (or `durable: true`)
 and manage it with the `process` tool when the job grants it. A thrown error or
 an invalid return value is recorded with the `script_error` code, and the job
 stays scheduled for its next occurrence. Keep this example within the 16 KiB state limit by scoping large

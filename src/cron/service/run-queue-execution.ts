@@ -215,9 +215,13 @@ export async function launchCronRun(
   }
   if (isImmediateCronRunMode(options.mode)) {
     executionJob.state.nextRunAtMs = options.scheduleOwnershipAtMs;
-    if (resolveCronTriggerSkip(executionJob, options)) {
-      delete executionJob.trigger;
-    }
+  }
+  // An explicit skipTrigger applies to due runs too; otherwise only manual runs skip it.
+  if (
+    options.skipTrigger ||
+    (isImmediateCronRunMode(options.mode) && resolveCronTriggerSkip(executionJob, options))
+  ) {
+    delete executionJob.trigger;
   }
   const activeJobMarker = manual
     ? markManualCronJobActive(state, entry.job, entry.runReceipt)

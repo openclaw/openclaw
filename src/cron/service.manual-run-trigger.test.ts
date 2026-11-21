@@ -24,9 +24,10 @@ async function startService(
 ) {
   const store = await makeStorePath();
   const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+  const clock = { nowMs: Date.now() };
   const cron = new CronService({
     scheduler: createTestGatewayScheduler(),
-    nowMs: () => Date.now(),
+    nowMs: () => clock.nowMs,
     storePath: store.storePath,
     cronEnabled: true,
     log: logger,
@@ -37,8 +38,8 @@ async function startService(
     evaluateCronTrigger: vi.fn(evaluateCronTrigger),
   });
   await cron.start();
-  const runNow = async (jobId: string, skipTrigger?: boolean) => {
-    const ack = await cron.enqueueRun(jobId, "force", skipTrigger ? { skipTrigger } : undefined);
+  const runNow = async (jobId: string, skipTrigger?: boolean, mode: "force" | "due" = "force") => {
+    const ack = await cron.enqueueRun(jobId, mode, skipTrigger ? { skipTrigger } : undefined);
     if (!("enqueued" in ack)) {
       throw new Error("manual run was not queued");
     }
@@ -49,7 +50,7 @@ async function startService(
     }).entries;
     return { ack, history };
   };
-  return { cron, store, runIsolatedAgentJob, runNow };
+  return { cron, store, clock, runIsolatedAgentJob, runNow };
 }
 
 describe("manual run of a triggered automation", () => {
@@ -80,19 +81,23 @@ describe("manual run of a triggered automation", () => {
     }
   });
 
-  it("runs the payload only when asked to skip the trigger, and says so", async () => {
-    const h = await startService(async () => ({ kind: "evaluated", fire: false }));
-    try {
-      const job = await h.cron.add(watcher);
-      const { ack, history } = await h.runNow(job.id, true);
-      expect(ack).toMatchObject({
-        trigger: "Trigger skipped: the trigger script was not tested.",
-      });
-      expect(h.runIsolatedAgentJob).toHaveBeenCalledOnce();
-      expect(history).toMatchObject([{ status: "ok" }]);
-    } finally {
-      h.cron.stop();
-      await h.store.cleanup();
-    }
-  });
+  it.each(["force", "due"] as const)(
+    "runs the payload only when asked to skip the trigger, and says so (%s)",
+    async (mode) => {
+      const h = await startService(async () => ({ kind: "evaluated", fire: false }));
+      try {
+        const job = await h.cron.add(watcher);
+        h.clock.nowMs = job.state.nextRunAtMs!;
+        const { ack, history } = await h.runNow(job.id, true, mode);
+        expect(ack).toMatchObject({
+          trigger: "Trigger skipped: the trigger script was not tested.",
+        });
+        expect(h.runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(history).toMatchObject([{ status: "ok" }]);
+      } finally {
+        h.cron.stop();
+        await h.store.cleanup();
+      }
+    },
+  );
 });

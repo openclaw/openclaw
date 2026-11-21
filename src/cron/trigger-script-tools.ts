@@ -12,17 +12,19 @@ export function headlessScriptTool(tool: AnyAgentTool, deadline: number): AnyAge
   return {
     ...tool,
     execute: async (toolCallId, input, signal, onUpdate) => {
-      const { yieldMs: _yield, ...args } = input as Record<string, unknown>;
+      const args = input as Record<string, unknown>;
+      // Background and durable launches keep their own contract; the process tool manages them.
+      if (args.background === true || args.durable === true) {
+        return tool.execute(toolCallId, input, signal, onUpdate);
+      }
+      const { yieldMs: _yield, ...foreground } = args;
       const remainingSeconds = Math.max(1, Math.floor((deadline - performance.now()) / 1_000));
       // A shorter timeout the script asked for still applies; the deadline caps longer ones.
       const requested = typeof args.timeoutSeconds === "number" ? args.timeoutSeconds : Infinity;
       const timeoutSeconds = Math.min(requested, remainingSeconds);
-      if (args.background === true) {
-        return tool.execute(toolCallId, { ...args, timeoutSeconds }, signal, onUpdate);
-      }
       const result = await tool.execute(
         toolCallId,
-        { ...args, awaitResults: true, timeoutSeconds },
+        { ...foreground, awaitResults: true, timeoutSeconds },
         signal,
         onUpdate,
       );
