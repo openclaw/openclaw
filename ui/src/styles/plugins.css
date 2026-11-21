@@ -1612,8 +1612,8 @@
     padding: 0;
   }
 
-  /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .refresh-button {
+  /* Center beside an inline menu; with the menu in the header, use the trailing refresh line. */
+  openclaw-skills-page .skill-library-search__action:not(:last-child) .refresh-button {
     justify-items: center;
   }
 
