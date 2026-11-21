@@ -337,6 +337,15 @@
           }
         }
       },
+      "resetCreditRecovery": {
+        "type": "object",
+        "description": "Draft opt-in for earned Codex quota reset spending; runtime integration pending maintainer review.",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "maxPer24Hours": { "type": "integer", "minimum": 1, "maximum": 10, "default": 1 }
+        }
+      },
       "supervision": {
         "type": "object",
         "additionalProperties": false,
