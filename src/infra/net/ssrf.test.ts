@@ -217,6 +217,75 @@ describe("SSRF policy and pinning", () => {
     expect(lookupFn).toHaveBeenCalledTimes(calls);
   });
 
+  it.each([
+    "169.254.169.254",
+    "100.100.100.200",
+    "fd00:ec2::254",
+    "::ffff:169.254.1.2",
+    "64:ff9b::169.254.1.2",
+  ])("rejects %s when private networks are allowed", async (address) => {
+    const lookupFn = vi.fn(async () => [{ address, family: address.includes(":") ? 6 : 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("ollama.example", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["ollama.example"] },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it("keeps loopback DNS for a configured hostname when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("configured.ollama.test", {
+        lookupFn,
+        policy: {
+          allowPrivateNetwork: true,
+          hostnameAllowlist: ["configured.ollama.test"],
+        },
+      }),
+    ).resolves.toMatchObject({ addresses: ["127.0.0.1"] });
+  });
+
+  it("keeps an unspecified local bind address when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("0.0.0.0", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["0.0.0.0"] },
+      }),
+    ).resolves.toMatchObject({ addresses: ["0.0.0.0"] });
+  });
+
+  it("keeps an IPv6 unspecified address when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "::", family: 6 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("::", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["::"] },
+      }),
+    ).resolves.toMatchObject({ addresses: ["::"] });
+  });
+
+  it("still rejects an unspecified answer when only the hostname is trusted", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "0.0.0.0", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("0.0.0.0", {
+        lookupFn,
+        policy: { allowedHostnames: ["0.0.0.0"] },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it("keeps an RFC1918 answer when private networks are allowed", async () => {
+    const lookupFn = vi.fn(async () => [{ address: "192.168.1.20", family: 4 }]);
+    await expect(
+      resolvePinnedHostnameWithPolicy("ollama.example", {
+        lookupFn,
+        policy: { allowPrivateNetwork: true, hostnameAllowlist: ["ollama.example"] },
+      }),
+    ).resolves.toMatchObject({ addresses: ["192.168.1.20"] });
+  });
+
   it("fails loud when a pinned lookup is created without any addresses", () => {
     expect(() => createPinnedLookup({ hostname: "example.com", addresses: [] })).toThrow(
       "Pinned lookup requires at least one address for example.com",
