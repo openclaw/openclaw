@@ -3,7 +3,12 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { receiveMessageOnPort, threadId } from "node:worker_threads";
 import { assertEngineStoreExecutionAllowed } from "../database-engine/admission-scope.js";
 import { observeDatabaseOperation } from "../database-engine/observation.js";
-import type { PostgresSqlConnection, SqlStatement } from "../sql-connection.js";
+import { POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS } from "../database-engine/policy.js";
+import type {
+  PostgresSqlConnection,
+  PostgresTransactionOptions,
+  SqlStatement,
+} from "../sql-connection.js";
 import { sqlPublicationAnchor } from "../sql-connection.js";
 import {
   beginSqliteDatabaseWrite,
@@ -53,6 +58,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   private readonly mainThread = threadId === 0;
   private readonly reuseKey?: string;
   private readonly admissionReadOnly: boolean;
+  private maintenance = false;
 
   constructor(
     url: string,
@@ -101,16 +107,22 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   runTransaction<T>(
     operation: () => T,
-    options?: { withCommit?: (commit: () => void) => void },
+    options?: PostgresTransactionOptions,
     ...modes: [readOnly?: boolean, reserved?: boolean]
   ): T {
-    return runPostgresTransactionSync(
-      this,
-      operation,
-      options,
-      this.admissionReadOnly || modes[0],
-      modes[1],
-    );
+    const previous = this.maintenance;
+    this.maintenance = previous || options?.maintenance === true;
+    try {
+      return runPostgresTransactionSync(
+        this,
+        operation,
+        options,
+        this.admissionReadOnly || modes[0],
+        modes[1],
+      );
+    } finally {
+      this.maintenance = previous;
+    }
   }
 
   readRecoveryGeneration(lock = false): string {
@@ -183,7 +195,11 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (id > 2_147_483_647) {
       throw this.loseConnection();
     }
-    const deadline = performance.now() + 120_000;
+    // Fingerprints span many SQL statements in one request; retain the maintenance
+    // budget through beforeCommit while ordinary requests keep their 120s deadline.
+    const deadline =
+      performance.now() +
+      (this.maintenance ? POSTGRES_MAINTENANCE_STATEMENT_TIMEOUT_MS + 30_000 : 120_000);
     const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
       (this.idleCheckout !== undefined || retainedIdle) &&
