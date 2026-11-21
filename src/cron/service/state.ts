@@ -209,6 +209,7 @@ export type CronServiceDeps = {
       agentId?: string;
       sessionKey?: string;
       contextKey?: string;
+      deliver?: false;
       deliveryContext?: DeliveryContext;
       expectedTarget?: SessionEventTarget;
       createIfMissing?: true;
@@ -326,6 +327,8 @@ export type CronServiceDeps = {
     payload: ReplyPayload;
     runAtMs?: number;
     channel: CronMessageChannel;
+    target?: ResolvedFailureAlert["target"];
+    directPolicy?: ResolvedFailureAlert["directPolicy"];
     to?: string;
     mode?: "announce" | "webhook";
     accountId?: string;

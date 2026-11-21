@@ -186,6 +186,9 @@ async function transportFailureAlert(
       params.payload.text ?? "",
       "failure-alert",
       routing,
+      {
+        privateFallback: params.route.target === "owner" || params.route.directPolicy === "block",
+      },
     );
     return;
   }
@@ -196,6 +199,8 @@ async function transportFailureAlert(
       payload: params.payload,
       runAtMs: params.runAtMs,
       channel: params.route.channel,
+      target: params.route.target,
+      directPolicy: params.route.directPolicy,
       to: params.route.to,
       mode: params.route.mode,
       accountId: params.route.accountId,
@@ -214,6 +219,10 @@ async function transportFailureAlert(
             params.payload.text ?? "",
             "failure-alert",
             routing,
+            {
+              privateFallback:
+                params.route.target === "owner" || params.route.directPolicy === "block",
+            },
           );
         }
       },
