@@ -21,16 +21,19 @@ afterEach(async () => {
 
 /** Imports first resolved after SIGTERM by a module loaded before it (a new chain's root). */
 function lateImportRoots(lines: string[]) {
-  return (
-    lines
-      .map((line) => JSON.parse(line) as [number, string | null, string, boolean])
-      // Dependencies resolve by package name in the replacement tree, and workers
-      // started after SIGTERM load their stable-named entry from it.
-      .filter(
-        ([, , specifier, fromLoadedModule]) => fromLoadedModule && /^\.\.?\//u.test(specifier),
-      )
-      .map(([, parent, specifier]) => `${path.basename(parent ?? "")} -> ${specifier}`)
-  );
+  return lines.flatMap((line) => {
+    const [, parent, specifier, fromLoadedModule] = JSON.parse(line) as [
+      number,
+      string | null,
+      string,
+      boolean,
+    ];
+    // Dependencies resolve by package name in the replacement tree, and workers
+    // started after SIGTERM load their stable-named entry from it.
+    return fromLoadedModule && /^\.\.?\//u.test(specifier)
+      ? [`${path.basename(parent ?? "")} -> ${specifier}`]
+      : [];
+  });
 }
 
 it("stops a built Gateway without first-importing a module after SIGTERM", async () => {
