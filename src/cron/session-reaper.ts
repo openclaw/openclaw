@@ -16,7 +16,7 @@ import type { CronConfig } from "../config/types.cron.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCompetingSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseCronBaseSessionJobId } from "../sessions/session-key-utils.js";
 import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
@@ -40,6 +40,8 @@ type ReaperTarget = {
   retentionMs: number;
   lastSweepAtMs: number;
   nextSweepAtMs: number;
+  /** Whether the recorded sweep saw job inventory; base-candidate discovery differs without it. */
+  hadInventory: boolean;
 };
 
 const reaper = resolveGlobalSingleton<{
@@ -60,7 +62,14 @@ function ensureReaperSubscription(): void {
     if (!sessionChangeScopeAffectsStoredRows(change)) {
       return;
     }
-    if (!("all" in change) && !isCronRunSessionKey(change.sessionKey)) {
+    // Base-key commits also invalidate deadlines: a hook that persists its base
+    // row and then fails before its :run: row exists would otherwise never wake
+    // retention, and the base would outlive its retention deadline unpruned.
+    if (
+      !("all" in change) &&
+      !isCronRunSessionKey(change.sessionKey) &&
+      parseCronBaseSessionJobId(change.sessionKey) === undefined
+    ) {
       return;
     }
     const agentId = "all" in change ? undefined : parseAgentSessionKey(change.sessionKey)?.agentId;
@@ -148,7 +157,8 @@ export async function removeCronJobBaseSession(params: {
 }
 
 /**
- * Sweeps completed isolated cron run sessions while preserving base cron sessions.
+ * Sweeps completed isolated cron run sessions, plus base cron sessions whose job no
+ * longer exists (transient hook runs), while preserving stored-job base sessions.
  *
  * Run outside the cron service `locked()` section: cleanup acquires session
  * lifecycle and writer ownership, so nesting the queues can deadlock timer ticks.
@@ -159,6 +169,12 @@ export async function sweepCronRunSessions(params: {
   /** Resolved session-store target, interpreted by the SQLite accessor. */
   sessionStorePath: string;
   isAgentAvailable?: CronAgentAvailability;
+  /**
+   * Cron-store job ids at sweep time. Base cron rows are pruned only when this is
+   * provided and their job id is absent: without job inventory a base row may still
+   * belong to a live stored job, whose base cleanup is owned by cron.remove.
+   */
+  knownJobIds?: ReadonlySet<string>;
   nowMs?: number;
   log: Logger;
 }): Promise<ReaperResult> {
@@ -175,9 +191,16 @@ export async function sweepCronRunSessions(params: {
   const previous = reaper.targets.get(targetKey);
 
   // Timer ticks can be frequent; throttle per agent/store target to avoid
-  // repeated session-store I/O.
+  // repeated session-store I/O. Inventory availability changes the discovery
+  // scope (base candidates appear only with inventory), so an availability
+  // change invalidates the recorded next-sweep deadline: without this, a
+  // sweep that ran without inventory records an infinite deadline from its
+  // run-only discovery and every later inventory-aware sweep stays skipped,
+  // leaving leaked base rows unpruned.
+  const hadInventory = params.knownJobIds !== undefined;
   if (
     previous?.retentionMs === retentionMs &&
+    previous.hadInventory === hadInventory &&
     now >= previous.lastSweepAtMs &&
     (now - previous.lastSweepAtMs < MIN_SWEEP_INTERVAL_MS || now < previous.nextSweepAtMs)
   ) {
@@ -192,6 +215,7 @@ export async function sweepCronRunSessions(params: {
     retentionMs,
     lastSweepAtMs: now,
     nextSweepAtMs: Infinity,
+    hadInventory,
   };
   reaper.targets.set(targetKey, target);
 
@@ -212,6 +236,13 @@ export async function sweepCronRunSessions(params: {
       return { swept: false, pruned: 0 };
     }
     const cutoff = now - retentionMs;
+    // Inventory ids arrive as authored (explicit job ids keep their case) while base
+    // session keys fold to lowercase through parseAgentSessionKey; compare in the
+    // key's canonical form or a mixed-case stored job would look jobless and lose
+    // its base session after retention expires.
+    const canonicalKnownJobIds = params.knownJobIds
+      ? new Set([...params.knownJobIds].map((id) => id.toLowerCase()))
+      : undefined;
     let pendingMediaSessionKeys: Set<string> | undefined;
     const removals: SessionEntryLifecycleRemoval[] = [];
     // Discovery validates the physical store in its reader worker and returns only full
@@ -222,6 +253,7 @@ export async function sweepCronRunSessions(params: {
         storePath,
         env: context.environment,
         updatedBefore: cutoff,
+        includeBaseCronCandidates: params.knownJobIds !== undefined,
       });
     // A receipt during discovery can only bring the next attempt forward.
     target.nextSweepAtMs = Math.min(
@@ -240,6 +272,15 @@ export async function sweepCronRunSessions(params: {
         ? await prepareCronDescendantDeletion(continuationKeys)
         : undefined;
     for (const { sessionKey, entry } of expiredEntries) {
+      const baseJobId = parseCronBaseSessionJobId(sessionKey);
+      if (baseJobId !== undefined) {
+        // Base rows serve stored jobs, including quarantined-but-recoverable ones
+        // (cron.remove owns their cleanup), and transient hook runs. Prune only
+        // jobless ones, and only with readable job inventory.
+        if (!canonicalKnownJobIds || canonicalKnownJobIds.has(baseJobId)) {
+          continue;
+        }
+      }
       if (entry.cronRunContinuation) {
         // Build one unordered snapshot only when an expired continuation needs it.
         // Fresh rows and stores without continuations never read media operation state.

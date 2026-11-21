@@ -65,6 +65,21 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
 }
 
 /**
+ * Returns the job id of a base cron session key (`agent:<id>:cron:<jobId>`, no run
+ * scope), else undefined. Run-scoped keys (`cron:<job>:run:<runId>`) and non-cron
+ * keys yield undefined, so base rows and per-run rows stay disjoint sets.
+ */
+export function parseCronBaseSessionJobId(
+  sessionKey: string | undefined | null,
+): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  return parsed.rest.match(/^cron:([^:]+)$/)?.[1];
+}
+
+/**
  * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
  * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
  * The run scope is only ever appended to cron keys, so this is gated to that exact

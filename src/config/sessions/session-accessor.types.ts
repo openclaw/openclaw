@@ -100,7 +100,12 @@ export type SessionEntryListScope = Partial<
   /** Page full cron-run entries for exact deletion guards without hydrating the store. */
   cronRetention?: { afterSessionKey?: string; limit: number };
   /** Validate the complete listing, retaining full expired cron rows only for this logical owner. */
-  expiredCronRuns?: { agentId: string; updatedBefore: number };
+  expiredCronRuns?: {
+    agentId: string;
+    updatedBefore: number;
+    /** Also select expired base cron rows (`cron:<jobId>`, no run scope) as cleanup candidates. */
+    includeBaseCronCandidates?: boolean;
+  };
 };
 
 export type ResolvedSessionEntryAccessTarget = {

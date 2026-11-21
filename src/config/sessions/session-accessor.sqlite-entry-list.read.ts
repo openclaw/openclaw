@@ -9,7 +9,10 @@ import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  parseCronBaseSessionJobId,
+} from "../../sessions/session-key-utils.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -147,8 +150,12 @@ export function listSqliteSessionEntriesFromDatabase(
               .select("session_key")
               .orderBy("session_key"),
           )) {
+            const isRun = isCronRunSessionKey(row.session_key);
             if (
-              !isCronRunSessionKey(row.session_key) ||
+              (!isRun &&
+                !(
+                  expired?.includeBaseCronCandidates && parseCronBaseSessionJobId(row.session_key)
+                )) ||
               normalizeAgentId(parseAgentSessionKey(row.session_key)!.agentId) !== requestedOwner
             ) {
               continue;
@@ -161,7 +168,8 @@ export function listSqliteSessionEntriesFromDatabase(
         let oldestUpdatedAt: number | null = null;
         let selected = entries.filter(({ sessionKey, entry }) => {
           if (
-            !isCronRunSessionKey(sessionKey) ||
+            (!isCronRunSessionKey(sessionKey) &&
+              !(expired?.includeBaseCronCandidates && parseCronBaseSessionJobId(sessionKey))) ||
             (expired &&
               normalizeAgentId(parseAgentSessionKey(sessionKey)!.agentId) !== requestedOwner)
           ) {

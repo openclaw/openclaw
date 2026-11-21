@@ -382,6 +382,8 @@ export type CronJobPolicyContext = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
+  /** Authored ids of malformed jobs quarantined by the last load; their base sessions stay owned. */
+  quarantinedJobIds?: readonly string[];
   /** Revisions of the last published definitions, replaced with each committed snapshot. */
   jobConfigRevisions: ReadonlyMap<string, CronJobConfigRevisionResult>;
   /** Detached rows and their content digests survive unchanged store publications. */
