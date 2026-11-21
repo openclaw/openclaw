@@ -2,13 +2,16 @@ import path from "node:path";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import { describeConversationBinding } from "../command-handler-bindings.js";
+import { createCodexCommandHost } from "../command-host.test-support.js";
+import { createContext } from "../commands.test-support.js";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
   isCodexAppServerLiveThreadProtected,
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { ownCodexInferenceClient } from "./inference-routing.js";
-import type { JsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import { itemNotification } from "./protocol.test-helpers.js";
 import {
   answerCompleted,
@@ -26,6 +29,11 @@ import {
   tempDir,
   threadStartResult,
 } from "./run-attempt-test-harness.js";
+import {
+  readCodexAppServerBinding,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import { withCodexSessionDescendantCancellation } from "./session-cancellation.js";
 import { isCodexTurnContextHandoff } from "./test-support.js";
 import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
@@ -249,8 +257,9 @@ it("delivers fresh prompt-hook parent context on the same protected thread", asy
     systemPrompt = "Changed persistent thread policy";
     await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toMatchObject({
       name: "AgentHarnessPreflightError",
-      message:
-        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+      message: expect.stringMatching(
+        /^Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry\. Native command holding it: background-listener /,
+      ),
     });
     expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
     expect(harness.requests).not.toContainEqual(unsubscribe);
@@ -380,5 +389,133 @@ it.each([
     abort.abort(new Error("fixture cleanup"));
     harness.close();
     await Promise.allSettled([run]);
+  }
+});
+
+it("session Stop ends a native command a finished turn left running so follow-ups continue", async () => {
+  const sessionFile = path.join(tempDir, "retained-command.jsonl");
+  const agentDir = path.join(tempDir, "wire-agent");
+  const codexHome = resolveCodexAppServerHomeDir(agentDir);
+  const rolloutPath = path.join(codexHome, "sessions", "retained-command.jsonl");
+  let nativeTools: unknown;
+  const source = new AbortController();
+  const requestCustody = Object.freeze({});
+  const command = runningCommand("socks-tunnel", "synthetic-never-exiting-tunnel", "49413");
+  let alive = true;
+  let confirmTermination = false;
+  const harness = createStartedThreadHarness(
+    async (method, request) => {
+      if (method === "account/read") {
+        return { account: { type: "apiKey" } };
+      }
+      if ((method === "thread/start" || method === "thread/resume") && isJsonObject(request)) {
+        nativeTools = request.dynamicTools ?? nativeTools;
+        const result = threadStartResult("thread-1");
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
+      if (method === "turn/start") {
+        await writeNativeCatalogFixture(rolloutPath, "thread-1", nativeTools);
+      }
+      if (method === "thread/backgroundTerminals/list") {
+        return {
+          data: alive ? [{ itemId: command.id, processId: command.processId }] : [],
+          nextCursor: null,
+        };
+      }
+      if (method === "thread/backgroundTerminals/terminate") {
+        expect(request).toEqual({ threadId: "thread-1", processId: "49413" });
+        if (!confirmTermination) {
+          return { terminated: false };
+        }
+        alive = false;
+        // Codex publishes the terminal item after acknowledging termination.
+        void harness.notify(
+          itemNotification("item/completed", { ...command, status: "failed", exitCode: 143 }),
+        );
+        return { terminated: true };
+      }
+      return undefined;
+    },
+    { persistedThreads: [], codexHome },
+  );
+  ownCodexInferenceClient(harness.client);
+  const paramsFor = (runId: string, extraSystemPrompt?: string) => {
+    const params = createParams(sessionFile, tempDir, { runId });
+    params.agentDir = agentDir;
+    params.extraSystemPrompt = extraSystemPrompt;
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      captureRequestCustody: () => requestCustody,
+      retainSourceAuthority: retainSourceAuthority(source.signal),
+    };
+    return params;
+  };
+  const stop = (acceptsRequest: (custody: unknown) => boolean) =>
+    withCodexSessionDescendantCancellation(
+      testCodexAppServerBindingStore,
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        sessionId: "session-1",
+        acceptsRequest,
+        assertCurrent: () => {},
+      },
+      (cancel) => cancel(),
+    );
+  try {
+    const first = runCodexAppServerAttempt(paramsFor("start-tunnel"));
+    await first.waitForTurnAccepted();
+    await harness.notify(itemNotification("item/started", command));
+    await harness.notify(answerCompleted("The tunnel is running."));
+    await first;
+    expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+
+    const status = await describeConversationBinding(
+      createCodexCommandHost(),
+      createContext("binding", sessionFile, { sessionKey: "agent:main:session-1" }),
+    );
+    expect(status).toContain("- Thread: thread-1");
+    expect(status).toMatch(/- Retained native commands: socks-tunnel （turn turn-1,/);
+
+    const refused = runCodexAppServerAttempt(paramsFor("follow-up", "Changed operator policy."));
+    await expect(refused).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message: expect.stringMatching(
+        /^Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry\. Native command holding it: socks-tunnel \(turn turn-1, running \d+s, background, its turn ended\)\. Stop this session to end it, or wait for it to exit\.$/,
+      ),
+    });
+
+    // Another requester's session Stop is not this command's owner.
+    expect((await stop(() => false)).killed).toBe(0);
+    expect(alive).toBe(true);
+    const incomplete = await stop((custody) => custody === requestCustody);
+    expect(incomplete.killed).toBe(0);
+    expect(incomplete.errors).toEqual([
+      expect.objectContaining({
+        message: "Codex native command socks-tunnel termination was not confirmed",
+      }),
+    ]);
+    expect(alive).toBe(true);
+    expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+    await expect(
+      runCodexAppServerAttempt(paramsFor("still-refused", "Changed operator policy.")),
+    ).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message: expect.stringContaining("Native command holding it: socks-tunnel"),
+    });
+    confirmTermination = true;
+    expect((await stop((custody) => custody === requestCustody)).killed).toBe(1);
+    expect(alive).toBe(false);
+    expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(false);
+
+    const followUp = runCodexAppServerAttempt(paramsFor("follow-up-2", "Changed operator policy."));
+    await followUp.waitForTurnAccepted();
+    await harness.notify(answerCompleted("Continued."));
+    await followUp;
+    expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("thread-1");
+    expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(2);
+  } finally {
+    source.abort(new Error("fixture cleanup"));
+    harness.close();
   }
 });
