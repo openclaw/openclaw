@@ -151,6 +151,12 @@ function hotExportSnapshot<Snapshot>(sessionId: string, snapshot: Snapshot | "co
   return snapshot;
 }
 
+/**
+ * Rows one slice query may return. PostgreSQL buffers a whole result before the byte budget
+ * can stop iteration, so the query itself must be bounded.
+ */
+export const TRANSCRIPT_PAYLOAD_SLICE_ROWS = 256;
+
 /** Captures decoded payload text after `afterSeq` up to the slice budget. */
 function readTranscriptPayloadSlice(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -161,6 +167,7 @@ function readTranscriptPayloadSlice(
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const slice: TranscriptPayloadSlice = { payloads: [] };
     let bytes = 0;
+    let lastSeq: number | undefined;
     // Leaving the loop early or by a throw closes the iterator; no live cursor escapes a read.
     for (const row of iterateSqliteQuerySync(
       database.db,
@@ -171,14 +178,20 @@ function readTranscriptPayloadSlice(
         .where("session_id", "=", sessionId)
         .where("seq", "<=", throughSeq)
         .$if(afterSeq !== undefined, (query) => query.where("seq", ">", afterSeq!))
-        .orderBy("seq", "asc"),
+        .orderBy("seq", "asc")
+        .limit(TRANSCRIPT_PAYLOAD_SLICE_ROWS),
     )) {
       slice.payloads.push(readTranscriptPayload(row));
       bytes += row.payload_bytes;
+      lastSeq = row.seq;
       if (bytes >= TRANSCRIPT_PAYLOAD_SLICE_BYTES) {
         slice.resumeAfterSeq = row.seq;
         break;
       }
+    }
+    // A full page may have more rows after it; an empty next slice ends the export.
+    if (slice.payloads.length === TRANSCRIPT_PAYLOAD_SLICE_ROWS && lastSeq !== throughSeq) {
+      slice.resumeAfterSeq = lastSeq;
     }
     return slice;
   });
