@@ -13,16 +13,7 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const rootDir = path.resolve(import.meta.dirname, "../../../extensions/clawrouter");
-const metadataSnapshot = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "clawrouter",
-      rootDir,
-      providers: ["clawrouter"],
-      contracts: { webSearchProviders: ["clawrouter"] },
-    },
-  ],
-});
+let metadataSnapshot: ReturnType<typeof createPluginMetadataSnapshotFixture>;
 const pluginRegistry = createEmptyPluginRegistry();
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let server: Awaited<ReturnType<typeof reserveTestPortListener<Server>>>;
@@ -165,6 +156,16 @@ afterAll(async () => {
 });
 
 beforeEach(() => {
+  metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "clawrouter",
+        rootDir,
+        providers: ["clawrouter"],
+        contracts: { webSearchProviders: ["clawrouter"] },
+      },
+    ],
+  });
   routeKind = "native";
   replyStatus = 200;
   requests.length = 0;
