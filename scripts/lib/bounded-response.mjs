@@ -180,8 +180,13 @@ export function toLintErrorObject(value, fallbackMessage) {
     return new Error(value);
   }
   const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
+  // Keep native assignment semantics while blocking the prototype setter.
+  Object.assign(
+    new Proxy(error, {
+      /** @param {Error} target @param {string | symbol} key @param {unknown} detail */
+      set: (target, key, detail) => key === "__proto__" || Reflect.set(target, key, detail),
+    }),
+    value,
+  );
   return error;
 }
