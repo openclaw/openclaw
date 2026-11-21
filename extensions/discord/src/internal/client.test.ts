@@ -1,6 +1,6 @@
 import { ComponentType, Routes } from "discord-api-types/v10";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import { Client } from "./client.js";
 import type { DiscordCommand } from "./commands.js";
 import { parseCustomId } from "./components.base.js";
@@ -209,6 +209,51 @@ describe("Client.deployCommands", () => {
     expect(first.delete).toHaveBeenCalledOnce();
     expectNoWrites(second.get, second.post, second.delete);
   });
+
+  it.each([true, false])(
+    "recreates a changed command whose PATCH hits unknown command (gone: %s)",
+    async (gone) => {
+      const { store: commandDeployHashStore } = createTestHashStore();
+      const changed = createTestCommand("changed", undefined, { description: "new text" });
+      const deploy = async (patch: Mock) => {
+        const client = createInternalTestClient([changed], { commandDeployHashStore });
+        const rest = attachRestMock(client, {
+          get: vi.fn(async () => [
+            { ...existingCommand(changed, "changed-id"), description: "old text" },
+            existingCommand(createTestCommand("stale"), "stale-id"),
+          ]),
+          patch,
+        });
+        await client.deployCommands();
+        return rest;
+      };
+      const first = await deploy(
+        vi.fn(async () => {
+          if (gone) {
+            throw new DiscordError(new Response(null, { status: 404 }), { code: 10063 });
+          }
+          return {};
+        }),
+      );
+      expect(first.patch).toHaveBeenCalledExactlyOnceWith(
+        Routes.applicationCommand("app1", "changed-id"),
+        { body: changed.serialize() },
+      );
+      if (gone) {
+        expect(first.post).toHaveBeenCalledExactlyOnceWith(Routes.applicationCommands("app1"), {
+          body: changed.serialize(),
+        });
+      } else {
+        expect(first.post).not.toHaveBeenCalled();
+      }
+      expect(first.delete).toHaveBeenCalledExactlyOnceWith(
+        Routes.applicationCommand("app1", "stale-id"),
+      );
+      expect(first.put).not.toHaveBeenCalled();
+      const second = await deploy(vi.fn());
+      expectNoWrites(second.get, second.patch, second.post, second.delete);
+    },
+  );
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
     const client = createInternalTestClient();
