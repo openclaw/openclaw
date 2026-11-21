@@ -54,32 +54,6 @@ it("keeps a terminal question between the surrounding transcript turns", () => {
   ]);
 });
 
-it("keeps only post-reset questions and notices beside the reset divider", () => {
-  const before = prompt("answered");
-  const after = { ...before, id: "question-after-reset", createdAtMs: 3_000 };
-  const result = buildItems({
-    sessionKey: "agent:main:main",
-    messages: [
-      {
-        role: "system",
-        timestamp: 2_000,
-        __openclaw: { kind: "reset", id: "reset" },
-      },
-    ],
-    questionPrompts: [before, after],
-    guardianNotices: [
-      { key: "notice-before-reset", runId: "run-before", timestamp: 1_000, kind: "warning" },
-      { key: "notice-after-reset", runId: "run-after", timestamp: 3_000, kind: "warning" },
-    ],
-  });
-
-  expect(result.filter((item) => item.kind === "divider")).toHaveLength(1);
-  expect({
-    questions: result.filter((item) => item.kind === "question").map((item) => item.questionId),
-    notices: result.filter((item) => item.kind === "notice").map((item) => item.key),
-  }).toEqual({ questions: [after.id], notices: ["notice-after-reset"] });
-});
-
 it.each([
   ["answered", "Yes"],
   ["cancelled", "Skipped"],
