@@ -1,4 +1,3 @@
-/** Keep in sync with the `[data-sidebar-archive-exiting]` transitions in layout.css. */
 const EXIT_DURATION_MS = 240;
 const EXIT_EASING = "cubic-bezier(0.2, 0, 0, 1)";
 const SNAPSHOT_ATTRIBUTES = [
@@ -7,7 +6,6 @@ const SNAPSHOT_ATTRIBUTES = [
   "data-session-tree",
   "data-session-window-key",
 ];
-const exitsByList = new WeakMap<HTMLElement, number>();
 
 /**
  * Starts a short exit for a sidebar row the user is archiving; call it right
@@ -32,14 +30,9 @@ export function startSidebarArchiveExit(row: HTMLElement): () => void {
     return () => undefined;
   }
   const height = tree.getBoundingClientRect().height;
-  // Flag the list before the roster moves its rows: the window measures layout
-  // right after removing a row, so a later flag would miss that style change.
-  holdExit(list);
-  let removed = false;
   const observer = new MutationObserver((records) => {
     const removal = records.find((record) => [...record.removedNodes].includes(tree));
     if (removal) {
-      removed = true;
       observer.disconnect();
       insertSnapshot(tree, height, list, removal.nextSibling);
     }
@@ -49,23 +42,7 @@ export function startSidebarArchiveExit(row: HTMLElement): () => void {
   return () =>
     view.requestAnimationFrame(() => {
       observer.disconnect();
-      if (!removed) {
-        releaseExit(list);
-      }
     });
-}
-
-function holdExit(list: HTMLElement) {
-  exitsByList.set(list, (exitsByList.get(list) ?? 0) + 1);
-  list.dataset.sidebarArchiveExiting = "";
-}
-
-function releaseExit(list: HTMLElement) {
-  const remaining = (exitsByList.get(list) ?? 1) - 1;
-  exitsByList.set(list, remaining);
-  if (remaining === 0) {
-    delete list.dataset.sidebarArchiveExiting;
-  }
 }
 
 function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, next: Node | null) {
@@ -85,22 +62,17 @@ function insertSnapshot(tree: HTMLElement, height: number, list: HTMLElement, ne
   list.insertBefore(snapshot, next?.parentNode === list ? next : null);
   const fade = { opacity: 0, translate: "-10px 0", scale: "0.98", filter: "blur(1.5px)" };
   const shown = { opacity: 1, translate: "0 0", scale: "1", filter: "blur(0)" };
-  // Windowed lists position rows absolutely, so their neighbors glide by
-  // transition. In-flow lists need the snapshot itself to give its slot back.
-  const keyframes = list.classList.contains("sidebar-session-window")
-    ? [shown, fade]
-    : [
-        { ...shown, height: `${height}px` },
-        { ...fade, height: `${height}px`, offset: 0.5 },
-        {
-          ...fade,
-          height: "0px",
-          marginBottom: `${-Number.parseFloat(getComputedStyle(list).rowGap) || 0}px`,
-        },
-      ];
+  const keyframes = [
+    { ...shown, height: `${height}px` },
+    { ...fade, height: `${height}px`, offset: 0.5 },
+    {
+      ...fade,
+      height: "0px",
+      marginBottom: `${-Number.parseFloat(getComputedStyle(list).rowGap) || 0}px`,
+    },
+  ];
   const finish = () => {
     snapshot.remove();
-    releaseExit(list);
   };
   snapshot
     .animate(keyframes, { duration: EXIT_DURATION_MS, easing: EXIT_EASING, fill: "forwards" })

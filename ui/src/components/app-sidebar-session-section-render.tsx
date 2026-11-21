@@ -403,7 +403,7 @@ export function renderSessionSection(params: {
                 ref={sessionWindow.bind}
                 class="sidebar-session-window"
                 role="presentation"
-                style={{ position: "relative", height: sessionWindow.height() }}
+                style={{ "padding-block-end": sessionWindow.trailingSpace() }}
               >
                 <For each={sessionWindow.rows()} keyed={(session) => session.key}>
                   {(session) => (
