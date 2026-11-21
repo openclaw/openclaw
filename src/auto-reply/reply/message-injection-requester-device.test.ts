@@ -137,7 +137,7 @@ async function completionOwnerDevice(steeringDevice: string) {
       { messages: [], success: true },
       {
         runId: completionRunId,
-        ...buildAgentHookContextIdentityFields({ runId: completionRunId, trigger: "event" }),
+        ...buildAgentHookContextIdentityFields({ trigger: "event" }),
       },
     ),
   );

@@ -33,6 +33,8 @@ export type ExecRequestOwner = {
 type ExecRequestTurn = {
   identity: ExecRequestIdentity;
   owners: readonly ExecRequestOwner[];
+  /** The owners came from another request's events, such as a background exec completion. */
+  continues: boolean;
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.execRequestContext"), () => ({
@@ -52,17 +54,15 @@ export type ExecRequestOwnerRef = Readonly<{
 
 /**
  * Starting turns of the commands the current run continues, such as a background exec
- * completion. Owners the run created for its own request are excluded.
+ * completion. A run that owns only its own request continues nothing.
  */
-export function readInheritedExecRequestOwners(
-  runId: string | undefined,
-): readonly ExecRequestOwnerRef[] | undefined {
+export function readInheritedExecRequestOwners(): readonly ExecRequestOwnerRef[] | undefined {
   const turn = state.context.getStore();
-  if (!runId || turn?.identity.runId !== runId) {
+  if (!turn?.continues) {
     return undefined;
   }
   const refs = turn.owners.flatMap(({ identity }) =>
-    identity.runId && identity.runId !== runId
+    identity.runId
       ? [
           Object.freeze({
             runId: identity.runId,
@@ -248,7 +248,11 @@ export async function withExecRequestTurn<T>(
       owner.turnRunIds.add(params.identity.runId);
     }
   }
-  const turn = { identity, owners };
+  const turn = {
+    identity,
+    owners,
+    continues: params.owners?.length ? true : (sameTurn?.continues ?? false),
+  };
   const stop = () => {
     // Restart interrupts commands with their run, overlapping their cleanup grace.
     // Handler retirement and inherited event cancellation preserve other owners.

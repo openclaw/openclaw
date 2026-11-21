@@ -116,16 +116,16 @@ export function buildAgentHookContextChannelFields(params: {
 }
 
 /** Host-recorded starters of the commands this run continues, independent of the trigger. */
-export function buildAgentHookContextExecRequestFields(
-  runId: string | null | undefined,
-): Pick<PluginHookAgentContext, "execRequestOwners"> {
-  const execRequestOwners = readInheritedExecRequestOwners(normalizeOptionalString(runId));
+export function buildAgentHookContextExecRequestFields(): Pick<
+  PluginHookAgentContext,
+  "execRequestOwners"
+> {
+  const execRequestOwners = readInheritedExecRequestOwners();
   return execRequestOwners ? { execRequestOwners } : {};
 }
 
 /** Sender identity for user turns, plus the exec request owners any run continues. */
 export function buildAgentHookContextIdentityFields(params: {
-  runId?: string | null;
   trigger?: string | null;
   senderId?: string | null;
   chatId?: string | null;
@@ -135,7 +135,7 @@ export function buildAgentHookContextIdentityFields(params: {
   PluginHookAgentContext,
   "senderId" | "chatId" | "channelContext" | "requesterDeviceId" | "execRequestOwners"
 > {
-  const execRequestFields = buildAgentHookContextExecRequestFields(params.runId);
+  const execRequestFields = buildAgentHookContextExecRequestFields();
   const trigger = normalizeOptionalString(params.trigger);
   if (trigger && trigger !== "user") {
     return execRequestFields;

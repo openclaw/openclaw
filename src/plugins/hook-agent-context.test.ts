@@ -113,8 +113,7 @@ describe("buildAgentHookContextIdentityFields", () => {
 });
 
 describe("exec request owners on agent hook contexts", () => {
-  const identity = (runId: string, trigger: string) =>
-    buildAgentHookContextIdentityFields({ runId, trigger });
+  const identity = (trigger: string) => buildAgentHookContextIdentityFields({ trigger });
   const start = (runId: string, ownerDeviceId?: string) =>
     withExecRequestTurn(
       {
@@ -127,13 +126,13 @@ describe("exec request owners on agent hook contexts", () => {
       },
       async () => ({
         owners: captureExecRequestOwners({ runId, sessionId: "session-1" }) ?? [],
-        own: identity(runId, "user"),
+        own: identity("user"),
       }),
     );
   const complete = (runId: string, owners: readonly ExecRequestOwner[]) =>
     withExecRequestTurn(
       { identity: { runId, sessionKey: "agent:main:main", sessionId: "session-1" }, owners },
-      async () => identity(runId, "event"),
+      async () => identity("event"),
     );
 
   it("names the starting turn on an idle session's completion run", async () => {
@@ -169,19 +168,17 @@ describe("exec request owners on agent hook contexts", () => {
     const seen = await withExecRequestTurn(
       { identity: { runId: "run-busy", sessionKey: "agent:main:main", sessionId: "session-1" } },
       async () => {
-        const before = identity("run-busy", "user");
+        const before = identity("user");
         const completion = await complete("run-completion", a.owners);
         return {
           before,
           completion,
-          after: identity("run-busy", "user"),
-          staleRunId: identity("run-completion", "event"),
+          after: identity("user"),
         };
       },
     );
     expect(seen.before).not.toHaveProperty("execRequestOwners");
     expect(seen.after).not.toHaveProperty("execRequestOwners");
-    expect(seen.staleRunId).not.toHaveProperty("execRequestOwners");
     expect(seen.completion.execRequestOwners?.map((owner) => owner.runId)).toEqual(["run-a"]);
   });
 
@@ -190,16 +187,16 @@ describe("exec request owners on agent hook contexts", () => {
     const fields = await withExecRequestTurn(
       { identity: { runId: "run-completion", sessionId: "session-1" }, owners: a.owners },
       async () => ({
-        agent: identity("run-completion", "event"),
-        tool: buildAgentHookContextExecRequestFields("run-completion"),
+        agent: identity("event"),
+        tool: buildAgentHookContextExecRequestFields(),
       }),
     );
     expect(fields.agent.execRequestOwners?.map((owner) => owner.runId)).toEqual(["run-a"]);
     expect(fields.tool).toEqual({ execRequestOwners: fields.agent.execRequestOwners });
   });
 
-  it("is absent outside a run and for a run id that is not the current one", async () => {
-    expect(identity("run-a", "event")).toEqual({});
-    expect(buildAgentHookContextExecRequestFields(undefined)).toEqual({});
+  it("is absent outside a run", async () => {
+    expect(identity("event")).toEqual({});
+    expect(buildAgentHookContextExecRequestFields()).toEqual({});
   });
 });
