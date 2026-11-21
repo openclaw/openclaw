@@ -133,6 +133,15 @@ export type SubagentRunReadRecord = {
   cleanupCompletedAt?: number;
   /** Durable outbox marker for parent/external completion delivery. */
   delivery?: SubagentCompletionDeliveryState;
+  /**
+   * Continuation: after a Gateway restart ended this delegate, activation found its child session
+   * entry, and so its spawn lineage, missing. Its one outcome says so; `unresolved` records why
+   * no requester binding survived, and then nothing is delivered.
+   */
+  continuationLineageMissing?: {
+    recordedAt: number;
+    unresolved?: "requester-agent-unresolved" | "requester-session-missing";
+  };
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
     /** Recorded execution timing remains readable for retained task history. */

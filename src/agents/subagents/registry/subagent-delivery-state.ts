@@ -77,10 +77,15 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       disposition: entry.delivery.disposition || undefined,
       suspendedAt: entry.delivery.suspendedAt,
     },
+    continuationLineageMissing: entry.continuationLineageMissing,
   };
 }
 
 export function shouldPreserveSubagentForMaintenance(entry: SubagentRunMaintenanceRecord): boolean {
+  if (isDeliverySuspendedUnbound(entry)) {
+    // Continuation: its child session entry is gone and nothing at its requester key is owed it.
+    return false;
+  }
   if (entry.killReconciliation || entry.killIntent || entry.requesterSettleWake) {
     // Requester settlement still reads child policy after child cleanup has completed.
     // Reconciliation tombstones own provider results until completion or cancellation settles.
@@ -122,6 +127,9 @@ export function projectSubagentRunForMaintenance(
       : undefined,
     ...(entry.continuationRecipientAuthorityBinding
       ? { continuationRecipientAuthorityBinding: entry.continuationRecipientAuthorityBinding }
+      : {}),
+    ...(entry.continuationLineageMissing
+      ? { continuationLineageMissing: entry.continuationLineageMissing }
       : {}),
   };
 }
@@ -294,6 +302,18 @@ export function recordRequesterHandoff(entry: SubagentRunRecord, blockingRunId?:
 
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
+}
+
+/**
+ * Continuation: a suspended outcome that restart custody recorded with no requester binding
+ * (subagent-registry-restart-custody.ts). It stays inspectable until the sweeper discards it at
+ * retention end, but a session at its recorded requester key is not its requester: readers never
+ * list, count, hold or protect anything for it, and its discard notifies no session.
+ */
+export function isDeliverySuspendedUnbound(
+  entry: Pick<SubagentRunReadRecord, "delivery" | "continuationLineageMissing">,
+): boolean {
+  return isDeliverySuspended(entry) && entry.continuationLineageMissing?.unresolved !== undefined;
 }
 
 /** A finished requester without its required reply receipt must not execute again implicitly. */

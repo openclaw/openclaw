@@ -1,6 +1,6 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { recordRequiredCompletionNotice } from "../completion/subagent-completion-admission.store.js";
-import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { isDeliverySuspended, isDeliverySuspendedUnbound } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
   safeRemoveAttachmentsDir,
@@ -119,6 +119,10 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       isCurrent: isHookCurrent,
       prepareCurrent: prepareHookCurrent,
     });
+  }
+  // Continuation: a suspended-unbound outcome has no requester, so its discard only logs.
+  if (isDeliverySuspendedUnbound(entry)) {
+    return;
   }
   // Retiring the obligation is the final failure: the requester sees it, not only the log.
   // The discard is already committed, so the notice is best-effort and cannot undo it.

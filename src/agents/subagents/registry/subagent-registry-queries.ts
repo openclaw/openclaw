@@ -4,7 +4,7 @@ import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
 } from "./subagent-child-owner-match.js";
-import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { isDeliverySuspended, isDeliverySuspendedUnbound } from "./subagent-delivery-state.js";
 import {
   buildSubagentRunReadTopology,
   resolveControllerSessionKey,
@@ -305,6 +305,8 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
         }
         const runPending = hasSubagentRunEnded(entry)
           ? typeof entry.cleanupCompletedAt !== "number" &&
+            // Continuation: no session at its recorded requester key waits on this outcome.
+            !isDeliverySuspendedUnbound(entry) &&
             !(options?.excludeSuspendedDelivery === true && isDeliverySuspended(entry)) &&
             !(
               options?.treatSuspendedDeliveryAsSettled === true &&

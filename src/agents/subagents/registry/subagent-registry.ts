@@ -593,7 +593,7 @@ export function activateSubagentRegistry(
     activeGatewayContextResolver = resolveGatewayContext()?.resolveGatewayContext;
     bindGatewayContextResolver(subagentRuns, activeGatewayContextResolver);
     await subagentRestorer.activate();
-    await settleContinuationRestartCustody(startSubagentAnnounceCleanupFlow);
+    await settleContinuationRestartCustody(startSubagentAnnounceCleanupFlow, subagentSweeper.start);
   });
 }
 export { whenSubagentRegistryActivated } from "./subagent-registry-activation.js";

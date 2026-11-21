@@ -9,6 +9,7 @@ import {
 } from "../../tools/sessions-helpers.js";
 import { resolveSubagentCompletionResultText } from "../completion/subagent-completion-result.js";
 import { isSubagentRunVisibleToSession } from "./subagent-control-scope.js";
+import { isDeliverySuspendedUnbound } from "./subagent-delivery-state.js";
 import { buildSubagentList, captureSubagentListReadContext } from "./subagent-list.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
@@ -36,7 +37,9 @@ function hasOutstandingCompletion(entry: SubagentRunRecord): boolean {
     !Number.isFinite(entry.execution.endedAt) ||
     entry.suppressCompletionDelivery === true ||
     entry.killReconciliation?.suppressTaskDelivery === true ||
-    entry.killIntent?.suppressTaskDelivery === true
+    entry.killIntent?.suppressTaskDelivery === true ||
+    // Continuation: owed to no session, including a later one at its recorded requester key.
+    isDeliverySuspendedUnbound(entry)
   ) {
     return false;
   }

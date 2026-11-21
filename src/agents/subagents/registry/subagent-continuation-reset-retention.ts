@@ -11,6 +11,7 @@ import type {
   ContinuationResetRetention,
   ContinuationResetRetentionOutcome,
 } from "./subagent-continuation-reset-active.js";
+import { isDeliverySuspendedUnbound } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -37,7 +38,10 @@ export function findContinuationResetHold(
     : undefined;
 }
 
-/** Continuation-elected runs the reset of this session may retain. Ordinary runs never qualify. */
+/**
+ * Continuation-elected runs the reset of this session may retain. Ordinary runs never qualify, nor
+ * does a suspended-unbound outcome: it is owed to no session on this key.
+ */
 function selectRetainableContinuationRuns(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -50,7 +54,8 @@ function selectRetainableContinuationRuns(params: {
       entry.requesterSessionKey === params.sessionKey &&
       resolveSubagentRequesterAgentId(params.cfg, entry) === params.agentId &&
       entry.cleanupCompletedAt === undefined &&
-      entry.killIntent === undefined
+      entry.killIntent === undefined &&
+      !isDeliverySuspendedUnbound(entry)
     ) {
       selected.push(entry);
     }

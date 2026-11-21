@@ -15,11 +15,12 @@
 // root was inferred or resumed for the delegate. While its row still binds a requester that
 // restart completion recovery admits, its one outcome says the lineage is missing and the
 // election's outcome unknown, once, through its return mode. Otherwise the row records why no
-// binding survived and its outcome is suspended, unresolved rather than closed: no notice goes
-// out and no delivery is attempted or retried. Like every suspended outcome it stays listed for a
-// session at the recorded requester key, and when suspended-delivery retention ends the sweeper
-// discards it with a warning and that session's expiry notice. Only a delegate its requester had
-// asked to stop closes as intentional non-delivery (above).
+// binding survived and its outcome is suspended-unbound (🌊's T1), unresolved rather than closed:
+// no notice goes out and no delivery is attempted or retried. It is owed to no session, so a later
+// session at the recorded requester key is never treated as its requester
+// (isDeliverySuspendedUnbound). Activation starts the sweeper, which discards it with a warning
+// and no notice when suspended-delivery retention ends. Only a delegate its requester had asked
+// to stop closes as intentional non-delivery (above).
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
@@ -31,7 +32,11 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
-import { ensureCompletionState, ensureDeliveryState } from "./subagent-delivery-state.js";
+import {
+  ensureCompletionState,
+  ensureDeliveryState,
+  isDeliverySuspendedUnbound,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
   safeRemoveAttachmentsDir,
@@ -292,12 +297,13 @@ async function recordMissingContinuationLineage(): Promise<SubagentRunRecord[]> 
  */
 export async function settleContinuationRestartCustody(
   startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean,
+  startSweeper: () => void,
 ): Promise<void> {
   const settled = await settleOwnerlessContinuationChildren();
   const latest = new Map(settled.map((entry) => [entry.runId, entry]));
   for (const entry of await recordMissingContinuationLineage()) {
     if (entry.continuationLineageMissing?.unresolved) {
-      // Suspended: the sweeper owns its retention and expiry, so no cleanup starts now.
+      // Suspended-unbound: the sweeper owns its retention and expiry, so no cleanup starts now.
       latest.delete(entry.runId);
     } else if (latest.has(entry.runId)) {
       // A notice keeps the delivery path its row already had.
@@ -315,5 +321,10 @@ export async function settleContinuationRestartCustody(
     ) {
       startSubagentAnnounceCleanupFlow(entry);
     }
+  }
+  // Activation alone starts nothing else that sweeps, so it starts the sweeper for every
+  // suspended-unbound outcome it holds, recorded now or by an earlier lifecycle.
+  if ([...subagentRuns.values()].some(isDeliverySuspendedUnbound)) {
+    startSweeper();
   }
 }

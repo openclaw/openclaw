@@ -265,15 +265,6 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   continuationRecipientAuthorityBinding?: import("../../../config/sessions/session-recipient-authority-types.js").ContinuationRecipientAuthorityBinding;
   /** Continuation: a session reset retained this run; its results wait for the successor proof. */
   continuationResetRetention?: import("./subagent-continuation-reset-active.js").ContinuationResetRetention;
-  /**
-   * Continuation: after a Gateway restart ended this delegate, activation found its child session
-   * entry, and so its spawn lineage, missing. Its one outcome says so; `unresolved` records why
-   * no requester binding survived, and then nothing is delivered.
-   */
-  continuationLineageMissing?: {
-    recordedAt: number;
-    unresolved?: "requester-agent-unresolved" | "requester-session-missing";
-  };
   /** Continuation: producer span carrier available to child completion paths. */
   traceparent?: string;
   /** Spawner plus ancestor sessions authorized to wait, frozen when the collector is registered. */
@@ -306,6 +297,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   | "killIntent"
   | "killReconciliation"
   | "continuationRecipientAuthorityBinding"
+  | "continuationLineageMissing"
 > & {
   execution: Pick<SubagentExecutionState, "status" | "endedAt">;
   requesterSettleWake?: Pick<RequesterSettleWakeState, "status">;

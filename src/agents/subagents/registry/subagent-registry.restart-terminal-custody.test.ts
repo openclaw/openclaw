@@ -24,10 +24,12 @@
 //    on upstream #201970's root walk): no root is inferred or resumed for it. While its row still
 //    binds its requester, its one outcome says "lineage missing; election outcome unknown", once,
 //    through its return mode. Without that binding it is recorded unresolved and its outcome
-//    suspended, not closed: no notice and no delivery attempt or retry. When suspended-delivery
-//    retention ends, the sweeper discards it with a warning and the expiry notice of a session at
-//    the recorded requester key. Only an existing terminal policy, its requester's election to
-//    stop it, closes it as intentional non-delivery.
+//    suspended-unbound (🌊's T1), not closed: no notice and no delivery attempt or retry. It is
+//    owed to no session, so a later session at the recorded requester key gets no runtime fact,
+//    pending descendant, reset retention or maintenance protection from it. Activation starts the
+//    sweeper, which discards it with a warning and no notice when suspended-delivery retention
+//    ends. Only an existing terminal policy, its requester's election to stop it, closes it as
+//    intentional non-delivery.
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { childOutcomeText, gracefulStopStatus, parent, recordRequesterMessages, resolveGateway, restartInterruptedStatus, useRestartCustodyWorld } from "./subagent-registry.restart-custody.test-support.js";
@@ -40,6 +42,7 @@ import {
   loadExactSessionEntry,
   loadTranscriptEvents,
 } from "../../../config/sessions/session-accessor.js";
+import { prepareSessionMaintenancePreservation } from "../../../config/sessions/store-maintenance-preserve.js";
 import { GATEWAY_RESTART_RESUME_TEXT } from "../../../gateway/session-restart-resume-prompt.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -51,12 +54,16 @@ import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { deriveContinuationDelegateChildSessionKey } from "../../subagent-continuation-ids.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
+import { markContinuationRunsRetainedByReset } from "./subagent-continuation-reset-retention.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
+import "./subagent-registry-maintenance.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS } from "./subagent-registry-suspended-delivery.js";
+import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import {
   activateSubagentRegistry,
+  countPendingDescendantRuns,
   isSubagentRunLive,
   listUnsettledRequesterChildren,
   testing,
@@ -793,7 +800,7 @@ const UNBOUND = [
 ] as const;
 
 it.each(UNBOUND)(
-  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved and its outcome suspended, not closed: no notice, no root resume, no retry; a warned discard with its expiry notice when retention ends",
+  "7: with no requester binding left ($reason), a missing child session entry is recorded unresolved and its outcome suspended, not closed: no notice, no root resume, no retry; the sweeper activation starts discards it with a warning and no notice when retention ends",
   async ({ reason, requester, writesParent }) => {
     if (writesParent) {
       await writeParentSession();
@@ -839,16 +846,21 @@ it.each(UNBOUND)(
       },
     );
 
-    // Not pending forever: a second restart and its sweeps neither decide again nor send, and
-    // the sweeper discards the suspended outcome with a warning when its retention ends.
-    await restartGateway();
-    await resumeRoots();
-    expect(loadSubagentRegistryFromSqlite().get(delegate.runId)).toEqual(durable);
-    vi.spyOn(Date, "now").mockReturnValue(
-      durable!.delivery!.suspendedAt! + SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
-    );
-    await testing.sweepOnceForTests();
-    await fixture.settle();
+    // Not pending forever: a second restart and its sweeps neither decide again nor send. Nothing
+    // else starts the sweeper here, so its own tick at retention end shows activation started it.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldAdvanceTime: true });
+    try {
+      await restartGateway();
+      await resumeRoots();
+      expect(loadSubagentRegistryFromSqlite().get(delegate.runId)).toEqual(durable);
+      vi.spyOn(Date, "now").mockReturnValue(
+        durable!.delivery!.suspendedAt! + SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      await fixture.settle();
+    } finally {
+      vi.useRealTimers();
+    }
 
     const discarded = loadSubagentRegistryFromSqlite().get(delegate.runId);
     expect(discarded?.continuationLineageMissing).toEqual(lineage);
@@ -863,21 +875,80 @@ it.each(UNBOUND)(
     );
     expect(messages).toEqual([]);
     expect(fixture.announce).not.toHaveBeenCalled();
-    // The discard's own expiry notice: display-only, for a session at the recorded requester key.
-    const transcript = await loadTranscriptEvents({
-      agentId: "main",
-      sessionKey: parent,
-      sessionId: "sess-parent",
-    });
-    expect(
-      transcript.filter((event) => isRecord(event) && event.type === "custom_message"),
-    ).toEqual(
-      writesParent
-        ? [expect.objectContaining({ customType: "run-failed-before-reply", display: true })]
-        : [],
-    );
+    // No expiry notice either, even where a session exists at the recorded requester key.
+    expect(await customMessages("sess-parent")).toEqual([]);
   },
 );
+
+async function customMessages(sessionId: string) {
+  const transcript = await loadTranscriptEvents({ agentId: "main", sessionKey: parent, sessionId });
+  return transcript.filter((event) => isRecord(event) && event.type === "custom_message");
+}
+
+it("7: a later session at an unbound outcome's requester key is not its requester: no runtime fact, pending descendant, reset retention, maintenance protection or expiry notice", async () => {
+  const delegate = productionDelegate("key-reuse");
+  const child = await addRunningChild(delegate.runId, {
+    childSessionKey: delegate.childSessionKey,
+    // An accepted continuation delegate carries its recipient binding (subagent-spawn-request.ts).
+    continuationRecipientAuthorityBinding: { version: 1, selection: "pending", fanoutMode: "all" },
+  });
+  await removeChildSession(child);
+  await shutDownGracefully([child]);
+  const messages = recordRequesterMessages();
+  await restartGateway();
+  await resumeRoots();
+  const durable = loadSubagentRegistryFromSqlite().get(delegate.runId);
+  expect(durable?.continuationLineageMissing?.unresolved).toBe("requester-session-missing");
+  expect(durable?.delivery?.status).toBe("suspended");
+
+  // A new conversation takes the recorded requester key.
+  const storePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: parent,
+    defaultSessionId: "sess-later",
+  });
+  const facts = (
+    await buildRuntimeFactsContext({
+      cfg: getRuntimeConfig(),
+      executionHost: false,
+      capabilityToolNames: new Set(["sessions_spawn", "subagents", "continue_delegate"]),
+      sessionKey: parent,
+      agentId: "main",
+    })
+  )
+    .map((fragment) => fragment.text)
+    .join("\n\n");
+  expect(facts).not.toContain("## Child results awaiting delivery");
+  expect(facts).not.toContain(`run_json=${JSON.stringify(delegate.runId)}`);
+  expect(await countPendingDescendantRuns(parent, () => {})).toBe(0);
+  const reset = { resetId: "reset-later", sessionKey: parent, agentId: "main" };
+  expect(
+    await markContinuationRunsRetainedByReset({
+      cfg: getRuntimeConfig(),
+      reset,
+      toRevision: "rev-later",
+    }),
+  ).toEqual([]);
+  const preservation = await prepareSessionMaintenancePreservation(storePath);
+  try {
+    expect(preservation.capture().providerKeys).toEqual([]);
+  } finally {
+    preservation.dispose();
+  }
+
+  vi.spyOn(Date, "now").mockReturnValue(
+    durable!.delivery!.suspendedAt! + SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS,
+  );
+  await testing.sweepOnceForTests();
+  await fixture.settle();
+  expect(loadSubagentRegistryFromSqlite().get(delegate.runId)?.delivery).toMatchObject({
+    status: "discarded",
+    discardReason: "expired",
+  });
+  expect(await customMessages("sess-later")).toEqual([]);
+  expect(messages).toEqual([]);
+});
 
 it("7: an in-process restart suspends an unbound delegate it settles, and starts no delivery attempt", async () => {
   const delegate = productionDelegate("in-process-unbound");
