@@ -52,8 +52,20 @@
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",
         "api": "openai-completions",
-        "defaultModel": "zai-org-glm-4.7",
+        "defaultModel": "deepseek-v4-1-flash-1017-uncensored",
         "models": [
+          {
+            "id": "deepseek-v4-1-flash-1017-uncensored",
+            "name": "DeepSeek V4.1 Flash 1017 Uncensored",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "cost": { "input": 0.33, "output": 1.32, "cacheRead": 0.00825, "cacheWrite": 0 },
+            "compat": {
+              "supportsUsageInStreaming": false
+            }
+          },
           {
             "id": "zai-org-glm-5-2",
             "name": "GLM 5.2",

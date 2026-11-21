@@ -8,6 +8,6 @@ export const { applyConfig: applyVeniceConfig } = createProviderConnectionPreset
     api: "openai-completions",
     baseUrl: VENICE_BASE_URL,
     catalogModels: VENICE_MODEL_CATALOG,
-    aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "GLM 4.7" }],
+    aliases: [{ modelRef: VENICE_DEFAULT_MODEL_REF, alias: "DeepSeek V4.1 Flash 1017 Uncensored" }],
   }),
 });
