@@ -1,0 +1,4 @@
+39
+# Source 8bbb3539b2a709f3c09d65c7986d38ca297da1e4; release adaptation 85867ee75e4b363cbc2187c8f51f9af62ce29f35.
+# src/infra/worker-task-pool.sqlite-idle.test.ts: +39 literal LF bytes; original cold-import/reopen/close control preserved.
+# Additive accounting companion only; no credit for unselected sources or baseline change.
