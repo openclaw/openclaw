@@ -1,0 +1,3 @@
+50
+# Trajectory export projection-budget regressions for history-heavy context events and schema-heavy tool catalogs (issue #197231).
+# Exact measured net test LF growth; shared scalar unchanged.
