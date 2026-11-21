@@ -8,6 +8,7 @@ import * as processExec from "../process/exec.js";
 import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
+import { applyOutputTruncation } from "./invoke-system-run-allowlist.js";
 
 function runNode(source: string, cwd?: string, signal?: AbortSignal) {
   return runCommand([process.execPath, "-e", source], cwd, undefined, undefined, signal);
@@ -146,6 +147,49 @@ describe("runCommand", () => {
         expect(result).toMatchObject({ success: true, error: null });
         expect(JSON.parse(decodeURIComponent(result.stdout))).toEqual(expected);
       },
+    );
+  });
+
+  it("keeps the end of output that exceeds the node output cap", async () => {
+    const result = await runNode(
+      "process.stdout.write('FIRST_LINE\\n' + 'x'.repeat(250_000) + '\\nFAILED: 3 tests\\n'); process.exitCode = 2",
+    );
+
+    expect(result).toMatchObject({ exitCode: 2, success: false, truncated: true });
+    expect(result.stdout.endsWith("\nFAILED: 3 tests\n")).toBe(true);
+    expect(result.stdout).not.toContain("FIRST_LINE");
+    expect(Buffer.byteLength(result.stdout)).toBeLessThanOrEqual(200_000);
+
+    applyOutputTruncation(result);
+    expect(result.stdout.startsWith("... (truncated)\n")).toBe(true);
+    expect(result.stdout.endsWith("\nFAILED: 3 tests\n")).toBe(true);
+  });
+
+  it("marks dropped output before stderr when only stderr was kept", () => {
+    const result = {
+      exitCode: 1,
+      timedOut: false,
+      success: false,
+      stdout: "",
+      stderr: "error: build failed\n",
+      error: null,
+      truncated: true,
+    };
+
+    applyOutputTruncation(result);
+
+    expect(result).toMatchObject({ stdout: "", stderr: "... (truncated)\nerror: build failed\n" });
+  });
+
+  it("keeps the end of stderr when combined output exceeds the cap", async () => {
+    const result = await runNode(
+      "process.stdout.write('o'.repeat(150_000)); process.stderr.write('e'.repeat(150_000) + '\\nerror: build failed\\n'); process.exitCode = 1",
+    );
+
+    expect(result).toMatchObject({ exitCode: 1, truncated: true });
+    expect(result.stderr.endsWith("\nerror: build failed\n")).toBe(true);
+    expect(Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr)).toBeLessThanOrEqual(
+      200_000,
     );
   });
 
