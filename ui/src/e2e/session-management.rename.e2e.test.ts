@@ -64,8 +64,9 @@ suite.define(() => {
           evaluateControlUiContext(
             page,
             ({ sessions }, key) =>
-              sessions.presentation.result?.sessions.find((sessionRow) => sessionRow.key === key)
-                ?.lastActivityAt,
+              sessions.presentation.result?.sessions.find(
+                (matchingSession) => matchingSession.key === key,
+              )?.lastActivityAt,
             edited.key,
           ),
         )
