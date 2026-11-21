@@ -441,7 +441,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/session-repository-workspaces.test.ts",
   "src/state/session-repository-workspaces.migration.test.ts",
   "src/infra/update-run-reconciliation.worker.test.ts",
-  "src/infra/update-runner-git.test.ts",
   "src/infra/update-run-abandonment.test.ts",
   "src/infra/update-run-interruption.worker.test.ts",
   "src/channels/turn/durable-delivery.reload.test.ts",
