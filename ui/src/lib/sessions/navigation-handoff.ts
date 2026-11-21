@@ -78,7 +78,9 @@ export function prepareSessionNavigationHandoff(
     sessionKey,
     client,
     hello,
-    catalogProfileRelation: structuredClone(catalogProfileRelation),
+    ...(catalogProfileRelation
+      ? { catalogProfileRelation: structuredClone(catalogProfileRelation) }
+      : {}),
   };
   sessionNavigationHandoffs.set(owner, handoff);
   globalThis.setTimeout(() => {
@@ -108,5 +110,5 @@ export function consumeSessionNavigationHandoff(
   if (handoff.client !== client || handoff.hello !== hello) {
     return undefined;
   }
-  return { sessionKey: handoff.sessionKey, catalogProfileRelation: handoff.catalogProfileRelation };
+  return handoff;
 }

@@ -53,7 +53,7 @@ export function SidebarCatalogMenu(props: SidebarCatalogMenuProps) {
         ...menu.key,
         agentId: menu.agentId,
         ...(displayName ? { displayName } : {}),
-        profileRelation: menu.profileRelation,
+        ...(menu.profileRelation ? { profileRelation: menu.profileRelation } : {}),
       });
       if (!result || !isMutationCurrent(scope)) {
         return;
