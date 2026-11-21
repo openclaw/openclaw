@@ -144,7 +144,8 @@ export function selectBilledUsageEntries(
   if (!paths.navigated) {
     return { entries };
   }
-  const userTimestamps = new Map<ParsedTranscriptEntry, number>();
+  // Timing lookup must not keep processed usage entries alive during aggregation.
+  const userTimestamps = new WeakMap<ParsedTranscriptEntry, number>();
   for (const record of paths.billed) {
     const userTurn = paths.userTurnOf.get(record)?.usageEntry?.timestamp?.getTime();
     if (record.usageEntry && userTurn !== undefined) {

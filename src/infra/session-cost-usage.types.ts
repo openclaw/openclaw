@@ -45,7 +45,7 @@ export type ParsedTranscriptEntry = {
  * next append-only scan measures its first reply against.
  */
 export type UsageRollupTiming = {
-  userTimestamps: ReadonlyMap<ParsedTranscriptEntry, number>;
+  userTimestamps: WeakMap<ParsedTranscriptEntry, number>;
   activeUserTimestamp?: number;
 };
 
