@@ -1,0 +1,4 @@
+# Bounded release intake: native Gateway retry/fallback and catalog-acquisition
+# regression contracts, plus source owner cases. Existing 600-line slack covers
+# the other 600 of the intake's exact 620 net test lines; no scalar change.
+20
