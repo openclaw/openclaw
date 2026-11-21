@@ -42,6 +42,8 @@ export function narrowSessionEventSettings(
       current?.permissionMode,
     ),
     toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
+    // Host-captured identity is a fact, not an authority: follow current.
+    nativeChannelId: current?.nativeChannelId,
   };
 }
 

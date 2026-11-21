@@ -27,6 +27,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
@@ -39,6 +40,7 @@ import { chatRef } from "../../sessions/chat-ref.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { PreparedCommandOwnerAuthority } from "../command-auth.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
@@ -202,9 +204,7 @@ export async function captureSessionEventTargetForHost(
       }
     }
     toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
-    const destinationSettings = entry
-      ? { permissionMode: entry.permissionMode, toolOverrides: entry.toolOverrides }
-      : undefined;
+    const destinationSettings = resolveSessionEventDestinationSettings(entry);
     const callerSettings = callerAgentMatches ? caller?.sessionEventSettings : undefined;
     const producerSettings =
       options.producerPolicy?.settings && callerSettings
@@ -304,6 +304,32 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
 }
 
 /** Deferred producers retain snapshots; only admitted consumption holds live generation facts. */
+/**
+ * Host policy for a session-event destination: retained permission settings
+ * plus the host-captured native conversation identity. The identity is a
+ * fact read from the canonical delivery origin, not a route address.
+ */
+export function resolveSessionEventDestinationSettings(entry?: {
+  permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
+  delivery?: SessionEntry["delivery"];
+}):
+  | {
+      permissionMode?: SessionEntry["permissionMode"];
+      toolOverrides?: SessionEntry["toolOverrides"];
+      nativeChannelId?: string;
+    }
+  | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  return {
+    permissionMode: entry.permissionMode,
+    toolOverrides: entry.toolOverrides,
+    nativeChannelId: sessionDeliveryOrigin(entry)?.nativeChannelId,
+  };
+}
+
 export async function prepareSessionEventTargetForHost(
   target: SessionEventTarget,
   options: { createIfMissing?: true; assertAcceptanceCurrent?: () => void } = {},
