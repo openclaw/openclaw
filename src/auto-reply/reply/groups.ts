@@ -149,9 +149,11 @@ function buildGroupChatContext(params: {
       `If no visible ${sharedChatNoun === "channel" ? "channel" : "group"} response is needed, do not call message(action=send).`,
     );
   }
-  if (!params.participationAssessed) {
-    lines.push(silentReplyGuidance);
-  }
+  lines.push(
+    params.participationAssessed
+      ? "Once a reaction or other action has completed the current-source reply according to this turn's delivery contract, no additional text reply is needed."
+      : silentReplyGuidance,
+  );
   return lines.join(" ");
 }
 
