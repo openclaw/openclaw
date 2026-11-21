@@ -1036,6 +1036,22 @@
 
 .chat-tool-msg-collapse--lifecycle {
   gap: 4px;
+
+  /* Keep each linked name together when it fits, without clipping the next
+     agent or the remaining count when the conversation narrows. */
+  > .chat-tool-row .chat-tool-row__title {
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+
+    .chat-tool-row__subagent-link {
+      /* Leave room for the list separator after an unusually long name. */
+      max-width: calc(100% - 1ch);
+      vertical-align: bottom;
+      white-space: normal;
+      text-align: start;
+      outline-offset: -2px;
+    }
+  }
 }
 
 /* Transparent run/card hosts still participate in sibling selection. Apply the
@@ -1046,34 +1062,13 @@
     .chat-tool-msg-collapse,
     .chat-bubble--tool-shell,
     openclaw-chat-tool-card
-  )
-  + .chat-activity-group,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-tool-msg-collapse,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + .chat-bubble--tool-shell,
-:is(.chat-group-messages, .chat-agent-run-body)
-  > :is(
-    .chat-activity-group,
-    .chat-tool-msg-collapse,
-    .chat-bubble--tool-shell,
-    openclaw-chat-tool-card
-  )
-  + openclaw-chat-tool-card
-  > .chat-tool-msg-collapse {
-  margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
+  ) {
+  & + .chat-activity-group,
+  & + .chat-tool-msg-collapse,
+  & + .chat-bubble--tool-shell,
+  & + openclaw-chat-tool-card > .chat-tool-msg-collapse {
+    margin-block-start: calc(var(--chat-run-block-gap) - var(--chat-message-gap));
+  }
 }
 
 @keyframes chat-work-settle-in {

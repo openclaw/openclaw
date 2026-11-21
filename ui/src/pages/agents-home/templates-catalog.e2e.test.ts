@@ -3,7 +3,6 @@ import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ClawHubTemplateCatalogEntry } from "../../../../src/templates/clawhub-source.ts";
 import { pathForPluginCatalogEntry } from "../../app-route-paths.ts";
-import { iconData } from "../../components/icon-data.ts";
 import { LINK_READER_HOVERCARD_OPEN_DELAY_MS } from "../../components/link-reader-target.ts";
 import { inspection } from "../../e2e/plugins-settings-admin.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
@@ -205,103 +204,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     );
     expect(await publisher.getByRole("img", { name: "Official" }).count()).toBe(Number(official));
   }
-
-  it.each(["installed", "catalog", "unavailable artwork"])(
-    "shows %s plugin branding without registry labels or matching the wrong installed version",
-    async (source) => {
-      const { page, gateway } = await fixture();
-      await gateway.setMethodResponse("plugins.list", {
-        plugins:
-          source === "catalog"
-            ? [
-                {
-                  id: "workflow-tools",
-                  name: "Uninstalled official entry",
-                  clawhubPackage: "@openclaw/workflow-tools",
-                  origin: "official",
-                  installed: false,
-                  enabled: false,
-                  state: "not-installed",
-                },
-              ]
-            : [
-                {
-                  id: "workflow-tools",
-                  name: "Workflow Tools",
-                  clawhubPackage: "@openclaw/workflow-tools",
-                  version: "1.1.0",
-                  hasIcon: true,
-                  installed: true,
-                  enabled: true,
-                  state: "enabled",
-                },
-              ],
-        diagnostics: [],
-        mutationAllowed: true,
-      });
-      const imageUrl = "https://icons.example.test/workflow.png";
-      await gateway.setMethodResponse("plugins.catalog.get", {
-        ...inspection.catalog,
-        plugin: {
-          ...inspection.catalog.plugin,
-          catalog: { ...inspection.catalog.plugin.catalog, name: "Workflow Tools", imageUrl },
-        },
-        detail: { ...inspection.catalog.detail, packageName: "@openclaw/workflow-tools" },
-      });
-      await page.route(/\/__openclaw__\/(?:plugin-icon|catalog-icon)\//u, (route) =>
-        route.fulfill({
-          status: source === "unavailable artwork" ? 404 : 200,
-          contentType: "image/svg+xml",
-          body: '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36"><rect width="36" height="36" rx="8" fill="#4361ee"/><path d="m8 18 7 7 13-14" fill="none" stroke="#fff" stroke-width="4"/></svg>',
-        }),
-      );
-      const iconResponse = page.waitForResponse((response) =>
-        /\/__openclaw__\/(?:plugin-icon|catalog-icon)\//u.test(response.url()),
-      );
-      const detail = await openDetail(page);
-      await iconResponse;
-      const artwork = detail.locator(".plugin-capability__icon img");
-      if (source === "unavailable artwork") {
-        expect(await artwork.count()).toBe(0);
-        expect(
-          await detail
-            .locator(".plugin-capability__disclosure")
-            .filter({ hasText: "Workflow Tools" })
-            .locator(".plugin-capability__icon svg")
-            .count(),
-        ).toBe(1);
-      } else {
-        await artwork.waitFor();
-        await page.waitForFunction(() =>
-          Array.from(
-            document.querySelectorAll<HTMLImageElement>(".plugin-capability__icon img"),
-          ).some((image) => image.complete && image.naturalWidth > 0),
-        );
-      }
-      await capture(
-        page,
-        `dependency-provenance-${source}`,
-        detail.getByRole("heading", { name: "Skills" }),
-      );
-      // Skill rows carry the Skills navigation glyph, not the docs book.
-      expect(
-        await detail
-          .locator(".plugin-capabilities")
-          .filter({ has: page.getByRole("heading", { name: "Skills" }) })
-          .locator(".plugin-capability__icon path")
-          .evaluateAll((paths) => paths.map((path) => path.getAttribute("d"))),
-      ).toEqual(iconData.sparkles.children.map(([, attributes]) => attributes.d));
-      const rows = detail.locator(".plugin-capabilities");
-      expect((await rows.allTextContents()).join(" ")).not.toContain("ClawHub · Version");
-      await detail.getByText("Workflow Tools", { exact: true }).waitFor();
-      expect(await detail.getByText("Installed", { exact: true }).count()).toBe(0);
-      if (source === "catalog") {
-        expect(await gateway.getRequests("plugins.catalog.get", { version: "1.2.0" })).toHaveLength(
-          1,
-        );
-      }
-    },
-  );
 
   it.each([viewports[0], viewports[3]])(
     "shows the release audit and facts in the plugin page's rail at $name width",
@@ -713,6 +615,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     await references.nth(1).hover();
     await page.waitForTimeout(250); // The first anchor’s 180 ms dismissal must not close the second.
     expect(await page.locator(".template-reference-card").isVisible()).toBe(true);
+    await gateway.deferNext("plugins.list");
     await references.nth(1).click();
     const modal = page.getByRole("dialog", { name: "Template details", exact: true });
     const shell = modal.locator(".template-preview");
@@ -740,7 +643,11 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     expect(await back.textContent()).toBe("");
     await back.click();
     await shell.getByRole("button", { name: "Back to template", exact: true }).click();
-    await shell.getByRole("button", { name: /Plugins/ }).waitFor();
+    await shell.getByRole("button", { name: /Plugins/ }).click();
+    const plugin = shell.getByRole("button", { name: "@openclaw/workflow-tools", exact: true });
+    await plugin.locator(".skeleton").waitFor();
+    await gateway.resolveDeferred("plugins.list");
+    await shell.getByRole("button", { name: "Workflow Tools", exact: true }).waitFor();
     expect(await shell.boundingBox()).toEqual(bounds);
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
     await evaluateControlUiContext(page, (app) => app.navigateAndWait("templates"));

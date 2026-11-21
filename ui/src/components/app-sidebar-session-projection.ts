@@ -48,7 +48,7 @@ type SidebarSubtitleValue = ReturnType<typeof resolveSidebarSessionSubtitle>;
 type SidebarProjectionInput = {
   rows: SidebarRecentSession[];
   selectedSessionKey: string | null;
-  /** Catalog and personal placements share disclosure lifetime, not canonical grouping. */
+  /** Catalog references share disclosure lifetime, not canonical grouping. */
   referencedRows?: readonly SidebarRecentSession[];
   sections?: SidebarSessionSection<SidebarRecentSession>[];
   /** Personal pins render in the Pinned section above these sections, never twice. */
@@ -195,11 +195,6 @@ export class SidebarSessionProjection {
     const presentation = [
       host.navigationView,
       railRows.map(({ children: _children, ...row }) => row),
-      // Off-page group descriptors must admit repaint even when the roster tree is unchanged.
-      sessionsVisible &&
-        (context?.navigation.snapshot.personalSessionGroups ?? []).map((group) =>
-          group.sessionKeys.map((key) => zone.sessionRows.get(key)),
-        ),
       host.connected,
       this.#helloPresentation.readRevision(
         () => [context?.gateway.snapshot.hello, context?.gateway.snapshot.pluginCapabilities],

@@ -44,6 +44,9 @@ import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
+const WorktreeRestoreNotice = lazy(() => import("./chat-worktree-restore-notice.tsx"), {
+  export: "ChatWorktreeRestoreNotice",
+});
 const SlashMenu = lazy(() => import("./chat-composer-slash-menu.tsx"), { export: "SlashMenu" });
 const SkillMenu = lazy(() => import("./chat-composer-skill-menu.tsx"), { export: "SkillMenu" });
 const HumanMentionMenuView = lazy(() => import("./chat-composer-mention-menu.tsx"), {
@@ -72,6 +75,7 @@ export function renderChatComposerView(
   state: ChatComposerState,
 ) {
   const footerControl = createFooterControlRef();
+  let restoreFocusFor: string | undefined;
   const ComposerTextarea = (view: ComposerTextareaProps) =>
     renderComposerTextarea(context, props, state, view);
   const inputHandle = createChatAttachmentInputHandle();
@@ -137,8 +141,16 @@ export function renderChatComposerView(
   onSettled(() => presentComposerTasks(state));
   const application = useOptionalApplication();
   const memberWelcome = createMemberWelcomeSlot(() => application);
+  const removedWorkspace = createMemo(() =>
+    props.selectedSession?.worktreeState && props.selectedSession.worktreeState !== "ready"
+      ? props.selectedSession.worktree?.id
+      : undefined,
+  );
   const showComposerInput = createMemo(
-    () => !memberWelcome.active() && props.disabledBanner?.kind !== "composer-replacement",
+    () =>
+      !memberWelcome.active() &&
+      !removedWorkspace() &&
+      props.disabledBanner?.kind !== "composer-replacement",
   );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
@@ -481,14 +493,18 @@ export function renderChatComposerView(
                 data-prediction={context().predictionText ? "true" : undefined}
               >
                 <Show when={context().draftKey} keyed>
-                  {(scopeKey) => (
-                    <ComposerTextarea
-                      scopeKey={scopeKey}
-                      announcementId={slashMenuAnnouncementId()}
-                      disabledReasonId={disabledReasonId()}
-                      placeholder={placeholder()}
-                    />
-                  )}
+                  {(scopeKey) => {
+                    state.restoreComposerFocus ||= restoreFocusFor === scopeKey;
+                    restoreFocusFor = undefined;
+                    return (
+                      <ComposerTextarea
+                        scopeKey={scopeKey}
+                        announcementId={slashMenuAnnouncementId()}
+                        disabledReasonId={disabledReasonId()}
+                        placeholder={placeholder()}
+                      />
+                    );
+                  }}
                 </Show>
                 <span
                   class="agent-chat__composer-placeholder"
@@ -552,7 +568,6 @@ export function renderChatComposerView(
               </div>
             </div>
 
-            <regions.ComposerWorkspaceNotice {...props} />
             <div class="agent-chat__composer-footer">
               <div class="agent-chat__composer-lead agent-chat__composer-meta">
                 <ChatComposerPlusMenu
@@ -623,9 +638,16 @@ export function renderChatComposerView(
       ) : memberWelcome.active() ? (
         memberWelcome.step()
       ) : (
-        <regions.ComposerWorkspaceNotice {...props}>
-          {props.disabledBanner?.kind === "composer-replacement" ? disabledBanner : undefined}
-        </regions.ComposerWorkspaceNotice>
+        <Show when={removedWorkspace()} keyed fallback={disabledBanner}>
+          <ChatLazyBoundary>
+            <WorktreeRestoreNotice
+              {...props}
+              onRestore={() => {
+                restoreFocusFor = context().draftKey;
+              }}
+            />
+          </ChatLazyBoundary>
+        </Show>
       )}
     </div>
   );

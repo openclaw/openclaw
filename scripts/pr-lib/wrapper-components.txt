@@ -1243,6 +1243,7 @@ src/infra/process-exit-cleanup.ts
 src/infra/prototype-keys.ts
 src/infra/resolve-system-bin.ts
 src/infra/restart-stale-pids.ts
+src/infra/restart-lifecycle.worker.ts
 src/infra/restart-recovery-errors.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
@@ -2186,6 +2187,7 @@ src/state/openclaw-agent-db.ts
 src/state/openclaw-agent-db.wal.ts
 src/state/openclaw-agent-execution-authority.ts
 src/state/openclaw-agent-execution-cleanup.ts
+src/state/openclaw-agent-execution-cleanup.worker.ts
 src/state/openclaw-agent-execution-contract.ts
 src/state/openclaw-agent-execution-native.ts
 src/state/openclaw-agent-execution-owner.ts
