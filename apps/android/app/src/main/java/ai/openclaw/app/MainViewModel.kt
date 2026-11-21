@@ -1258,9 +1258,12 @@ class MainViewModel internal constructor(
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.refreshGatewayConnection(isCurrent, manualTlsTrust = true) }
   }
 
-  fun startGatewayDiscovery() {
-    queueRuntimeStartup()
-  }
+  fun loadGatewaySettings(): Unit = queueRuntimeStartup()
+
+  fun startGatewayDiscovery(): Job =
+    viewModelScope.launch(Dispatchers.Default) {
+      ensureRuntime().discoverGateways()
+    }
 
   fun connect(endpoint: GatewayEndpoint) {
     launchGatewayConnectionOperation { runtime, isCurrent -> runtime.connectSwitchingGateway(endpoint, isCurrent = isCurrent) }
