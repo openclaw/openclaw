@@ -94,7 +94,11 @@ export async function prepareSessionsSendFollowup(params: {
     }
     assertInvocation?.();
     for (const target of [
-      { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey },
+      {
+        agentId: params.requesterAgentId,
+        sessionKey: params.requesterSessionKey,
+        followLifecycle: true,
+      },
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
