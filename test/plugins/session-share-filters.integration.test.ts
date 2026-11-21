@@ -415,6 +415,7 @@ describe("session-share source publication filters", () => {
         capturedEnv.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR + "/changed-contents";
         params.env = { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR + "/replaced-env" };
         params.involvingProfileId = "";
+        // SAFETY: params.stores is seeded above with exactly one store for the held request.
         params.stores[0]!.sessionKeys.length = 0;
         params.stores[0]!.agentId = "different";
         release.resolve();
@@ -648,6 +649,7 @@ it("rejects profile-shaped synthetic clients without host-attested device admiss
       gatewayDeviceIds: ["reader"],
     });
     const respond = vi.fn();
+    // SAFETY: the fixture registers this method; deliberately omit socket attestation to test rejection.
     await fixture.gatewayHandlers["session-share.list"]!({
       req: { method: "session-share.list" },
       params: {},

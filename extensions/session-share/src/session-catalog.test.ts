@@ -664,19 +664,20 @@ describe("optional source-link command", () => {
   };
   const linkedNode = { nodeId: "alpha", connected: true, commands: [...commands, linkedCommand] };
 
-  it("uses the advertised variant and strips private path metadata from catalog rows", async () => {
+  it.each([false, true])("uses the advertised link variant (filtered: %s)", async (filtered) => {
     configure();
-    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    const command = filtered ? "openclaw.sessions.list-for-profile-with-links.v1" : linkedCommand;
+    const profileRelation = filtered
+      ? { relationship: "owned" as const, target: { type: "github-account" as const, id: "101" } }
+      : undefined;
+    f.list.mockResolvedValue({
+      nodes: [{ ...linkedNode, commands: [...linkedNode.commands, command] }],
+    });
     f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
-    expect((await f.host())?.sessions).toEqual([
-      {
-        ...nativeSession,
-        originalUrl: "https://source.example/control/chat/main/shared",
-      },
+    expect((await f.host({ profileRelation }))?.sessions).toEqual([
+      { ...nativeSession, originalUrl: "https://source.example/control/chat/main/shared" },
     ]);
-    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ command: linkedCommand }),
-    );
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command }));
   });
 
   it("keeps an old source readable with visible unavailable navigation", async () => {

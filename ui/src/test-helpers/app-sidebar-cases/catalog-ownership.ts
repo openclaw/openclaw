@@ -35,9 +35,9 @@ describe("AppSidebar session catalog ownership", () => {
       sidebar.sessionData.requestSessionDataUpdate();
       await settleRoster(sidebar);
     };
-    await publish();
     sidebar.setSessionOwnerFilter(ada.id);
     await settleRoster(sidebar);
+    await publish();
     expect(sidebar.textContent).toContain("Own session");
     expect(sidebar.textContent).not.toContain("Excluded session");
     const prepare = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "prepareRender");
@@ -104,6 +104,9 @@ describe("AppSidebar session catalog ownership", () => {
 
     sidebar.setSessionOwnerFilter(null);
     await sidebar.updateComplete;
+    // The previous scoped rows were retired; publish the new unfiltered response.
+    sidebar.sessionData.sessionCatalogs = page.catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
     await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
     await sidebar.updateComplete;
     expect(dom.query('[data-session-section="catalog:codex"]')).not.toBeNull();
