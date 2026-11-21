@@ -241,11 +241,13 @@ async function runMaintenance(request: MaintenanceCommand, workspace: string): P
     case "rename":
       return await fs.rename(...request.args);
     case "resolveWritePath": {
-      const { resolveMemoryWritePath } = await import("../short-term-promotion-memory-write.js");
+      const { resolveMemoryWritePath } =
+        await import("openclaw/plugin-sdk/memory-core-host-runtime-files");
       return await resolveMemoryWritePath(...request.args);
     }
     case "commitContent": {
-      const { commitMemoryContent } = await import("../short-term-promotion-memory-write.js");
+      const { commitMemoryContent } =
+        await import("openclaw/plugin-sdk/memory-core-host-runtime-files");
       return await commitMemoryContent(...request.args);
     }
     case "resolveDreamsPath": {

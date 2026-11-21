@@ -13,6 +13,8 @@ import {
   type MemoryEntryOrigin,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { commitMemoryContent } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import {
   captureOpenClawAgentDatabaseExecution,
@@ -53,7 +55,6 @@ import {
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
-import { commitMemoryContent, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import { readPhaseSignalStore, writePhaseSignalStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 

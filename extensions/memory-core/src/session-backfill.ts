@@ -1,6 +1,7 @@
 import path from "node:path";
 import { listSessionTranscriptCorpusEntriesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { removeBackfillDiaryEntries, writeBackfillDiaryEntries } from "./dreaming-dreams-file.js";
 import {
   readSessionIngestionState,
@@ -48,7 +49,7 @@ import {
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
 } from "./session-ingestion.js";
-import { buildPromotionMarker, hashMemoryContent } from "./short-term-promotion-memory-write.js";
+import { buildPromotionMarker } from "./short-term-promotion-markers.js";
 import {
   readShortTermRecallEntries,
   recordShortTermRecalls,

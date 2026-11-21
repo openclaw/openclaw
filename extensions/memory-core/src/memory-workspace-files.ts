@@ -1,30 +1,9 @@
 import type { Dirent, Stats } from "node:fs";
 import fs from "node:fs/promises";
-import {
-  getAgentWorkspaceAccess,
-  WorkspaceAccessUnavailableError,
-} from "openclaw/plugin-sdk/agent-workspace-runtime";
-import {
-  listMemoryFiles,
-  type MemoryWorkspaceFiles,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { getAgentWorkspaceAccess } from "openclaw/plugin-sdk/agent-workspace-runtime";
+import { listMemoryFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { getMemoryWorkspaceMaintenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { decodeUtf8Input } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-
-type MemoryWorkspaceMaintenance = NonNullable<MemoryWorkspaceFiles["maintenance"]>;
-
-export function getMemoryWorkspaceMaintenance(
-  workspaceDir: string,
-): MemoryWorkspaceMaintenance | undefined {
-  const access = getAgentWorkspaceAccess(workspaceDir, "memoryFiles");
-  if (!access?.memoryFiles) {
-    return undefined;
-  }
-  const files = access.memoryFiles.maintenance;
-  if (!files) {
-    throw new WorkspaceAccessUnavailableError("Remote Memory maintenance is unavailable");
-  }
-  return files;
-}
 
 export async function readWorkspaceFile(workspaceDir: string, filePath: string): Promise<Buffer> {
   const files = getMemoryWorkspaceMaintenance(workspaceDir);

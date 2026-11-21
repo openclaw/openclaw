@@ -1,6 +1,16 @@
 /**
- * Public SDK subpath for memory host runtime file path helpers.
+ * Private-local Memory host file operations. Provenance mutation stays inside publication.
  */
+export {
+  commitMemoryContent,
+  getMemoryWorkspaceMaintenance,
+  isAtomicReplacePermissionError,
+  MemoryAtomicPublicationError,
+  MemoryWriteConflictError,
+  readMemoryContent,
+  resolveMemoryWritePath,
+  resolveWorkspaceCreationMode,
+} from "../memory/memory-file-publication.js";
 export {
   readAgentMemoryFile,
   resolveMemoryBackendConfig,

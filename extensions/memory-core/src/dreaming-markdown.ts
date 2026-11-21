@@ -1,6 +1,10 @@
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
+  getMemoryWorkspaceMaintenance,
+  resolveWorkspaceCreationMode,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
   formatMemoryDreamingDay,
   type MemoryDreamingPhaseName,
   type MemoryDreamingStorageConfig,
@@ -12,9 +16,9 @@ import {
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { updateDeepDreamsFile } from "./dreaming-dreams-file.js";
-import { getMemoryWorkspaceMaintenance, readWorkspaceText } from "./memory-workspace-files.js";
+import { readWorkspaceText } from "./memory-workspace-files.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
-import { resolveWorkspaceCreationMode, type WorkspaceFileMode } from "./workspace-file-mode.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 const PHASE_TITLES: Record<MemoryDreamingPhaseName, string> = {
   light: "Light Sleep",

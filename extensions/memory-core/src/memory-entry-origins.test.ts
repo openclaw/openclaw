@@ -34,7 +34,7 @@ import {
   recordMemorySessionTombstonesInDatabase,
 } from "./memory-session-tombstones.js";
 import * as cpuRuntime from "./memory/manager-cpu-worker-runtime.js";
-import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
+import { buildPromotionMarker } from "./short-term-promotion-markers.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   readMemoryForgetTombstonesForTest,

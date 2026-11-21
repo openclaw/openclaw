@@ -9,7 +9,7 @@ import type { MemoryConsolidationResult } from "./dreaming-consolidation-artifac
 import { filterConsolidationCandidates } from "./dreaming-consolidation-candidates.js";
 import type { DreamingCompletion } from "./dreaming-narrative.js";
 import { DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
-import { buildPromotionMarker } from "./short-term-promotion-memory-write.js";
+import { buildPromotionMarker } from "./short-term-promotion-markers.js";
 import {
   buildPromotionRecallAnnotations,
   groupPromotionCandidatesByProjectKey,
