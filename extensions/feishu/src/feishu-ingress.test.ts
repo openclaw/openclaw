@@ -322,6 +322,33 @@ describe("Feishu durable ingress", () => {
     });
   });
 
+  it("recovers retained stable chat-lane input after restart", async () => {
+    await withQueue(async (queue, startIngress) => {
+      await queue.enqueue(
+        "evt-upgrade",
+        {
+          version: 1,
+          receivedAt: Date.now(),
+          rawEnvelope: JSON.stringify(messageEnvelope("evt-upgrade")),
+        },
+        { laneKey: "chat:oc-chat" },
+      );
+      const dispatched: string[] = [];
+      const ingress = startIngress({
+        queue,
+        dispatch: async (data) => {
+          dispatched.push(data.header.event_id);
+          await ingress.resolveLifecycle({ event_id: data.header.event_id })?.onAdopted();
+        },
+      });
+      ingress.start();
+      await ingress.waitForIdle();
+      expect(dispatched).toEqual(["evt-upgrade"]);
+      expect(await queue.listPending()).toEqual([]);
+      expect(await queue.listFailed?.()).toEqual([]);
+    });
+  });
+
   it("stops without stranding a buffered delivery or its durable claim", async () => {
     await withQueue(async (queue, startIngress) => {
       const buffered = createDeferred<void>();

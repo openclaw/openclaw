@@ -111,6 +111,8 @@ Reduce the number of Feishu/Lark API calls with two optional flags:
 
 For the topic scopes, native Feishu/Lark topic groups use the event `thread_id` (`omt_*`) as the topic session key. If a native topic starter event omits `thread_id`, OpenClaw hydrates it from Feishu before routing the turn. Normal group replies that OpenClaw turns into threads keep using the reply root message ID (`om_*`) so the first turn and follow-up turns stay in the same session.
 
+Topic scopes also separate inbound message queues by topic. Different topics can run concurrently within the configured agent concurrency limit. With `group_topic_sender`, different senders have separate queues within each topic. Messages in the same queue retain arrival order until the existing five-minute queue timeout. Native topic events without `thread_id` conservatively wait for earlier ordinary messages in the group and block later topic messages until queue settlement. These unidentified events bypass message batching so later topic buffers cannot overtake them.
+
 Set `replyInThread: "enabled"` (top-level or per group) to make bot replies create or continue a Feishu topic thread instead of replying inline. `topicSessionMode` is the deprecated predecessor of `groupSessionScope`; prefer `groupSessionScope`.
 
 ### Feishu workspace tools
