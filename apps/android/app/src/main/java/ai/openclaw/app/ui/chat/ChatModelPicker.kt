@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.providerDisplayName
+import ai.openclaw.app.providerQualifiedRef
 import java.util.Locale
 
 internal class ChatModelSearch(
@@ -91,13 +92,6 @@ internal enum class ChatModelPickerAction {
   Disabled,
 }
 
-internal fun GatewayModelSummary.providerQualifiedRef(): String {
-  val trimmedProvider = provider.trim()
-  if (trimmedProvider.isEmpty()) return id
-  val providerPrefix = "$trimmedProvider/"
-  return if (id.startsWith(providerPrefix)) id else "$providerPrefix$id"
-}
-
 internal fun thinkingSupportedForSelection(
   selectedModelRef: String?,
   catalog: List<GatewayModelSummary>,
@@ -124,34 +118,6 @@ internal fun fastModeSupportedForSelection(
   requestSupported: Boolean,
   hasConfiguredFastModeOverride: Boolean,
 ): Boolean = requestSupported || hasConfiguredFastModeOverride
-
-internal fun selectedChatModelUnavailableReason(
-  selectedModelRef: String?,
-  catalog: List<GatewayModelSummary>,
-): GatewayModelUnavailableReason? {
-  val selected = selectedModelRef?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-  val matches = catalog.filter { it.providerQualifiedRef().equals(selected, ignoreCase = true) }
-  if (matches.isEmpty() || matches.any { it.available != false || it.unavailableReason == null }) return null
-  if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.Cooldown }) {
-    return GatewayModelUnavailableReason.Cooldown
-  }
-  return if (matches.any { it.unavailableReason == GatewayModelUnavailableReason.AuthFailed }) {
-    GatewayModelUnavailableReason.AuthFailed
-  } else {
-    GatewayModelUnavailableReason.MissingAuth
-  }
-}
-
-internal fun selectedChatModelSendBlockingReason(
-  gatewayReady: Boolean,
-  selectedModelRef: String?,
-  catalog: List<GatewayModelSummary>,
-): GatewayModelUnavailableReason? {
-  if (!gatewayReady) return null
-  return selectedChatModelUnavailableReason(selectedModelRef, catalog).takeIf {
-    it == GatewayModelUnavailableReason.MissingAuth || it == GatewayModelUnavailableReason.AuthFailed
-  }
-}
 
 internal fun chatModelPickerAction(model: GatewayModelSummary): ChatModelPickerAction =
   when {
