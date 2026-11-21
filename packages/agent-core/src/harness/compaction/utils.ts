@@ -154,6 +154,40 @@ export function getCompactionContent(
 const MAX_OMISSION_MESSAGES = 8;
 const OMISSION_OVERFLOW = "[More image/non-text data omitted from summary input]";
 
+// Serialized entries start with role labels ("[User]:", "[Tool result of …]:"). Content
+// that carries the same line-initial shape would read as a genuine turn boundary, so
+// tool output could launder provenance into the summarizer input; neutralize it.
+// Genuine labels balance brackets across sender JSON (e.g. "Alex [ops]"), so scan for
+// the matching close bracket instead of stopping at the first one.
+function isLineInitialTurnLabel(line: string): boolean {
+  if (!line.startsWith("[")) {
+    return false;
+  }
+  let depth = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index];
+    if (char === "[") {
+      depth += 1;
+    } else if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return line[index + 1] === ":";
+      }
+    }
+  }
+  return false;
+}
+
+function escapeInBandLabelLines(text: string): string {
+  if (!text.includes("[") || !text.includes("]:")) {
+    return text;
+  }
+  return text
+    .split("\n")
+    .map((line) => (isLineInitialTurnLabel(line) ? `\\${line}` : line))
+    .join("\n");
+}
+
 // Compaction sees both model messages and harness-only AgentMessages. Sender
 // metadata is only meaningful on user turns, so this deliberately accepts the
 // minimal shared shape rather than forcing token accounting through an unsafe
@@ -384,9 +418,11 @@ function projectConversationMessage(
     }
     const omission = phase === 0 ? omissionText : "";
     const project = (maxChars: number) =>
-      [omission, msg.role === "toolResult" ? truncateForSummary(text, maxChars) : text]
-        .filter(Boolean)
-        .join("\n");
+      escapeInBandLabelLines(
+        [omission, msg.role === "toolResult" ? truncateForSummary(text, maxChars) : text]
+          .filter(Boolean)
+          .join("\n"),
+      );
     const content = project(TOOL_RESULT_MAX_CHARS);
     if (content) {
       if (msg.role === "toolResult") {
@@ -419,7 +455,7 @@ function projectConversationMessage(
       }
     }
     if (textParts.length > 0) {
-      add(`[Assistant]: ${textParts.join("\n")}`);
+      add(`[Assistant]: ${escapeInBandLabelLines(textParts.join("\n"))}`);
     }
     if (toolCalls.length > 0) {
       add(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
