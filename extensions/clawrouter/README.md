@@ -145,18 +145,39 @@ bound requests, but this bridge does not claim caller cancellation support.
 
 ## Memory embeddings
 
-Choose `clawrouter` as the memory embedding provider and select a catalog model
-such as `openai/text-embedding-3-small`. Each request resolves the router credential
-and refreshes the catalog, then uses the eligible declared `openai.embeddings`
-native, manifest or unified route. Native/manifest requests use the upstream model
-ID; unified requests use the catalog ID. The existing memory transport validates
-and orders vectors and reports usage.
+Choose `clawrouter` as the memory embedding provider and select an eligible catalog
+model. Each call resolves the router credential and refreshes declared formats.
+OpenAI-format text embeddings retain native, manifest and unified transports.
+Native formats use only native/manifest offers with the embedding capability:
 
-The initial adapter supports default text embeddings at declared `/embeddings`
-endpoints. Custom dimensions, task-specific input types and multimodal inputs fail
-explicitly. Remote destination overrides retain the memory transport's separate
-credential requirement; upstream OpenAI keys are never a fallback. A router
-deployment that declares endpoint formats for the offered route is required.
+| Wire format                                           | Qualified client surface                                                                                                                         |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `voyage.embeddings`                                   | voyage-4-large, voyage-4, voyage-4-lite; text query/document; float vectors at 256/512/1024/2048 dimensions                                      |
+| `cohere.embed`                                        | embed-v4.0; text query/document; float vectors at 256/512/1024/1536 dimensions                                                                   |
+| `aws_bedrock.invoke`                                  | Frozen Titan, Cohere, Nova and Marengo embedding families; text only, exact model/profile identity and family dimensions                         |
+| `google.embed_content`, `google.batch_embed_contents` | gemini-embedding-001 and the two frozen Embedding 2 variants; task formatting, bounded synchronous batches and qualified inline multimodal parts |
+
+Google Embedding 001 accepts text only. Embedding 2 preserves one aggregated
+vector per input, including inline parts, and skips native text templates when
+the host already prepared the input. Only declared, known formats enable a
+request; these handlers neither create catalog offers nor activate Worker routes.
+Google format declarations and Bedrock embedding offers still require their
+schema/runtime owners' qualification.
+
+Direct providers and ClawRouter share the native client builders and vector
+readers. Every response batch must have complete, finite vectors with the admitted
+count and dimensions. The consumer stages split batches until all requests succeed.
+Dimension/task/input settings partition index identity. Credential refresh,
+cancellation, one 30-second deadline, bounded response bytes and SSRF controls
+remain active. Remote origin overrides require separately admitted router
+credentials; upstream provider keys are never used.
+
+Only provider-reported token usage is forwarded. Missing usage remains unknown;
+vector dimensions never imply token count or cost. No tariff or billing policy
+is created by this client. Async Google upload/batch/file APIs require original-job
+ownership controls and remain disabled here; synchronous batches are not proof of
+that lifecycle. Actual memory-to-Worker acceptance remains a separate integration
+gate before claiming provider parity.
 
 ## Web search
 

@@ -1,4 +1,9 @@
 import {
+  isValidGeminiEmbeddingValues,
+  sanitizeGeminiEmbedding,
+  type GeminiEmbeddingRequest,
+} from "openclaw/plugin-sdk/embedding-native-runtime";
+import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
   buildBatchHeaders,
@@ -19,12 +24,7 @@ import {
   resolveProviderOperationTimeoutMs,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
-import {
-  isValidGeminiEmbeddingValues,
-  sanitizeGeminiEmbedding,
-  type GeminiEmbeddingClient,
-  type GeminiEmbeddingRequest,
-} from "./embedding-provider.js";
+import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
 
 type GeminiBatchRequest = {
