@@ -202,6 +202,7 @@ export function normalizeProviderConfig(config: RealtimeVoiceProviderConfig) {
       path: "plugins.entries.voice-call.config.realtime.providers.openai.apiKey",
     }),
     model: normalizeOptionalString(raw.model),
+    acknowledgement: normalizeOptionalString(raw.acknowledgement),
     inputTranscriptionModel: normalizeOptionalString(raw.inputTranscriptionModel),
     // Session creation selects the effective model; an earlier family fallback loses overrides.
     voice: normalizeOptionalLowercaseString(raw.speakerVoice ?? raw.voice),

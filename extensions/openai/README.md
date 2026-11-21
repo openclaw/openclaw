@@ -29,3 +29,10 @@ than Codex's native custom tools. GPT-5-family models keep the Codex runtime.
 See the [OpenAI setup guide](https://docs.openclaw.ai/providers/openai/setup) and
 [authentication comparison](https://docs.openclaw.ai/providers/openai/authentication)
 to choose the appropriate access method.
+
+## Talk acknowledgment
+
+GPT-Live supports an optional fixed launch phrase via
+`talk.realtime.providers.openai.acknowledgement`; unset or blank retains natural
+wording. See [Talk realtime sessions](https://docs.openclaw.ai/nodes/talk/realtime-sessions)
+for configuration and scope.
