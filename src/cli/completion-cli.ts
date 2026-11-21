@@ -314,7 +314,7 @@ ${commandPathCases}
           (fullPath) => `
             if ($commandPath -eq ${quotePowerShellArg(fullPath)}) {
                 $completions = ${allCompletions}
-                $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+                $completions | Where-Object { (-not $optionsEnded -or $_ -notlike '-*') -and $_ -like "$wordToComplete*" } | ForEach-Object {
                     [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
                 }
             }
@@ -351,7 +351,9 @@ ${commandPathCases}
         )
         .join("\n");
       return pathVariants.map(
-        (pathSegments) => `    if ($commandPath -eq ${quotePowerShellArg(pathSegments.join(" "))}) {
+        (
+          pathSegments,
+        ) => `    if (-not $optionsEnded -and $commandPath -eq ${quotePowerShellArg(pathSegments.join(" "))}) {
 ${optionChoiceCases}
     }`,
       );
@@ -367,11 +369,10 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $commandPath = ""
     $valueOptions = ${formatPowerShellArray(root.valueOptions)}
     $requiredValueOptions = ${formatPowerShellArray(root.requiredValueOptions)}
+    $optionsEnded = $false
     $pendingRequiredValue = $false
     $hasCurrentWord = $wordToComplete -ne ''
     $previousElementIndex = if ($hasCurrentWord) { $commandElements.Count - 2 } else { $commandElements.Count - 1 }
-    $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
-    $choiceFlag = $previousElement
     # Native completion includes the suffix after the cursor in both the word and AST.
     if ($hasCurrentWord -and $commandElements[-1].Extent.EndOffset -gt $cursorPosition) {
         $wordPrefix = $commandElements[-1].Extent.Text.Substring(0, $cursorPosition - $commandElements[-1].Extent.StartOffset)
@@ -383,6 +384,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
             $wordPrefix
         }
     }
+    $commandWords = @($commandElements | ForEach-Object {
+        if ($_ -is [System.Management.Automation.Language.StringConstantExpressionAst]) { $_.Value } else { $_.Extent.Text }
+    })
+    $previousElement = if ($previousElementIndex -ge 1) { $commandWords[$previousElementIndex] } else { '' }
+    $choiceFlag = $previousElement
     $choicePrefix = $wordToComplete
     # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
     if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
@@ -396,15 +402,27 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     }
 
     for ($i = 1; $i -lt $commandElements.Count; $i++) {
-        $element = if ($commandElements[$i] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
-            $commandElements[$i].Value
-        } else {
-            $commandElements[$i].Extent.Text
-        }
+        $element = $commandWords[$i]
         if ($i -eq $commandElements.Count - 1 -and $hasCurrentWord) { break }
-        if ($element -like "-*") {
+        if ($element -eq '--') {
+            $optionsEnded = $true
+            continue
+        }
+        if (-not $optionsEnded -and $element -like "-*") {
             $flag = ($element -split '=', 2)[0]
-            if ($element -notlike '*=*' -and $valueOptions -contains $flag) {
+            if ($element -match '^-[^-].+$') {
+                $shortGroup = $element.Substring(1)
+                for ($shortIndex = 0; $shortIndex -lt $shortGroup.Length; $shortIndex++) {
+                    $shortFlag = "-$($shortGroup[$shortIndex])"
+                    if ($valueOptions -contains $shortFlag) {
+                        $flag = if ($shortIndex -eq $shortGroup.Length - 1) { $shortFlag } else { '' }
+                        break
+                    }
+                }
+            }
+            $nextElement = if ($i + 1 -lt $commandWords.Count) { $commandWords[$i + 1] } else { '' }
+            if ($element -notlike '*=*' -and $valueOptions -contains $flag -and
+                ($requiredValueOptions -contains $flag -or $nextElement -notlike '-?*')) {
                 if ($i -eq $previousElementIndex -and $requiredValueOptions -contains $flag) {
                     $pendingRequiredValue = $true
                 }
@@ -448,7 +466,7 @@ ${choiceCompletion}
     # Root command
     if ($commandPath -eq "") {
          $completions = ${formatPowerShellArray(root.completions)}
-         $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
+         $completions | Where-Object { (-not $optionsEnded -or $_ -notlike '-*') -and $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
          }
     }
