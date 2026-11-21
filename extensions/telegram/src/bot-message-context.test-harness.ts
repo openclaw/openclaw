@@ -29,6 +29,7 @@ type BuildTelegramMessageContextForTestParams = {
   /** Registered host builder, so ingress handoff binds the same way a live account does. */
   buildContext?: TelegramTestSessionRuntime["buildChannelInboundEventContext"];
   historyLimit?: number;
+  ackReactionScope?: BuildTelegramMessageContextParams["ackReactionScope"];
   botApi?: Record<string, unknown>;
   sendChatActionHandler?: BuildTelegramMessageContextParams["sendChatActionHandler"];
   sessionRuntime?: null;
@@ -117,7 +118,7 @@ export async function buildTelegramMessageContextForTest(
     dmPolicy: "open",
     allowFrom: ["*"],
     groupAllowFrom: [],
-    ackReactionScope: "off",
+    ackReactionScope: params.ackReactionScope ?? "off",
     logger: { info: vi.fn() },
     resolveGroupActivation: params.resolveGroupActivation ?? (() => undefined),
     resolveGroupRequireMention: () => false,
