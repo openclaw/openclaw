@@ -361,6 +361,14 @@ describe("tools.effective handler", () => {
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
     const inventoryField = field === "sessionId" ? "sessionId" : "workspaceDir";
     expect(resolveEffectiveToolInventoryArg(1)?.[inventoryField]).toBe(value);
+    expect(resolveEffectiveToolInventoryArg(0)?.conversationCapabilityProfile).toMatchObject({
+      workspace: { workspaceRoot: "/tmp/workspace-main" },
+    });
+    expect(resolveEffectiveToolInventoryArg(1)?.conversationCapabilityProfile).toMatchObject({
+      workspace: {
+        workspaceRoot: field === "spawnedWorkspaceDir" ? value : "/tmp/workspace-main",
+      },
+    });
   });
 
   it("updates returned web_search availability when only the saved override changes", async () => {
