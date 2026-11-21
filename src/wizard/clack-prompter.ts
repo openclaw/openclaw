@@ -32,6 +32,7 @@ import {
   selectWithNavigationFooter,
   textWithNavigationFooter,
 } from "./clack-navigation-prompts.js";
+import { t } from "./i18n/index.js";
 import type { WizardProgress, WizardPrompter, WizardPromptNavigation } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
@@ -41,7 +42,8 @@ const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
 function guardCancel<T>(value: T | symbol, output: NodeJS.WriteStream, signal?: AbortSignal): T {
   if (value === CANCEL_SYMBOL) {
     if (!signal?.aborted) {
-      cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.", { output });
+      const message = t("common.cancel");
+      cancel(stylePromptTitle(message) ?? message, { output });
     }
     throw new WizardCancelledError();
   }
@@ -267,6 +269,7 @@ export function createClackPrompter(
           return await prompt({
             message,
             initialValue: params.initialValue,
+            ...(!params.navigation ? { active: t("common.yes"), inactive: t("common.no") } : {}),
             vertical: params.layout === "vertical",
             ...(params.navigation ? { navigation: params.navigation } : {}),
             signal: promptSignal,

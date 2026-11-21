@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSetupTranslator, t } from "./index.js";
 import { en } from "./locales/en.js";
+import { pt_PT } from "./locales/pt-PT.js";
 import { zh_CN } from "./locales/zh-CN.js";
 import { zh_TW } from "./locales/zh-TW.js";
 import type { WizardTranslationTree } from "./types.js";
@@ -28,6 +29,11 @@ describe("wizard i18n", () => {
     ["zh-HK", "Gateway 連接埠"],
     ["en_US.UTF-8", "Gateway port"],
     ["de_DE.UTF-8", "Gateway port"],
+    ["pt-PT", "Porta do Gateway"],
+    ["pt_PT.UTF-8", "Porta do Gateway"],
+    ["pt", "Gateway port"],
+    ["ptBR", "Gateway port"],
+    ["pt-BR", "Gateway port"],
   ])("resolves the %s CLI locale through translated setup copy", (locale, expected) => {
     vi.stubEnv("OPENCLAW_LOCALE", locale);
     expect(t("wizard.gateway.port")).toBe(expected);
@@ -46,6 +52,16 @@ describe("wizard i18n", () => {
     expect(t("wizard.gateway.missing", undefined, { locale: "zh-CN" })).toBe(
       "wizard.gateway.missing",
     );
+    expect(t("wizard.gateway.missing", undefined, { locale: "pt-PT" })).toBe(
+      "wizard.gateway.missing",
+    );
+    expect(
+      t(
+        "wizard.appRecommendations.option",
+        { name: "Calendar", reason: "disponível", app: "Calendar" },
+        { locale: "pt-PT" },
+      ),
+    ).toBe("Calendar — disponível (aplicação detetada: Calendar)");
     expect(
       t(
         "wizard.customProvider.endpointIdRenamed",
@@ -67,6 +83,7 @@ describe("wizard i18n", () => {
   it("keeps shipped locale keys aligned with English", () => {
     const english = collectLeafKeys(en).toSorted();
     for (const [locale, translations] of [
+      ["pt-PT", pt_PT],
       ["zh-CN", zh_CN],
       ["zh-TW", zh_TW],
     ] as const) {

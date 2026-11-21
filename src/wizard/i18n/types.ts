@@ -1,4 +1,4 @@
-export type WizardLocale = "en" | "zh-CN" | "zh-TW";
+export type WizardLocale = "en" | "pt-PT" | "zh-CN" | "zh-TW";
 
 export type WizardI18nParams = Record<string, boolean | number | string | null | undefined>;
 

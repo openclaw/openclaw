@@ -17,6 +17,9 @@ export const zh_TW = {
     skip: "略過",
     skipForNow: "暫時略過",
     tokenRecommended: "權杖（建議）",
+    yes: "是",
+    no: "否",
+    cancel: "設定已取消。",
   },
   wizard: {
     customProvider: {
