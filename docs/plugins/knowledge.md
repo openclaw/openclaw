@@ -211,6 +211,12 @@ caller's authorized store and partition.
 | Automatic recall      | `knowledge_recall`                                                                                                                                                               |
 | History and recovery  | `knowledge_history`, `knowledge_revision`, `knowledge_mutation`, `knowledge_resume`                                                                                              |
 
+The memory prompt shows the object call shapes for available recall and remember
+tools: `knowledge_lookup({ query })`, `knowledge_grep({ query })`, and
+`knowledge_remember({ requestId, attribution, excerpt, items })`. Each remembered
+item needs `kind` and `text`; `subject` and `about` are optional. Agent saves use a
+fresh lowercase UUID for `requestId`. Read-only prompts omit save guidance.
+
 See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 
 ## Bundled skills

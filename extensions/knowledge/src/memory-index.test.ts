@@ -51,6 +51,7 @@ it("lists page labels and unfiled recent claims, never bodies, sources or filed 
   expect(text).not.toContain("Filed claim headline");
   expect(text).not.toContain("Raw meeting transcript");
   expect(text).not.toContain("BODY TEXT");
+  expect(text).toContain("knowledge_lookup({ query }) accepts a listed title or aka");
   expect(text).toContain("All pages are listed.");
 });
 
