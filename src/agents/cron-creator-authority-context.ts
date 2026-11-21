@@ -22,7 +22,7 @@ import {
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { AsyncContext } from "../shared/async-context.js";
-import { requesterCreatorProfileId } from "./requester-origin.js";
+import { requesterCreatorProfileId, resolveRequesterPrincipalKey } from "./requester-origin.js";
 import type {
   CronCreatorToolAuthorityMaterialization,
   CronToolOptions,
@@ -252,6 +252,48 @@ export function bindRequesterOwnerIdentity(params: {
     assertCurrent: () => {
       if (!isCurrent()) {
         throw new Error("Requester owner identity is no longer active for this continuation");
+      }
+    },
+  };
+}
+
+/** Identity of the channel owner whose yielded turn this admitted continuation resumes. */
+export function readRequesterOwnerContinuation(run: {
+  sessionKey?: string;
+  sessionId?: string;
+}): { principalKey: string; isCurrent: () => boolean } | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  const owner = scope?.requesterOwner;
+  const context = scope && getAgentRunContext(scope.runId);
+  const principalKey =
+    owner &&
+    resolveRequesterPrincipalKey({
+      messageChannel: owner.channel,
+      accountId: owner.accountId,
+      senderId: owner.senderId,
+    });
+  // Only a run in the admitted continuation's session, not one started elsewhere inside its scope.
+  if (
+    !scope ||
+    !owner ||
+    !principalKey ||
+    scope.callerOrigin.kind !== "unknown" ||
+    scope.isCurrent?.() !== true ||
+    !run.sessionKey ||
+    context?.sessionKey !== run.sessionKey ||
+    context.sessionId !== run.sessionId
+  ) {
+    return undefined;
+  }
+  // Who yielded is fixed at capture; the owner's own steer revokes the yield authority, so
+  // later liveness follows the run and the owner, not the authority.
+  return {
+    principalKey,
+    isCurrent: () => {
+      try {
+        return scope.active && !scope.signal.aborted && owner.isCurrent();
+      } catch {
+        return false;
       }
     },
   };
