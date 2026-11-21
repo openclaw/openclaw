@@ -156,9 +156,14 @@ describe("question custody", () => {
       if (typeof text !== "string") {
         throw new Error("missing question answer text");
       }
+      // Mirrors agent-runner-run.ts: channel turns bind their source before the probe.
+      const followupRun = createQueueTestRun({ prompt: text, messageId: sessionCtx.MessageSid });
+      followupRun.run.sessionKey = key;
+      followupRun.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+      bindReplySourceToFollowup(opts, followupRun);
       const result = await runReplyQuestionInput({
         commandBody: text,
-        followupRun: createQueueTestRun({ prompt: text }),
+        followupRun,
         sessionKey: key,
         sessionCtx,
         opts,
@@ -345,16 +350,19 @@ describe("question custody", () => {
         },
       };
       const question = fixture.register({ questionId, questions, gatewayCall, answer });
+      // Telegram aborts an abandoned turn, dropping the notice, and replays its update.
+      const onAbandoned = vi.fn();
       const answerQuestion = (text: string, messageId: string) =>
         fixture.dispatch({
           ctx: { ...fixture.ctx, agentText: text, MessageSid: messageId },
           replyOptions: {
             sourceReplyDeliveryMode: "message_tool_only",
-            turnAdoptionLifecycle: { onAdopted: async () => {} },
+            turnAdoptionLifecycle: { onAdopted: async () => {}, onAbandoned },
           },
         });
       try {
         await answerQuestion("Lisbon", "incomplete-answer");
+        expect(onAbandoned).not.toHaveBeenCalled();
         expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
         fixture.expectError(
           "The answer was not accepted: question 'budget'",
