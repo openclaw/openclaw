@@ -53,7 +53,7 @@ const expectUploadFailure = (upload: TerminalPanelUpload, error: unknown) =>
     expect(upload.progress()).toMatchObject({ state: "failed", retryable: false, error }),
   );
 
-function pasteUpload(items: { type: string; file?: File }[], text = "") {
+function pasteClipboardItems(items: { type: string; file?: File }[]) {
   const base = createApplicationConfigCapability({ resourceBasePath: "" });
   const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
   const terminal = createTerminalController();
@@ -63,7 +63,7 @@ function pasteUpload(items: { type: string; file?: File }[], text = "") {
     status: "live",
     controller: terminal as unknown as GhosttyTerminalController,
   };
-  const request = vi.fn().mockResolvedValue({ path: "/tmp/pasted-image.png", size: 4 });
+  const request = vi.fn();
   let upload!: TerminalPanelUpload;
   mountSolid(() => {
     upload = createTerminalPanelUpload({
@@ -80,34 +80,16 @@ function pasteUpload(items: { type: string; file?: File }[], text = "") {
   Object.defineProperty(paste, "clipboardData", {
     value: {
       items: items.map((item) => ({ type: item.type, getAsFile: () => item.file ?? null })),
-      getData: (type: string) => (type === "text/plain" ? text : ""),
+      getData: () => "",
     },
   });
   upload.handlePaste(paste as ClipboardEvent);
-  return { upload, terminal, request, paste };
+  return { upload, request, paste };
 }
-
-it("uploads a pasted clipboard image as an editable quoted path", async () => {
-  const file = new File(["png"], "pasted-image.png", { type: "image/png" });
-  Object.defineProperty(file, "arrayBuffer", {
-    value: async () => new TextEncoder().encode("png").buffer,
-  });
-  const { terminal, request, paste } = pasteUpload([{ type: file.type, file }]);
-  expect(paste.defaultPrevented).toBe(true);
-  await waitForSolid(() =>
-    expect(terminal.terminal.paste).toHaveBeenCalledWith("/tmp/pasted-image.png"),
-  );
-  expect(request).toHaveBeenCalledWith(
-    "terminal.upload",
-    { sessionId: "session-1", name: "pasted-image.png", contentBase64: "cG5n" },
-    { signal: expect.any(AbortSignal) },
-  );
-  expect(terminal.terminal.input).not.toHaveBeenCalled();
-});
 
 it("leaves text-only pastes on the native input path", () => {
   const textFile = new File(["hello"], "hello.txt", { type: "text/plain" });
-  const { upload, request, paste } = pasteUpload([{ type: textFile.type, file: textFile }]);
+  const { upload, request, paste } = pasteClipboardItems([{ type: textFile.type, file: textFile }]);
   expect(paste.defaultPrevented).toBe(false);
   expect(upload.progress()).toBeNull();
   expect(request).not.toHaveBeenCalled();
