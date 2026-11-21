@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
-import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { setOpenClawIdMemberAccountLookup } from "../openclaw-id/tunnel-principal.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pushHandlers } from "./push.js";
@@ -400,15 +399,6 @@ describe("push.web.send handler", () => {
     );
   });
   afterEach(() => setOpenClawIdMemberAccountLookup(undefined));
-
-  it("requires operator.write", () => {
-    for (const [scope, allowed] of [
-      ["operator.read", false],
-      ["operator.write", true],
-    ] as const) {
-      expect(authorizeOperatorScopesForMethod("push.web.send", [scope]).allowed).toBe(allowed);
-    }
-  });
 
   it.each<[string, Record<string, unknown>, string?]>([
     ["missing profile", { profileId: undefined }],

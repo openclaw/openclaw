@@ -209,15 +209,20 @@ describe("profile-targeted send", () => {
     },
   );
 
-  it("keeps caller text off Private lock screens", async () => {
-    const identified = makeSubscription("bob-identified", "bob", { label: "Desk" });
+  it("shows caller text only on Detailed lock screens", async () => {
+    const detailed = makeSubscription("bob-detailed", "bob", {
+      label: "Desk",
+      detailLevel: "detailed",
+    });
+    const identified = makeSubscription("bob-identified", "bob", { label: "Phone" });
     const privateTarget = makeSubscription("bob-private", "bob", { detailLevel: "private" });
-    setRecipients(identified, privateTarget);
+    setRecipients(detailed, identified, privateTarget);
 
     const question = {
       category: "agent-question",
       title: "Ticket\nassigned",
-      body: "Review\u0007\r\n ticket 42\u202E",
+      body: "Customer balance:\u0007\r\n $12,450\u202E",
+      agentId: "research",
       tag: "ticket-42",
       path: "chat/research/thread%2E1",
       urgency: "high",
@@ -234,8 +239,9 @@ describe("profile-targeted send", () => {
     expect(mocks.send).not.toHaveBeenCalled();
 
     setPaired(
-      pairedOperator(identified.deviceId, ["operator.read", "operator.questions"]),
-      pairedOperator(privateTarget.deviceId, ["operator.read", "operator.questions"]),
+      ...[detailed, identified, privateTarget].map(({ deviceId }) =>
+        pairedOperator(deviceId, ["operator.read", "operator.questions"]),
+      ),
     );
     await sendToBob(question);
     const calls = mocks.send.mock.calls.map(([call]) => call);
@@ -245,12 +251,16 @@ describe("profile-targeted send", () => {
       payload: { title, body, tag: "openclaw-send-ticket-42", renotify: false, url },
       deliveryOptions: { TTL: 60, urgency: "high", topic: expect.any(String) },
     });
-    expect(calls).toEqual(
-      expect.arrayContaining([
-        message(identified, "Desk · Ticket assigned", "Review ticket 42\\u{202E}"),
-        message(privateTarget, "OpenClaw needs an answer", "An agent has a question for you."),
-      ]),
-    );
+    // Names only keeps the permitted agent label but never the caller's text.
+    expect(calls).toEqual([
+      message(detailed, "Desk · Ticket assigned", "Customer balance: $12,450\\u{202E}"),
+      message(
+        identified,
+        "Phone · OpenClaw needs an answer",
+        "research: An agent has a question for you.",
+      ),
+      message(privateTarget, "OpenClaw needs an answer", "An agent has a question for you."),
+    ]);
   });
 
   it("reports expired endpoints as failed and pruned", async () => {
