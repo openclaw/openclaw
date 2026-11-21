@@ -2,14 +2,14 @@ import { createHostChannelInboundEventContextBuilder } from "../channels/inbound
 import { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  claimChannelGatewayContext,
+  isChannelRecordSuperseded,
+} from "./channel-gateway-root-slots.js";
 import { isPluginRecordActive, revokePluginRecord } from "./registry-lifecycle.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
-import {
-  bindGatewayContextResolver,
-  getCanonicalGatewayContextResolver,
-  getGatewayContextResolver,
-} from "./runtime/gateway-request-scope.js";
+import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
@@ -34,7 +34,8 @@ export function createRegisteredChannelRuntimeResolver(
     if (cached && cachedOwner?.isLive() === true) {
       return cached;
     }
-    if (cachedOwner) {
+    // A superseded owner stays restorable: its successor may still roll back.
+    if (cachedOwner && !isChannelRecordSuperseded(record)) {
       cachedOwner.dispose();
       registeredAdmissionOwnerByRecord.delete(record);
     }
@@ -42,13 +43,15 @@ export function createRegisteredChannelRuntimeResolver(
     if (
       (record.origin !== "bundled" && record.trustedOfficialInstall !== true) ||
       !registry.channels.some((entry) => entry.pluginId === record.id) ||
-      !isPluginRecordActive(registry, record)
+      !isPluginRecordActive(registry, record) ||
+      isChannelRecordSuperseded(record)
     ) {
       return channel;
     }
     let closed = false;
     const ownsLiveRegistrySlot = () =>
       !closed &&
+      !isChannelRecordSuperseded(record) &&
       registeredRuntimeRecordById.get(record.id) === record &&
       isPluginRecordActive(registry, record);
     const previousRecord = registeredRuntimeRecordById.get(record.id);
@@ -58,16 +61,12 @@ export function createRegisteredChannelRuntimeResolver(
       revokePluginRecord(registry, previousRecord);
     }
     registeredRuntimeRecordById.set(record.id, record);
-    const resolveGatewayContext = getGatewayContextResolver(registryParams.runtime.subagent);
-    const scopedGatewayContext = resolveGatewayContext
-      ? () => (ownsLiveRegistrySlot() ? resolveGatewayContext() : undefined)
-      : undefined;
-    if (scopedGatewayContext && resolveGatewayContext) {
-      bindGatewayContextResolver(
-        scopedGatewayContext,
-        getCanonicalGatewayContextResolver(resolveGatewayContext),
-      );
-    }
+    const scopedGatewayContext = claimChannelGatewayContext({
+      resolveGatewayContext: getGatewayContextResolver(registryParams.runtime.subagent),
+      registry,
+      record,
+      ownsLiveRegistrySlot,
+    });
     const owner = Object.freeze({
       channelId: record.id,
       resolveGatewayContext: scopedGatewayContext,
