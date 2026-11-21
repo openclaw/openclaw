@@ -2556,7 +2556,11 @@ export async function publishInstalledTerminalDiagnostics(
             name: entry.name,
             bytes: entry.bytes,
             sha256: entry.sha256,
-            sources: entry.sources.map(({ name, bytes, sha256 }) => ({ name, bytes, sha256 })),
+            sources: entry.sources.map(({ name, bytes: sourceBytes, sha256 }) => ({
+              name,
+              bytes: sourceBytes,
+              sha256,
+            })),
           },
         });
       } catch {
@@ -2569,7 +2573,7 @@ export async function publishInstalledTerminalDiagnostics(
     assert.deepEqual(
       Object.keys(manifest)
         .filter((key) => key !== "error")
-        .sort(),
+        .toSorted(),
       ["bytes", "files", "omissions", "status"],
     );
     assert.deepEqual(
@@ -2631,7 +2635,7 @@ export async function publishInstalledTerminalDiagnostics(
     }
     const contracts = JSON.parse(files.get("installed-terminal-contracts.json")?.bytes);
     assert.equal(contracts.packageSha256, packageSha256);
-    for (const name of [
+    for (const memberName of [
       "candidate-package-identity.json",
       "package-hasher-contract.json",
       "package-heartbeat-contracts.json",
@@ -2640,7 +2644,7 @@ export async function publishInstalledTerminalDiagnostics(
       ...summary.commands.flatMap(({ name }) => [`${name}.out.gz`, `${name}.err.gz`]),
       ...cells.flatMap((name) => [`${name}-isolate-census.json`, `${name}-observer.jsonl.gz`]),
     ]) {
-      assert(files.has(name));
+      assert(files.has(memberName));
     }
     const identity = JSON.parse(files.get("candidate-package-identity.json").bytes);
     assert(/^[a-f0-9]{64}$/.test(summary.candidateSha256));

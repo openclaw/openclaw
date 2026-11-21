@@ -226,6 +226,39 @@ it.each(["write", "rename"] as const)(
   },
 );
 
+it("preserves a falsy serialization failure across a secondary close failure", () => {
+  const root = dirs.make("atomic-evidence-");
+  const file = path.join(root, "evidence.json");
+  writeInstalledRecoveryEvidence(file, { prior: true });
+  const prior = fs.readFileSync(file);
+  const failure: { cause: unknown } = { cause: 0 };
+  const closeSync = fs.closeSync;
+  const close = vi.spyOn(fs, "closeSync").mockImplementationOnce((fd) => {
+    closeSync(fd);
+    throw new Error("secondary close failed");
+  });
+  let observed: unknown = Symbol("not thrown");
+  try {
+    try {
+      writeInstalledRecoveryEvidence(file, {
+        toJSON() {
+          throw failure.cause;
+        },
+      });
+    } catch (error) {
+      observed = error;
+    }
+    expect(close).toHaveBeenCalledOnce();
+  } finally {
+    close.mockRestore();
+  }
+  expect(observed).toBe(failure.cause);
+  expect(fs.readFileSync(file)).toEqual(prior);
+  expect(fs.existsSync(`${file}.tmp`)).toBe(false);
+  writeInstalledRecoveryEvidence(file, { current: true });
+  expect(readJson(file)).toEqual({ current: true });
+});
+
 it("loads the real isolated capture closure without terminal-only dependencies", () => {
   const root = dirs.make("isolated-survivor-capture-");
   const capture = copySurvivorCaptureClosure(root);

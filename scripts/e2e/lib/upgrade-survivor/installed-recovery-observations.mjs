@@ -40,24 +40,29 @@ export function writeInstalledRecoveryEvidence(file, value) {
   const fd = openInstalledRecoveryEvidence(temporary);
   let owned;
   try {
+    /** @type {{ cause: unknown } | undefined} */
     let failure;
     try {
       owned = fs.fstatSync(fd);
       fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
     } catch (error) {
-      failure = error;
+      failure = { cause: error };
     }
     try {
       fs.closeSync(fd);
     } catch (error) {
-      failure ??= error;
+      failure ??= { cause: error };
     }
-    if (failure) throw failure;
+    if (failure) {
+      throw failure.cause;
+    }
     fs.renameSync(temporary, file);
   } catch (error) {
     try {
       const current = fs.lstatSync(temporary);
-      if (owned && current.dev === owned.dev && current.ino === owned.ino) fs.unlinkSync(temporary);
+      if (owned && current.dev === owned.dev && current.ino === owned.ino) {
+        fs.unlinkSync(temporary);
+      }
     } catch {
       // Cleanup never replaces the write failure or removes another writer's file.
     }
