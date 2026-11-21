@@ -285,6 +285,7 @@ export async function runPluginUpdateAttempt(params: {
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
+  retainInstalled?: Parameters<typeof installPluginFromClawHub>[0]["retainInstalled"];
   clawhubSpecs?: PluginUpdateSpecPlan;
   officialNpmFallback?: { installSpec: string; recordSpec: string; expectedIntegrity?: string };
   trustedSourceLinkedOfficialInstall: boolean;
@@ -344,6 +345,7 @@ export async function runPluginUpdateAttempt(params: {
           ? await installPluginFromClawHub({
               spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
               baseUrl: params.record.clawhubUrl,
+              retainInstalled: params.retainInstalled,
               ...commonInstallOptions,
             })
           : params.record.source === "git"
@@ -384,6 +386,7 @@ export async function runPluginUpdateAttempt(params: {
     result = await installPluginFromClawHub({
       spec: params.clawhubSpecs.fallbackSpec,
       baseUrl: params.record.clawhubUrl,
+      retainInstalled: params.retainInstalled,
       ...commonInstallOptions,
     });
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;

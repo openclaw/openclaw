@@ -1,0 +1,2 @@
+139
+# Real updater regression: attested unchanged files/config stay intact; damaged payload/manifest/host links repair; file-list-only, dry-run, trust and compatibility controls remain enforced.
