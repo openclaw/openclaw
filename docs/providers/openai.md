@@ -9,7 +9,7 @@ title: "OpenAI"
 ---
 
 OpenClaw uses one provider id, `openai`, for both direct API-key auth and
-ChatGPT/Codex subscription auth. `openai/*` is the canonical model route.
+ChatGPT/Codex subscription auth. `openai/*` is the standard model route.
 For embedded agent turns with runtime policy unset or `auto`, OpenAI's route
 facts decide whether OpenClaw may select the bundled Codex app-server runtime
 implicitly. The `openai/*` prefix alone does not select a runtime.
@@ -27,19 +27,20 @@ implicitly. The `openai/*` prefix alone does not select a runtime.
 OpenAI explicitly supports subscription OAuth usage in external tools and
 workflows like OpenClaw.
 
-This page is an index. OpenAI is documented on eight pages, one per reader
+This page is an index. OpenAI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-| Page                                                                   | Read it when                                                                                                                           |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| [OpenAI setup](/providers/openai/setup)                                | You are connecting an account: the API-key and Codex subscription paths, route summaries, OAuth recovery, and the long-context opt-in. |
-| [OpenAI models](/providers/openai/models)                              | You are choosing a model ref: the quick-choice table, GPT-6 Astra, and the GPT-5.6 tiers.                                              |
-| [OpenAI runtimes and Codex auth](/providers/openai/runtimes)           | You need to know which runtime runs an `openai/*` turn, and how native Codex resolves its account.                                     |
-| [OpenAI coverage and cost](/providers/openai/coverage-and-cost)        | You want the capability matrix, memory embeddings, or how subscription quota and Platform billing are reported.                        |
-| [OpenAI image and video generation](/providers/openai/image-and-video) | You are generating or editing images and video through the bundled `openai` plugin.                                                    |
-| [OpenAI voice and speech](/providers/openai/voice-and-speech)          | You are configuring text-to-speech, transcription, or realtime voice, including per-route auth order.                                  |
-| [Azure OpenAI endpoints](/providers/openai/azure)                      | You are pointing the bundled `openai` provider at an Azure OpenAI resource.                                                            |
-| [OpenAI advanced configuration](/providers/openai/advanced)            | You are tuning prompt contribution, transport, Fast mode, compaction, strict-agentic mode, or proxy compat.                            |
+| Page                                                            | Read it when                                                                                                                           |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| [OpenAI setup](/providers/openai/setup)                         | You are connecting an account: the API-key and Codex subscription paths, route summaries, OAuth recovery, and the long-context opt-in. |
+| [OpenAI authentication](/providers/openai/authentication)       | Choose Codex login, an API key, or SIWC based on model access, plugins, usage tracking, and permissions.                               |
+| [OpenAI models](/providers/openai/models)                       | You are choosing a model ref: the quick-choice table, GPT-6 Astra, Sol, Luna, and the GPT-5.6 tiers.                                   |
+| [OpenAI runtimes and Codex auth](/providers/openai/runtimes)    | You need to know which runtime runs an `openai/*` turn, and how native Codex resolves its account.                                     |
+| [OpenAI coverage and cost](/providers/openai/coverage-and-cost) | You want the capability matrix, memory embeddings, or how subscription quota and Platform billing are reported.                        |
+| [OpenAI image generation](/providers/openai/image-and-video)    | You are generating or editing images through the bundled `openai` plugin.                                                              |
+| [OpenAI voice and speech](/providers/openai/voice-and-speech)   | You are configuring text-to-speech, transcription, or realtime voice, including per-route auth order.                                  |
+| [Azure OpenAI endpoints](/providers/openai/azure)               | You are pointing the bundled `openai` provider at an Azure OpenAI resource.                                                            |
+| [OpenAI advanced configuration](/providers/openai/advanced)     | You are tuning prompt contribution, transport, Fast mode, compaction, strict-agentic mode, or proxy compat.                            |
 
 ## Where each section moved
 
@@ -67,7 +68,7 @@ working. Each entry points at the page that now holds the content.
 - <a id="verify-the-model-is-available" />[Verify the model is available](/providers/openai/setup#verify-the-model-is-available)
 - <a id="codex-subscription" />[Codex subscription](/providers/openai/setup#codex-subscription)
 - <a id="run-codex-oauth" />[Run Codex OAuth](/providers/openai/setup#run-codex-oauth)
-- <a id="use-the-canonical-openai-model-route" />[Use the canonical OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
+- <a id="use-the-canonical-openai-model-route" />[Use the standard OpenAI model route](/providers/openai/setup#use-the-canonical-openai-model-route)
 - <a id="verify-codex-auth-is-available" />[Verify Codex auth is available](/providers/openai/setup#verify-codex-auth-is-available)
 
 **[OpenAI models](/providers/openai/models)**
@@ -90,10 +91,10 @@ working. Each entry points at the page that now holds the content.
 - <a id="openclaw-feature-coverage" />[OpenClaw feature coverage](/providers/openai/coverage-and-cost#openclaw-feature-coverage)
 - <a id="memory-embeddings" />[Memory embeddings](/providers/openai/coverage-and-cost#memory-embeddings)
 
-**[OpenAI image and video generation](/providers/openai/image-and-video)**
+**[OpenAI image generation](/providers/openai/image-and-video)**
 
 - <a id="image-generation" />[Image generation](/providers/openai/image-and-video#image-generation)
-- <a id="video-generation" />[Video generation](/providers/openai/image-and-video#video-generation)
+- <a id="video-generation" />[Supported video providers](/tools/video-generation)
 
 **[OpenAI voice and speech](/providers/openai/voice-and-speech)**
 
@@ -134,6 +135,9 @@ working. Each entry points at the page that now holds the content.
 
 ## Related
 
+For hosted execution, file handling, and connected tools in chat, see the
+[Agents API guide](/plugins/agentsapi).
+
 <CardGroup cols={2}>
   <Card title="Model selection" href="/concepts/model-providers" icon="layers">
     Choosing providers, model refs, and failover behavior.
@@ -148,3 +152,78 @@ working. Each entry points at the page that now holds the content.
     Auth details and credential reuse rules.
   </Card>
 </CardGroup>
+
+## Decision models
+
+The bundled `openai` plugin supports the beta
+[OpenAI Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+through OpenClaw's [Decision model role](/concepts/decision-models).
+Configure `OPENAI_API_KEY` or an `openai` API-key auth profile, then select
+`openai/gpt-6-luna` in the Decision picker or set:
+
+```json5
+{
+  agents: { defaults: { decisionModel: "openai/gpt-6-luna" } },
+}
+```
+
+The account and selected model must have Decisions API access. OpenClaw requires
+a Platform API key for Decisions. It excludes ChatGPT/Codex subscription profiles
+and Sign in with ChatGPT token-sharing grants before credential resolution.
+The provider selects the Decisions route before credential resolution. A model-level
+`baseUrl` takes precedence over the provider URL, then `OPENAI_BASE_URL`, then
+the Platform default. A custom Platform-compatible endpoint must implement
+the native `POST /decisions` question and image contract; route metadata does not
+validate a custom endpoint's implementation. Declare the supported model under
+`models.providers.openai.models` when using a custom provider URL; implicit
+native model discovery does not advertise models for arbitrary endpoints.
+ChatGPT backend URLs are rejected. Prepared provider, model and request headers
+retain their normal precedence. An explicit `@profile`
+selection remains locked; an incompatible subscription profile does not fall
+through to a different account.
+
+Boolean questions map to predicates; choices retain their string labels; score
+levels use zero-based rubric positions. A V2 batch supports up to 400 questions,
+with up to 255 alternatives per choice question. Larger requests return
+`unsupported-input` before credential resolution or an API call. Split independent
+questions into separate batches, or reduce the alternatives. Legacy V1 callers
+retain the host's 256-question limit; use `contractVersion: 2` for larger batches.
+
+The prepared V2 adapter accepts tagged text, JSON, or one inline PNG, JPEG, or
+WebP image up to 4 MiB, with optional text. It does not fetch remote image URLs.
+Explicit JSON scalars and strings remain JSON-encoded; text remains literal.
+Omitted reasoning and `reasoning: "auto"` preserve the endpoint default; explicit
+`on` and `off` controls are unsupported.
+Boolean, Choice, and Score questions work with image evidence. OpenClaw's
+image envelope is an integration limit, not a claim about the vendor's maximum.
+
+A per-question refusal becomes an error answer with `providerCode: "refusal"`;
+successful siblings remain available. Malformed or incomplete answers return
+`invalid-response`. Probabilities, fractional scores, confidence, and input/output
+token usage are preserved. Decision cost stays unknown unless reported; chat
+token prices do not price this endpoint. V1 text/JSON callers still use the
+lossless bridge, so a refusal batch cannot be narrowed to V1.
+
+Selecting a Decision model does not replace the primary chat model or enable
+automatic Decision assistance. Explicit evaluations send the supplied evidence
+to OpenAI and use Platform billing.
+
+### Harness and authentication
+
+Both the OpenClaw and Codex harnesses expose the shared `decision_evaluate` tool
+when a Decision model is configured, subject to normal tool policy.
+The OpenAI plugin sends its requests to
+`POST /v1/decisions`. Codex's native model loop still uses Responses.
+
+| Primary-model harness | Primary-model auth | Decision auth and behavior                                                                                                      |
+| --------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| OpenClaw              | Platform API key   | The shared tool resolves a compatible OpenAI API key.                                                                           |
+| OpenClaw              | ChatGPT OAuth      | The shared tool requires a separate OpenAI API-key profile or `OPENAI_API_KEY`.                                                 |
+| Codex                 | Platform API key   | The shared tool resolves an OpenClaw OpenAI API key independently of Codex's native credentials.                                |
+| Codex                 | ChatGPT OAuth      | Native Codex login remains available for chat. The shared tool requires an OpenClaw OpenAI API-key profile or `OPENAI_API_KEY`. |
+
+With automatic OAuth-only discovery, an evaluation returns `credentials-unavailable`
+without an API request. An explicitly incompatible provider credential binding
+remains terminal; OpenClaw does not substitute another account. Configure the
+Decision API key through OpenClaw's existing OpenAI auth setup, without changing
+the primary model or Codex login.

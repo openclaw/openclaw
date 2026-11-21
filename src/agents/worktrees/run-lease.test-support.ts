@@ -1,12 +1,25 @@
-import type { unlockWorktree } from "./git-lock.js";
-import type { releaseWorktreeRunLeaseRow } from "./registry.js";
 import "./run-lease.js";
+import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
+import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { collectLiveRunLeases, worktreeRunLeaseScope } from "./run-lease-owner.js";
+
+export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
+  return (
+    withExistingOpenClawStateDatabaseCurrentReadOnly(
+      ({ db }) =>
+        collectLiveRunLeases(
+          db,
+          getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db),
+          worktreeRunLeaseScope(worktreeId),
+          false,
+        ).livePids.length > 0,
+      { env },
+    ) ?? false
+  );
+}
 
 type WorktreeRunLeaseTesting = {
-  setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void;
-  setDeadPidResolverForTest(resolver: ((pid: number) => boolean) | null): void;
-  setReleaseRowImplForTest(impl: typeof releaseWorktreeRunLeaseRow | null): void;
-  setUnlockImplForTest(impl: typeof unlockWorktree | null): void;
   drainPendingCleanupsForTest(): Promise<void>;
   resetForTest(): void;
 };

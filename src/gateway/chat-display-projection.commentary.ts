@@ -1,5 +1,6 @@
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  isSilentAssistantTranscriptMessage,
   parseAssistantTextSignature,
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
@@ -13,13 +14,11 @@ export function projectAssistantCommentaryFallbacks(
   message: unknown,
   maxChars: number,
 ): { fallbacks: unknown[]; message: unknown } {
-  if (!message || typeof message !== "object") {
-    return { fallbacks: [], message };
-  }
   const entry = readRecord(message);
   if (
     !entry ||
     entry.role !== "assistant" ||
+    isSilentAssistantTranscriptMessage(entry) ||
     !Array.isArray(entry.content) ||
     entry.stopReason === "error" ||
     typeof entry.errorMessage === "string"
@@ -123,16 +122,16 @@ export function projectAssistantCommentaryFallbacks(
   if (commentaryContent.size === 0) {
     return { fallbacks, message };
   }
+  const remainingContent = entry.content.filter((block) => !commentaryContent.has(block));
   const remaining: Record<string, unknown> = {
     ...entry,
-    content: entry.content.filter((block) => !commentaryContent.has(block)),
+    content: remainingContent,
   };
   if (
     projectedUnphasedText &&
-    Array.isArray(remaining.content) &&
-    remaining.content.some((block) => isToolHistoryBlockType(readRecord(block)?.type))
+    remainingContent.some((block) => isToolHistoryBlockType(readRecord(block)?.type))
   ) {
-    remaining.content = remaining.content.filter((block) => !commentaryBlocks.has(block));
+    remaining.content = remainingContent.filter((block) => !commentaryBlocks.has(block));
     delete remaining.phase;
   }
   return { fallbacks, message: remaining };

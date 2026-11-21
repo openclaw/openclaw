@@ -1,61 +1,96 @@
-// OpenClaw rescue policy tests cover eligibility and safety decisions.
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { CommandContext } from "../auto-reply/reply/commands-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSystemAgentRescuePolicy } from "./rescue-policy.js";
+import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { runSystemAgentRescueMessage } from "./rescue-message.js";
 
-function decide(cfg: OpenClawConfig, overrides = {}) {
-  return resolveSystemAgentRescuePolicy({
-    cfg,
-    senderIsOwner: true,
-    isDirectMessage: true,
-    ...overrides,
-  });
-}
-
-describe("resolveSystemAgentRescuePolicy", () => {
-  it("allows auto rescue for owner DMs in YOLO host posture with sandboxing off", () => {
-    expect(decide({}).allowed).toBe(true);
-  });
-
-  it("hard-denies rescue when sandboxing is active", () => {
-    const decision = decide({
-      agents: { defaults: { sandbox: { mode: "all" } } },
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected rescue to be denied");
-    }
-    expect(decision.reason).toBe("sandbox-active");
-  });
-
-  it("keeps auto rescue closed outside YOLO host posture", () => {
-    const decision = decide({
-      tools: { exec: { security: "allowlist", ask: "always" } },
-    });
-    expect(decision.allowed).toBe(false);
-    if (decision.allowed) {
-      throw new Error("expected rescue to be denied");
-    }
-    expect(decision.reason).toBe("disabled");
-  });
-
-  it("requires owner identity and direct messages by default", () => {
-    const notOwnerDecision = decide({}, { senderIsOwner: false });
-    expect(notOwnerDecision.allowed).toBe(false);
-    if (notOwnerDecision.allowed) {
-      throw new Error("expected non-owner rescue to be denied");
-    }
-    expect(notOwnerDecision.reason).toBe("not-owner");
-
-    const notDirectMessageDecision = decide({}, { isDirectMessage: false });
-    expect(notDirectMessageDecision.allowed).toBe(false);
-    if (notDirectMessageDecision.allowed) {
-      throw new Error("expected non-DM rescue to be denied");
-    }
-    expect(notDirectMessageDecision.reason).toBe("not-direct-message");
-  });
-
-  it("always limits rescue to owner direct messages", () => {
-    expect(decide({}, { isDirectMessage: false }).allowed).toBe(false);
-  });
+describe("OpenClaw rescue eligibility", () => {
+  it.each<{
+    name: string;
+    cfg: OpenClawConfig;
+    senderIsOwner: boolean;
+    isGroup: boolean;
+    reply: string;
+  }>([
+    {
+      name: "active sandbox",
+      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      senderIsOwner: true,
+      isGroup: false,
+      reply:
+        "OpenClaw rescue is blocked because OpenClaw sandboxing is active. Fix the install locally or disable sandboxing before using remote rescue.",
+    },
+    {
+      name: "restricted host posture",
+      cfg: { tools: { exec: { security: "allowlist", ask: "always" } } },
+      senderIsOwner: true,
+      isGroup: false,
+      reply: "OpenClaw rescue requires YOLO host posture with sandboxing off.",
+    },
+    {
+      name: "non-owner sender",
+      cfg: {},
+      senderIsOwner: false,
+      isGroup: false,
+      reply: "OpenClaw rescue only accepts commands from an OpenClaw owner.",
+    },
+    {
+      name: "group conversation",
+      cfg: {},
+      senderIsOwner: true,
+      isGroup: true,
+      reply: "OpenClaw rescue is restricted to owner DMs by default.",
+    },
+  ])(
+    "denies $name through the rescue entry point",
+    async ({ cfg, senderIsOwner, isGroup, reply }) => {
+      await withTestDir({ prefix: "openclaw-rescue-policy-" }, async (root) => {
+        await withEnvAsync(
+          {
+            HOME: root,
+            OPENCLAW_HOME: path.join(root, ".openclaw"),
+            OPENCLAW_STATE_DIR: path.join(root, "state"),
+            OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+            XDG_CONFIG_HOME: path.join(root, "config"),
+            XDG_CACHE_HOME: path.join(root, "cache"),
+            XDG_DATA_HOME: path.join(root, "data"),
+            XDG_STATE_HOME: path.join(root, "xdg-state"),
+          },
+          async () => {
+            const commandBody = "/openclaw restart gateway";
+            const command: CommandContext = {
+              surface: "whatsapp",
+              channel: "whatsapp",
+              channelId: "whatsapp",
+              accountId: "default",
+              ownerList: ["user:owner"],
+              senderIsOwner,
+              isAuthorizedSender: true,
+              senderId: senderIsOwner ? "user:owner" : "user:other",
+              rawBodyNormalized: commandBody,
+              commandBodyNormalized: commandBody,
+              from: senderIsOwner ? "user:owner" : "user:other",
+              to: "account:default",
+            };
+            resetPluginStateStoreForTests();
+            try {
+              await expect(
+                runSystemAgentRescueMessage({ cfg, command, commandBody, isGroup }),
+              ).resolves.toBe(reply);
+            } finally {
+              try {
+                await closeOpenClawStateDatabaseAsync();
+              } finally {
+                resetPluginStateStoreForTests();
+              }
+            }
+          },
+        );
+      });
+    },
+  );
 });

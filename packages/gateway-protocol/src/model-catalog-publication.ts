@@ -1,5 +1,5 @@
-import type { ModelsListParams, ModelsListResult } from "./schema/agents-models-skills.js";
 import type { ConnectParams } from "./schema/frames.js";
+import type { ModelsListParams, ModelsListResult } from "./schema/model-catalog.js";
 
 export type ModelCatalogScope = Pick<ModelsListParams, "agentId" | "sessionKey">;
 export type ModelCatalogTarget = NonNullable<ConnectParams["modelCatalog"]>;

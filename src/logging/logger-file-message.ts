@@ -32,42 +32,95 @@ export type FileLogMessagePart = {
   primitiveText?: string;
 };
 
-export function buildFileLogMessage(
+export function serializeFileLogRecord(
   record: Record<string, unknown>,
-  parts: readonly FileLogMessagePart[],
-): RedactionMessage | undefined {
-  const text: string[] = [];
-  const spans: RedactionMessage["parts"] = [];
-  let length = 0;
-  for (const { key, json, primitiveText } of parts) {
-    const value = record[key];
-    const part = primitiveText ?? stringifyFileLogMessagePart(value, json);
-    if (!part?.trim()) {
-      continue;
-    }
-    if (text.length > 0) {
-      length += 1;
-    }
-    spans.push({
-      key,
-      json,
-      messageField: !json && isRecord(value),
-      start: length,
-      ...(primitiveText === undefined ? {} : { primitiveLength: primitiveText.length }),
-    });
-    text.push(part);
-    length += part.length;
+  parts: readonly FileLogMessagePart[] = [],
+): string {
+  const ancestors: object[] = [];
+  // Materialize native values once so the display message cannot invoke toJSON again.
+  const materialized: unknown = JSON.parse(
+    JSON.stringify(record, function (_key, value: unknown) {
+      while (ancestors.length > 0 && ancestors.at(-1) !== this) {
+        ancestors.pop();
+      }
+      if (typeof value === "bigint") {
+        return String(value);
+      }
+      if (value !== null && typeof value === "object") {
+        if (ancestors.includes(value)) {
+          return "[Circular]";
+        }
+        ancestors.push(value);
+      }
+      return value;
+    }),
+  );
+  if (!isRecord(materialized)) {
+    throw new TypeError("File log records must serialize to objects");
   }
-  if (text.length === 0) {
+  const text: string[] = [];
+  for (const { key, json, primitiveText } of parts) {
+    const part = primitiveText ?? stringifyFileLogMessagePart(materialized[key], json);
+    if (part?.trim()) {
+      text.push(part);
+    }
+  }
+  if (text.length > 0) {
+    const message = clampMessage(text.join(" "));
+    if (Object.hasOwn(materialized, "message")) {
+      materialized.message = message;
+    } else {
+      const entries = Object.entries(materialized);
+      entries.splice(entries.findIndex(([key]) => key === "hostname") + 1, 0, ["message", message]);
+      return JSON.stringify(Object.fromEntries(entries));
+    }
+  }
+  return JSON.stringify(materialized);
+}
+
+/** Locate display copies in raw JSONL so egress masks follow their structured source. */
+export function getFileLogRedactionMessage(
+  record: Record<string, unknown>,
+): RedactionMessage | undefined {
+  if (typeof record.message !== "string") {
     return undefined;
   }
-  const joined = text.join(" ");
-  const prefix = truncateUtf16Safe(joined, MAX_FILE_LOG_MESSAGE_CHARS);
-  const textValue = clampMessage(joined);
-  return {
-    text: textValue,
-    contentLength: prefix.length,
-    finish: (value) => (value === textValue ? value : clampMessage(value)),
-    parts: spans,
-  };
+  const text = record.message;
+  const contentLength = text.endsWith("...(truncated)")
+    ? text.length - "...(truncated)".length
+    : text.length;
+  const parts: RedactionMessage["parts"] = [];
+  let cursor = 0;
+  for (const [key, value] of Object.entries(record)
+    .filter(([fieldKey]) => /^\d+$/.test(fieldKey))
+    .toSorted((a, b) => Number(a[0]) - Number(b[0]))) {
+    const json = value !== null && typeof value === "object";
+    const candidates = [
+      { value: stringifyFileLogMessagePart(value, json), json, messageField: false },
+      ...(json && isRecord(value) && typeof value.message === "string"
+        ? [{ value: value.message, json: false, messageField: true }]
+        : []),
+    ];
+    for (const candidate of candidates) {
+      if (!candidate.value?.trim()) {
+        continue;
+      }
+      let start = text.indexOf(candidate.value, cursor);
+      if (start < 0 && contentLength < text.length) {
+        // A truncated display can end inside a credential; project its visible prefix too.
+        for (let index = cursor; index < contentLength; index += 1) {
+          if (candidate.value.startsWith(text.slice(index, contentLength))) {
+            start = index;
+            break;
+          }
+        }
+      }
+      if (start >= 0 && start < contentLength) {
+        parts.push({ key, json: candidate.json, messageField: candidate.messageField, start });
+        cursor = start + candidate.value.length;
+        break;
+      }
+    }
+  }
+  return { text, contentLength, parts, finish: clampMessage };
 }

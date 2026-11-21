@@ -1,4 +1,3 @@
-// Whatsapp helper module supports account config behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   resolveAccountEntry,

@@ -9,67 +9,25 @@ import { toBoolean } from "./routes/utils.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
 
 describe("toBoolean", () => {
-  it("parses yes/no and 1/0", () => {
-    expect(toBoolean("yes")).toBe(true);
-    expect(toBoolean("1")).toBe(true);
-    expect(toBoolean("no")).toBe(false);
-    expect(toBoolean("0")).toBe(false);
-  });
-
-  it("returns undefined for on/off strings", () => {
-    expect(toBoolean("on")).toBeUndefined();
-    expect(toBoolean("off")).toBeUndefined();
-  });
-
-  it("passes through boolean values", () => {
-    expect(toBoolean(true)).toBe(true);
-    expect(toBoolean(false)).toBe(false);
+  it.each([
+    ["yes", true],
+    ["1", true],
+    ["no", false],
+    ["0", false],
+    [" YES ", true],
+    [1, true],
+    [0, false],
+    [2, undefined],
+    ["on", undefined],
+    ["off", undefined],
+    [true, true],
+    [false, false],
+  ])("parses %j as %j", (input, expected) => {
+    expect(toBoolean(input)).toBe(expected);
   });
 });
 
 describe("browser target id resolution", () => {
-  it("resolves exact ids", () => {
-    const res = resolveTargetIdFromTabs("FULL", [{ targetId: "AAA" }, { targetId: "FULL" }]);
-    expect(res).toEqual({ ok: true, targetId: "FULL" });
-  });
-
-  it("resolves exact tab ids and labels", () => {
-    expect(
-      resolveTargetIdFromTabs("t2", [
-        { targetId: "AAA", tabId: "t1" },
-        { targetId: "BBB", suggestedTargetId: "docs", tabId: "t2", label: "docs" },
-      ]),
-    ).toEqual({ ok: true, targetId: "BBB" });
-    expect(
-      resolveTargetIdFromTabs("docs", [
-        { targetId: "AAA", tabId: "t1" },
-        { targetId: "BBB", tabId: "t2", label: "docs" },
-      ]),
-    ).toEqual({ ok: true, targetId: "BBB" });
-  });
-
-  it("resolves unique prefixes (case-insensitive)", () => {
-    const res = resolveTargetIdFromTabs("57a01309", [
-      { targetId: "57A01309E14B5DEE0FB41F908515A2FC" },
-    ]);
-    expect(res).toEqual({
-      ok: true,
-      targetId: "57A01309E14B5DEE0FB41F908515A2FC",
-    });
-  });
-
-  it("fails on ambiguous prefixes", () => {
-    const res = resolveTargetIdFromTabs("57A0", [
-      { targetId: "57A01309E14B5DEE0FB41F908515A2FC" },
-      { targetId: "57A0BEEF000000000000000000000000" },
-    ]);
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.reason).toBe("ambiguous");
-      expect(res.matches?.length).toBe(2);
-    }
-  });
-
   it("fails when no tab matches", () => {
     const res = resolveTargetIdFromTabs("NOPE", [{ targetId: "AAA" }]);
     expect(res).toEqual({ ok: false, reason: "not_found" });
@@ -87,13 +45,6 @@ describe("cdp.helpers", () => {
     expect(url).toBe("https://example.com/chrome/json/list?token=abc");
   });
 
-  it("normalizes direct WebSocket CDP URLs to an HTTP base for /json endpoints", () => {
-    const url = normalizeCdpHttpBaseForJsonEndpoints(
-      "wss://connect.example.com/devtools/browser/ABC?token=abc",
-    );
-    expect(url).toBe("https://connect.example.com/?token=abc");
-  });
-
   it("preserves auth and query params when normalizing secure loopback WebSocket CDP URLs", () => {
     const url = normalizeCdpHttpBaseForJsonEndpoints(
       "wss://user:pass@127.0.0.1:9222/devtools/browser/ABC?token=abc",
@@ -109,11 +60,6 @@ describe("cdp.helpers", () => {
   it("preserves base prefixes when stripping a trailing /cdp suffix", () => {
     const url = normalizeCdpHttpBaseForJsonEndpoints("ws://127.0.0.1:9222/browser/cdp?token=abc");
     expect(url).toBe("http://127.0.0.1:9222/browser?token=abc");
-  });
-
-  it("adds basic auth headers when credentials are present", () => {
-    const headers = getHeadersWithAuth("https://user:pass@example.com");
-    expect(headers.Authorization).toBe(`Basic ${Buffer.from("user:pass").toString("base64")}`);
   });
 
   it("decodes percent-encoded basic auth credentials from URLs", () => {

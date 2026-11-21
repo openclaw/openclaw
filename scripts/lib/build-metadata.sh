@@ -55,10 +55,6 @@ openclaw_normalize_utc_build_timestamp() {
     "${year}" "${month}" "${day}" "${hour}" "${minute}" "${second}" "${fraction}"
 }
 
-openclaw_is_utc_build_timestamp() {
-  openclaw_normalize_utc_build_timestamp "${1:-}" >/dev/null
-}
-
 openclaw_resolve_git_commit() {
   local root_dir="$1"
   local candidate

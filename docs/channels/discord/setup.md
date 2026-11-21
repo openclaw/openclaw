@@ -202,7 +202,7 @@ channel. Discord omits user-authored content from other guild messages in this m
 <Note>
 Token resolution is account-aware. Config token values win over the env fallback, and `DISCORD_BOT_TOKEN` is only used for the default account.
 If two enabled Discord accounts resolve to the same bot token, OpenClaw starts only one gateway monitor for that token: a config-sourced token wins over the env fallback; otherwise the first enabled account wins and the duplicate account is reported disabled with reason `duplicate bot token`.
-For advanced outbound calls (message tool/channel actions), an explicit per-call `token` is used for that call. This applies to send and read/probe-style actions (read/search/fetch/thread/pins/permissions). Account policy/retry settings still come from the selected account in the active runtime snapshot.
+For advanced outbound calls (message tool/channel actions), an explicit per-call `token` is used for that call. This applies to send and read/check-style actions (read/search/fetch/thread/pins/permissions). Account policy/retry settings still come from the selected account in the active runtime snapshot.
 </Note>
 
 ## Recommended: Set up a guild workspace
@@ -218,6 +218,13 @@ Once DMs work, you can turn your server into a full workspace where each channel
         > "Add my Discord Server ID `<server_id>` to the guild allowlist"
       </Tab>
       <Tab title="Config">
+        **Configuration example — do not run in a terminal.** This is a fragment
+        for `~/.openclaw/openclaw.json` (or the path printed by `openclaw config file`).
+        Merge the shown `groupPolicy` and `guilds` keys into your existing
+        `channels.discord` object; keep your token, accounts, other guilds, and
+        unrelated settings. Replace `YOUR_SERVER_ID`
+        and `YOUR_USER_ID` with the IDs you copied. If this guild already has a
+        `users` list, add your ID without removing the users you still want to allow.
 
 ```json5
 {
@@ -254,7 +261,19 @@ Once DMs work, you can turn your server into a full workspace where each channel
         > "Allow my agent to respond on this server without having to be @mentioned"
       </Tab>
       <Tab title="Config">
-        Set `requireMention: false` in your guild config:
+        For the guild you already allowlisted, change only `requireMention`.
+        **Terminal command** — run on the Gateway host after replacing
+        `YOUR_SERVER_ID` with your server ID. This preserves the guild's user
+        and channel restrictions and all unrelated settings:
+
+```bash
+openclaw config set 'channels.discord.guilds.YOUR_SERVER_ID.requireMention' false
+```
+
+        **Configuration example — do not run in a terminal.** If editing by
+        hand instead, merge this fragment into `~/.openclaw/openclaw.json`
+        (or the path printed by `openclaw config file`). Keep the existing guild
+        entry and change only its `requireMention` value; do not replace the file:
 
 ```json5
 {

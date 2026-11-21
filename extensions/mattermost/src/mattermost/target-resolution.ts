@@ -1,6 +1,4 @@
-// Mattermost plugin module implements target resolution behavior.
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -19,7 +17,6 @@ import type { OpenClawConfig } from "./runtime-api.js";
 
 type MattermostOpaqueTargetResolution = {
   kind: "user" | "channel" | "group";
-  id: string;
   to: string;
 };
 
@@ -28,39 +25,14 @@ export type MattermostTarget =
   | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
 
-const MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES = 1024;
-const MATTERMOST_OPAQUE_TARGET_CACHE_TTL_MS = 5 * 60 * 1000;
-type MattermostOpaqueTargetCacheEntry = {
-  kind: MattermostOpaqueTargetResolution["kind"];
-  expiresAt: number;
-};
-const mattermostOpaqueTargetCache = new Map<string, MattermostOpaqueTargetCacheEntry>();
-
-function cacheMattermostOpaqueTarget(
-  key: string,
-  kind: MattermostOpaqueTargetResolution["kind"],
-): void {
-  mattermostOpaqueTargetCache.set(key, {
-    kind,
-    expiresAt: Date.now() + MATTERMOST_OPAQUE_TARGET_CACHE_TTL_MS,
-  });
-  // Keep the newest authoritative classifications while bounding retention.
-  pruneMapToMaxSize(mattermostOpaqueTargetCache, MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES);
-}
-
-function getCachedMattermostOpaqueTargetKind(
-  key: string,
-): MattermostOpaqueTargetResolution["kind"] | undefined {
-  const cached = mattermostOpaqueTargetCache.get(key);
-  if (!cached) {
-    return undefined;
-  }
-  if (cached.expiresAt <= Date.now()) {
-    mattermostOpaqueTargetCache.delete(key);
-    return undefined;
-  }
-  return cached.kind;
-}
+const mattermostOpaqueTargetCache = createStaleWhileRevalidateCache<
+  MattermostOpaqueTargetResolution["kind"] | undefined
+>({
+  maxEntries: 1024,
+  maxPending: Number.POSITIVE_INFINITY,
+  ttlMs: 5 * 60 * 1000,
+  cacheable: (kind) => kind !== undefined,
+});
 
 function cacheKey(baseUrl: string, token: string, id: string): string {
   return `${baseUrl}::${token}::${id}`;
@@ -72,43 +44,23 @@ function isMattermostId(value: string): boolean {
 }
 
 export function parseMattermostTarget(raw: string): MattermostTarget {
-  const trimmed = raw.trim();
+  let trimmed = raw.trim();
   if (!trimmed) {
     throw new Error("Recipient is required for Mattermost sends");
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (lower.startsWith("channel:")) {
-    const id = trimmed.slice("channel:".length).trim();
-    if (!id) {
+    trimmed = trimmed.slice("channel:".length).trim();
+    if (!trimmed) {
       throw new Error("Channel id is required for Mattermost sends");
     }
-    if (id.startsWith("#")) {
-      const name = id.slice(1).trim();
-      if (!name) {
-        throw new Error("Channel name is required for Mattermost sends");
-      }
-      return { kind: "channel-name", name };
-    }
-    if (!isMattermostId(id)) {
-      return { kind: "channel-name", name: id };
-    }
-    return { kind: "channel", id };
-  }
-  if (lower.startsWith("user:")) {
-    const id = trimmed.slice("user:".length).trim();
+  } else if (lower.startsWith("user:") || lower.startsWith("mattermost:")) {
+    const id = trimmed.slice(trimmed.indexOf(":") + 1).trim();
     if (!id) {
       throw new Error("User id is required for Mattermost sends");
     }
     return { kind: "user", id };
-  }
-  if (lower.startsWith("mattermost:")) {
-    const id = trimmed.slice("mattermost:".length).trim();
-    if (!id) {
-      throw new Error("User id is required for Mattermost sends");
-    }
-    return { kind: "user", id };
-  }
-  if (trimmed.startsWith("@")) {
+  } else if (trimmed.startsWith("@")) {
     const username = trimmed.slice(1).trim();
     if (!username) {
       throw new Error("Username is required for Mattermost sends");
@@ -128,18 +80,6 @@ export function parseMattermostTarget(raw: string): MattermostTarget {
   return { kind: "channel", id: trimmed };
 }
 
-function isExplicitMattermostTarget(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  return (
-    /^(channel|user|mattermost):/i.test(trimmed) ||
-    trimmed.startsWith("@") ||
-    trimmed.startsWith("#")
-  );
-}
-
 export async function resolveMattermostOpaqueTarget(
   params: { input: string } & (
     | { cfg: OpenClawConfig; accountId?: string | null }
@@ -147,7 +87,7 @@ export async function resolveMattermostOpaqueTarget(
   ),
 ): Promise<MattermostOpaqueTargetResolution | null> {
   const input = params.input.trim();
-  if (!input || isExplicitMattermostTarget(input) || !isMattermostId(input)) {
+  if (!isMattermostId(input)) {
     return null;
   }
 
@@ -167,40 +107,34 @@ export async function resolveMattermostOpaqueTarget(
     client = createMattermostClient({
       baseUrl,
       botToken: token,
-      allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+      allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     });
   }
 
   const key = cacheKey(client.baseUrl, client.token, input);
-  const cachedKind = getCachedMattermostOpaqueTargetKind(key);
-  if (cachedKind) {
-    const to = cachedKind === "user" ? `user:${input}` : `channel:${input}`;
-    return { kind: cachedKind, id: input, to };
-  }
-
-  try {
-    await fetchMattermostUser(client, input);
-    cacheMattermostOpaqueTarget(key, "user");
-    return { kind: "user", id: input, to: `user:${input}` };
-  } catch (err) {
-    if (parseMattermostApiStatus(err) !== 404) {
-      // Unknown lookup error: stay best-effort and do not cache the result.
-      return { kind: "channel", id: input, to: `channel:${input}` };
-    }
-  }
-
-  // A user 404 means this ID may be a channel. Only a successful channel lookup
-  // is authoritative enough to cache: caching a fallback after a transient error
-  // can permanently fork a private channel's `group:<id>` session as `channel:<id>`.
-  try {
-    const channel = await fetchMattermostChannel(client, input);
-    const channelKind =
-      resolveMattermostTrustedChatKind({ channelType: channel.type }) === "group"
-        ? "group"
-        : "channel";
-    cacheMattermostOpaqueTarget(key, channelKind);
-    return { kind: channelKind, id: input, to: `channel:${input}` };
-  } catch {
-    return { kind: "channel", id: input, to: `channel:${input}` };
-  }
+  const { value } = await mattermostOpaqueTargetCache.read(
+    key,
+    async () => {
+      try {
+        await fetchMattermostUser(client, input);
+        return "user";
+      } catch (err) {
+        if (parseMattermostApiStatus(err) !== 404) {
+          return undefined;
+        }
+      }
+      // Cache only authoritative lookups: transient fallbacks must not fork private sessions.
+      try {
+        const channel = await fetchMattermostChannel(client, input);
+        return resolveMattermostTrustedChatKind({ channelType: channel.type }) === "group"
+          ? "group"
+          : "channel";
+      } catch {
+        return undefined;
+      }
+    },
+    { allowStale: false },
+  );
+  const kind = value ?? "channel";
+  return { kind, to: `${kind === "user" ? "user" : "channel"}:${input}` };
 }

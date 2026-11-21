@@ -1,4 +1,3 @@
-// Bundled Extension Manifest script supports OpenClaw repository automation.
 import { checkMinHostVersion } from "../../src/plugins/min-host-version.ts";
 import { isRecord } from "../../src/utils.js";
 

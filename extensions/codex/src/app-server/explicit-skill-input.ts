@@ -5,9 +5,9 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexAppServerClient } from "./client.js";
-import type { v2 } from "./protocol.js";
+import type { CodexUserInput } from "./protocol.js";
 
-type CodexExplicitSkillInput = { type: "skill"; name: string; path: string };
+type CodexExplicitSkillInput = Extract<CodexUserInput, { type: "skill" }>;
 
 function comparablePath(value: string): string {
   const resolved = path.resolve(value);
@@ -26,11 +26,11 @@ export async function resolveCodexExplicitSkillInputs(params: {
   // The prompt instruction block owns skills unavailable to Codex, so misses and RPC errors
   // stay fail-open instead of blocking the turn.
   try {
-    const response = (await params.client.request(
+    const response = await params.client.request(
       "skills/list",
-      { cwds: [params.cwd], forceReload: false } satisfies v2.SkillsListParams,
+      { cwds: [params.cwd], forceReload: false },
       { signal: params.signal },
-    )) as v2.SkillsListResponse;
+    );
     const cwd = comparablePath(params.cwd);
     const catalog = response.data.find((entry) => comparablePath(entry.cwd) === cwd);
     return params.selections.flatMap((selection) => {

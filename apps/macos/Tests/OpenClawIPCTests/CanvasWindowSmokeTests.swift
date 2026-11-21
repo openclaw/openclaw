@@ -17,50 +17,32 @@ struct CanvasWindowSmokeTests {
         let controller = try CanvasWindowController(
             sessionKey: "  main/invalid⚡️  ",
             root: root,
-            presentation: .panel(anchorProvider: anchor))
+            anchorProvider: anchor)
 
         #expect(controller.directoryPath.contains("main_invalid__") == true)
         #expect(controller.webView.configuration.preferences.tabFocusesLinks)
-        #expect(controller._testIsFilePollingActive == false)
+        #expect(controller.watcher.isPolling == false)
 
-        controller.applyPreferredPlacement(CanvasPlacement(x: 120, y: 200, width: 520, height: 680))
+        controller.preferredPlacement = CanvasPlacement(x: 120, y: 200, width: 520, height: 680)
         controller.load(target: "/")
-        #expect(controller._testIsFilePollingActive == false)
+        #expect(controller.watcher.isPolling == false)
         let localURL = try #require(CanvasScheme.makeURL(session: "main", path: "/"))
         controller.updateFilePollingForCommittedNavigation(to: localURL)
         controller.showCanvas()
-        #expect(controller._testIsFilePollingActive)
+        #expect(controller.watcher.isPolling)
         let remoteURL = try #require(URL(string: "https://example.com"))
         controller.load(target: remoteURL.absoluteString)
-        #expect(controller._testIsFilePollingActive)
+        #expect(controller.watcher.isPolling)
         controller.updateFilePollingForCommittedNavigation(to: remoteURL)
-        #expect(controller._testIsFilePollingActive == false)
+        #expect(controller.watcher.isPolling == false)
         controller.load(target: "/")
-        #expect(controller._testIsFilePollingActive == false)
+        #expect(controller.watcher.isPolling == false)
         controller.updateFilePollingForCommittedNavigation(to: localURL)
-        #expect(controller._testIsFilePollingActive)
+        #expect(controller.watcher.isPolling)
         controller.windowDidMove(Notification(name: NSWindow.didMoveNotification))
         controller.windowDidEndLiveResize(Notification(name: NSWindow.didEndLiveResizeNotification))
         controller.hideCanvas()
-        #expect(controller._testIsFilePollingActive == false)
-        controller.close()
-    }
-
-    @Test func `window controller shows and closes`() throws {
-        let root = FileManager().temporaryDirectory
-            .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
-        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
-        defer { try? FileManager().removeItem(at: root) }
-
-        let controller = try CanvasWindowController(
-            sessionKey: "main",
-            root: root,
-            presentation: .window)
-
-        #expect(controller.window?.isRestorable == false)
-        controller.showCanvas(path: "/")
-        controller.windowWillClose(Notification(name: NSWindow.willCloseNotification))
-        controller.hideCanvas()
+        #expect(controller.watcher.isPolling == false)
         controller.close()
     }
 

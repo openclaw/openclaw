@@ -27,7 +27,7 @@ scenario:
     - test/e2e/qa-lab/runtime/voice-call-gateway.ts
   execution:
     kind: script
-    parallelSafe: true
+    parallelSafe: false
     path: test/e2e/qa-lab/runtime/voice-call-gateway.ts
     summary: Starts a real Gateway and Voice Call plugin, runs the actual CLI, RPC, classic webhook, and tools.invoke entry points, then drives the runtime-issued realtime media stream through embedded-agent consult.
     args:

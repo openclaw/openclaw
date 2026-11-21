@@ -18,7 +18,7 @@ struct AgentEventsWindow: View {
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(self.store.events.reversed(), id: \.seq) { evt in
+                    ForEach(self.store.events.reversed(), id: \.id) { evt in
                         EventRow(event: evt)
                     }
                 }
@@ -39,8 +39,8 @@ private struct EventRow: View {
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(self.tint)
-                    .foregroundStyle(Color.white)
+                    .background(self.tint.opacity(0.14))
+                    .foregroundStyle(.primary)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
                 Text("run " + self.event.runId)
                     .font(.caption.monospaced())

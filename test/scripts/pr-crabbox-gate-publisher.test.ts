@@ -1,6 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   appendCrabboxOutputTail,
@@ -15,6 +18,7 @@ import {
   formatCrabboxGateCheckSummary,
   validateForwardAncestry,
 } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
+import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
 
 const repository = "openclaw/openclaw";
 const workflowSha = "a".repeat(40);
@@ -22,13 +26,16 @@ const baseSha = "c".repeat(40);
 const headSha = "b".repeat(40);
 const mainSha = "d".repeat(40);
 const laterMainSha = "e".repeat(40);
-const bootstrapSha256 = createHash("sha256")
-  .update(readFileSync("scripts/crabbox-untrusted-bootstrap.sh"))
-  .digest("hex");
+const bootstrap = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
+const bootstrapSha256 = createHash("sha256").update(bootstrap).digest("hex");
 const runId = "run_abc123";
 const leaseId = "cbx_def456";
 const serviceOwner = "unknown";
 const proofEndedAt = Date.parse("2026-08-28T01:30:00Z");
+const recoveryHomes = new Set<string>();
+const proofContext = { baseSha, headSha, runId, leaseId, workflowSha };
+const handoff = `run_id=${runId}\nlease_id=${leaseId}\n`;
+const emptyResult = { exitCode: 0, stdout: "", stderr: "" };
 
 type PublisherWorkflow = {
   jobs: {
@@ -36,6 +43,10 @@ type PublisherWorkflow = {
       environment: string;
       permissions: Record<string, string>;
       steps: Array<{
+        id?: string;
+        if?: string;
+        uses?: string;
+        "continue-on-error"?: boolean;
         env?: Record<string, string>;
         run?: string;
         with?: Record<string, unknown>;
@@ -99,15 +110,16 @@ function context() {
   };
 }
 
-function command() {
-  return [
-    "--script",
-    "scripts/crabbox-untrusted-bootstrap.sh",
+function transport() {
+  return buildCrabboxGateTransport({
+    bootstrap,
+    command: buildCrabboxGateCommand(gatePlan(), bootstrapSha256),
     headSha,
-    "/bin/bash",
-    "-lc",
-    buildCrabboxGateCommand(gatePlan(), bootstrapSha256),
-  ];
+  });
+}
+
+function command() {
+  return ["--script-stdin", ...transport().args];
 }
 
 function retainedLog() {
@@ -152,16 +164,30 @@ function brokerEvents(overrides: Record<number, Record<string, unknown>> = {}) {
     { type: "run.started" },
     { leaseID: leaseId, provider: "aws", target: "linux", type: "lease.created" },
     {
-      message: `.crabbox/scripts/${bootstrapSha256.slice(0, 12)}-crabbox-untrusted-bootstrap.sh`,
+      message: transport().uploadPath,
       type: "script.uploaded",
     },
     { type: "command.started" },
     { exitCode: 0, type: "command.finished" },
-    { type: "lease.released" },
+    { phase: "released", type: "lease.released" },
   ];
   return values.map((value, index) =>
     Object.assign(value, overrides[index], { runID: runId, seq: index + 1 }),
   );
+}
+
+function brokerLease(overrides: Record<string, unknown> = {}) {
+  return {
+    id: leaseId,
+    owner: serviceOwner,
+    org: "openclaw",
+    provider: "aws",
+    state: "released",
+    cleanupStatus: "complete",
+    cleanupCompletedAt: "2026-08-28T01:31:00Z",
+    host: "",
+    ...overrides,
+  };
 }
 
 function pullRequest(overrides: Record<string, unknown> = {}) {
@@ -175,24 +201,13 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function baseAncestry(overrides: Record<string, unknown> = {}) {
+function ancestry(from = workflowSha, to = mainSha, overrides: Record<string, unknown> = {}) {
   return {
-    ahead_by: 4,
-    base_commit: { sha: baseSha },
+    ahead_by: from === to ? 0 : 4,
+    base_commit: { sha: from },
     behind_by: 0,
-    merge_base_commit: { sha: baseSha },
-    status: "ahead",
-    ...overrides,
-  };
-}
-
-function mainAncestry(candidateMainSha = mainSha, overrides: Record<string, unknown> = {}) {
-  return {
-    ahead_by: candidateMainSha === workflowSha ? 0 : 4,
-    base_commit: { sha: workflowSha },
-    behind_by: 0,
-    merge_base_commit: { sha: workflowSha },
-    status: candidateMainSha === workflowSha ? "identical" : "ahead",
+    merge_base_commit: { sha: from },
+    status: from === to ? "identical" : "ahead",
     ...overrides,
   };
 }
@@ -211,29 +226,69 @@ function servicePrincipal(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function timingLine() {
+  return `${JSON.stringify({
+    exitCode: 0,
+    label: `openclaw-pr-gate:130481:${baseSha}:${headSha}`,
+    leaseId,
+    leaseStopped: true,
+    provider: "aws",
+    runId,
+    runStatus: "succeeded",
+  })}\n`;
+}
+
+function verifyProof(
+  overrides: {
+    events?: ReturnType<typeof brokerEvents>;
+    log?: string;
+    now?: number;
+    run?: ReturnType<typeof brokerRun>;
+  } = {},
+) {
+  return validateBrokerProof({
+    bootstrap,
+    context: context(),
+    events: brokerEvents(),
+    log: retainedLog(),
+    now: Date.parse("2026-08-28T02:00:00Z"),
+    principal: servicePrincipal(),
+    run: brokerRun(),
+    ...overrides,
+  });
+}
+
 function crabboxRunner() {
   return vi.fn(
     async ({
       args,
       env: childEnv,
       stream,
+      input,
     }: {
       args: string[];
       env: NodeJS.ProcessEnv;
       stream?: boolean;
+      input?: string;
     }) => {
+      recoveryHomes.add(childEnv.HOME!);
       if (args[0] === "config") {
-        expect(stream).toBeUndefined();
+        expect({ stream, input }).toEqual({ stream: undefined, input: undefined });
         return {
-          exitCode: 0,
-          stderr: "",
+          ...emptyResult,
           stdout: JSON.stringify({
             aws: { instanceProfile: "" },
             coordinator: "https://crabbox.example",
           }),
         };
       }
-      expect(stream).toBe(true);
+      if (args[0] === "stop") {
+        expect(args).toEqual(["stop", "--provider", "aws", "--id", leaseId, "--wait"]);
+        expect({ stream, input }).toEqual({ stream: undefined, input: undefined });
+        return { ...emptyResult, stderr: `released lease=${leaseId} server=fixture\n` };
+      }
+      expect({ stream, input }).toEqual({ stream: true, input: transport().input });
+      expect(args.slice(-4)).toEqual(transport().args);
       expect(args).toEqual(
         expect.arrayContaining([
           "--provider",
@@ -248,8 +303,7 @@ function crabboxRunner() {
           "240m",
           "--stop-after",
           "always",
-          "--script",
-          "scripts/crabbox-untrusted-bootstrap.sh",
+          "--script-stdin",
           headSha,
         ]),
       );
@@ -260,20 +314,17 @@ function crabboxRunner() {
         CRABBOX_ENV_ALLOW: "CI",
         NO_COLOR: "1",
       });
-      expect(childEnv).not.toHaveProperty("AWS_PROFILE");
-      return {
-        exitCode: 0,
-        stdout: "",
-        stderr: `${JSON.stringify({
-          exitCode: 0,
-          label: `openclaw-pr-gate:130481:${baseSha}:${headSha}`,
-          leaseId,
-          leaseStopped: true,
-          provider: "aws",
-          runId,
-          runStatus: "succeeded",
-        })}\n`,
-      };
+      for (const name of [
+        "AWS_PROFILE",
+        "GH_TOKEN",
+        "GH_APP_TOKEN",
+        "GITHUB_OUTPUT",
+        "CRABBOX_PROOF_RUN_ID",
+        "CRABBOX_PROOF_LEASE_ID",
+      ]) {
+        expect(childEnv).not.toHaveProperty(name);
+      }
+      return { ...emptyResult, stderr: timingLine() };
     },
   );
 }
@@ -301,34 +352,12 @@ describe("Crabbox gate request and broker proof", () => {
     expect(() => validatePublisherRequest(inputEvent, inputEnv)).toThrow();
   });
 
-  it("accepts matching opaque owner, including unknown", () => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrapSha256,
-        context: context(),
-        events: brokerEvents(),
-        log: retainedLog(),
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      }),
-    ).not.toThrow();
-  });
-
   it.each([
-    ["at the two-hour limit", proofEndedAt + 2 * 60 * 60 * 1000, false],
-    ["one millisecond past the limit", proofEndedAt + 2 * 60 * 60 * 1000 + 1, true],
-  ])("%s proof freshness", (_label, now, rejected) => {
-    const verify = () =>
-      validateBrokerProof({
-        bootstrapSha256,
-        context: context(),
-        events: brokerEvents(),
-        log: retainedLog(),
-        now,
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      });
+    ["at the two-hour limit", proofEndedAt + 2 * 60 * 60 * 1000, retainedLog(), false],
+    ["one millisecond past the limit", proofEndedAt + 2 * 60 * 60 * 1000 + 1, retainedLog(), true],
+    ["empty retained log", Date.parse("2026-08-28T02:00:00Z"), "", false],
+  ])("validates %s proof", (_label, now, log, rejected) => {
+    const verify = () => verifyProof({ now, log });
     if (rejected) {
       expect(verify).toThrow(/fresh completed proof/u);
     } else {
@@ -337,14 +366,7 @@ describe("Crabbox gate request and broker proof", () => {
   });
 
   it("caps retained output while preserving the final timing line", () => {
-    const timing = `${JSON.stringify({
-      exitCode: 0,
-      leaseId,
-      leaseStopped: true,
-      provider: "aws",
-      runId,
-      runStatus: "succeeded",
-    })}\n`;
+    const timing = timingLine();
     const oversized = Buffer.from("x".repeat(256 * 1024));
     const retained = appendCrabboxOutputTail(
       appendCrabboxOutputTail(Buffer.alloc(0), oversized),
@@ -355,89 +377,88 @@ describe("Crabbox gate request and broker proof", () => {
   });
 
   it.each([
-    ["owner", { owner: "github:42" }, brokerEvents(), retainedLog()],
-    ["provider", { provider: "blacksmith-testbox" }, brokerEvents(), retainedLog()],
-    ["truncation", { logTruncated: true }, brokerEvents(), retainedLog()],
-    ["command", { command: ["pnpm", "test"] }, brokerEvents(), retainedLog()],
-    [
-      "bootstrap",
-      {},
-      brokerEvents({ 2: { message: ".crabbox/scripts/attacker.sh" } }),
-      retainedLog(),
-    ],
-    [
-      "failed event",
-      {},
-      brokerEvents({ 4: { exitCode: 1, type: "command.failed" } }),
-      retainedLog(),
-    ],
-    ["marker", {}, brokerEvents(), retainedLog().replace("test:ok", "missing")],
-  ])("rejects mismatched %s", (_label, runOverrides, events, log) => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrapSha256,
-        context: context(),
-        events,
-        log,
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(runOverrides),
-      }),
-    ).toThrow();
-  });
-
-  it("accepts empty retained logs when command and events are complete", () => {
-    expect(() =>
-      validateBrokerProof({
-        bootstrapSha256,
-        context: context(),
-        events: brokerEvents(),
-        log: "",
-        now: Date.parse("2026-08-28T02:00:00Z"),
-        principal: servicePrincipal(),
-        run: brokerRun(),
-      }),
-    ).not.toThrow();
+    ["provider", { run: brokerRun({ provider: "blacksmith-testbox" }) }],
+    ["truncation", { run: brokerRun({ logTruncated: true }) }],
+    ["command", { run: brokerRun({ command: ["pnpm", "test"] }) }],
+    ...["head", "bootstrap digest", "command digest", "launcher digest"].map(
+      (label, index) =>
+        [
+          label,
+          {
+            run: brokerRun({
+              command: command().map((arg, position) =>
+                position === index + 1 ? "f".repeat(arg.length) : arg,
+              ),
+            }),
+          },
+        ] as const,
+    ),
+    ["bootstrap", { events: brokerEvents({ 2: { message: ".crabbox/scripts/attacker.sh" } }) }],
+    ["failed event", { events: brokerEvents({ 4: { exitCode: 1, type: "command.failed" } }) }],
+    ["terminal lease", { events: brokerEvents({ 5: { leaseID: "cbx_other" } }) }],
+    ["terminal phase", { events: brokerEvents({ 5: { phase: "running" } }) }],
+    ["marker", { log: retainedLog().replace("test:ok", "missing") }],
+  ] as const)("rejects mismatched %s", (_label, overrides) => {
+    expect(() => verifyProof(overrides)).toThrow();
   });
 });
 
-describe("protected main ancestry", () => {
-  it.each([
-    [workflowSha, mainAncestry(workflowSha)],
-    [mainSha, mainAncestry(mainSha)],
-  ])("accepts live-shape identical or forward main %s", (candidateMainSha, comparison) => {
-    expect(comparison).not.toHaveProperty("head_commit");
-    expect(
+it.each([
+  ["identical", workflowSha, {}, true],
+  ["forward", mainSha, {}, true],
+  ["behind", mainSha, { behind_by: 1, status: "behind" }, false],
+  ["diverged", mainSha, { status: "diverged" }, false],
+  ["wrong base", mainSha, { base_commit: { sha: baseSha } }, false],
+  ["wrong merge base", mainSha, { merge_base_commit: { sha: baseSha } }, false],
+  ["malformed ahead count", mainSha, { ahead_by: "4" }, false],
+  ["malformed behind count", mainSha, { behind_by: "0" }, false],
+] as const)(
+  "validates %s protected main comparison",
+  (_label, candidateMainSha, override, valid) => {
+    const comparison = ancestry(workflowSha, candidateMainSha, override);
+    const validate = () =>
       validateForwardAncestry(
         comparison,
         { baseSha: workflowSha, headSha: candidateMainSha },
         "protected main",
-      ),
-    ).toEqual({ baseSha: workflowSha, headSha: candidateMainSha });
-  });
-
-  it.each([
-    ["behind", { behind_by: 1, status: "behind" }],
-    ["diverged", { status: "diverged" }],
-    ["wrong base", { base_commit: { sha: baseSha } }],
-    ["wrong merge base", { merge_base_commit: { sha: baseSha } }],
-    ["malformed ahead count", { ahead_by: "4" }],
-    ["malformed behind count", { behind_by: "0" }],
-  ])("rejects %s protected main comparison", (_label, override) => {
-    expect(() =>
-      validateForwardAncestry(
-        mainAncestry(mainSha, override),
-        { baseSha: workflowSha, headSha: mainSha },
-        "protected main",
-      ),
-    ).toThrow(/protected main/u);
-  });
-});
+      );
+    if (valid) {
+      expect(comparison).not.toHaveProperty("head_commit");
+      expect(validate()).toEqual({ baseSha: workflowSha, headSha: candidateMainSha });
+    } else {
+      expect(validate).toThrow(/protected main/u);
+    }
+  },
+);
 
 describe("Crabbox gate publisher boundary", () => {
+  let outputRoot: string;
+  let outputPath: string;
+  beforeEach(() => {
+    outputRoot = mkdtempSync(path.join(tmpdir(), "crabbox-publisher-test-"));
+    outputPath = path.join(outputRoot, "output");
+  });
+  afterEach(() => {
+    rmSync(outputRoot, { force: true, recursive: true });
+    for (const home of recoveryHomes) {
+      rmSync(home, { force: true, recursive: true });
+    }
+    recoveryHomes.clear();
+  });
+
+  function phaseEnv(phase: "proof" | "publish", overrides: NodeJS.ProcessEnv = {}) {
+    return env({
+      ...(phase === "proof"
+        ? { GITHUB_OUTPUT: outputPath }
+        : { CRABBOX_PROOF_RUN_ID: runId, CRABBOX_PROOF_LEASE_ID: leaseId }),
+      ...overrides,
+    });
+  }
   function harness(
     overrides: {
       ancestry?: Record<string, unknown>;
+      events?: ReturnType<typeof brokerEvents>;
+      lease?: Record<string, unknown>;
       mainShas?: string[];
       membership?: Record<string, unknown>;
       principal?: Record<string, unknown>;
@@ -447,276 +468,470 @@ describe("Crabbox gate publisher boundary", () => {
   ) {
     const orderedCalls: string[] = [];
     let mainReads = 0;
-    const github = {
-      request: vi.fn(async (method: string, requestPath: string, body?: unknown) => {
-        orderedCalls.push(`github:${method}:${requestPath}`);
-        if (requestPath.endsWith("/pulls/130481")) {
-          return pullRequest(overrides.pull);
-        }
-        if (requestPath.endsWith("/git/ref/heads/main")) {
-          const sha = overrides.mainShas?.[mainReads] ?? (mainReads < 2 ? mainSha : laterMainSha);
-          mainReads += 1;
-          return {
-            object: { sha },
-            ref: "refs/heads/main",
-          };
-        }
-        if (requestPath.endsWith(`/compare/${baseSha}...${workflowSha}`)) {
-          return baseAncestry(overrides.ancestry);
-        }
-        if (requestPath.includes(`/compare/${workflowSha}...`)) {
-          return mainAncestry(requestPath.slice(-40));
-        }
-        if (method === "POST" && requestPath.endsWith("/check-runs")) {
-          expect(body).toMatchObject({
-            conclusion: "success",
-            head_sha: headSha,
-            name: "openclaw/crabbox-gate",
-            output: {
-              summary: formatCrabboxGateCheckSummary({
-                baseSha,
-                headSha,
-                leaseId,
-                planDigest: crabboxGatePlanDigest(gatePlan()),
-                runId,
-                targetCount: 1,
-                workflowSha,
-              }),
-            },
-          });
-          return {
-            app: { id: 15368 },
-            conclusion: "success",
-            head_sha: headSha,
-            id: 88,
-            name: "openclaw/crabbox-gate",
-          };
-        }
-        throw new Error(`unexpected GitHub call: ${method} ${requestPath}`);
-      }),
-    };
-    const organization = {
-      request: vi.fn(async (method: string, requestPath: string) => {
-        orderedCalls.push(`organization:${method}:${requestPath}`);
-        return overrides.membership ?? activeMembership();
-      }),
-    };
-    const broker = {
-      request: vi.fn(async (requestPath: string, options?: { text?: boolean }) => {
-        orderedCalls.push(`broker:${requestPath}`);
-        if (requestPath === "/v1/whoami") {
-          return servicePrincipal(overrides.principal);
-        }
-        if (requestPath.endsWith("/events?limit=500")) {
-          return { events: brokerEvents() };
-        }
-        if (requestPath.endsWith("/logs") && options?.text) {
-          return retainedLog();
-        }
-        if (requestPath === `/v1/runs/${runId}`) {
-          return { run: brokerRun(overrides.run) };
-        }
-        throw new Error(`unexpected broker call: ${requestPath}`);
-      }),
-    };
+    const check = { conclusion: "success", head_sha: headSha, name: "openclaw/crabbox-gate" };
+    function request<Args extends unknown[]>(service: string, respond: (...args: Args) => unknown) {
+      return {
+        request: vi.fn(async (...args: Args) => {
+          orderedCalls.push(`${service}:${args.slice(0, service === "broker" ? 1 : 2).join(":")}`);
+          return respond(...args);
+        }),
+      };
+    }
+    const github = request("github", (method: string, requestPath: string, body?: unknown) => {
+      if (requestPath.endsWith("/pulls/130481")) {
+        return pullRequest(overrides.pull);
+      }
+      if (requestPath.endsWith("/git/ref/heads/main")) {
+        const sha = overrides.mainShas?.[mainReads] ?? (mainReads < 2 ? mainSha : laterMainSha);
+        mainReads += 1;
+        return { object: { sha }, ref: "refs/heads/main" };
+      }
+      if (requestPath.endsWith(`/compare/${baseSha}...${workflowSha}`)) {
+        return ancestry(baseSha, workflowSha, overrides.ancestry);
+      }
+      if (requestPath.includes(`/compare/${workflowSha}...`)) {
+        return ancestry(workflowSha, requestPath.slice(-40));
+      }
+      if (method === "POST" && requestPath.endsWith("/check-runs")) {
+        expect(body).toMatchObject({
+          ...check,
+          output: {
+            summary: formatCrabboxGateCheckSummary({
+              ...proofContext,
+              planDigest: crabboxGatePlanDigest(gatePlan()),
+              targetCount: 1,
+            }),
+          },
+        });
+        return { ...check, app: { id: 15368 }, id: 88 };
+      }
+      throw new Error(`unexpected GitHub call: ${method} ${requestPath}`);
+    });
+    const organization = request(
+      "organization",
+      (_method: string, _path: string) => overrides.membership ?? activeMembership(),
+    );
+    const broker = request("broker", (requestPath: string, options?: { text?: boolean }) => {
+      const replies: Record<string, unknown> = {
+        "/v1/whoami": servicePrincipal(overrides.principal),
+        [`/v1/runs/${runId}`]: { run: brokerRun(overrides.run) },
+        [`/v1/leases/${leaseId}`]: { lease: brokerLease(overrides.lease) },
+      };
+      if (requestPath.endsWith("/events?limit=500")) {
+        return { events: overrides.events ?? brokerEvents() };
+      }
+      if (requestPath.endsWith("/logs") && options?.text) {
+        return retainedLog();
+      }
+      if (Object.hasOwn(replies, requestPath)) {
+        return replies[requestPath];
+      }
+      throw new Error(`unexpected broker call: ${requestPath}`);
+    });
     return { broker, github, orderedCalls, organization, runCrabbox: crabboxRunner() };
   }
 
-  it("preflights authority, launches under the service token, and revalidates before publish", async () => {
-    const values = harness();
-    await expect(
-      runPublisher({
-        ...values,
-        clock: () => Date.parse("2026-08-28T02:00:00Z"),
-        env: env({ AWS_PROFILE: "must-not-leak" }),
-        event: event(),
-        resolvePlan: () => gatePlan(),
-      }),
-    ).resolves.toMatchObject({
-      checkId: 88,
-      context: { baseSha, headSha, leaseId, runId, workflowSha },
-    });
-    expect(values.runCrabbox).toHaveBeenCalledTimes(2);
-    expect(values.orderedCalls.slice(0, 6)).toEqual([
-      "organization:GET:/orgs/openclaw/memberships/maintainer",
-      "github:GET:/repos/openclaw/openclaw/pulls/130481",
-      `github:GET:/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`,
-      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
-      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${mainSha}`,
-      "github:GET:/repos/openclaw/openclaw/git/ref/heads/main",
-    ]);
-    expect(values.orderedCalls).toContain(
-      `github:GET:/repos/openclaw/openclaw/compare/${workflowSha}...${laterMainSha}`,
+  type RunnerInput = Parameters<ReturnType<typeof crabboxRunner>>[0];
+  type RunnerResult = Awaited<ReturnType<ReturnType<typeof crabboxRunner>>>;
+  function changeRunner(
+    values: ReturnType<typeof harness>,
+    change: (step: string, result: RunnerResult) => RunnerResult | Promise<RunnerResult>,
+  ) {
+    return vi.fn(async (input: RunnerInput) =>
+      change(input.args[0]!, await values.runCrabbox(input)),
     );
-    expect(values.orderedCalls.at(-1)).toBe("github:POST:/repos/openclaw/openclaw/check-runs");
+  }
+  function unpublished(values: ReturnType<typeof harness>, outputExists = false) {
+    expect(existsSync(outputPath)).toBe(outputExists);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  }
+  function handedOff(values: ReturnType<typeof harness>) {
+    expect(readFileSync(outputPath, "utf8")).toBe(handoff);
+    unpublished(values, true);
+  }
+  function runPhase(
+    values: ReturnType<typeof harness>,
+    phase: "proof" | "publish",
+    overrides: {
+      clock?: () => number;
+      env?: NodeJS.ProcessEnv;
+      organization?: { request: () => Promise<ReturnType<typeof activeMembership>> };
+      resolvePlan?: () => ReturnType<typeof gatePlan>;
+      runCrabbox?: ReturnType<typeof crabboxRunner>;
+    } = {},
+  ) {
+    return runPublisher({
+      ...values,
+      phase,
+      clock: () => proofEndedAt,
+      env: phaseEnv(phase),
+      event: event(),
+      resolvePlan: () => gatePlan(),
+      ...overrides,
+    });
+  }
+
+  it.each(["released", "cleanup"])(
+    "waits for confirmed cleanup before handing off %s workload proof",
+    async (phase) => {
+      const values = harness({
+        run: { phase },
+        events: brokerEvents({ 5: { phase } }),
+      });
+      const stopStarted = Promise.withResolvers<void>();
+      const stopCompleted = Promise.withResolvers<void>();
+      const runCrabbox = changeRunner(values, async (step, result) => {
+        if (step === "run") {
+          return {
+            ...result,
+            stderr: result.stderr.replace('"leaseStopped":true', '"leaseStopped":false'),
+          };
+        }
+        if (step === "stop") {
+          stopStarted.resolve();
+          await stopCompleted.promise;
+        }
+        return result;
+      });
+      const proof = runPhase(values, "proof", { runCrabbox });
+      await stopStarted.promise;
+      const homes = runCrabbox.mock.calls.map(([input]) => input.env.HOME);
+      expect(new Set(homes).size).toBe(1);
+      expect(existsSync(homes[0]!)).toBe(true);
+      expect(existsSync(outputPath)).toBe(false);
+      expect(values.broker.request).not.toHaveBeenCalledWith(`/v1/leases/${leaseId}`);
+      stopCompleted.resolve();
+      await expect(proof).resolves.toMatchObject({ context: { runId, leaseId } });
+      expect(existsSync(homes[0]!)).toBe(false);
+      handedOff(values);
+      await expect(runPhase(values, "publish")).resolves.toMatchObject({ checkId: 88 });
+    },
+  );
+
+  it.each([
+    ["failed stop", { exitCode: 5, stderr: "cleanup pending" }, {}],
+    ["accepted cleanup", { exitCode: 0, stderr: `release accepted lease=${leaseId}` }, {}],
+    ["wrong stop lease", { exitCode: 0, stderr: "released lease=cbx_other server=fixture" }, {}],
+    ["pending broker cleanup", {}, { cleanupStatus: "pending", cleanupCompletedAt: undefined }],
+    ["wrong broker lease", {}, { id: "cbx_other" }],
+    ["malformed completion receipt", {}, { cleanupCompletedAt: 1 }],
+    ["retained access", {}, { host: "private-host.example" }],
+  ])("retains recovery ownership after %s", async (_label, stop, lease) => {
+    const values = harness({ lease });
+    const runCrabbox = changeRunner(values, (step, result) =>
+      step === "stop" ? { ...result, ...stop } : result,
+    );
+    const proof = runPhase(values, "proof", { runCrabbox });
+    await expect(proof).rejects.toThrow(/recovery home retained/u);
+    await expect(proof).rejects.toThrow(`run=${runId} lease=${leaseId}`);
+    await expect(proof).rejects.toThrow(`crabbox stop --provider aws --id ${leaseId} --wait`);
+    expect(existsSync(runCrabbox.mock.calls[0]![0].env.HOME!)).toBe(true);
+    unpublished(values);
   });
 
-  it("evaluates proof freshness after the remote run completes", async () => {
+  it("uses fresh membership authority after a proof outlives the initial token", async () => {
     const values = harness();
-    let clockNow = Date.parse("2026-08-28T01:00:00Z");
-    const runCrabbox = vi.fn(async (input: Parameters<typeof values.runCrabbox>[0]) => {
-      const result = await values.runCrabbox(input);
-      if (input.args[0] === "run") {
+    let clockNow = Date.parse("2026-08-28T00:00:00Z");
+    const initialOrganization = {
+      request: vi.fn(async () => {
+        if (clockNow >= Date.parse("2026-08-28T01:00:00Z")) {
+          throw new Error("installation token expired");
+        }
+        return activeMembership();
+      }),
+    };
+    const runCrabbox = changeRunner(values, (step, result) => {
+      if (step === "run") {
         clockNow = Date.parse("2026-08-28T02:00:00Z");
       }
       return result;
     });
+    const resolvePlan = vi.fn(() => gatePlan());
     await expect(
-      runPublisher({
-        ...values,
+      runPhase(values, "proof", {
         clock: () => clockNow,
-        env: env(),
-        event: event(),
-        resolvePlan: () => gatePlan(),
+        env: phaseEnv("proof", {
+          AWS_PROFILE: "must-not-leak",
+          GH_TOKEN: "job-token",
+          GH_APP_TOKEN: "initial-token",
+        }),
+        organization: initialOrganization,
+        resolvePlan,
         runCrabbox,
       }),
-    ).resolves.toMatchObject({ checkId: 88 });
-  });
+    ).resolves.toMatchObject({ checkId: null, context: { runId, leaseId } });
+    expect(initialOrganization.request).toHaveBeenCalledTimes(1);
+    handedOff(values);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(3);
+    expect(values.broker.request).toHaveBeenCalledWith(`/v1/runs/${runId}`);
 
-  it("rejects non-admin, closed, or non-ancestor input before provisioning", async () => {
-    for (const overrides of [
-      { membership: { ...activeMembership(), state: "pending" } },
-      { pull: { state: "closed" } },
-      { ancestry: { behind_by: 1, status: "diverged" } },
-    ]) {
-      const values = harness(overrides);
-      await expect(
-        runPublisher({
-          ...values,
-          env: env(),
-          event: event(),
-          resolvePlan: () => gatePlan(),
-        }),
-      ).rejects.toThrow();
-      expect(values.runCrabbox).not.toHaveBeenCalled();
-    }
-  });
-
-  it("rejects protected main moving between comparison and final ref reread", async () => {
-    const values = harness({
-      mainShas: [mainSha, mainSha, laterMainSha, "f".repeat(40)],
-    });
+    values.broker.request.mockClear();
+    values.runCrabbox.mockClear();
     await expect(
-      runPublisher({
-        ...values,
-        clock: () => Date.parse("2026-08-28T02:00:00Z"),
-        env: env(),
-        event: event(),
-        resolvePlan: () => gatePlan(),
+      runPhase(values, "publish", {
+        clock: () => clockNow,
+        resolvePlan,
       }),
-    ).rejects.toThrow(/protected main moved/u);
-    expect(values.github.request).not.toHaveBeenCalledWith(
-      "POST",
-      "/repos/openclaw/openclaw/check-runs",
-      expect.anything(),
-    );
+    ).resolves.toMatchObject({
+      checkId: 88,
+      context: proofContext,
+    });
+    expect(resolvePlan).toHaveBeenCalledTimes(2);
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+    expect(values.broker.request.mock.calls[0]).toEqual(["/v1/whoami"]);
+    expect(values.organization.request).toHaveBeenCalledTimes(2);
+    expect(values.orderedCalls.at(-1)).toBe("github:POST:/repos/openclaw/openclaw/check-runs");
   });
 
-  it("requires the exact bearer service principal and same-owner broker run", async () => {
-    for (const overrides of [
+  it.each([
+    ["failed native command", 255, {}, /command failed/u],
+    ["malformed run ID", 0, { id: "run_bad\nextra=1" }, /identity/u],
+    ["unfinished release", 0, { phase: "running" }, /lifecycle/u],
+    ["failed proof", 0, { state: "failed", exitCode: 1 }, /result/u],
+  ] as const)("does not hand off %s", async (_label, exitCode, run, failure) => {
+    const values = harness({ run });
+    const runCrabbox = changeRunner(values, (step, result) =>
+      step === "run" ? { ...result, exitCode } : result,
+    );
+    await expect(runPhase(values, "proof", { runCrabbox })).rejects.toThrow(failure);
+    unpublished(values);
+  });
+
+  it("refuses publication when both fresh token steps provide no token", () => {
+    writeFileSync(outputPath, JSON.stringify(event()));
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/pr-crabbox-gate-publisher.mjs", "--publish"],
+      {
+        encoding: "utf8",
+        env: phaseEnv("publish", {
+          GITHUB_EVENT_PATH: outputPath,
+          GH_TOKEN: "job-token",
+          GH_APP_TOKEN: "",
+        }),
+        input: "",
+        timeout: 10_000,
+      },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("GH_APP_TOKEN is required");
+  });
+
+  it("propagates output-write failure after joined proof without publishing", async () => {
+    const values = harness();
+    await expect(
+      runPhase(values, "proof", {
+        env: phaseEnv("proof", { GITHUB_OUTPUT: outputRoot }),
+      }),
+    ).rejects.toThrow(/EISDIR/u);
+    expect(values.runCrabbox).toHaveBeenCalledTimes(3);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+  });
+
+  it.each([
+    ["missing output destination", "proof", { GITHUB_OUTPUT: "" }],
+    ["missing run", "publish", { CRABBOX_PROOF_RUN_ID: "" }],
+    ["missing lease", "publish", { CRABBOX_PROOF_LEASE_ID: "" }],
+    ["injected run", "publish", { CRABBOX_PROOF_RUN_ID: `${runId}\nextra=1` }],
+    ["injected lease", "publish", { CRABBOX_PROOF_LEASE_ID: `${leaseId}\nextra=1` }],
+  ] as const)("rejects %s before external work", async (_label, phase, overrides) => {
+    const values = harness();
+    await expect(
+      runPhase(values, phase, {
+        env: phaseEnv(phase, overrides),
+      }),
+    ).rejects.toThrow();
+    expect(values.orderedCalls).toEqual([]);
+    expect(values.runCrabbox).not.toHaveBeenCalled();
+  });
+
+  const atTwo = { clock: () => Date.parse("2026-08-28T02:00:00Z") };
+  function rejection(
+    label: string,
+    overrides: Parameters<typeof harness>[0],
+    error?: RegExp,
+    options: Parameters<typeof runPhase>[2] = atTwo,
+    phase: "proof" | "publish" = "publish",
+  ) {
+    return { label, overrides, error, options, phase };
+  }
+  it.each([
+    ...(
+      [
+        [
+          "changed head",
+          { pull: { head: { repo: { full_name: repository }, sha: "f".repeat(40) } } },
+        ],
+        [
+          "changed base",
+          { pull: { base: { ref: "main", repo: { full_name: repository }, sha: "f".repeat(40) } } },
+        ],
+        ["revoked administrator", { membership: { ...activeMembership(), role: "member" } }],
+        ["changed broker principal", { principal: { owner: "other-owner" } }],
+        ["mismatched lease", { run: { leaseID: "cbx_other" } }],
+        ["pending cleanup", { lease: { cleanupStatus: "pending", cleanupCompletedAt: undefined } }],
+        ["mismatched cleanup lease", { lease: { id: "cbx_other" } }],
+        ["expired completed proof", { run: { endedAt: "2026-08-28T01:00:00Z" } }],
+      ] satisfies [string, Parameters<typeof harness>[0]][]
+    ).map(([label, overrides]) =>
+      rejection(label, overrides, undefined, {
+        clock: () => Date.parse("2026-08-28T03:00:00.001Z"),
+      }),
+    ),
+    ...[
       { principal: { auth: "session" } },
       { principal: { org: "other" } },
       { principal: { admin: true } },
       { run: { owner: "github:42" } },
       { run: { org: "other" } },
-    ]) {
+    ].map((overrides) =>
+      rejection("service principal or run ownership", overrides, /service principal|ownership/u),
+    ),
+    rejection("untrusted output plan", {}, /canonical exact-head gate/u, {
+      resolvePlan: () => ({ ...gatePlan(), targets: [] }),
+    }),
+    rejection(
+      "main moving during final reread",
+      { mainShas: [mainSha, mainSha, laterMainSha, "f".repeat(40)] },
+      /protected main moved/u,
+    ),
+    ...[
+      { membership: { ...activeMembership(), state: "pending" } },
+      { pull: { state: "closed" } },
+      { ancestry: { behind_by: 1, status: "diverged" } },
+    ].map((overrides) => rejection("ineligible proof input", overrides, undefined, {}, "proof")),
+  ])(
+    "rejects $label before publication or provisioning",
+    async ({ overrides, error, options, phase }) => {
       const values = harness(overrides);
-      await expect(
-        runPublisher({
-          ...values,
-          clock: () => Date.parse("2026-08-28T02:00:00Z"),
-          env: env(),
-          event: event(),
-          resolvePlan: () => gatePlan(),
-        }),
-      ).rejects.toThrow(/service principal|ownership/u);
-    }
+      await expect(runPhase(values, phase, options)).rejects.toThrow(error);
+      expect(values.runCrabbox).not.toHaveBeenCalled();
+      expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
+    },
+  );
+
+  it("rechecks membership immediately before publication", async () => {
+    const values = harness();
+    values.organization.request.mockResolvedValueOnce(activeMembership()).mockResolvedValueOnce({
+      ...activeMembership(),
+      role: "member",
+    });
+    await expect(runPhase(values, "publish")).rejects.toThrow(/not an active/u);
+    expect(values.github.request.mock.calls.some(([method]) => method === "POST")).toBe(false);
   });
 });
 
-describe("Crabbox broker authentication", () => {
-  it.each([
-    ["with Access", "access-id", "access-secret"],
-    ["without Access", "", ""],
-  ])("sends bearer authentication %s", async (_label, accessClientId, accessClientSecret) => {
-    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
-      expect(init?.headers).toEqual({
-        Authorization: "Bearer coordinator-token",
-        ...(accessClientId
-          ? {
-              "CF-Access-Client-Id": accessClientId,
-              "CF-Access-Client-Secret": accessClientSecret,
-            }
-          : {}),
-      });
-      return new Response('{"owner":"service"}', { status: 200 });
+it.each([
+  ["with Access", "access-id", "access-secret"],
+  ["without Access", "", ""],
+  ["with an invalid Access half-pair", "id", undefined],
+])("validates bearer authentication %s", async (_label, accessClientId, accessClientSecret) => {
+  const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+    expect(init?.headers).toEqual({
+      Authorization: "Bearer coordinator-token",
+      ...(accessClientId
+        ? {
+            "CF-Access-Client-Id": accessClientId,
+            "CF-Access-Client-Secret": accessClientSecret,
+          }
+        : {}),
     });
-    const api = createJsonApi({
+    return new Response('{"owner":"service"}', { status: 200 });
+  });
+  const createApi = () =>
+    createJsonApi({
       accessClientId,
       accessClientSecret,
       baseUrl: "https://broker.example/",
       fetchImpl,
       token: "coordinator-token",
     });
-    await expect(api.request("/v1/whoami")).resolves.toEqual({ owner: "service" });
-  });
-
-  it("rejects a Cloudflare Access half-pair", () => {
-    expect(() =>
-      createJsonApi({
-        accessClientId: "id",
-        baseUrl: "https://broker.example/",
-        token: "coordinator-token",
-      }),
-    ).toThrow(/provided together/u);
-  });
+  if (accessClientSecret === undefined) {
+    expect(createApi).toThrow(/provided together/u);
+  } else {
+    await expect(createApi().request("/v1/whoami")).resolves.toEqual({ owner: "service" });
+  }
 });
 
-describe("Crabbox gate workflow", () => {
-  it("pins the publisher-owned run to protected main", () => {
-    const workflow = parseYaml(
-      readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
-    ) as PublisherWorkflow;
-    const job = workflow.jobs.publish;
-    expect(workflow["run-name"]).toBe(
-      "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}",
-    );
-    expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
-      "base_sha",
-      "head_sha",
-      "pr_number",
-    ]);
-    expect(workflow.permissions).toEqual({});
-    expect(job.environment).toBe("qa-live-shared");
-    expect(job["timeout-minutes"]).toBe(270);
-    expect(job.permissions).toEqual({
-      checks: "write",
-      contents: "read",
-      "pull-requests": "read",
-    });
-    expect(job.steps[0]).toMatchObject({
-      with: {
-        "fetch-depth": 0,
-        "persist-credentials": false,
-        ref: "${{ github.workflow_sha }}",
-      },
-    });
-    const installCommand = job.steps[2]?.run;
-    if (typeof installCommand !== "string") {
-      throw new Error("Crabbox install command is missing");
-    }
-    expect(installCommand).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
-    expect(installCommand).toContain(
-      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
-    );
-    expect(job.steps.at(-1)).toMatchObject({
-      env: {
-        CRABBOX_COORDINATOR:
-          "${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
-        CRABBOX_COORDINATOR_TOKEN:
-          "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
-      },
-      run: "node scripts/pr-crabbox-gate-publisher.mjs",
-    });
+it("pins proof to protected main and publishes with fresh membership authority", () => {
+  const workflow = parseYaml(
+    readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
+  ) as PublisherWorkflow;
+  const job = workflow.jobs.publish;
+  const { steps } = job;
+  const proofIndex = steps.findIndex((step) => step.id === "proof");
+  const proof = steps[proofIndex];
+  const fresh = steps[proofIndex + 1];
+  const fallback = steps[proofIndex + 2];
+  const publish = steps[proofIndex + 3];
+  expect(proof).toMatchObject({ run: "node scripts/pr-crabbox-gate-publisher.mjs --proof" });
+  expect(proof?.["continue-on-error"]).toBeUndefined();
+  expect(fresh).toMatchObject({
+    id: "publish-app-token",
+    if: "success() && steps.proof.outcome == 'success'",
+    uses: "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510",
+    "continue-on-error": true,
+    with: { "app-id": "2729701", "permission-members": "read" },
+  });
+  expect(fallback).toMatchObject({
+    id: "publish-app-token-fallback",
+    if: "success() && steps.proof.outcome == 'success' && steps.publish-app-token.outcome == 'failure'",
+    uses: fresh?.uses,
+    "continue-on-error": true,
+    with: { "app-id": "2971289", "permission-members": "read" },
+  });
+  expect(publish).toMatchObject({
+    if: "success() && steps.proof.outcome == 'success'",
+    env: {
+      CRABBOX_PROOF_RUN_ID: "${{ steps.proof.outputs.run_id }}",
+      CRABBOX_PROOF_LEASE_ID: "${{ steps.proof.outputs.lease_id }}",
+      GH_APP_TOKEN:
+        "${{ steps.publish-app-token.outputs.token || steps.publish-app-token-fallback.outputs.token }}",
+      GH_TOKEN: "${{ github.token }}",
+    },
+    run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
+  });
+  expect(publish?.["continue-on-error"]).toBeUndefined();
+  expect(steps.at(-1)).toBe(publish);
+  expect(workflow["run-name"]).toBe(
+    "PR Crabbox gate #${{ inputs.pr_number }} / ${{ inputs.head_sha }}",
+  );
+  expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
+    "base_sha",
+    "head_sha",
+    "pr_number",
+  ]);
+  expect(workflow.permissions).toEqual({});
+  expect(job.environment).toBe("qa-live-shared");
+  expect(job["timeout-minutes"]).toBe(270);
+  expect(job.permissions).toEqual({
+    checks: "write",
+    contents: "read",
+    "pull-requests": "read",
+  });
+  expect(job.steps[0]).toMatchObject({
+    with: {
+      "fetch-depth": 0,
+      "persist-credentials": false,
+      ref: "${{ github.workflow_sha }}",
+    },
+  });
+  const installCommand = job.steps[2]?.run;
+  if (typeof installCommand !== "string") {
+    throw new Error("Crabbox install command is missing");
+  }
+  expect(installCommand).toContain("crabbox_0.79.2_linux_amd64.tar.gz");
+  expect(installCommand).toContain(
+    "316e2d788c9f85d0a7e876a0a91eab5e0a9257b8c572ca2c1372dbe066395dae",
+  );
+  expect(job.steps.at(-1)).toMatchObject({
+    env: {
+      CRABBOX_COORDINATOR:
+        "${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
+      CRABBOX_COORDINATOR_TOKEN:
+        "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
+    },
+    run: "node scripts/pr-crabbox-gate-publisher.mjs --publish",
   });
 });

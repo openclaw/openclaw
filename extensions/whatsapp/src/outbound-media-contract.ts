@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements outbound media contract behavior.
 import path from "node:path";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import {
@@ -13,12 +12,12 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
   stripToolCallXmlTags,
-} from "./text-runtime.js";
+} from "openclaw/plugin-sdk/text-chunking";
+import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 
 type WhatsAppOutboundPayloadLike = {
   text?: string;
@@ -61,12 +60,8 @@ const WHATSAPP_VOICE_SAMPLE_RATE_HZ = 48_000;
 const WHATSAPP_VOICE_BITRATE = "64k";
 const WHATSAPP_VOICE_MIMETYPE = "audio/ogg; codecs=opus";
 
-function stripWhatsAppPluralToolXml(text: string): string {
-  return stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true });
-}
-
 function finalizeWhatsAppVisibleText(text: string): string {
-  return sanitizeForPlainText(stripWhatsAppPluralToolXml(text));
+  return sanitizeForPlainText(stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }));
 }
 
 export function normalizeWhatsAppPayloadText(text: string | undefined): string {
@@ -142,10 +137,10 @@ function inferWhatsAppMediaKind(
     : inferredKind;
 }
 
-function normalizeWhatsAppLoadedMedia(
+export async function prepareWhatsAppOutboundMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
-): CanonicalWhatsAppLoadedMedia {
+): Promise<CanonicalWhatsAppLoadedMedia> {
   // Infer the kind and native payload MIME from the same filename fact; Baileys
   // does not replace an explicit application/octet-stream on images or videos.
   const filenameMimeType = mimeTypeFromFilePath(media.fileName);
@@ -155,17 +150,10 @@ function normalizeWhatsAppLoadedMedia(
       ? (filenameMimeType ?? normalizedContentType)
       : normalizedContentType;
   const kind = inferWhatsAppMediaKind(media, resolvedContentType);
-  // Match the existing URL/filename voice rule used by the transcode decision;
-  // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.
-  const mimetype =
-    kind === "audio" &&
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    })
-      ? WHATSAPP_VOICE_MIMETYPE
-      : (resolvedContentType ?? "application/octet-stream");
+  const nativeVoice = kind === "audio" && isWhatsAppNativeVoiceAudio(media.buffer);
+  const mimetype = nativeVoice
+    ? WHATSAPP_VOICE_MIMETYPE
+    : (resolvedContentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
       ? resolveWhatsAppDocumentFileName({
@@ -173,35 +161,25 @@ function normalizeWhatsAppLoadedMedia(
           mimetype,
         })
       : media.fileName;
-  return {
+  const normalized = {
     buffer: media.buffer,
     kind,
     mimetype,
     ...(fileName ? { fileName } : {}),
   };
-}
-
-export async function prepareWhatsAppOutboundMedia(
-  media: WhatsAppLoadedMediaLike,
-  mediaUrl?: string,
-): Promise<CanonicalWhatsAppLoadedMedia> {
-  const normalized = normalizeWhatsAppLoadedMedia(media, mediaUrl);
-  if (normalized.kind !== "audio") {
-    return normalized;
-  }
-  if (
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    })
-  ) {
+  if (kind !== "audio" || nativeVoice) {
     return normalized;
   }
 
-  const buffer = await transcodeToWhatsAppVoiceOpus({
-    buffer: media.buffer,
-    fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+  const buffer = await transcodeAudioBufferToOpus({
+    audioBuffer: media.buffer,
+    inputFileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "audio",
+    tempPrefix: "whatsapp-voice-",
+    outputFileName: WHATSAPP_VOICE_FILE_NAME,
+    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
+    channels: 1,
+    bitrate: WHATSAPP_VOICE_BITRATE,
   });
   return {
     buffer,
@@ -210,34 +188,17 @@ export async function prepareWhatsAppOutboundMedia(
   };
 }
 
-function isWhatsAppNativeVoiceAudio(params: {
-  contentType?: string;
-  fileName?: string;
-  mediaUrl?: string;
-}): boolean {
-  const contentType = normalizeMimeType(params.contentType);
-  if (contentType === "audio/ogg" || contentType === "audio/opus") {
-    return true;
+function isWhatsAppNativeVoiceAudio(buffer: Buffer): boolean {
+  const segmentCount = buffer[26];
+  if (!segmentCount || buffer.toString("latin1", 0, 4) !== "OggS") {
+    return false;
   }
-  const fileName = params.fileName ?? deriveWhatsAppDocumentFileName(params.mediaUrl) ?? "";
-  const ext = path.extname(fileName).toLowerCase();
-  return ext === ".ogg" || ext === ".opus";
-}
-
-async function transcodeToWhatsAppVoiceOpus(params: {
-  buffer: Buffer;
-  fileName: string;
-}): Promise<Buffer> {
-  return await transcodeAudioBufferToOpus({
-    audioBuffer: params.buffer,
-    inputFileName: params.fileName,
-    tempPrefix: "whatsapp-voice-",
-    outputFileName: WHATSAPP_VOICE_FILE_NAME,
-    maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
-    sampleRateHz: WHATSAPP_VOICE_SAMPLE_RATE_HZ,
-    channels: 1,
-    bitrate: WHATSAPP_VOICE_BITRATE,
-  });
+  // RFC 7845: the first Ogg page contains only the Opus identification packet.
+  const packetOffset = 27 + segmentCount;
+  return (
+    buffer.length >= packetOffset + 19 &&
+    buffer.toString("latin1", packetOffset, packetOffset + 8) === "OpusHead"
+  );
 }
 
 function deriveWhatsAppDocumentFileName(mediaUrl: string | undefined): string | undefined {

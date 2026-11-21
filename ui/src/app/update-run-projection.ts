@@ -1,21 +1,92 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import type { UpdateRunRecord, UpdateRunStep } from "../../../src/infra/update-run-record.ts";
+import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUpdateRepairRun,
+  type UpdateRunRecord,
+  type UpdateRunStep,
+} from "../../../src/infra/update-run-record.ts";
 import {
   renderUpdateRunReport,
   resolveUpdateRunIdentity,
 } from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
-type OracleState = "pass" | "warn" | "fail" | "pending";
+registerUpdateActionsEnglish();
 
-export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
+export function updateRunStepOwner(step: string): string {
+  // Diagnostic suffixes identify ledger receipts, not additional installation work.
+  return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
+}
+
+function isServingUpdateTarget(
+  run: UpdateRunRecord,
+  { version, buildId }: UpdateRunServingIdentity,
+) {
+  const { reason, before, after, target, verification } = run;
+  const rollback = verification.rollbackOutcome?.status;
+  // Rollback can rewrite `after` with the restored package, even at the same version.
+  if (
+    (reason !== "post-update-failed" &&
+      reason !== "version-mismatch" &&
+      reason !== "build-id-mismatch") ||
+    rollback === "succeeded" ||
+    rollback === "failed" ||
+    verification.recovery?.packageRollbackVerified ||
+    (after.version && after.version !== version) ||
+    (target.version && target.version !== version) ||
+    (target.sha && target.sha !== after.sha)
+  ) {
+    return false;
+  }
+  return after.buildId
+    ? buildId === after.buildId &&
+        buildId !== before.buildId &&
+        buildId !== verification.runningBuildId
+    : reason !== "build-id-mismatch" &&
+        target.kind === "package" &&
+        Boolean(
+          version &&
+          target.version === version &&
+          verification.runningVersion &&
+          version !== verification.runningVersion &&
+          version !== before.version,
+        );
+}
+
+export function projectUpdateRun(
+  run: UpdateRunRecord,
+  connected = true,
+  serving?: UpdateRunServingIdentity,
+) {
   const terminal = run.status !== "running";
-  const report = renderUpdateRunReport(run);
+  const repairRun = isUpdateRepairRun(run);
+  const managedByOcm = run.target.installationMethod === "ocm";
+  const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const targetNote =
+    historical && serving && isServingUpdateTarget(run, serving)
+      ? t("updates.run.servingTarget")
+      : null;
+  const report = historical
+    ? {
+        headline: historical,
+        lines: targetNote ? [targetNote] : [],
+        markdown: targetNote ? `${historical}\n\n${targetNote}` : historical,
+      }
+    : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
-    if (phase === "repairing" && !recorded && phase !== run.phase) {
+    if (
+      !recorded &&
+      phase !== run.phase &&
+      (phase === "repairing" || (repairRun && phase !== "finished"))
+    ) {
       return [];
     }
     let status: UpdateRunStep["status"] = recorded?.status ?? "pending";
@@ -36,23 +107,38 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
     }
     return [{ step: phase, status, label: t(`updates.run.phase.${phase}`) }];
   });
-  // Notice receipts share the bounded ledger but are delivery bookkeeping, not update work.
+  // Supplemental receipts share the ledger but do not represent installation steps.
   const steps = run.steps.filter(
     (step) =>
-      !step.step.startsWith("notice:") && !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
+      !step.step.startsWith("notice:") &&
+      !step.step.startsWith("diagnostic:") &&
+      !UPDATE_RUN_PHASES.some((phase) => phase === step.step),
   );
+  // An active operation owns the panel even before it has emitted diagnostic text.
   const detailStep =
+    steps.findLast((step) => step.status === "in_progress") ??
     run.steps.findLast((step) => step.status === "in_progress" && step.detail) ??
     run.steps.findLast((step) => step.detail);
-  const details = detailStep
-    ? sliceUtf16Safe(detailStep.detail ?? "", -4096)
-        .split(/\r?\n/u)
-        .slice(-80)
-        .join("\n")
-    : "";
+  const groupedDetails = new Map<string, string[]>();
+  for (const step of run.steps) {
+    if (!step.detail) {
+      continue;
+    }
+    const owner = updateRunStepOwner(step.step);
+    const lines = groupedDetails.get(owner) ?? [];
+    lines.push(step.detail);
+    groupedDetails.set(owner, lines);
+  }
+  const stepDetails = new Map<string, string>(
+    Array.from(groupedDetails, ([owner, lines]) => [
+      owner,
+      sliceUtf16Safe(lines.join("\n"), -4096).split(/\r?\n/u).slice(-80).join("\n"),
+    ]),
+  );
+  const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
   const identity = resolveUpdateRunIdentity(facts, run.after);
-  const booleanState = (value: boolean | undefined): OracleState =>
+  const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },
@@ -76,17 +162,32 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   return {
     report,
     terminal,
+    reconciled: isAcknowledgedAbandonedUpdateRun(run),
     headline:
       !connected &&
       !terminal &&
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
         : report.headline,
-    compactLabel: t("updates.run.progress", { completed: String(completed), total: String(total) }),
-    phases,
-    steps,
+    compactLabel: managedByOcm
+      ? ""
+      : t("updates.run.progress", { completed: String(completed), total: String(total) }),
+    phases: managedByOcm
+      ? []
+      : phases.map(({ step, status, label }) => ({
+          step,
+          status,
+          label,
+          detail: stepDetails.get(step),
+        })),
+    steps: steps.map(({ step, status }) => ({
+      step,
+      status,
+      detail: stepDetails.get(updateRunStepOwner(step)),
+    })),
     detailStep: detailStep?.step,
     details,
-    oracles,
+    historicalVerificationLabel: historical ? t("updates.run.recordedVerification") : undefined,
+    oracles: managedByOcm ? [] : oracles,
   };
 }

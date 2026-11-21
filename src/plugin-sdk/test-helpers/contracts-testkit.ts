@@ -4,16 +4,10 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistryParams } from "../../plugins/registry-types.js";
 import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
-import {
-  registerProviderPlugins as registerProviders,
-  requireRegisteredProvider as requireProvider,
-} from "../../test-utils/plugin-registration.js";
 import type { OpenClawPluginApi } from "../plugin-entry.js";
 export { assertNoImportTimeSideEffects } from "./import-side-effects.js";
-
-export { registerProviders, requireProvider };
 
 /** Creates a minimal plugin registry fixture with quiet logger defaults. */
 export function createPluginRegistryFixture(
@@ -32,7 +26,7 @@ export function createPluginRegistryFixture(
         error() {},
         debug() {},
       },
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs ?? true,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),

@@ -1,0 +1,237 @@
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "./bot.cleanup.test-support.js";
+import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import {
+  createFeishuTestConfig,
+  createFeishuTestEvent,
+  createFeishuTestRoute,
+  replyDispatcher,
+  withFeishuRuntimeDefaults,
+} from "./bot.test-support.js";
+import { setFeishuRuntime } from "./runtime.js";
+
+const { getMessage, dispatch, resolveRoute } = vi.hoisted(() => ({
+  getMessage: vi.fn<typeof import("./send.js").getMessageFeishu>(),
+  dispatch: vi
+    .fn<PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"]>()
+    .mockResolvedValue({ queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } }),
+  resolveRoute: vi.fn<PluginRuntime["channel"]["routing"]["resolveAgentRoute"]>(() =>
+    createFeishuTestRoute(),
+  ),
+}));
+
+// mock-isolation: thread admission inspects synthetic messages without Feishu network I/O.
+vi.mock("./send.js", () => ({
+  getMessageFeishu: getMessage,
+  listFeishuThreadMessages: vi.fn().mockResolvedValue([]),
+  sendMessageFeishu: vi.fn(),
+}));
+// mock-isolation: thread admission uses a controlled dispatcher without sending real replies.
+vi.mock("./reply-dispatcher.js", () => ({
+  createFeishuReplyDispatcher: vi.fn(() => replyDispatcher()),
+}));
+// mock-isolation: thread admission keeps previews disabled without reading persisted session reasoning settings.
+vi.mock("./reasoning-preview.js", () => ({
+  resolveFeishuReasoningPreviewEnabled: vi.fn(async () => false),
+}));
+vi.mock("./bot-group-name.js", () => ({ resolveGroupName: vi.fn(async () => undefined) }));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    resolveConfiguredBindingRoute: ({
+      route,
+    }: Parameters<typeof actual.resolveConfiguredBindingRoute>[0]) => ({
+      route,
+      bindingResolution: null,
+    }),
+    resolveRuntimeConversationBindingRoute: ({
+      route,
+    }: Parameters<typeof actual.resolveRuntimeConversationBindingRoute>[0]) => ({
+      route,
+      bindingRecord: null,
+    }),
+  };
+});
+
+afterAll(() => vi.doUnmock("./bot-group-name.js"));
+
+let runtimeConfig = {} as ClawdbotConfig;
+
+async function dispatchMessage(params: {
+  cfg: ClawdbotConfig;
+  event: FeishuMessageEvent;
+  botOpenId?: string;
+}) {
+  runtimeConfig = withFeishuRuntimeDefaults(params.cfg);
+  await handleFeishuMessage({ ...params, runtime: createRuntimeEnv() });
+}
+
+describe("Feishu bot-owned thread mentions", () => {
+  const root = {
+    messageId: "om_bot_root",
+    chatId: "oc-group",
+    senderId: "cli_test",
+    senderType: "app",
+    content: "topic starter",
+    contentType: "text",
+  };
+  const config = (overrides: Parameters<typeof createFeishuTestConfig>[0]) =>
+    createFeishuTestConfig({
+      appId: "cli_test",
+      appSecret: "test-secret",
+      requireMention: true,
+      requireMentionInBotThreads: false,
+      resolveSenderNames: false,
+      ...overrides,
+    });
+  const event = (
+    messageId: string,
+    message: Partial<FeishuMessageEvent["message"]>,
+    chatType: FeishuMessageEvent["message"]["chat_type"] = "group",
+  ) => createFeishuTestEvent({ messageId, chatId: "oc-group", chatType, message });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getMessage.mockReset().mockResolvedValue(null);
+    setFeishuRuntime(
+      createPluginRuntimeMock({
+        config: { current: () => runtimeConfig },
+        channel: {
+          inbound: { buildContext: buildChannelInboundEventContext },
+          reply: { dispatchReplyWithBufferedBlockDispatcher: dispatch },
+          routing: { resolveAgentRoute: resolveRoute },
+        },
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "this bot's typed open ID",
+      root: { senderId: "ou-bot", senderOpenId: "ou-bot" },
+      expected: true,
+    },
+    { name: "another app", root: { senderId: "cli_other" }, expected: false },
+    { name: "a user", root: { senderType: "user" }, expected: false },
+    { name: "untyped open ID", root: { senderId: "ou-bot" }, expected: false },
+    { name: "unreadable root", lookupFailed: true, expected: false },
+    { name: "another chat", root: { chatId: "oc-other" }, expected: false },
+    { name: "another message", root: { messageId: "om_other" }, expected: false },
+    { name: "inline quote", inlineQuote: true, expected: false },
+    { name: "omitted setting", omitted: true, expected: false },
+  ])("admits unmentioned topic replies only for a verified bot root: $name", async (testCase) => {
+    if (testCase.lookupFailed) {
+      getMessage.mockRejectedValueOnce(new Error("root unavailable"));
+    } else {
+      getMessage.mockResolvedValue({
+        ...root,
+        ...testCase.root,
+        threadId: "omt_bot_topic",
+      });
+    }
+    await dispatchMessage({
+      cfg: config({
+        requireMentionInBotThreads: testCase.omitted ? undefined : false,
+        groups: { "oc-group": { groupSessionScope: "group_topic" } },
+      }),
+      botOpenId: "ou-bot",
+      event: event(`msg-owned-thread-${testCase.name}`, {
+        root_id: "om_bot_root",
+        parent_id: "om_bot_root",
+        ...(testCase.inlineQuote ? {} : { thread_id: "omt_bot_topic" }),
+      }),
+    });
+
+    expect(dispatch).toHaveBeenCalledTimes(testCase.expected ? 1 : 0);
+    expect(getMessage).toHaveBeenCalledTimes(testCase.omitted || testCase.inlineQuote ? 0 : 1);
+    if (testCase.expected) {
+      expect(dispatch.mock.calls[0]?.[0].ctx).toMatchObject({
+        GroupRequireMention: false,
+        ReplyToId: "om_bot_root",
+        ReplyToBody: "topic starter",
+        ThreadStarterBody: "topic starter",
+        ThreadLabel: "Feishu thread in oc-group",
+      });
+    }
+  });
+
+  it.each([
+    ["account disables inherited requirement", false, undefined, false, true],
+    ["group disables account requirement", true, false, false, true],
+    ["group requires mention despite parent allowing all messages", false, true, false, false],
+    ["explicit mention satisfies strict group setting", false, true, true, true],
+  ] as const)(
+    "uses account and group bot-thread mention precedence: %s",
+    async (name, accountSetting, groupSetting, mentioned, expected) => {
+      getMessage.mockResolvedValue(root);
+      await dispatchMessage({
+        cfg: config({
+          requireMention: !groupSetting,
+          requireMentionInBotThreads: true,
+          accounts: {
+            default: {
+              requireMentionInBotThreads: accountSetting,
+              groups: { "oc-group": { requireMentionInBotThreads: groupSetting } },
+            },
+          },
+        }),
+        botOpenId: "ou-bot",
+        event: event(
+          `msg-owned-scope-${name}`,
+          {
+            root_id: "om_bot_root",
+            ...(mentioned
+              ? { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] }
+              : {}),
+          },
+          "topic_group",
+        ),
+      });
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { name: "group admission", update: { groupPolicy: "disabled" as const }, expected: false },
+    { name: "sender admission", update: { groupSenderAllowFrom: ["ou-other"] }, expected: false },
+    { name: "mention requirement", update: { requireMentionInBotThreads: true }, expected: false },
+    { name: "bot app", update: { appId: "cli_changed" }, expected: false },
+    { name: "unrelated config", update: { textChunkLimit: 2000 }, expected: true },
+  ])(
+    "rechecks current $name after fetching bot-owned thread roots",
+    async ({ name, update, expected }) => {
+      const lookupStarted = createDeferred<void>();
+      const releaseLookup = createDeferred<void>();
+      getMessage.mockImplementationOnce(async () => {
+        lookupStarted.resolve();
+        await releaseLookup.promise;
+        return root;
+      });
+      const cfg = config({ groupPolicy: "open" });
+      const pending = dispatchMessage({
+        cfg,
+        event: event(`msg-owned-current-${name}`, {
+          root_id: "om_bot_root",
+          thread_id: "omt_bot_topic",
+        }),
+      });
+      await lookupStarted.promise;
+      runtimeConfig = createFeishuTestConfig({ ...cfg.channels?.feishu, ...update });
+      releaseLookup.resolve();
+      await pending;
+
+      expect(dispatch).toHaveBeenCalledTimes(expected ? 1 : 0);
+      if (!expected) {
+        expect(resolveRoute).not.toHaveBeenCalled();
+      }
+    },
+  );
+});

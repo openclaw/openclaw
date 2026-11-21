@@ -21,11 +21,13 @@ scenario:
     - src/gateway/server-restart-sentinel.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
+    isolationReason: Changes the Control UI serving path and restarts the Gateway.
     summary: Verify a restart-required config.apply restarts cleanly and delivers the post-restart wake message back into the QA channel.
     channel: qa-channel
     config:
-      channelId: qa-room
-      announcePrompt: "Acknowledge restart wake-up setup in qa-room."
+      ownerId: qa-operator
+      announcePrompt: "Acknowledge restart wake-up setup."
 
 flow:
   steps:
@@ -34,7 +36,7 @@ flow:
         - call: reset
         - set: sessionKey
           value:
-            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', peer: { kind: 'channel', id: config.channelId } })"
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', peer: { kind: 'direct', id: config.ownerId } })"
         - call: createSession
           args:
             - ref: env
@@ -46,7 +48,7 @@ flow:
             - sessionKey:
                 ref: sessionKey
               to:
-                expr: "`channel:${config.channelId}`"
+                expr: "`dm:${config.ownerId}`"
               message:
                 expr: config.announcePrompt
               timeoutMs:
@@ -57,7 +59,7 @@ flow:
             - ref: env
         - set: nextConfig
           value:
-            expr: "(() => { const nextConfig = structuredClone(current.config); const gatewayConfig = (nextConfig.gateway ??= {}); const controlUi = (gatewayConfig.controlUi ??= {}); const allowedOrigins = Array.isArray(controlUi.allowedOrigins) ? [...controlUi.allowedOrigins] : []; if (!allowedOrigins.includes('http://127.0.0.1:65535')) allowedOrigins.push('http://127.0.0.1:65535'); controlUi.allowedOrigins = allowedOrigins; return nextConfig; })()"
+            expr: "(() => { const nextConfig = structuredClone(current.config); const gatewayConfig = (nextConfig.gateway ??= {}); const controlUi = (gatewayConfig.controlUi ??= {}); controlUi.basePath = controlUi.basePath === '/qa-restart-wakeup' ? '/qa-restart-wakeup-alt' : '/qa-restart-wakeup'; return nextConfig; })()"
         - set: wakeMarker
           value:
             expr: "`QA-RESTART-${randomUUID().slice(0, 8)}`"
@@ -73,7 +75,7 @@ flow:
               sessionKey:
                 ref: sessionKey
               deliveryContext:
-                expr: "({ channel: 'qa-channel', to: `channel:${config.channelId}` })"
+                expr: "({ channel: 'qa-channel', to: `dm:${config.ownerId}` })"
               note:
                 ref: wakeMarker
         - try:
@@ -106,7 +108,7 @@ flow:
                   - ref: state
                   - lambda:
                       params: [candidate]
-                      expr: "candidate.text.includes(wakeMarker)"
+                      expr: "candidate.conversation.kind === 'direct' && candidate.conversation.id === config.ownerId && candidate.text.includes(wakeMarker)"
                   - 60000
                   - sinceIndex:
                       ref: wakeStartIndex

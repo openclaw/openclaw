@@ -1,8 +1,8 @@
-import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   normalizeSessionToolOverrides,
   sessionToolOverridesEqual,
-} from "../session-tool-overrides.js";
+} from "../../config/sessions/session-tool-overrides.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 
 export const SESSION_SETTINGS_CHANGED_ERROR_REASON = "session-settings-changed";

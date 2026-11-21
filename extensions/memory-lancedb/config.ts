@@ -1,25 +1,19 @@
-// Memory Lancedb helper module supports config behavior.
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseFiniteNumber,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type MemoryConfig = {
-  embedding: {
-    provider: string;
-    model: string;
-    apiKey?: string;
-    baseUrl?: string;
-    dimensions?: number;
+type ProducedMemoryConfig = ReturnType<typeof memoryConfigSchema.parse>;
+type OptionalMemoryFields = "dreaming" | "dbPath" | "autoCapture" | "autoRecall";
+type OptionalEmbeddingFields = "apiKey" | "baseUrl" | "dimensions";
+export type MemoryConfig = Omit<ProducedMemoryConfig, "embedding" | OptionalMemoryFields> &
+  Partial<Pick<ProducedMemoryConfig, OptionalMemoryFields>> & {
+    embedding: Omit<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields> &
+      Partial<Pick<ProducedMemoryConfig["embedding"], OptionalEmbeddingFields>>;
   };
-  dreaming?: Record<string, unknown>;
-  dbPath?: string;
-  autoCapture?: boolean;
-  autoRecall?: boolean;
-  captureMaxChars: number;
-  customTriggers?: string[];
-  recallMaxChars: number;
-  storageOptions?: Record<string, string>;
-};
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
@@ -27,7 +21,10 @@ export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number];
 const DEFAULT_MODEL = "text-embedding-3-small";
 export const DEFAULT_CAPTURE_MAX_CHARS = 500;
 export const DEFAULT_RECALL_MAX_CHARS = 1000;
-const DEFAULT_DB_PATH = join(homedir(), ".openclaw", "memory", "lancedb");
+
+export function resolveDefaultDbPath(stateDir: string = resolveStateDir()): string {
+  return join(stateDir, "memory", "lancedb");
+}
 
 const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-small": 1536,
@@ -51,9 +48,9 @@ export function vectorDimsForModel(model: string): number {
   return dims;
 }
 
-function resolveEnvVars(value: string): string {
+export function resolveEnvVars(value: string, env: NodeJS.ProcessEnv = process.env): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
-    const envValue = process.env[envVar];
+    const envValue = env[envVar];
     if (!envValue) {
       throw new Error(`Environment variable ${envVar} is not set`);
     }
@@ -72,24 +69,10 @@ function resolveEmbeddingModel(
   return model;
 }
 
-function resolveFiniteIntegerConfig(value: unknown): number | undefined {
-  if (typeof value !== "number") {
-    return undefined;
-  }
-  const parsed = parseFiniteNumber(value);
-  return parsed === undefined ? undefined : Math.floor(parsed);
-}
-
-function resolveBoundedIntegerConfig(params: {
-  value: unknown;
-  fallback: number;
-  min: number;
-  max: number;
-  label: string;
-}): number {
-  const resolved = resolveFiniteIntegerConfig(params.value) ?? params.fallback;
-  if (resolved < params.min || resolved > params.max) {
-    throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
+function resolveTextLimit(value: unknown, fallback: number, label: string): number {
+  const resolved = resolveOptionalIntegerOption(value) ?? fallback;
+  if (resolved < 100 || resolved > 10_000) {
+    throw new Error(`${label} must be between 100 and 10000`);
   }
   return resolved;
 }
@@ -107,11 +90,11 @@ function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number 
 }
 
 export const memoryConfigSchema = {
-  parse(value: unknown): MemoryConfig {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  parse(value: unknown) {
+    if (!isRecord(value)) {
       throw new Error("memory config required");
     }
-    const cfg = value as Record<string, unknown>;
+    const cfg = value;
     assertAllowedKeys(
       cfg,
       [
@@ -128,8 +111,8 @@ export const memoryConfigSchema = {
       "memory config",
     );
 
-    const embedding = cfg.embedding as Record<string, unknown> | undefined;
-    if (!embedding || typeof embedding !== "object" || Array.isArray(embedding)) {
+    const embedding = cfg.embedding;
+    if (!isRecord(embedding)) {
       throw new Error("embedding config required");
     }
     assertAllowedKeys(embedding, [...EMBEDDING_CONFIG_KEYS], "embedding config");
@@ -144,20 +127,16 @@ export const memoryConfigSchema = {
       throw new Error("embedding.provider must not be empty");
     }
 
-    const captureMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.captureMaxChars,
-      fallback: DEFAULT_CAPTURE_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "captureMaxChars",
-    });
-    const recallMaxChars = resolveBoundedIntegerConfig({
-      value: cfg.recallMaxChars,
-      fallback: DEFAULT_RECALL_MAX_CHARS,
-      min: 100,
-      max: 10_000,
-      label: "recallMaxChars",
-    });
+    const captureMaxChars = resolveTextLimit(
+      cfg.captureMaxChars,
+      DEFAULT_CAPTURE_MAX_CHARS,
+      "captureMaxChars",
+    );
+    const recallMaxChars = resolveTextLimit(
+      cfg.recallMaxChars,
+      DEFAULT_RECALL_MAX_CHARS,
+      "recallMaxChars",
+    );
     let customTriggers: string[] | undefined;
     if (cfg.customTriggers !== undefined) {
       if (!Array.isArray(cfg.customTriggers)) {
@@ -181,24 +160,18 @@ export const memoryConfigSchema = {
       }
     }
 
-    const dreaming =
-      cfg.dreaming === undefined
-        ? undefined
-        : cfg.dreaming && typeof cfg.dreaming === "object" && !Array.isArray(cfg.dreaming)
-          ? (cfg.dreaming as Record<string, unknown>)
-          : (() => {
-              throw new Error("dreaming config must be an object");
-            })();
+    const dreaming = cfg.dreaming;
+    if (dreaming !== undefined && !isRecord(dreaming)) {
+      throw new Error("dreaming config must be an object");
+    }
 
-    // Parse storageOptions (object with string values)
     let storageOptions: Record<string, string> | undefined;
-    const storageOpts = cfg.storageOptions as Record<string, unknown> | undefined;
+    const storageOpts = cfg.storageOptions;
     if (storageOpts !== undefined && storageOpts !== null) {
-      if (!storageOpts || typeof storageOpts !== "object" || Array.isArray(storageOpts)) {
+      if (!isRecord(storageOpts)) {
         throw new Error("storageOptions must be an object");
       }
       storageOptions = {};
-      // Validate all values are strings
       for (const [key, valueLocal] of Object.entries(storageOpts)) {
         if (typeof valueLocal !== "string") {
           throw new Error(`storageOptions.${key} must be a string`);
@@ -217,7 +190,7 @@ export const memoryConfigSchema = {
         dimensions,
       },
       dreaming,
-      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
+      dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : resolveDefaultDbPath(),
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
       captureMaxChars,

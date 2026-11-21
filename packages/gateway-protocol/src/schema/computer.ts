@@ -2,7 +2,9 @@ import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
-export const ComputerStatusParamsSchema = closedObject({});
+export const ComputerStatusParamsSchema = closedObject({
+  probe: Type.Optional(Type.Boolean()),
+});
 
 export const ComputerInvokeParamsSchema = closedObject({
   command: Type.Enum(["screen.snapshot", "computer.act"]),

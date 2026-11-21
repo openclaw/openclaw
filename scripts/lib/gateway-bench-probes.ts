@@ -1,10 +1,11 @@
-// Gateway Bench Probes script supports OpenClaw repository automation.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type ChildProcess } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
 import { performance } from "node:perf_hooks";
 import { expectDefined } from "../../packages/normalization-core/src/expect.ts";
 import { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.ts";
+import { readProcessCgroupV2Snapshot } from "./process-memory.mts";
 
 export type GatewayRpc = <T>(method: string, params: unknown, timeoutMs?: number) => Promise<T>;
 
@@ -19,6 +20,38 @@ export type GatewayMemorySample = {
 };
 
 const PROBE_REQUEST_TIMEOUT_MS = 100;
+
+/** Sample outside the Gateway process; unavailable kernel counters remain explicit. */
+export function readGatewayBenchHostCounters() {
+  const read = (file: string) => {
+    try {
+      return readFileSync(file, "utf8");
+    } catch {
+      return null;
+    }
+  };
+  const cgroups = readProcessCgroupV2Snapshot();
+  for (const snapshot of cgroups ?? []) {
+    snapshot.counters["memory.stat"] = read(`${snapshot.directory}/memory.stat`);
+  }
+  return {
+    atEpochMs: performance.timeOrigin + performance.now(),
+    atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
+    platform: process.platform,
+    counters: Object.fromEntries(
+      [
+        "stat",
+        "loadavg",
+        "meminfo",
+        "vmstat",
+        "pressure/cpu",
+        "pressure/memory",
+        "pressure/io",
+      ].map((name) => [name, process.platform === "linux" ? read(`/proc/${name}`) : null]),
+    ),
+    cgroups,
+  };
+}
 
 export async function readGatewayMemory(
   rpc: GatewayRpc,
@@ -121,6 +154,26 @@ export function readProcessRssMb(pid: number | undefined): number | null {
   }
   const rssKb = parseProcessRssKb(result.stdout);
   return rssKb === null ? null : rssKb / 1024;
+}
+
+export function startGatewayRssSampling(child: Pick<ChildProcess, "pid">) {
+  let maxRssMb: number | null = null;
+  const sample = () => {
+    const rssMb = readProcessRssMb(child.pid);
+    if (rssMb != null) {
+      maxRssMb = maxRssMb == null ? rssMb : Math.max(maxRssMb, rssMb);
+    }
+    return maxRssMb;
+  };
+  let timer: ReturnType<typeof setTimeout>;
+  const tick = () => {
+    sample();
+    // PowerShell can take longer than the interval; leave time for probe I/O.
+    timer = setTimeout(tick, 100);
+    timer.unref?.();
+  };
+  tick();
+  return { sample, stop: () => clearTimeout(timer) };
 }
 
 export function parseProcessRssKb(raw: string): number | null {
@@ -254,28 +307,20 @@ function parsePsCpuTimeMs(raw: string): number | null {
   if (
     !Number.isFinite(days) ||
     days < 0 ||
-    parts.some((part) => !Number.isFinite(part) || part < 0)
+    parts.some((part) => !Number.isFinite(part) || part < 0) ||
+    (parts.length !== 2 && parts.length !== 3)
   ) {
     return null;
   }
   if (parts.length === 2) {
-    const [minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
+    parts.unshift(0);
   }
-  if (parts.length === 3) {
-    const [hours, minutes, seconds] = parts;
-    return Math.round(
-      (days * 24 * 60 * 60 +
-        expectDefined(hours, "process CPU hours") * 60 * 60 +
-        expectDefined(minutes, "process CPU minutes") * 60 +
-        expectDefined(seconds, "process CPU seconds")) *
-        1000,
-    );
-  }
-  return null;
+  const [hours, minutes, seconds] = parts;
+  return Math.round(
+    (days * 24 * 60 * 60 +
+      expectDefined(hours, "process CPU hours") * 60 * 60 +
+      expectDefined(minutes, "process CPU minutes") * 60 +
+      expectDefined(seconds, "process CPU seconds")) *
+      1000,
+  );
 }

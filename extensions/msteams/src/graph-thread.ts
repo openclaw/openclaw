@@ -1,5 +1,5 @@
-import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { fetchAllGraphPages, fetchGraphJson } from "./graph.js";
+import { htmlToPlainText } from "./inbound.js";
 import type { MSTeamsRequestDeadline } from "./request-timeout.js";
 
 export type GraphThreadMessage = {
@@ -12,19 +12,23 @@ export type GraphThreadMessage = {
   createdDateTime?: string;
 };
 
+/** Keep inbound thread enrichment bounded while still reaching recent replies. */
+const MAX_REPLY_PAGES = 50;
+
+function compareThreadMessagesChronologically(
+  a: GraphThreadMessage,
+  b: GraphThreadMessage,
+): number {
+  const timeDelta = Date.parse(a.createdDateTime ?? "") - Date.parse(b.createdDateTime ?? "");
+  return timeDelta || (a.id ?? "").localeCompare(b.id ?? "");
+}
+
 /**
  * Strip HTML tags from Teams message content, preserving @mention display names.
  * Teams wraps mentions in <at>Name</at> tags.
  */
 export function stripHtmlFromTeamsMessage(html: string): string {
-  // Preserve mention display names by replacing <at>Name</at> with @Name.
-  let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
-  // Strip remaining HTML tags.
-  text = text.replace(/<[^>]*>/g, " ");
-  // Single-pass decoding preserves literally typed entity text such as "&lt;".
-  text = decodeHtmlEntities(text).replaceAll("\u00a0", " ");
-  // Normalize whitespace.
-  return text.replace(/\s+/g, " ").trim();
+  return htmlToPlainText(html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1"));
 }
 
 /**
@@ -87,29 +91,39 @@ export async function fetchChatMessageText(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not
- * support `$orderby`, so results are always returned in ascending (oldest-first) order.
- * Combined with the `$top` cap of 50, this means only the **oldest 50 replies** are
- * returned for long threads — newer replies are silently omitted. There is currently no
- * Graph API workaround for this; pagination via `@odata.nextLink` can retrieve more
- * replies but still in ascending order only.
+ * Graph caps each replies page at 50 and does not support `$orderby`. Follow
+ * `@odata.nextLink`, then return the newest bounded window in chronological order.
  */
 export async function fetchThreadReplies(
   token: string,
   groupId: string,
   channelId: string,
   messageId: string,
-  limit = 50,
   deadline?: MSTeamsRequestDeadline,
 ): Promise<GraphThreadMessage[]> {
-  const top = Math.min(Math.max(limit, 1), 50);
-  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({
+  const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=50`;
+  const { items, truncated } = await fetchAllGraphPages<GraphThreadMessage>({
     token,
     path,
+    maxPages: MAX_REPLY_PAGES,
     ...(deadline ? { deadline } : {}),
   });
-  return res.value ?? [];
+  if (truncated) {
+    throw new Error("MS Teams thread replies pagination did not reach the newest replies");
+  }
+
+  if (items.length <= 50) {
+    return items;
+  }
+  // Once trimming is required, an incomplete timestamp set cannot identify the newest
+  // window safely; do not present an oldest or arrival-order prefix as current context.
+  const hasCompleteTimestamps = items.every((item) =>
+    Number.isFinite(Date.parse(item.createdDateTime ?? "")),
+  );
+  if (!hasCompleteTimestamps) {
+    throw new Error("MS Teams thread replies have incomplete timestamps");
+  }
+  return items.toSorted(compareThreadMessagesChronologically).slice(-50);
 }
 
 type ThreadContextMessage = {

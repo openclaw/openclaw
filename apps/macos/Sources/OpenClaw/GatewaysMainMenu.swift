@@ -89,7 +89,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     private var loggedMissingMenu = false
     private var isMenuOpen = false
     private var refreshTask: Task<Void, Never>?
-    private var openingID: UUID?
     private var rows: [(gateway: DashboardGatewayMenuItem, item: NSMenuItem)] = []
     private var rowSignature: [RowSignature]?
     private var profiles: [String: MacGatewayCatalogProfile] = [:]
@@ -127,7 +126,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         // SwiftUI owns the top-level item; AppKit owns the view-based submenu.
         if topLevelItem.submenu !== self.ownedMenu {
             topLevelItem.submenu = self.ownedMenu
-            self.logger.debug("Attached AppKit Gateways submenu")
         }
         self.rebuildRowsIfNeeded()
         return true
@@ -149,7 +147,7 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
     private func observeGatewayChanges() {
         withObservationTracking {
             _ = DashboardManager.shared.gatewayEntries
-            _ = DashboardManager.shared.frontmostDashboardTarget
+            _ = AppNavigationActions.selectedGatewayTarget
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -220,8 +218,6 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         }
         guard !self.isMenuOpen else { return }
         self.isMenuOpen = true
-        let openingID = UUID()
-        self.openingID = openingID
         let state = AppStateStore.shared
         let connectivity = GatewayConnectivityCoordinator.shared
         self.primaryLabels = GatewayMenuEndpointLabels.primary(
@@ -234,14 +230,14 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         // Probe the rows that exist now; a catalog refresh can take seconds while
         // a profile window is open, and cards must not wait for it.
         self.store.beginProbing(targets: self.rows.map(\.gateway.target)) { [weak self] in
-            guard let self, self.openingID == openingID else { return }
+            guard let self, self.isMenuOpen else { return }
             self.updateCards()
         }
         self.updateCards()
         self.refreshTask = Task { [weak self] in
             async let refresh: Void = DashboardManager.shared.refreshGatewaySnapshots()
             let profiles = try? await MacGatewayProfileStore.shared.catalogProfiles()
-            guard let self, !Task.isCancelled, self.openingID == openingID else { return }
+            guard let self, !Task.isCancelled else { return }
             if let profiles {
                 self.profiles = Dictionary(uniqueKeysWithValues: profiles.map { ($0.profile.id, $0) })
             } else {
@@ -249,14 +245,13 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
             }
             self.updateCards()
             await refresh
-            guard !Task.isCancelled, self.openingID == openingID else { return }
+            guard !Task.isCancelled else { return }
             self.updateCards()
         }
     }
 
     func menuDidClose(_ menu: NSMenu) {
         self.isMenuOpen = false
-        self.openingID = nil
         self.refreshTask?.cancel()
         self.refreshTask = nil
         self.store.endProbing { Self.activeConsumerCount(for: $0) }
@@ -290,41 +285,42 @@ final class GatewaysMainMenu: NSObject, NSMenuDelegate {
         let model = GatewayMenuCardModel(
             name: gateway.name,
             isPrimary: gateway.isPrimary,
-            isFrontmost: dashboard.frontmostDashboardTarget == gateway.target,
+            isFrontmost: AppNavigationActions.selectedGatewayTarget == gateway.target,
             shortcutNumber: gateway.shortcutNumber,
-            health: facts?.health ?? gateway.health,
+            // Probes still supply latency/version and health for unopened targets;
+            // a live dashboard owns connection health when its authority differs.
+            health: dashboard.dashboardHealth(for: gateway.target) ?? facts?.health ?? gateway.health,
             version: facts?.version,
             buildId: facts?.buildId,
             endpointLabel: labels?.endpointLabel,
             transportLabel: labels?.transportLabel,
             latencyMs: facts?.latencyMs,
-            windowCount: dashboard.openWindowCount(for: gateway.target),
+            windowCount: AppStateStore.shared.nativeExperienceEnabled
+                ? WebChatManager.shared.openWindowCount(for: gateway.target)
+                : dashboard.openWindowCount(for: gateway.target),
             browserSessionExpiresAt: profile?.browserSessionExpiresAt,
             lastSeen: facts?.lastSeen,
             isProbing: self.store.isProbing(gateway.target))
+        let activate = { [weak self, weak item] in
+            guard let self, let item else { return }
+            item.menu?.cancelTracking()
+            self.openGateway(item)
+        }
         let card = GatewayMenuCard(model: model, now: now)
             .contentShape(Rectangle())
-            .onTapGesture { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
-            .accessibilityAction { [weak self, weak item] in
-                guard let self, let item else { return }
-                item.menu?.cancelTracking()
-                self.openGateway(item)
-            }
+            .onTapGesture(perform: activate)
+            .accessibilityAction(.default, activate)
         StatusMenuRenderer.configureHostedView(item, rootView: card, highlights: true)
     }
 
     @objc private func openGateway(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: DashboardManager.shared.openOrFocusDashboard(for: target))
+        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target))
     }
 
     @objc private func newGatewayWindow(_ sender: NSMenuItem) {
         guard let id = sender.identifier?.rawValue, let target = DashboardGatewayTarget(bridgeID: id) else { return }
-        self.trackWindowOpen(target: target, task: DashboardManager.shared.openNewDashboardWindow(for: target))
+        self.trackWindowOpen(target: target, task: AppNavigationActions.openGateway(target, newWindow: true))
     }
 
     private func trackWindowOpen(target: DashboardGatewayTarget, task: Task<Void, Never>) {

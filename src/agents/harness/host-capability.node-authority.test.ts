@@ -1,9 +1,12 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   resetAgentRunRegistryForTest,
@@ -21,151 +24,112 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../admitted-run-context.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { admissionFixture } from "./host-capability.shard.test-support.js";
 
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-const admissions: PreparedAgentRunAdmission[] = [];
+const { admittedAttempt, closeAdmissions } = admissionFixture(
+  { permissionMode: "full" },
+  "host-capability-node-authority-test",
+);
 
-async function admittedAttempt(
-  runId: string,
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: {
-        kind: "system",
-        boundary: "host-capability-node-authority-test",
-        state: "present",
-      },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      permissionMode: "full",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
+function assertWithoutHostSql(assertCurrent: () => void) {
+  const sql = observeHostDataSql();
+  try {
+    assertCurrent();
+  } finally {
+    try {
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  }
 }
 
 afterEach(() => {
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
   resetPluginRuntimeStateForTest();
 });
 
-describe("agent harness node authority", () => {
-  it("binds Full node invocation to the exact live admission, session and placement", async () => {
+it.each(["durable", "incognito"])(
+  "binds %s Full node invocation to the exact live admission, session and placement",
+  async (storage) => {
     const previousRegistry = getActivePluginRegistry();
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-full-node-"));
+    const memoryPath = resolveIncognitoOpenClawAgentSqlitePath({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: root },
+    });
     const sessionTarget = {
       agentId: "main",
-      sessionKey: "agent:main:session-1",
+      sessionKey:
+        storage === "incognito" ? "agent:main:dashboard:incognito-node" : "agent:main:session-1",
       sessionId: "session-1",
-      storePath: path.join(root, "sessions.json"),
+      storePath: storage === "incognito" ? memoryPath : path.join(root, "sessions.json"),
     };
     try {
-      for (const change of [
-        "none",
-        "ordinary",
-        "close",
-        "admission",
-        "restart",
-        "permission",
-        "session",
-        "placement",
-        "gateway",
-        "plugin",
-        "plugin-reload",
-      ] as const) {
-        await upsertSessionEntryCore(sessionTarget, {
-          sessionId: "session-1",
-          updatedAt: Date.now(),
-          permissionMode: "full",
-        });
-        const { attempt, admission } = await admittedAttempt(`run-${change}`, {
-          permissionMode: change === "ordinary" ? "workspace" : "full",
-          sessionTarget,
-        });
-        let placementActive = true;
-        const registry = createEmptyPluginRegistry();
-        registry.plugins.push(
-          createPluginRecord({
-            id: "fixture",
-            source: "fixture",
-            origin: "bundled",
-            enabled: true,
-            configSchema: true,
-          }),
-        );
-        setActivePluginRegistry(registry);
-        const context = {} as GatewayRequestContext;
-        const assertPlacementCurrent = vi.fn(() => {
-          if (!placementActive) {
-            throw new Error("placement no longer current");
-          }
-        });
-        let currentContext = context;
-        bindGatewayContextResolver(attempt.admittedRunContext, () => currentContext);
-        const host = createAgentHarnessHostCapabilities({
-          attempt,
-          pluginId: "fixture",
-          requiredNodeCommands: ["fixture.exec"],
-        });
-        const dispatched = vi.fn(async () => "launched");
-        await withPluginRuntimeGatewayRequestScope(
-          { isWebchatConnect: () => false, assertNodeExecutionCurrent: assertPlacementCurrent },
-          () =>
-            host.runWithScope(async () => {
-              const requestScope = getPluginRuntimeGatewayRequestScope();
-              const invoke = requestScope?.invokeWithSessionNodeAuthority;
-              expect(invoke).toBeTypeOf("function");
-              const placementGrantAuthority = requestScope?.nodePlacementGrantAuthority;
-              expect(placementGrantAuthority).toMatchObject({
-                agentId: "main",
-                sessionKey: sessionTarget.sessionKey,
-                runId: `run-${change}`,
-              });
-              const placementGrantRequest = {
-                pluginId: "fixture",
-                command: "fixture.exec",
-                nodeId: "node-1",
-                workspace: {
-                  workspaceDir: "/node/workspace",
-                  sessionKey: sessionTarget.sessionKey,
-                  sessionId: "session-1",
-                  environmentId: "environment-1",
-                  ownerEpoch: 2,
-                },
-              };
-              expect(() =>
-                placementGrantAuthority?.assertCurrent(placementGrantRequest),
-              ).not.toThrow();
-              const ready = createDeferred();
-              const release = createDeferred();
-              const result = invoke!(
-                {
-                  source: "session-full",
+      const run = async () => {
+        for (const change of [
+          "none",
+          "ordinary",
+          "close",
+          "admission",
+          "restart",
+          "permission",
+          "session",
+          "placement",
+          "gateway",
+          "plugin",
+          "plugin-reload",
+        ] as const) {
+          await upsertSessionEntryCore(sessionTarget, {
+            sessionId: "session-1",
+            updatedAt: Date.now(),
+            permissionMode: "full",
+          });
+          const { attempt, admission } = await admittedAttempt(`run-${change}`, {
+            permissionMode: change === "ordinary" ? "workspace" : "full",
+            sessionTarget,
+            sessionKey: sessionTarget.sessionKey,
+          });
+          let placementActive = true;
+          const registry = createEmptyPluginRegistry();
+          registry.plugins.push(
+            createPluginRecord({
+              id: "fixture",
+              source: "fixture",
+              origin: "bundled",
+              enabled: true,
+              configSchema: true,
+            }),
+          );
+          setActivePluginRegistry(registry);
+          const context = {} as GatewayRequestContext;
+          const assertPlacementCurrent = vi.fn(() => {
+            if (!placementActive) {
+              throw new Error("placement no longer current");
+            }
+          });
+          let currentContext = context;
+          bindGatewayContextResolver(attempt.admittedRunContext, () => currentContext);
+          const host = createAgentHarnessHostCapabilities({
+            attempt,
+            pluginId: "fixture",
+            requiredNodeCommands: ["fixture.exec"],
+          });
+          const dispatched = vi.fn(async () => "launched");
+          await withPluginRuntimeGatewayRequestScope(
+            { isWebchatConnect: () => false, assertNodeExecutionCurrent: assertPlacementCurrent },
+            () =>
+              host.runWithScope(async () => {
+                const requestScope = getPluginRuntimeGatewayRequestScope();
+                const invoke = requestScope?.invokeWithSessionNodeAuthority;
+                const placementGrantAuthority = requestScope?.nodePlacementGrantAuthority;
+                const placementGrantRequest = {
+                  pluginId: "fixture",
                   command: "fixture.exec",
-                  pluginId: change === "plugin" ? "other" : "fixture",
                   nodeId: "node-1",
                   workspace: {
                     workspaceDir: "/node/workspace",
@@ -174,78 +138,95 @@ describe("agent harness node authority", () => {
                     environmentId: "environment-1",
                     ownerEpoch: 2,
                   },
-                },
-                async (assertCurrent) => {
-                  ready.resolve();
-                  await release.promise;
-                  assertCurrent();
-                  return await dispatched();
-                },
-              );
-              void result.catch(() => {});
-              if (change === "ordinary") {
-                await expect(result).resolves.toBeUndefined();
-                expect(dispatched).not.toHaveBeenCalled();
-                return;
-              }
-              if (change === "plugin") {
-                await expect(result).rejects.toThrow("no longer current");
-                expect(dispatched).not.toHaveBeenCalled();
-                return;
-              }
-              await ready.promise;
-              switch (change) {
-                case "close":
-                  host.close();
-                  break;
-                case "admission":
-                  admission.close();
-                  break;
-                case "restart":
-                  rotateAgentRunRegistryLifecycleGeneration();
-                  break;
-                case "permission":
-                  await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
-                  break;
-                case "session":
-                  await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
-                  break;
-                case "placement":
-                  placementActive = false;
-                  break;
-                case "gateway":
-                  currentContext = {} as GatewayRequestContext;
-                  break;
-                case "plugin-reload":
-                  setActivePluginRegistry(createEmptyPluginRegistry());
-                  break;
-                case "none":
-                  break;
-              }
-              release.resolve();
-              if (change === "none") {
-                await expect(result).resolves.toBe("launched");
-                expect(dispatched).toHaveBeenCalledOnce();
-                host.close();
-                expect(() => placementGrantAuthority?.assertCurrent(placementGrantRequest)).toThrow(
-                  "no longer active",
+                };
+                expect(() =>
+                  assertWithoutHostSql(() =>
+                    placementGrantAuthority?.assertCurrent(placementGrantRequest),
+                  ),
+                ).not.toThrow();
+                const ready = createDeferred();
+                const release = createDeferred();
+                const result = invoke!(
+                  {
+                    ...placementGrantRequest,
+                    source: "session-full",
+                    pluginId: change === "plugin" ? "other" : "fixture",
+                  },
+                  async (assertCurrent) => {
+                    ready.resolve();
+                    await release.promise;
+                    assertWithoutHostSql(assertCurrent);
+                    return await dispatched();
+                  },
                 );
-              } else {
-                await expect(result).rejects.toThrow(/no longer (active|current)/);
-                expect(dispatched).not.toHaveBeenCalled();
-              }
-            }),
-        );
-        host.close();
-        admission.close();
-      }
+                void result.catch(() => {});
+                if (change === "ordinary") {
+                  await expect(result).resolves.toBeUndefined();
+                  expect(dispatched).not.toHaveBeenCalled();
+                  return;
+                }
+                if (change === "plugin") {
+                  await expect(result).rejects.toThrow("no longer current");
+                  expect(dispatched).not.toHaveBeenCalled();
+                  return;
+                }
+                await ready.promise;
+                switch (change) {
+                  case "close":
+                    host.close();
+                    break;
+                  case "admission":
+                    admission.close();
+                    break;
+                  case "restart":
+                    rotateAgentRunRegistryLifecycleGeneration();
+                    break;
+                  case "permission":
+                    await upsertSessionEntryCore(sessionTarget, { permissionMode: "workspace" });
+                    break;
+                  case "session":
+                    await upsertSessionEntryCore(sessionTarget, { sessionId: "replacement" });
+                    break;
+                  case "placement":
+                    placementActive = false;
+                    break;
+                  case "gateway":
+                    currentContext = {} as GatewayRequestContext;
+                    break;
+                  case "plugin-reload":
+                    setActivePluginRegistry(createEmptyPluginRegistry());
+                    break;
+                  case "none":
+                    break;
+                }
+                release.resolve();
+                if (change === "none") {
+                  await expect(result).resolves.toBe("launched");
+                  expect(dispatched).toHaveBeenCalledOnce();
+                  host.close();
+                  expect(() =>
+                    placementGrantAuthority?.assertCurrent(placementGrantRequest),
+                  ).toThrow("no longer active");
+                } else {
+                  await expect(result).rejects.toThrow(/no longer (active|current)/);
+                  expect(dispatched).not.toHaveBeenCalled();
+                }
+              }),
+          );
+          host.close();
+          admission.close();
+        }
+      };
+      await run();
     } finally {
+      memorySessionActorOwners.closeDatabase({ agentId: "main", path: memoryPath });
       if (previousRegistry) {
         setActivePluginRegistry(previousRegistry);
       } else {
         resetPluginRuntimeStateForTest();
       }
+      await closeOpenClawAgentDatabasesAsync(root);
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
-});
+  },
+);

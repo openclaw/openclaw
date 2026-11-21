@@ -1,7 +1,6 @@
-// Shared skill name normalization and prompt/command exposure predicates.
 import type { SkillEntry } from "../types.js";
+import type { SkillStatusEntry } from "./status.types.js";
 
-/** Normalizes a skill name to the comparable key used by filters and commands. */
 export function normalizeSkillIndexName(value: string): string {
   return value
     .trim()
@@ -16,26 +15,47 @@ export function isSkillPromptVisible(entry: SkillEntry): boolean {
   if (entry.exposure) {
     return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }
-  if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
-  }
-  return !entry.skill.disableModelInvocation;
+  return !(entry.invocation ?? entry.skill).disableModelInvocation;
 }
 
 export function isSkillUserInvocable(entry: SkillEntry): boolean {
-  if (entry.exposure) {
-    return entry.exposure.userInvocable ?? true;
-  }
-  if (entry.invocation) {
-    return entry.invocation.userInvocable ?? true;
-  }
-  return true;
+  return (entry.exposure ?? entry.invocation)?.userInvocable ?? true;
 }
 
-export function filterPromptVisibleSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
-  return entries.filter(isSkillPromptVisible);
+/** Missing prerequisites exclude intentional disablement and are independent of agent exposure. */
+export function hasMissingSkillRequirements(
+  skill: Pick<SkillStatusEntry, "eligible" | "disabled" | "blockedByAllowlist">,
+): boolean {
+  return !skill.eligible && !skill.disabled && !skill.blockedByAllowlist;
 }
 
-export function filterUserInvocableSkillEntries(entries: readonly SkillEntry[]): SkillEntry[] {
-  return entries.filter(isSkillUserInvocable);
+export function resolveSkillStatusEntry<T extends Pick<SkillStatusEntry, "name" | "skillKey">>(
+  skills: readonly T[],
+  requestedName: string,
+): T | null {
+  const raw = requestedName.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const lower = raw.toLowerCase();
+  const normalized = normalizeSkillIndexName(raw);
+  // Names outrank metadata aliases. A tie at the strongest matching level
+  // must not redirect inspection or Workshop updates to the first loaded skill.
+  const matchers: Array<(skill: T) => boolean> = [
+    (skill) => skill.name === raw,
+    (skill) => skill.skillKey === raw,
+    (skill) => skill.name.toLowerCase() === lower || skill.skillKey.toLowerCase() === lower,
+    (skill) =>
+      Boolean(normalized) &&
+      (normalizeSkillIndexName(skill.name) === normalized ||
+        normalizeSkillIndexName(skill.skillKey) === normalized),
+  ];
+  for (const matches of matchers) {
+    const candidates = skills.filter(matches);
+    if (candidates.length > 0) {
+      return candidates.length === 1 ? candidates[0]! : null;
+    }
+  }
+  return null;
 }

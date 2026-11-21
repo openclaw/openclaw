@@ -1,4 +1,3 @@
-// Slack plugin module implements detected Enterprise Grid installation policy.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -81,8 +80,8 @@ function isStableSlackToolsBySenderEntry(value: unknown): boolean {
   if (normalized === "*") {
     return true;
   }
-  const prefixed = /^(?:id:|channel:slack:)([UW][A-Z0-9]{8,})$/.exec(normalized);
-  return Boolean(prefixed?.[1]) || SLACK_USER_ID_RE.test(normalized);
+  const senderId = /^(?:id:|channel:slack:)(.+)$/.exec(normalized)?.[1];
+  return senderId !== undefined && SLACK_USER_ID_RE.test(senderId);
 }
 
 function assertStableEntries(params: {

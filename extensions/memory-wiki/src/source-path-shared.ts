@@ -1,4 +1,3 @@
-// Memory Wiki plugin module implements source path shared behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { lowercasePreservingWhitespace } from "openclaw/plugin-sdk/string-coerce-runtime";

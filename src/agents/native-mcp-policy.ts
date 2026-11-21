@@ -1,13 +1,10 @@
 /** Projects the canonical conversation tool policy into raw native MCP identities. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig } from "../plugins/bundle-mcp.types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { McpToolCatalog } from "./agent-bundle-mcp-catalog.types.js";
 import { buildBundleMcpToolsFromCatalog } from "./agent-bundle-mcp-materialize.js";
-import type {
-  McpToolCatalog,
-  PreparedNativeMcpPolicy,
-  SessionMcpRuntime,
-} from "./agent-bundle-mcp-types.js";
+import type { PreparedNativeMcpPolicy, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { isRecord } from "./bundle-mcp-adapter.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";

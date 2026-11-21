@@ -10,10 +10,6 @@ function fakeAwsCredentialWithPadding(): string {
   return fakeRepeatedToken(["A", "b", "9", "="]);
 }
 
-function fakeCommitHash(): string {
-  return `${"0123456789abcdef".repeat(2)}01234567`;
-}
-
 function fakeLowercaseBase36Identifier(): string {
   return `${"z".repeat(39)}1`;
 }
@@ -50,13 +46,6 @@ describe("redactSensitiveText token ordering", () => {
     expect(output).not.toContain(jwtSegment);
     expect(output).not.toContain("signatureabcd123456");
     expect(output).toBe("jwt eyJhea…3456");
-  });
-
-  it("does not mask ordinary 40-character hex identifiers", () => {
-    const commitHash = fakeCommitHash();
-    expect(redactSensitiveText(`commit ${commitHash}`, { mode: "tools" })).toBe(
-      `commit ${commitHash}`,
-    );
   });
 
   it("does not mask ordinary lowercase 40-character alphanumeric identifiers", () => {

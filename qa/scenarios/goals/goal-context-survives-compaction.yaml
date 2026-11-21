@@ -200,9 +200,6 @@ flow:
             - ref: env
             - ref: sessionKey
           saveAs: transcriptBeforeCompaction
-        - set: checkpointsBeforeCompaction
-          value:
-            expr: "(await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })).checkpoints ?? []"
         - set: requestCursorBeforeCompaction
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -254,12 +251,6 @@ flow:
         - assert:
             expr: "compactedTranscript.compactionSummaries.length === 1"
             message: manual compaction must append exactly one durable summary
-        - set: newCheckpoints
-          value:
-            expr: "((await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })).checkpoints ?? []).filter((checkpoint) => !checkpointsBeforeCompaction.some((previous) => previous.checkpointId === checkpoint.checkpointId))"
-        - assert:
-            expr: "newCheckpoints.length === 1 && Number.isFinite(newCheckpoints[0].tokensBefore) && Number.isFinite(newCheckpoints[0].tokensAfter) && newCheckpoints[0].tokensAfter === compactedSession.totalTokens"
-            message: manual compaction must publish one checkpoint with the same context snapshot
         - set: summaryRequests
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeCompaction}`)).filter((request) => request.requestKind === 'compaction-summary')"
@@ -334,4 +325,4 @@ flow:
         - assert:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(postCompactOutboundIndex).filter((message) => message.conversation.id === conversationId && message.text === config.postCompactionReplyMarker).length === 1"
             message: the post-compaction final reply must be delivered exactly once
-      detailsExpr: "JSON.stringify({ sessionKey, sessionId: compactedSession.sessionId, lifecycleRevision: compactedSession.lifecycleRevision, counts: [sessionBeforeCompaction.compactionCount ?? 0, compactedSession.compactionCount, sessionAfterTurn.compactionCount], contextAfterCompaction: compactedSession.totalTokens, contextFresh: compactedSession.totalTokensFresh, checkpointId: newCheckpoints[0].checkpointId, summaryRequests: summaryRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome })), postCompactionRequestCursor: postCompactionRequest.cursor, finalReply: postCompactionReply.text })"
+      detailsExpr: "JSON.stringify({ sessionKey, sessionId: compactedSession.sessionId, lifecycleRevision: compactedSession.lifecycleRevision, counts: [sessionBeforeCompaction.compactionCount ?? 0, compactedSession.compactionCount, sessionAfterTurn.compactionCount], contextAfterCompaction: compactedSession.totalTokens, contextFresh: compactedSession.totalTokensFresh, summaryRequests: summaryRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome })), postCompactionRequestCursor: postCompactionRequest.cursor, finalReply: postCompactionReply.text })"

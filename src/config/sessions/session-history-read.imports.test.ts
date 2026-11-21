@@ -1,0 +1,186 @@
+import { expect, it, vi } from "vitest";
+import { findSourceImportBackedges } from "../../../test/helpers/source-import-closure.js";
+import type { SessionTranscriptWorkerRequest } from "./session-transcript-worker.types.js";
+
+const paths = (prefix: string, names: string) =>
+  names.split(" ").map((name) => `${prefix}${name}.ts`);
+const sessions = (names: string) => paths("src/config/sessions/session-", names);
+const gateway = (names: string) => paths("src/gateway/", names);
+const configIO = paths("src/config/", "io io.runtime");
+const aiTransports = "packages/ai/src/transports.ts";
+
+it.each([
+  [
+    "canonical entry parsing",
+    sessions("entry-json"),
+    ["src/channels/bundled-channel-catalog-read.ts"],
+  ],
+  ["transport", sessions("transcript-worker-runtime"), configIO],
+  [
+    "title and topology",
+    [
+      ...gateway("session-transcript-title-reader.worker"),
+      "src/config/sessions/combined-store-topology.worker.ts",
+    ],
+    [...configIO, ...sessions("accessor")],
+  ],
+  [
+    "history acquisition and decoration",
+    [
+      ...sessions("transcript.worker accessor.sqlite-branches"),
+      ...gateway(
+        "session-history-readonly-reader session-transcript-preview-reader chat-history-page-kernel session-history-snapshot",
+      ),
+    ],
+    [
+      ...sessions(
+        "accessor.sqlite-scope accessor.sqlite-active-projection accessor.sqlite-delta accessor.sqlite-history-events transcript-reconcile",
+      ),
+      ...paths(
+        "src/state/",
+        "openclaw-agent-db openclaw-agent-db-lifecycle openclaw-agent-db-readonly openclaw-state-db",
+      ),
+      ...gateway("current-user-profile-display session-transcript-message session-utils.fs"),
+    ],
+  ],
+  [
+    "lazy runtime",
+    gateway("session-history-worker-reader"),
+    [
+      ...gateway(
+        "session-utils-store-sources session-utils-store-candidates chat-history-reply-messages current-user-profile-display",
+      ),
+      ...paths("src/cron/store/", "job-name.kernel paths"),
+      ...sessions("store-target-inventory"),
+      "src/config/runtime-source-projection.ts",
+      "src/agents/bash-tools.process-schema.ts",
+      "packages/tool-call-repair/src/stream-normalizer.ts",
+    ],
+  ],
+  [
+    "lazy entry readers",
+    [
+      ...gateway("session-history-worker-reader"),
+      ...sessions("store-target-inventory entry-read.worker accessor.sqlite-model-context"),
+    ],
+    [
+      "src/config/sessions/lifecycle.ts",
+      ...sessions(
+        "accessor accessor.sqlite-entry-store accessor.sqlite-read accessor.sqlite-exact-read",
+      ),
+      aiTransports,
+      "packages/ai/src/internal/default-runtime.ts",
+      "packages/gateway-protocol/src/schema/users.ts",
+    ],
+  ],
+  [
+    "usage",
+    ["src/infra/session-cost-usage-worker.ts"],
+    [...configIO, ...sessions("accessor"), aiTransports],
+  ],
+  [
+    "exact entry mutation",
+    sessions("accessor.transcript-target entry-read-result.worker"),
+    sessions("accessor.entry accessor.sqlite-entry"),
+  ],
+  [
+    "entry patch publication",
+    sessions("entry-patch.worker"),
+    sessions(
+      "accessor.sqlite-maintenance-store accessor.sqlite-archive-store-kernel accessor.sqlite-transcript-store",
+    ),
+  ],
+] as const)("keeps the %s import boundary", (_name, roots, forbidden) => {
+  expect(findSourceImportBackedges(roots, forbidden)).toEqual([]);
+});
+
+const prewarm = vi.hoisted(() => ({
+  read: vi.fn<(input: SessionTranscriptWorkerRequest) => Promise<unknown>>(),
+  modules: Array.from({ length: 4 }, () => vi.fn(() => ({}))),
+  loadsAtRegistration: [] as number[],
+  broadEntryLoads: 0,
+  open: vi.fn(() => ({ found: false, reason: "database-missing" })),
+}));
+
+// mock-isolation: Capture dispatch without installing native worker ports in the test process.
+vi.mock("../../infra/worker-task-server.js", () => ({
+  serveOwnedWorkerTasks(handler: (input: SessionTranscriptWorkerRequest) => Promise<unknown>) {
+    prewarm.loadsAtRegistration = prewarm.modules.map((loaded) => loaded.mock.calls.length);
+    prewarm.read.mockImplementation(handler);
+  },
+}));
+// mock-isolation: Native custody has separate real-database proof; this test owns import timing.
+vi.mock("./session-transcript-worker-scopes.js", () => ({
+  withHistoryDatabase: async (_database: unknown, _operation: string, read: () => unknown) => ({
+    ok: true,
+    value: await read(),
+  }),
+  pruneClosedHistoryDatabaseScopes: () => {},
+}));
+// mock-isolation: Missing-store admission isolates startup imports from actual database handles.
+vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({
+  withOpenClawAgentDatabaseReadOnly: prewarm.open,
+}));
+
+it("dispatches private entry and runtime-target reads without the broad entry worker", async () => {
+  vi.resetModules();
+  prewarm.broadEntryLoads = 0;
+  vi.doMock("./session-entry-read.worker.js", async (importOriginal) => {
+    prewarm.broadEntryLoads++;
+    return importOriginal();
+  });
+  await import("./session-transcript.worker.js");
+  const database = { agentId: "main", path: "/synthetic/missing/openclaw-agent.sqlite" };
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    sessionKey: "agent:main:missing",
+    storePath: database.path,
+    env: {},
+  };
+  await expect(
+    prewarm.read({ kind: "session-entry-read", database, scope }),
+  ).resolves.toMatchObject({ ok: true, value: { kind: "session-entry-read", entry: undefined } });
+  await expect(
+    prewarm.read({
+      kind: "session-runtime-target",
+      database,
+      scope: { ...scope, sessionId: "missing" },
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: { kind: "session-runtime-target", target: { sessionKey: scope.sessionKey } },
+  });
+  expect(prewarm.broadEntryLoads).toBe(0);
+});
+
+it("prepares presentation only for an explicit prewarm request", async () => {
+  vi.resetModules();
+  prewarm.modules.forEach((loaded) => loaded.mockClear());
+  prewarm.open.mockClear();
+  // mock-isolation: Fresh workers have independent module caches and no previous warm request.
+  vi.doMock("../../gateway/session-history-worker-reader.js", () => prewarm.modules[0]!());
+  // mock-isolation: Observe each fresh worker's presentation imports without loading the kernel.
+  vi.doMock("../../gateway/chat-history-page-kernel.js", () => prewarm.modules[1]!());
+  // mock-isolation: Observe each fresh worker's presentation imports without loading response code.
+  vi.doMock("../../gateway/chat-history-response-page.js", () => prewarm.modules[2]!());
+  // mock-isolation: Observe each fresh worker's presentation imports without loading snapshot code.
+  vi.doMock("../../gateway/session-history-snapshot.js", () => prewarm.modules[3]!());
+  await import("./session-transcript.worker.js");
+  expect(prewarm.loadsAtRegistration).toEqual([0, 0, 0, 0]);
+  // Missing stores are allowed; database admission still runs independently of code preparation.
+  await expect(
+    prewarm.read({
+      kind: "prewarm",
+      env: {},
+      database: { agentId: "main", path: "/synthetic/missing/openclaw-agent.sqlite" },
+    }),
+  ).resolves.toMatchObject({
+    ok: true,
+    value: { kind: "prewarm" },
+  });
+  expect(prewarm.open).toHaveBeenCalledOnce();
+  for (const loaded of prewarm.modules) {
+    expect(loaded).toHaveBeenCalledOnce();
+  }
+});

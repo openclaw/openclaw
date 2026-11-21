@@ -1,12 +1,4 @@
-import type { DeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
 // Public facade for outbound delivery planning, queueing, and transport.
-import type {
-  DeliverOutboundPayloadsParams,
-  InternalDeliverOutboundPayloadsParams,
-} from "./deliver-contracts.js";
-import { runOutboundDelivery, runOutboundDeliveryInternal } from "./deliver-queue.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
-
 export type { OutboundDeliveryResult } from "./deliver-types.js";
 export type { NormalizedOutboundPayload } from "./payloads.js";
 export type { OutboundSendDeps } from "./send-deps.js";
@@ -15,7 +7,6 @@ export type {
   DurableFinalDeliveryRequirement,
   DurableFinalDeliveryRequirements,
   OutboundDeliveryIntent,
-  OutboundDeliveryQueuePolicy,
 } from "./deliver-contracts.js";
 export { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 
@@ -24,15 +15,8 @@ export { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js
  * New message lifecycle code should use `sendDurableMessageBatch` or
  * `deliverInboundReplyWithMessageSendContext`.
  */
-export async function deliverOutboundPayloads(
-  params: DeliverOutboundPayloadsParams,
-): Promise<OutboundDeliveryResult[]> {
-  return await runOutboundDelivery(params);
-}
-
-export async function deliverOutboundPayloadsInternal(
-  params: InternalDeliverOutboundPayloadsParams,
-  stateContext?: DeliveryQueueStateContext,
-): Promise<OutboundDeliveryResult[]> {
-  return await runOutboundDeliveryInternal(params, stateContext);
-}
+export { runOutboundDelivery as deliverOutboundPayloads } from "./deliver-queue.js";
+export {
+  runOutboundDeliveryInternal as deliverOutboundPayloadsInternal,
+  runStructuredOutboundDeliveryInternal as deliverStructuredOutboundPayloadsInternal,
+} from "./deliver-queue.js";

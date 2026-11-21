@@ -20,6 +20,42 @@ class SecurePrefsTest {
     )
 
   @Test
+  fun textSizeDefaultsTo100AndEveryWebStopSurvivesReconstruction() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = testPrefs(context)
+    assertEquals(100, prefs.appearanceTextScale.value.percent)
+    for (percent in listOf(90, 100, 110, 125, 140)) {
+      prefs.setAppearanceTextScale(AppearanceTextScale.fromPercent(percent))
+      assertEquals(percent, prefs.appearanceTextScale.value.percent)
+      assertEquals(percent, testPrefs(context).appearanceTextScale.value.percent)
+      assertTrue(prefs.pendingAppearancePreferenceKeysForGateway("synthetic-gateway").isEmpty())
+    }
+  }
+
+  @Test
+  fun invalidTextSizeFallsBackTo100WithoutChangingExistingAppearance() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putString("appearance.themeMode", "light")
+      .commit()
+    for (invalid in listOf(-1, 0, 99, 115, 141, Int.MAX_VALUE)) {
+      plainPrefs.edit().putInt("appearance.textScale", invalid).commit()
+      val prefs = testPrefs(context)
+      assertEquals(AppearanceTextScale.Standard, prefs.appearanceTextScale.value)
+      assertEquals(AppearanceThemeMode.Light, prefs.appearanceThemeMode.value)
+    }
+    plainPrefs.edit().putString("appearance.textScale", "125").commit()
+    assertEquals(AppearanceTextScale.Standard, testPrefs(context).appearanceTextScale.value)
+    plainPrefs.edit().putBoolean("appearance.textScale", true).commit()
+    assertEquals(AppearanceTextScale.Standard, testPrefs(context).appearanceTextScale.value)
+  }
+
+  @Test
   fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
     assertEquals(
       LocationMode.Always,
@@ -117,11 +153,14 @@ class SecurePrefsTest {
 
     assertEquals(defaultSidebarPageOrder, prefs.sidebarPageOrder.value)
 
-    prefs.setSidebarPageOrder(listOf("threads", "home", "threads", "unknown"))
+    prefs.setSidebarPageOrder(listOf("settings", "threads", "home", "threads", "unknown"))
 
-    val expected = listOf("threads", "home", "settings", "work", "skills")
-    assertEquals(expected, prefs.sidebarPageOrder.value)
-    assertEquals(expected, testPrefs(context).sidebarPageOrder.value)
+    val legacyOrder = listOf("threads", "home", "skills", "work")
+    val storedOrder = prefs.sidebarPageOrder.value
+    assertEquals(legacyOrder, storedOrder.take(legacyOrder.size))
+    assertTrue("New workspace pages follow the saved order", "dreaming" in storedOrder.drop(legacyOrder.size))
+    assertEquals(storedOrder.size, storedOrder.distinct().size)
+    assertEquals(storedOrder, testPrefs(context).sidebarPageOrder.value)
     assertEquals(
       defaultSidebarPageOrder,
       sanitizeSidebarPageOrder(listOf("unknown", "unknown")),
@@ -129,7 +168,7 @@ class SecurePrefsTest {
   }
 
   @Test
-  fun sidebarVisiblePagesDefaultToEveryCurrentDestinationAndPersistAValidatedSubset() {
+  fun sidebarVisiblePagesDefaultToMainPagesAndPersistAValidatedSubset() {
     val context = RuntimeEnvironment.getApplication()
     context
       .getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
@@ -140,12 +179,38 @@ class SecurePrefsTest {
 
     assertEquals(defaultSidebarVisiblePages, prefs.sidebarVisiblePages.value)
 
-    prefs.setSidebarVisiblePages(listOf("threads", "home", "threads", "unknown"))
+    prefs.setSidebarVisiblePages(listOf("settings", "threads", "dreaming", "home", "threads", "unknown"))
 
-    val expected = listOf("threads", "home")
+    val expected = listOf("threads", "dreaming", "home")
     assertEquals(expected, prefs.sidebarVisiblePages.value)
     assertEquals(expected, testPrefs(context).sidebarVisiblePages.value)
     assertEquals(defaultSidebarVisiblePages, sanitizeSidebarVisiblePages(listOf("unknown")))
+  }
+
+  @Test
+  fun legacySidebarPreferencesDropSettingsAndPreserveOtherPinsAndOrder() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    for (
+    (storedPins, expectedPins) in
+    listOf(
+      """["settings","threads","work"]""" to listOf("threads", "work"),
+      """["settings"]""" to listOf("home", "threads", "skills", "work"),
+    )
+    ) {
+      plainPrefs
+        .edit()
+        .clear()
+        .putString("sidebar.pageOrder", """["threads","settings","home","work","skills"]""")
+        .putString("sidebar.visiblePages", storedPins)
+        .commit()
+
+      val prefs = testPrefs(context)
+
+      assertEquals(listOf("threads", "home", "work", "skills"), prefs.sidebarPageOrder.value.take(4))
+      assertFalse("settings" in prefs.sidebarPageOrder.value)
+      assertEquals(expectedPins, prefs.sidebarVisiblePages.value)
+    }
   }
 
   @Test

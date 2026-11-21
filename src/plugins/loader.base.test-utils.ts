@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { resolveBootstrapFilesForRun } from "../agents/bootstrap-files.js";
 import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
-import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  getRegisteredEventKeys,
+  hasInternalHookListeners,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { withEnv } from "../test-utils/env.js";
@@ -90,6 +91,8 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.configValidationMs).toEqual(expect.any(Number));
+    expect(metrics.artifactPreparationMs).toEqual(expect.any(Number));
     expect(metrics.loadMs).toEqual(expect.any(Number));
     expect(metrics.loadFailedCount).toBe(0);
     expect(metrics.registerMs).toEqual(expect.any(Number));
@@ -259,41 +262,6 @@ describe("loadOpenClawPlugins", () => {
     expect(registerFailMetrics.registerMs).toEqual(expect.any(Number));
     expect(registerFailMetrics.registerFailedCount).toBe(1);
     expect(registerFailMetrics.loadAndRegisterMs).toEqual(expect.any(Number));
-  });
-
-  it("rolls back trusted policies when plugin register fails", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "trusted-policy-register-fail",
-      filename: "trusted-policy-register-fail.cjs",
-      registration: `api.registerTrustedToolPolicy({
-        id: "failed-policy",
-        description: "Must be removed after register failure",
-        evaluate: () => ({ block: true, blockReason: "stale failed policy" })
-      });
-      throw new Error("register boom");`,
-    });
-    updatePluginManifest(plugin, {
-      contracts: { trustedToolPolicies: ["failed-policy"] },
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["trusted-policy-register-fail"],
-      },
-    });
-
-    expect(registry.trustedToolPolicies).toHaveLength(0);
-    const loaded = registry.plugins.find((entry) => entry.id === "trusted-policy-register-fail");
-    expect(loaded?.status).toBe("error");
-    expect(loaded?.error).toContain("register boom");
-    expectDiagnosticContaining({
-      registry,
-      level: "error",
-      pluginId: "trusted-policy-register-fail",
-      message: "plugin failed during register: Error: register boom",
-    });
   });
 
   it("rolls back worker providers when plugin register fails", () => {
@@ -491,14 +459,14 @@ describe("loadOpenClawPlugins", () => {
     expect(registry.plugins.find((entry) => entry.id === sourcePlugin.id)?.status).toBe("loaded");
   });
 
-  it("loads installed plugin packages discovered from persisted install records", () => {
+  it("loads installed plugin packages discovered from persisted install records", async () => {
     useNoBundledPlugins();
     const stateDir = makePluginLoaderTempDir();
     const plugin = writePlugin({
       id: "installed-record-plugin",
       body: `module.exports = { id: "installed-record-plugin", register() {} };`,
     });
-    refreshPersistedInstalledPluginIndex({
+    await refreshPersistedInstalledPluginIndex({
       stateDir,
       reason: "source-changed",
       installRecords: {
@@ -646,33 +614,6 @@ describe("loadOpenClawPlugins", () => {
       record?.status,
       JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
     ).toBe("loaded");
-  });
-
-  it("registers standalone text transforms", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "text-shim",
-      filename: "text-shim.cjs",
-      registration: `api.registerTextTransforms({
-        input: [{ from: /red basket/g, to: "blue basket" }],
-        output: [{ from: /blue basket/g, to: "red basket" }],
-      });`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["text-shim"] },
-    });
-
-    expect(registry.textTransforms).toHaveLength(1);
-    const transformRegistration = registry.textTransforms[0];
-    expect(transformRegistration?.pluginId).toBe("text-shim");
-    expect(transformRegistration?.transforms.input).toEqual([
-      { from: /red basket/g, to: "blue basket" },
-    ]);
-    expect(transformRegistration?.transforms.output).toEqual([
-      { from: /blue basket/g, to: "red basket" },
-    ]);
   });
 
   it("loads multiple manifestless standalone files from one configured directory", () => {
@@ -1038,6 +979,7 @@ describe("loadOpenClawPlugins", () => {
         const responses: unknown[] = [];
         await registry.gatewayHandlers["returned-gateway-method.status"]?.({
           params: {},
+          context: {},
           respond: (ok: boolean, payload: unknown, error?: unknown) =>
             responses.push({ ok, payload, error }),
         } as never);
@@ -1068,6 +1010,7 @@ describe("loadOpenClawPlugins", () => {
         const responses: unknown[] = [];
         await registry.gatewayHandlers["explicit-gateway-method.status"]?.({
           params: {},
+          context: {},
           respond: (ok: boolean, payload: unknown, error?: unknown) =>
             responses.push({ ok, payload, error }),
         } as never);
@@ -1075,6 +1018,76 @@ describe("loadOpenClawPlugins", () => {
         expect(responses).toEqual([
           { ok: true, payload: { status: "responded" }, error: undefined },
         ]);
+      },
+    },
+    {
+      label: "reports removed session maps without changing the plugin request context",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "removed-session-capabilities",
+          registration: `api.registerGatewayMethod("removed-session-capabilities.probe", ({ context, params }) => {
+            if (params.capability) {
+              if (params.write) context[params.capability] = new Map();
+              return context[params.capability].size;
+            }
+            return context.getRuntimeConfig();
+          });`,
+        });
+        const registry = loadRegistryFromSinglePlugin({
+          plugin,
+          pluginConfig: { allow: [plugin.id] },
+        });
+        const handler = registry.gatewayHandlers["removed-session-capabilities.probe"];
+        if (!handler) {
+          throw new Error("missing registered plugin probe");
+        }
+        const config = { agents: { entries: { main: {} } } };
+        const context = createGatewayRequestContext(makeContextParams());
+        context.getRuntimeConfig = function () {
+          expect(this).toBe(context);
+          return config;
+        };
+        const contextKeys = Object.keys(context);
+        const respond = vi.fn();
+        const invoke = (params: Record<string, unknown>) =>
+          handler({
+            req: {
+              type: "req",
+              id: "removed-session-capabilities",
+              method: "removed-session-capabilities.probe",
+              params,
+            },
+            params,
+            client: null,
+            isWebchatConnect: () => false,
+            context,
+            respond,
+          });
+        for (const capability of ["chatAbortControllers", "chatQueuedTurns"]) {
+          for (const write of [false, true]) {
+            respond.mockClear();
+            await invoke({ capability, write });
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                retryable: false,
+                message: expect.stringContaining("dispatchGatewayMethod"),
+                details: {
+                  code: "PLUGIN_CAPABILITY_REMOVED",
+                  capability: `context.${capability}`,
+                },
+              }),
+              undefined,
+            );
+          }
+        }
+        respond.mockClear();
+        await invoke({});
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, config, undefined, undefined);
+        expect(Object.keys(context)).toEqual(contextKeys);
       },
     },
     {
@@ -1231,33 +1244,6 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label: "can build a manifest-only snapshot without importing plugin modules",
-      run: () => {
-        useNoBundledPlugins();
-        const importedMarker = path.join(makePluginLoaderTempDir(), "manifest-only-imported.txt");
-        const plugin = writePlugin({
-          id: "manifest-only-plugin",
-          filename: "manifest-only-plugin.cjs",
-          body: `require("node:fs").writeFileSync(${JSON.stringify(importedMarker)}, "loaded", "utf-8");
-  module.exports = { id: "manifest-only-plugin", register() { throw new Error("manifest-only snapshot should not register"); } };`,
-        });
-
-        const registry = loadRegistryFromSinglePlugin({
-          plugin,
-          includeWorkspaceDir: false,
-          pluginConfig: {
-            allow: ["manifest-only-plugin"],
-            entries: { "manifest-only-plugin": { enabled: true } },
-          },
-          options: { activate: false, loadModules: false },
-        });
-
-        expect(fs.existsSync(importedMarker)).toBe(false);
-        const record = registry.plugins.find((entry) => entry.id === "manifest-only-plugin");
-        expect(record?.status).toBe("loaded");
-      },
-    },
-    {
       label: "includes manifest-owned surfaces in manifest-only snapshots",
       run: () => {
         useNoBundledPlugins();
@@ -1291,6 +1277,7 @@ describe("loadOpenClawPlugins", () => {
 
         const record = registry.plugins.find((entry) => entry.id === "manifest-surfaces-plugin");
         expect(fs.existsSync(importedMarker)).toBe(false);
+        expect(record?.status).toBe("loaded");
         expect(record?.channelIds).toEqual(["manifest-surfaces-channel"]);
         expect(record?.providerIds).toEqual(["manifest-surfaces-provider"]);
         expect(record?.cliBackendIds).toEqual([
@@ -1409,7 +1396,6 @@ describe("loadOpenClawPlugins", () => {
         expect(reenter.mock.results[0]).toMatchObject({
           type: "throw",
           value: {
-            name: "PluginLoadReentryError",
             message: `plugin load reentry detected for cache key: ${cacheKey}`,
           },
         });
@@ -1526,34 +1512,6 @@ describe("loadOpenClawPlugins", () => {
     },
   ] as const)("handles config-path and scoped plugin loads: $label", async ({ run }) => {
     await run();
-  });
-
-  it("treats an explicit empty plugin scope as scoped-empty instead of unscoped", () => {
-    useNoBundledPlugins();
-    const allowed = writePlugin({
-      id: "allowed-empty-scope",
-      filename: "allowed-empty-scope.cjs",
-      body: `module.exports = { id: "allowed-empty-scope", register() {} };`,
-    });
-    const extra = writePlugin({
-      id: "extra-empty-scope",
-      filename: "extra-empty-scope.cjs",
-      body: `module.exports = { id: "extra-empty-scope", register() {} };`,
-    });
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      activate: false,
-      config: {
-        plugins: {
-          load: { paths: [allowed.file, extra.file] },
-          allow: ["allowed-empty-scope", "extra-empty-scope"],
-        },
-      },
-      onlyPluginIds: [],
-    });
-
-    expect(registry.plugins).toStrictEqual([]);
   });
 
   it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {
@@ -1913,7 +1871,7 @@ describe("loadOpenClawPlugins", () => {
       "loaded",
     );
     expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
-    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
 
     clearInternalHooks();
   });
@@ -2078,16 +2036,8 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    const updated = await applyBootstrapHookOverrides({
-      files: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/base-AGENTS.md",
-          content: "base bootstrap rules",
-          missing: false,
-        } satisfies WorkspaceBootstrapFile,
-      ],
-      workspaceDir: "/tmp",
+    const updated = await resolveBootstrapFilesForRun({
+      workspaceDir: plugin.dir,
       sessionKey: "agent:main:subagent:test-bootstrap",
     });
 

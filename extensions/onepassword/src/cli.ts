@@ -18,7 +18,6 @@ type OnePasswordCliContext = {
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
   auditStore: PluginStateKeyedStore<AuditRow>;
   registerAdditionalCommands?: (command: CommandLike) => void;
-  write?: (message: string) => void;
 };
 
 function parseLimit(value: unknown): number {
@@ -36,23 +35,6 @@ function truncateReason(reason: string): string {
   return reason.length <= 80 ? reason : `${truncateUtf16Safe(reason, 77)}...`;
 }
 
-async function buildStatus(
-  config: OnePasswordConfig | undefined,
-  opClient: Pick<OpClient, "opBin" | "tokenFilePresent">,
-) {
-  const policies = { auto: 0, approve: 0, deny: 0 };
-  for (const item of Object.values(config?.items ?? {})) {
-    policies[item.policy] += 1;
-  }
-  return {
-    tokenFilePresent: await opClient.tokenFilePresent(),
-    opBinaryResolved: Boolean(opClient.opBin),
-    opBinaryPath: opClient.opBin ?? null,
-    itemCount: Object.keys(config?.items ?? {}).length,
-    policyCounts: policies,
-  };
-}
-
 async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit: number) {
   return (await auditStore.entries())
     .toSorted(
@@ -60,30 +42,22 @@ async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit:
         right.value.timestampMs - left.value.timestampMs || right.key.localeCompare(left.key),
     )
     .slice(0, limit)
-    .map(({ value }) => {
-      const row: {
-        timestamp: string;
-        agent: string;
-        slug: string;
-        outcome: string;
-        errorCode?: string;
-        reason: string;
-      } = {
-        timestamp: new Date(value.timestampMs).toISOString(),
-        agent: value.agentId,
-        slug: value.slug,
-        outcome: value.outcome,
-        reason: truncateReason(value.reason),
-      };
-      if (value.errorCode) {
-        row.errorCode = value.errorCode;
-      }
-      return row;
-    });
+    .map(({ value }) =>
+      Object.assign(
+        {
+          timestamp: new Date(value.timestampMs).toISOString(),
+          agent: value.agentId,
+          slug: value.slug,
+          outcome: value.outcome,
+          reason: truncateReason(value.reason),
+        },
+        value.errorCode ? { errorCode: value.errorCode } : {},
+      ),
+    );
 }
 
 export function registerOnePasswordCommands(context: OnePasswordCliContext): void {
-  const write = context.write ?? ((message: string) => process.stdout.write(`${message}\n`));
+  const write = (message: string) => process.stdout.write(`${message}\n`);
   const command = context.program
     .command("onepassword")
     .description("Inspect the 1Password broker");
@@ -92,13 +66,20 @@ export function registerOnePasswordCommands(context: OnePasswordCliContext): voi
     .command("status")
     .description("Show broker readiness without secret values")
     .action(async () => {
-      write(
-        JSON.stringify(
-          await buildStatus(context.resolveConfig(), context.resolveOpClient()),
-          null,
-          2,
-        ),
-      );
+      const config = context.resolveConfig();
+      const opClient = context.resolveOpClient();
+      const policies = { auto: 0, approve: 0, deny: 0 };
+      for (const item of Object.values(config?.items ?? {})) {
+        policies[item.policy] += 1;
+      }
+      const status = {
+        tokenFilePresent: await opClient.tokenFilePresent(),
+        opBinaryResolved: Boolean(opClient.opBin),
+        opBinaryPath: opClient.opBin ?? null,
+        itemCount: Object.keys(config?.items ?? {}).length,
+        policyCounts: policies,
+      };
+      write(JSON.stringify(status, null, 2));
     });
   command
     .command("audit")

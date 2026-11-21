@@ -1,18 +1,10 @@
 import AppKit
 import Foundation
-import OSLog
 
 enum VoiceWakeChime: Codable, Equatable {
     case none
     case system(name: String)
     case custom(displayName: String, bookmark: Data)
-
-    var systemName: String? {
-        if case let .system(name) = self {
-            return name
-        }
-        return nil
-    }
 
     var displayLabel: String {
         switch self {
@@ -28,33 +20,13 @@ enum VoiceWakeChime: Codable, Equatable {
 
 @MainActor
 enum VoiceWakeChimePlayer {
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.chime")
-
-    static func play(_ chime: VoiceWakeChime, reason: String? = nil) {
-        guard let sound = self.sound(for: chime) else { return }
-        if let reason {
-            self.logger.log(level: .info, "chime play reason=\(reason, privacy: .public)")
-        } else {
-            self.logger.log(level: .info, "chime play")
+    static func play(_ chime: VoiceWakeChime) {
+        let sound: NSSound? = switch chime {
+        case .none: nil
+        case let .system(name): SoundEffectPlayer.sound(named: name)
+        case let .custom(_, bookmark): SoundEffectPlayer.sound(from: bookmark)
         }
-        DiagnosticsFileLog.shared.log(category: "voicewake.chime", event: "play", fields: [
-            "reason": reason ?? "",
-            "chime": chime.displayLabel,
-            "systemName": chime.systemName ?? "",
-        ])
+        guard let sound else { return }
         SoundEffectPlayer.play(sound)
-    }
-
-    private static func sound(for chime: VoiceWakeChime) -> NSSound? {
-        switch chime {
-        case .none:
-            nil
-
-        case let .system(name):
-            SoundEffectPlayer.sound(named: name)
-
-        case let .custom(_, bookmark):
-            SoundEffectPlayer.sound(from: bookmark)
-        }
     }
 }

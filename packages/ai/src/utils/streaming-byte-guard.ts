@@ -1,16 +1,4 @@
-/**
- * Bounded SSE / NDJSON stream reader guard.
- *
- * Wraps a `ReadableStreamDefaultReader<Uint8Array>` so the caller's existing
- * chunk-by-chunk parsing logic is unchanged, but accumulated bytes are tracked
- * against a hard cap. On overflow the underlying reader is cancelled and a
- * canonical error is thrown. Mirrors the `readResponseWithLimit` / bounded
- * JSON response pattern (see `src/agents/provider-http-errors.ts`).
- *
- * Internal helper for now. If extensions need it, promote to a plugin-SDK
- * subpath in a separate, dedicated PR with full SDK metadata sync.
- */
-
+/** Bounds cumulative stream bytes without waiting for reader cleanup after overflow. */
 export type SseStreamOverflow = {
   size: number;
   maxBytes: number;
@@ -80,4 +68,31 @@ export function createSseByteGuard(
     overflowed: () => overflowedFlag,
     cancelled: () => cancelledFlag,
   };
+}
+
+/** Lazily bound an SDK response while preserving upstream cancellation. */
+export function boundResponseBody(
+  response: Response,
+  options: ReadSseStreamWithLimitOptions,
+): Response {
+  if (!response.body || typeof response.body.getReader !== "function") {
+    return response;
+  }
+  const guard = createSseByteGuard(response.body.getReader(), options);
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await guard.read();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      },
+      async cancel(reason) {
+        await guard.cancel(reason);
+      },
+    }),
+    response,
+  );
 }

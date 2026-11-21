@@ -1,0 +1,33 @@
+title: Discord agent E2E readiness
+scenario:
+  id: discord-e2e-doctor
+  surface: channels
+  coverage:
+    secondary:
+      - discord.configured-and-runtime-routing
+  objective: Check the current leased bots, guild channel, native permissions, observer intents, and SUT Gateway without sending a message.
+  successCriteria:
+    - Both identities and the guild text channel match the current lease.
+    - The driver has native lifecycle permissions and a connected event recorder with MESSAGE_CONTENT.
+    - The leased SUT Gateway is connected; missing capability is a failure.
+  execution:
+    kind: flow
+    channel: discord
+    config:
+      agentE2e: true
+      requiredChannelDriver: live
+    timeoutMs: 90000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Owns one leased bot pair and one private event recorder.
+flow:
+  steps:
+    - name: verifies this run's lease and native capabilities
+      actions:
+        - call: channelE2e.doctor
+          saveAs: readiness
+        - assert:
+            expr: readiness.ok
+            message:
+              expr: "JSON.stringify(readiness.checks)"
+      detailsExpr: JSON.stringify(readiness.capabilities)

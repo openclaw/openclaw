@@ -1,0 +1,20 @@
+import type fs from "node:fs";
+
+export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+
+export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+
+export type ConfigIoDeps = {
+  fs?: typeof fs;
+  env?: NodeJS.ProcessEnv;
+  lowerPrecedenceEnv?: Readonly<Record<string, string>>;
+  homedir?: () => string;
+  configPath?: string;
+  mapIncludePath?: (absolutePath: string) => string;
+  logger?: Pick<typeof console, "error" | "warn">;
+  measure?: ConfigSnapshotReadMeasure;
+  suppressFutureVersionWarning?: boolean;
+  observe?: boolean;
+};
+
+export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;

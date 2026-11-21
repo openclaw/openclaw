@@ -1,21 +1,16 @@
-// Qa Coverage Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 
-type Options = {
-  json?: boolean;
-  match?: string[];
-  output?: string;
-  repoRoot?: string;
-  summary?: string;
-  tools?: boolean;
-};
+type Options = Parameters<
+  typeof import("../extensions/qa-lab/reporting-api.ts").runQaCoverageReportCommand
+>[0];
 
 function parseArgs(args: string[]): Options {
-  return parseFlagArgs(
+  return parseFlagArgs<Options>(
     args,
     {},
     [
       booleanFlag("--json", "json"),
+      stringFlag("--evidence", "evidence", { rejectShortOptions: true }),
       stringListFlag("--match", "match", { rejectShortOptions: true }),
       stringFlag("--output", "output", { rejectShortOptions: true }),
       stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
@@ -31,6 +26,7 @@ function parseArgs(args: string[]): Options {
 
 Options:
   --json                Print machine-readable JSON
+  --evidence <path>     Report scorecard gaps from an existing qa-evidence.json
   --match <query>       Search scenario metadata and print matching suite targets
   --output <path>       Write the report to a file
   --repo-root <path>    Repository root to target
@@ -41,20 +37,13 @@ Options:
         process.exit(0);
       },
     },
-  ) as Options;
+  );
 }
 
 try {
   const opts = parseArgs(process.argv.slice(2));
-  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
-  await runQaCoverageReportCommand({
-    ...(opts.json ? { json: true } : {}),
-    ...(opts.match ? { match: opts.match } : {}),
-    ...(opts.output ? { output: opts.output } : {}),
-    ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
-    ...(opts.summary ? { summary: opts.summary } : {}),
-    ...(opts.tools ? { tools: true } : {}),
-  });
+  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/reporting-api.ts");
+  await runQaCoverageReportCommand(opts);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;

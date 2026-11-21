@@ -1,119 +1,66 @@
 import fs from "node:fs";
 import * as os from "node:os";
 import path from "node:path";
-import { Text } from "@earendil-works/pi-tui";
+import { fileURLToPath } from "node:url";
+import { stripVTControlCharacters } from "node:util";
+import { type Component, Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
-import {
-  appendSessionToolTruncationWarning,
-  reuseTextComponent,
-  shortenPath,
-  trimTrailingEmptyLines,
-} from "./render-utils.js";
+import { loadThemeFromPath } from "../../modes/interactive/theme/theme.js";
+import { readRenderContext as context } from "./read-render.test-support.js";
+import { createReadToolDefinition } from "./read.js";
 
-const theme = {
-  fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-};
+const theme = loadThemeFromPath(
+  fileURLToPath(new URL("../../modes/interactive/theme/dark.json", import.meta.url)),
+);
+const tool = createReadToolDefinition("/workspace");
 
-describe("appendSessionToolTruncationWarning", () => {
-  it("leaves output unchanged when no truncation metadata is present", () => {
-    expect(appendSessionToolTruncationWarning("output", theme, {})).toBe("output");
-  });
+function renderCall(filePath: string, lastComponent?: Component) {
+  return tool.renderCall?.({ path: filePath }, theme, context(filePath, lastComponent));
+}
 
-  it("combines limit, byte, and additional warnings in order", () => {
-    expect(
-      appendSessionToolTruncationWarning("output", theme, {
-        limit: { count: 5, noun: "matches" },
-        truncation: { truncated: true, maxBytes: 1024 },
-        additionalWarnings: ["some lines truncated"],
-      }),
-    ).toBe(
-      "output\n<warning>[Truncated: 5 matches limit, 1.0KB limit, some lines truncated]</warning>",
-    );
-  });
-});
+function visibleRows(component: Component | undefined, width = 120): string[] | undefined {
+  return component?.render(width).map((line) => stripVTControlCharacters(line).trimEnd());
+}
 
-describe("trimTrailingEmptyLines", () => {
-  it.each([
-    {
-      name: "removes multiple trailing empty lines",
-      lines: ["first", "second", "", ""],
-      expected: ["first", "second"],
-    },
-    { name: "removes all-empty input", lines: ["", ""], expected: [] },
-    {
-      name: "keeps leading and interior empty lines",
-      lines: ["", "first", "", "second", ""],
-      expected: ["", "first", "", "second"],
-    },
-    {
-      name: "keeps whitespace-only trailing lines",
-      lines: ["first", " ", "\t"],
-      expected: ["first", " ", "\t"],
-    },
-  ])("$name", ({ lines, expected }) => {
-    expect(trimTrailingEmptyLines(lines)).toEqual(expected);
-  });
-
-  it("does not mutate the caller-owned lines", () => {
-    const lines = ["first", "", ""];
-    const original = [...lines];
-
-    trimTrailingEmptyLines(lines);
-
-    expect(lines).toEqual(original);
-  });
-});
-
-describe("reuseTextComponent", () => {
-  it("creates a zero-padding Text component when no prior component exists", () => {
-    const component = reuseTextComponent(undefined, "hello");
-
+describe("read tool rendering", () => {
+  it("creates an unpadded Text slot and updates the same component on redraw", () => {
+    const component = renderCall("hello");
     expect(component).toBeInstanceOf(Text);
-    expect(component.render(5)).toEqual(["hello"]);
+    expect(visibleRows(component, 10)).toEqual(["read hello"]);
+
+    const updated = renderCall("world", component);
+    expect(updated).toBe(component);
+    expect(visibleRows(updated, 10)).toEqual(["read world"]);
   });
 
-  it("reuses the prior Text component and invalidates its rendered content", () => {
-    const component = new Text("before", 0, 0);
-    expect(component.render(6)).toEqual(["before"]);
-
-    const reused = reuseTextComponent(component, "after!");
-
-    expect(reused).toBe(component);
-    expect(reused.render(6)).toEqual(["after!"]);
+  it.each([
+    ["\n\n", []],
+    ["alpha\n\n", ["", "alpha"]],
+  ])("omits trailing blank result rows for %j", (text, rows) => {
+    const component = tool.renderResult?.(
+      { content: [{ type: "text", text }], details: { kind: "text", content: text } },
+      { expanded: true, isPartial: false },
+      theme,
+      context("notes"),
+    );
+    expect(visibleRows(component)).toEqual(rows);
   });
-});
-
-describe("shortenPath", () => {
-  const home = os.homedir();
 
   it("shortens paths inside the home directory", () => {
-    expect(shortenPath(`${home}/projects/app.ts`)).toBe("~/projects/app.ts");
-  });
-
-  it("collapses the home directory itself", () => {
-    expect(shortenPath(home)).toBe("~");
-  });
-
-  it("leaves a sibling directory that merely shares the prefix untouched", () => {
-    // `${home}extra` starts with `home` as a substring but is not under it,
-    // so it must not be rewritten to `~extra`.
-    expect(shortenPath(`${home}extra/app.ts`)).toBe(`${home}extra/app.ts`);
-  });
-
-  it("leaves unrelated paths untouched", () => {
-    expect(shortenPath("/var/log/syslog")).toBe("/var/log/syslog");
+    expect(visibleRows(renderCall(`${os.homedir()}/projects/app.ts`))).toEqual([
+      "read ~/projects/app.ts",
+    ]);
   });
 
   it.skipIf(process.platform !== "win32")("shortens real Windows home casing aliases", () => {
-    const homeAlias = home.toUpperCase();
+    const homeAlias = os.homedir().toUpperCase();
     expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
-
-    expect(shortenPath(path.join(homeAlias, "projects", "app.ts"))).toBe(
-      `~${path.sep}projects${path.sep}app.ts`,
-    );
+    expect(visibleRows(renderCall(path.join(homeAlias, "projects", "app.ts")))).toEqual([
+      `read ~${path.sep}projects${path.sep}app.ts`,
+    ]);
   });
 
-  it("returns an empty string for non-string input", () => {
-    expect(shortenPath(undefined)).toBe("");
+  it("shows the incomplete-path placeholder", () => {
+    expect(visibleRows(renderCall(""))).toEqual(["read ..."]);
   });
 });

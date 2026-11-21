@@ -160,14 +160,15 @@ defineDiscordVoiceTests(
 
       await vi.waitFor(() =>
         expect(controlRealtimeVoiceAgentRunMock).toHaveBeenCalledWith({
-          getToolAuthorityOverlay: expect.any(Function),
+          assertCurrent: expect.any(Function),
+          getToolAuthorityOverlayAsync: expect.any(Function),
           sessionKey: "discord:g1:c1",
           text: "revísalo en WebUI",
           mode: "steer",
         }),
       );
       expect(
-        controlRealtimeVoiceAgentRunMock.mock.calls[0]?.[0].getToolAuthorityOverlay?.(),
+        await controlRealtimeVoiceAgentRunMock.mock.calls[0]?.[0].getToolAuthorityOverlayAsync?.(),
       ).toMatchObject({
         originatingChannel: "discord",
         messageProvider: "discord-voice",
@@ -216,7 +217,7 @@ defineDiscordVoiceTests(
         const effect = vi.fn();
         controlRealtimeVoiceAgentRunMock.mockImplementationOnce(async (params) => {
           await resume.promise;
-          params.getToolAuthorityOverlay?.();
+          await params.getToolAuthorityOverlayAsync?.();
           effect();
           return {
             ok: true,
@@ -447,6 +448,38 @@ defineDiscordVoiceTests(
       }
     });
 
+    it.each([-60_000, 0, 60_000])(
+      "keeps the playback watchdog budget after a %i ms wall-clock change",
+      async (wallClockShiftMs) => {
+        vi.useFakeTimers();
+        const wallNow = Date.now;
+        let wallClockOffsetMs = 0;
+        const nowSpy = vi
+          .spyOn(Date, "now")
+          .mockImplementation(() => wallNow() + wallClockOffsetMs);
+        const manager = createAgentProxyManager();
+        try {
+          expect((await manager.join({ guildId: "g1", channelId: "1001" })).ok).toBe(true);
+          const player = getLastAudioPlayer();
+          const bridgeParams = lastRealtimeBridgeParams();
+
+          bridgeParams?.audioSink?.sendAudio(Buffer.alloc(48_000));
+          expect(player.play).toHaveBeenCalledOnce();
+          wallClockOffsetMs = wallClockShiftMs;
+          bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+
+          await vi.advanceTimersByTimeAsync(3_999);
+          expect(player.stop).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+          expect(player.stop).toHaveBeenCalledWith(true);
+        } finally {
+          await manager.destroy();
+          nowSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it("does not let an old realtime playback watchdog stop a later response", async () => {
       vi.useFakeTimers();
       try {
@@ -511,7 +544,7 @@ defineDiscordVoiceTests(
           | (() => void)
           | undefined;
         idleHandler?.();
-        expectUserMessageIncludes("second answer");
+        await vi.waitFor(() => expectUserMessageIncludes("second answer"));
         beginSpeakerTurn(entry);
         bridgeParams?.onTranscript?.("user", "third question", true);
         await vi.advanceTimersByTimeAsync(260);

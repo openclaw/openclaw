@@ -1,4 +1,3 @@
-// Normalizes config version metadata and compatibility comparisons.
 import { parse as parseSemver, type SemVer } from "semver";
 import {
   compareOpenClawSemver,

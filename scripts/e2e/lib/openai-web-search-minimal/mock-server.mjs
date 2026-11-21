@@ -1,4 +1,3 @@
-// Mock server for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
@@ -40,25 +39,23 @@ function hasWebSearchTool(tools) {
       if (!tool || typeof tool !== "object") {
         return false;
       }
-      if (tool.type === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.name === "web_search") {
-        return true;
-      }
-      if (tool.type === "function" && tool.function?.name === "web_search") {
-        return true;
-      }
-      return false;
+      return (
+        tool.type === "web_search" ||
+        (tool.type === "function" &&
+          (tool.name === "web_search" || tool.function?.name === "web_search"))
+      );
     })
   );
 }
 
-function bodyContainsForceReject(body) {
-  return JSON.stringify(body).includes("FORCE_SCHEMA_REJECT");
-}
-
 function responseEvents(text) {
+  const completedMessage = {
+    type: "message",
+    id: "msg_schema_e2e_1",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
   return [
     {
       type: "response.output_item.added",
@@ -72,19 +69,14 @@ function responseEvents(text) {
     },
     {
       type: "response.output_item.done",
-      item: {
-        type: "message",
-        id: "msg_schema_e2e_1",
-        role: "assistant",
-        status: "completed",
-        content: [{ type: "output_text", text, annotations: [] }],
-      },
+      item: completedMessage,
     },
     {
       type: "response.completed",
       response: {
         id: "resp_schema_e2e_1",
         status: "completed",
+        output: [completedMessage],
         usage: {
           input_tokens: 11,
           output_tokens: 7,
@@ -143,7 +135,7 @@ const handleRequest = (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
-      if (bodyContainsForceReject(body)) {
+      if (JSON.stringify(body).includes("FORCE_SCHEMA_REJECT")) {
         writeOpenAiReject(res);
         return;
       }

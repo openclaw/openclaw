@@ -52,7 +52,7 @@ observed state is existing OpenClaw config or workspace metadata.
 | `routing.probes[].expect.agentId`   | Resolved agent id                                   | Require the route to reach the reviewed agent.                         |
 | `routing.probes[].expect.matchedBy` | Resolver match kind                                 | Require peer, account, channel, or other reviewed binding specificity. |
 
-Probe ids must be unique. A route supports `channel`, optional `accountId`,
+Check ids must be unique. A route supports `channel`, optional `accountId`,
 `peer`, `parentPeer`, `guildId`, `teamId`, and `memberRoleIds`. Peer kinds are
 `direct`, `group`, and `channel`. `matchedBy` may contain one or more runtime
 match kinds, including `binding.peer`, `binding.account`, `binding.channel`,

@@ -1,0 +1,125 @@
+.memory-memories__search {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-2);
+}
+
+.memory-memories__search .settings-input {
+  flex: 1 1 0;
+  min-width: 0;
+  /* A query reads from its start; the field is not a settings value. */
+  text-align: start;
+}
+
+.memory-memories__search .btn {
+  flex: none;
+  height: auto;
+}
+
+/* The bundle takes no inline assets, so the clear mark is drawn with the theme's muted ink. */
+.memory-memories__search input::-webkit-search-cancel-button {
+  width: 10px;
+  height: 10px;
+  background:
+    linear-gradient(45deg, transparent 46%, var(--muted) 46% 54%, transparent 54%),
+    linear-gradient(-45deg, transparent 46%, var(--muted) 46% 54%, transparent 54%);
+  appearance: none;
+  cursor: pointer;
+}
+
+.memory-memories .callout p {
+  margin: 0;
+}
+
+.memory-memories .callout p + p {
+  margin-top: var(--space-1);
+}
+
+.memory-memories .settings-empty {
+  margin: 0;
+}
+
+.memory-memories__summary {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.memory-memories__error {
+  justify-content: space-between;
+}
+
+.memory-memories__error p {
+  margin: 0;
+  min-width: 0;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.memory-memories__snippet {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.memory-memories__meta {
+  margin-top: 2px;
+}
+
+.memory-memories__meta code {
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.memory-memories__chevron svg {
+  transition: transform 140ms ease;
+}
+
+[aria-expanded="true"] .memory-memories__chevron svg {
+  transform: rotate(90deg);
+}
+
+.memory-memories__detail {
+  min-width: 0;
+  padding: 0 16px var(--space-3);
+}
+
+.memory-memories__detail p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.memory-memories__detail .memory-memories__detail-error {
+  color: var(--danger);
+}
+
+.memory-memories__file {
+  max-height: 420px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.55 var(--mono);
+  /* Memory files are prose: wrap them rather than scroll sideways on a phone. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.memory-memories__file mark {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: inherit;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .memory-memories__chevron svg {
+    transition: none;
+  }
+}

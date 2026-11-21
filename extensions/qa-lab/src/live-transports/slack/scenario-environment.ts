@@ -1,10 +1,12 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import type { QaChannelE2eDriver } from "../shared/channel-e2e.types.js";
 import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
+import type { SlackChannelE2eSession } from "./channel-e2e.js";
 import { buildSlackQaConfig } from "./slack-live.config.js";
 import type {
   SlackAuthIdentity,
@@ -17,7 +19,6 @@ import type {
 } from "./slack-live.contracts.js";
 import { assertSlackCodexApprovalModelSupported } from "./slack-live.contracts.js";
 import { waitForSlackChannelStable } from "./slack-live.message-observations.js";
-import { sendSlackChannelMessage } from "./slack-live.observations.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
@@ -25,17 +26,17 @@ type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlo
 
 export type SlackQaScenarioEnvironment = {
   channelId: string;
+  channelE2e?: QaChannelE2eDriver;
   configureScenario: (implementation: SlackQaScenarioImplementation) => Promise<{
     cfg: OpenClawConfig;
     primaryModel: string;
     run: SlackQaScenarioRun;
   }>;
   context: Omit<SlackQaScenarioContext, "sentTs">;
-  gatewayDebugDirPath: string;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   observedMessages: SlackObservedMessage[];
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
-  outputDir: string;
+  recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"];
   scenario: SlackQaScenarioMetadata;
   stopGateway: (preserveDebugArtifacts: boolean) => Promise<void>;
   sutAccountId: string;
@@ -43,25 +44,12 @@ export type SlackQaScenarioEnvironment = {
   sutWriteClient: WebClient;
 };
 
-function resolveSlackQaReplacePaths(accountId: string, channelId: string): string[] {
-  return [
-    "agents",
-    "approvals",
-    "channels.slack",
-    `channels.slack.accounts.${accountId}.allowFrom`,
-    `channels.slack.accounts.${accountId}.channels.${channelId}.users`,
-    "messages",
-    "plugins",
-    "tools",
-  ];
-}
-
 export function createSlackQaScenarioEnvironment(params: {
   accountId: string;
   channelId: string;
   driverBotUserId: string;
   driverClient: WebClient;
-  getMessageWriteCursor: () => number;
+  getMessageWriteCursor: () => Promise<number>;
   readMessageWrites: (afterRequestEventId: number) => Promise<SlackObservedMessage[]>;
   sutAppToken: string;
   sutBotToken: string;
@@ -73,26 +61,21 @@ export function createSlackQaScenarioEnvironment(params: {
 
   const prepareFlow = async (
     input: FlowPreparationInput,
+    channelE2e?: QaChannelE2eDriver,
+    recordScenarioMessages?: SlackChannelE2eSession["recordScenarioMessages"],
   ): Promise<{ slackScenarioContext: SlackQaScenarioEnvironment }> => {
     const context = {
       channelId: params.channelId,
       driverClient: params.driverClient,
       gateway: input.gateway as never,
-      postSlackMessage: async (message: { text: string; threadTs?: string }) =>
-        await sendSlackChannelMessage({
-          channelId: params.channelId,
-          client: params.driverClient,
-          text: message.text,
-          threadTs: message.threadTs,
-        }),
       sutIdentity: params.sutIdentity,
       sutReadClient: params.sutReadClient,
-      waitForReady: async () =>
-        await waitForSlackChannelStable(input.gateway as never, params.accountId, "connected"),
     } satisfies Omit<SlackQaScenarioContext, "sentTs">;
     return {
       slackScenarioContext: {
         channelId: params.channelId,
+        channelE2e,
+        recordScenarioMessages,
         configureScenario: async (implementation: SlackQaScenarioImplementation) => {
           if (!input.primaryModel) {
             throw new Error("Slack QA module flow requires a primary model");
@@ -115,7 +98,16 @@ export function createSlackQaScenarioEnvironment(params: {
           await patchLiveQaGatewayConfig({
             gateway: input.gateway,
             patch: cfg as Record<string, unknown>,
-            replacePaths: resolveSlackQaReplacePaths(params.accountId, params.channelId),
+            replacePaths: [
+              "agents",
+              "approvals",
+              "channels.slack",
+              `channels.slack.accounts.${params.accountId}.allowFrom`,
+              `channels.slack.accounts.${params.accountId}.channels.${params.channelId}.users`,
+              "messages",
+              "plugins",
+              "tools",
+            ],
             timeoutMs: input.timeoutMs,
             waitForConfigRestartSettle: input.waitForConfigRestartSettle,
           });
@@ -125,11 +117,9 @@ export function createSlackQaScenarioEnvironment(params: {
           return { cfg, primaryModel, run };
         },
         context,
-        gatewayDebugDirPath: path.join(input.outputDir, "gateway-debug"),
         getMessageWriteCursor: params.getMessageWriteCursor,
         observedMessages,
         readMessageWrites: params.readMessageWrites,
-        outputDir: input.outputDir,
         scenario: {
           id: input.scenarioId,
           timeoutMs: input.timeoutMs,

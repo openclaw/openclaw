@@ -1,17 +1,18 @@
-// OpenClaw operation tests cover rescue operation planning and execution.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
-import {
-  executeSystemAgentOperation as executeSystemAgentOperationImpl,
-  type SystemAgentCommandDeps,
-} from "./operations.js";
+import { executeSystemAgentOperation as executeOperation } from "./operations.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
+import type { SystemAgentSetupApplyResult } from "./setup-apply.js";
+import { applySystemAgentSetup } from "./setup-apply.js";
+import { verifySetupInferenceConfig } from "./setup-inference.js";
+import { loadLocalSetupRecovery } from "./setup-recovery.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
   expectSystemAgentAuditRecord as expectAuditRecord,
@@ -19,628 +20,440 @@ import {
   installSystemAgentClaudeCliBackendTestFixture,
   createSystemAgentPluginMetadataTestSnapshot,
   readLastSystemAgentAuditEntry as readLastAuditEntry,
-  requireTestRecord as requireRecord,
   type SystemAgentPluginMetadataTestSnapshot,
 } from "./system-agent.test-helpers.js";
 
-type TestConfig = Record<string, unknown>;
-
-const mockConfig = vi.hoisted(() => {
-  const initial = { agents: { entries: { main: { default: true } } } };
-  const state = {
-    path: "/tmp/openclaw.json",
-    exists: true,
-    config: initial as TestConfig,
-    hash: "mock-hash-0" as string | undefined,
-  };
-  const cloneConfig = () => structuredClone(state.config);
-  let bindPluginMetadata = (_config: TestConfig) => {};
-  const snapshot = () => {
-    const config = cloneConfig();
-    bindPluginMetadata(config);
-    return {
-      path: state.path,
-      exists: state.exists,
-      raw: state.exists ? `${JSON.stringify(config)}\n` : null,
-      parsed: state.exists ? config : undefined,
-      sourceConfig: config,
-      resolved: config,
-      valid: state.exists,
-      runtimeConfig: config,
-      config,
-      hash: state.hash,
-      issues: state.exists ? [] : [{ path: "", message: "missing config" }],
-      warnings: [],
-      legacyIssues: [],
-    };
-  };
+const model = "openai/gpt-5.5";
+const previousModel = "anthropic/claude-sonnet-4-6";
+const workspace = "/tmp/approved-workspace";
+const configPath = "/tmp/openclaw.json";
+vi.mock("./setup-apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-apply.js")>()),
+  applySystemAgentSetup: vi.fn(),
+}));
+vi.mock("./setup-inference.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup-inference.js")>()),
+  verifySetupInferenceConfig: vi.fn(),
+}));
+const localOnboarding = vi.hoisted(() => {
+  const states = new Map<string, LocalOnboardingState>();
   return {
-    reset() {
-      state.path = "/tmp/openclaw.json";
-      state.exists = true;
-      state.config = { agents: { entries: { main: { default: true } } } };
-      state.hash = "mock-hash-0";
-      bindPluginMetadata(state.config);
-    },
-    missing(pathLocal: string) {
-      state.path = pathLocal;
-      state.exists = false;
-      state.config = { agents: { entries: { main: { default: true } } } };
-      state.hash = undefined;
-      bindPluginMetadata(state.config);
-    },
-    currentConfig() {
-      return cloneConfig();
-    },
-    setConfig(config: TestConfig) {
-      state.config = structuredClone(config);
-      bindPluginMetadata(state.config);
-    },
-    setPluginMetadataBinder(binder: (config: TestConfig) => void) {
-      bindPluginMetadata = binder;
-    },
-    readConfigFileSnapshot: vi.fn(async () => snapshot()),
-    mutateConfigFile: vi.fn(
-      async (params: {
-        writeOptions?: {
-          preCommitRuntimePreflight?: (sourceConfig: TestConfig) => Promise<unknown>;
-        };
-        mutate: (
-          draft: TestConfig,
-          context: { snapshot: ReturnType<typeof snapshot> },
-        ) => Promise<void> | void;
-      }) => {
-        const before = snapshot();
-        const draft = cloneConfig();
-        await params.mutate(draft, { snapshot: before });
-        bindPluginMetadata(draft);
-        await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
-        state.exists = true;
-        state.config = draft;
-        state.hash = "mock-hash-1";
-        bindPluginMetadata(state.config);
-        return {
-          path: state.path,
-          previousHash: before.hash ?? null,
-          persistedHash: before.hash ?? null,
-          snapshot: before,
-          nextConfig: cloneConfig(),
-          result: undefined,
-        };
-      },
-    ),
+    states,
+    readForConfig: vi.fn((file: string, config: OpenClawConfig) => {
+      const state = states.get(file);
+      return state?.securityAcknowledgedAt === config.wizard?.securityAcknowledgedAt
+        ? state
+        : undefined;
+    }),
+    complete: vi.fn(({ configPath: file, runId }: { configPath: string; runId: string }) => {
+      const current = states.get(file);
+      if (current?.status !== "pending" || current.runId !== runId) {
+        return false;
+      }
+      states.set(file, { ...current, status: "completed", completedAtMs: Date.now() });
+      return true;
+    }),
   };
 });
-
-vi.mock("./probes.js", () => ({
-  probeLocalCommand: vi.fn(async (command: string) => ({
-    command,
-    found: false,
-    error: "not found",
-  })),
-  probeGatewayUrl: vi.fn(async (url: string) => ({ reachable: false, url, error: "offline" })),
-}));
-
-vi.mock("./overview.js", () => ({
-  formatSystemAgentOverview: () => "Default model: openai/gpt-5.5",
-  loadSystemAgentOverview: vi.fn(async () => ({
-    defaultAgentId: "main",
-    defaultModel: undefined,
-    agents: [
-      { id: "main", isDefault: true },
-      { id: "work", isDefault: false, model: "openai/gpt-5.2" },
-    ],
-    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: null },
-    tools: {
-      codex: { command: "codex", found: false, error: "not found" },
-      claude: { command: "claude", found: false, error: "not found" },
-      gemini: { command: "gemini", found: false, error: "not found" },
-      apiKeys: { openai: true, anthropic: false },
+const mockConfig = vi.hoisted(() => {
+  let config: OpenClawConfig = {};
+  let exists = true;
+  let hash = "mock-hash-0";
+  let bind = (_config: OpenClawConfig) => {};
+  const snapshot = () => {
+    const copy = structuredClone(config);
+    bind(copy);
+    return {
+      ...createSnapshot({ sourceConfig: copy, hash }),
+      exists,
+      valid: exists,
+      raw: exists ? `${JSON.stringify(copy)}\n` : null,
+      sourceConfigBeforeMigrations: copy,
+      issues: exists ? [] : [{ path: "", message: "missing config" }],
+    };
+  };
+  const read = vi.fn(async () => snapshot());
+  const exclusive = vi.fn(async (effect: (source: OpenClawConfig) => Promise<unknown>) =>
+    effect(snapshot().sourceConfig),
+  );
+  const mutate = vi.fn(
+    async (params: {
+      writeOptions?: { preCommitRuntimePreflight?: (source: OpenClawConfig) => Promise<unknown> };
+      mutate: (
+        draft: OpenClawConfig,
+        context: { snapshot: ReturnType<typeof snapshot> },
+      ) => Promise<void> | void;
+    }) => {
+      const before = snapshot();
+      const draft = structuredClone(config);
+      await params.mutate(draft, { snapshot: before });
+      bind(draft);
+      await params.writeOptions?.preCommitRuntimePreflight?.(structuredClone(draft));
+      config = draft;
+      exists = true;
+      hash = "mock-hash-1";
+      bind(config);
+      return { path: before.path };
     },
-    gateway: {
-      url: "ws://127.0.0.1:18789",
-      source: "local loopback",
-      reachable: false,
-      error: "offline",
+  );
+  return {
+    read,
+    exclusive,
+    mutate,
+    set: (value: OpenClawConfig) => {
+      config = structuredClone(value);
+      bind(config);
     },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
+    current: () => structuredClone(config),
+    missing: () => {
+      exists = false;
     },
-  })),
-}));
-
+    bind: (binder: typeof bind) => {
+      bind = binder;
+    },
+    reset: () => {
+      exists = true;
+      hash = "mock-hash-0";
+      read.mockClear();
+      mutate.mockClear();
+      exclusive.mockReset().mockImplementation(async (effect) => effect(snapshot().sourceConfig));
+    },
+  };
+});
 vi.mock("../config/config.js", () => ({
-  mutateConfigFile: mockConfig.mutateConfigFile,
-  readConfigFileSnapshot: mockConfig.readConfigFileSnapshot,
+  readConfigFileSnapshot: mockConfig.read,
+  mutateConfigFile: mockConfig.mutate,
+  withConfigMutationExclusive: mockConfig.exclusive,
+}));
+vi.mock("../state/local-onboarding-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/local-onboarding-state.js")>()),
+  readLocalOnboardingStateForConfigAsync: localOnboarding.readForConfig,
+  completeLocalOnboarding: localOnboarding.complete,
 }));
 
-vi.mock("../state/local-onboarding-state.js", () => ({
-  readLocalOnboardingState: () => undefined,
-  readLocalOnboardingStateForConfig: () => undefined,
-  completeLocalOnboarding: () => false,
-}));
-
-const opTempDirs = useAutoCleanupTempDirTracker(afterEach);
-let restoreCliBackendFixture: (() => void) | undefined;
-let pluginMetadataSnapshot: SystemAgentPluginMetadataTestSnapshot | undefined;
-
-const executeSystemAgentOperation: typeof executeSystemAgentOperationImpl = (...args) =>
-  pluginMetadataSnapshot!.run(() => executeSystemAgentOperationImpl(...args));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let metadata: SystemAgentPluginMetadataTestSnapshot;
+let restoreBackend: () => void;
+let runtime: ReturnType<typeof createSystemAgentTestRuntime>["runtime"];
+let lines: string[];
+type ApplySetup = typeof applySystemAgentSetup;
+const applySetup = vi.mocked(applySystemAgentSetup);
+type Verify = typeof verifySetupInferenceConfig;
+type Options = NonNullable<Parameters<typeof executeOperation>[2]>;
+function run(operation: Parameters<typeof executeOperation>[0], options: Options = {}) {
+  return metadata.run(() => executeOperation(operation, runtime, { approved: true, ...options }));
+}
+function setup(
+  options: Options = {},
+  operation: Partial<Extract<Parameters<typeof executeOperation>[0], { kind: "setup" }>> = {},
+) {
+  return run(
+    { kind: "setup", workspace, ...operation },
+    {
+      ...options,
+      deps: { loadOverview: async () => overview(), ...options.deps },
+    },
+  );
+}
+function setModel(verify: Verify, options: Options = {}) {
+  vi.mocked(verifySetupInferenceConfig).mockImplementation(verify);
+  return run({ kind: "set-default-model", model }, options);
+}
+async function expectRejectedSetup(result: ReturnType<typeof setup>, error: string) {
+  await expect(result).rejects.toThrow(error);
+  expect(applySetup).not.toHaveBeenCalled();
+  expectNoAudit("openclaw.setup");
+}
+const verified = () => ({ ok: true as const, modelRef: model, latencyMs: 5 });
+const withModel = (primary = model): OpenClawConfig => ({
+  agents: { defaults: { model: { primary } }, entries: { main: {} } },
+});
+const overview = (defaultModel: string | undefined = model) =>
+  createSystemAgentOverviewFixture({ defaultModel });
+function setupResult(
+  overrides: Partial<SystemAgentSetupApplyResult> = {},
+): SystemAgentSetupApplyResult {
+  return {
+    configPath,
+    bootstrapPending: true,
+    workspaceReady: true,
+    gateway: { status: "ready", action: "reused" },
+    lines: [`Workspace: ${workspace}`],
+    ...overrides,
+  };
+}
+function afterSetup(effect: () => void) {
+  applySetup.mockImplementation(async () => {
+    effect();
+    return setupResult();
+  });
+}
+function expectNoAudit(operation: string) {
+  expect(lines.join("\n")).not.toContain(`[openclaw] done: ${operation}`);
+  expect(readLastAuditEntry()).toBeUndefined();
+}
+async function rejectsModel(
+  verifyInferenceConfig: Verify,
+  error: string | typeof SystemAgentInferenceUnavailableError,
+  options: Options = {},
+) {
+  const original = withModel(previousModel);
+  mockConfig.set(original);
+  const result = expect(setModel(verifyInferenceConfig, options)).rejects;
+  if (typeof error === "string") {
+    await result.toThrow(error);
+  } else {
+    await result.toBeInstanceOf(error);
+  }
+  expect(mockConfig.current()).toEqual(original);
+  expectNoAudit("config.setDefaultModel");
+}
+function pendingOwner(teamCoordinatorId?: string): LocalOnboardingState {
+  const pending: LocalOnboardingState = {
+    version: 1,
+    status: "pending",
+    configPath,
+    workspace,
+    runId: "guided-run",
+    securityAcknowledgedAt: "2026-08-02T00:00:00.000Z",
+    startedAtMs: 1,
+    ...(teamCoordinatorId ? { teamCoordinatorId } : {}),
+  };
+  localOnboarding.states.set(configPath, pending);
+  recoveryConfig(pending);
+  return pending;
+}
+function recoveryConfig(
+  pending: LocalOnboardingState,
+  securityAcknowledgedAt = pending.securityAcknowledgedAt,
+  approvedWorkspace = workspace,
+) {
+  mockConfig.set({
+    agents: {
+      defaults: { model: { primary: model }, workspace: approvedWorkspace },
+      entries: { main: {} },
+    },
+    gateway: { mode: "local" },
+    wizard: { securityAcknowledgedAt },
+  });
+}
+function teamConfig(pending: LocalOnboardingState, coordinator = "coordinator") {
+  const specialists = ["researcher", "writer", "reviewer"];
+  return {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { model: { primary: model }, workspace, systemAgent: { agentId: coordinator } },
+      entries: Object.fromEntries(
+        [coordinator, ...specialists].map((id) => [
+          id,
+          {
+            workspace: `${workspace}/${id}`,
+            subagents:
+              id === coordinator
+                ? { allowAgents: specialists, delegationMode: "prefer" as const }
+                : { allowAgents: [] },
+          },
+        ]),
+      ),
+    },
+    gateway: { mode: "local" as const },
+    wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
+  } satisfies OpenClawConfig;
+}
+function expectPending(pending: LocalOnboardingState) {
+  expect(localOnboarding.complete).not.toHaveBeenCalled();
+  expect(localOnboarding.states.get(configPath)).toEqual(pending);
+  expect(lines.join("\n")).not.toContain("[openclaw] done: openclaw.setup");
+}
+function expectApplied(options: Partial<Parameters<ApplySetup>[0]>) {
+  expect(applySetup.mock.calls[0]?.[0]).toMatchObject(options);
+}
+function expectCompleted(pending: LocalOnboardingState) {
+  expect(localOnboarding.states.get(configPath)).toMatchObject({ ...pending, status: "completed" });
+}
+function afterFirstAuthorization(effect: () => void) {
+  let authorizations = 0;
+  return vi.fn(() => {
+    if (++authorizations > 1) {
+      effect();
+    }
+  });
+}
+async function rejectsRecovery(
+  pending: LocalOnboardingState,
+  apply: ApplySetup = async () => setupResult(),
+  error = "onboarding configuration changed before setup could complete",
+  options: Options = {},
+) {
+  applySetup.mockImplementation(apply);
+  await expect(setup(options)).rejects.toThrow(error);
+  expectPending(pending);
+}
 
 beforeAll(() => {
-  restoreCliBackendFixture = installSystemAgentClaudeCliBackendTestFixture();
-  pluginMetadataSnapshot = createSystemAgentPluginMetadataTestSnapshot();
-  mockConfig.setPluginMetadataBinder((config) => {
-    pluginMetadataSnapshot?.bindForConfig(config as OpenClawConfig);
-  });
-  mockConfig.reset();
+  restoreBackend = installSystemAgentClaudeCliBackendTestFixture();
+  metadata = createSystemAgentPluginMetadataTestSnapshot();
+  mockConfig.bind((config) => metadata.bindForConfig(config));
 });
-
 afterAll(() => {
-  mockConfig.setPluginMetadataBinder(() => {});
-
-  restoreCliBackendFixture?.();
+  mockConfig.bind(() => {});
+  restoreBackend();
+});
+beforeEach(() => {
+  applySetup.mockReset().mockImplementation(async () => setupResult());
+  vi.mocked(verifySetupInferenceConfig)
+    .mockReset()
+    .mockImplementation(async () => verified());
+  mockConfig.reset();
+  mockConfig.set(withModel());
+  localOnboarding.states.clear();
+  localOnboarding.readForConfig.mockClear();
+  localOnboarding.complete.mockClear();
+  ({ runtime, lines } = createSystemAgentTestRuntime());
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-operations-setup-"));
+  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+});
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  vi.unstubAllEnvs();
 });
 
-describe("parseSystemAgentOperation", () => {
-  let stateDirSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-  beforeEach(() => {
-    mockConfig.reset();
-    stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  });
-
-  afterEach(() => {
-    resetPluginStateStoreForTests();
-    stateDirSnapshot?.restore();
-    vi.unstubAllEnvs();
-  });
-
-  it("runs setup bootstrap only after approval and audits it", async () => {
-    const tempDir = opTempDirs.make("openclaw-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({
+describe("setup inference", () => {
+  it("approves and audits setup-model setup while preserving concurrent edits", async () => {
+    mockConfig.set({
+      meta: { migrations: { utilityModelSeparation: true } },
       agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
+        defaults: { utilityModel: model },
+        entries: { main: {} },
       },
+      gateway: { port: 18789 },
     });
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      configHashBefore: "mock-hash-0",
-      configHashAfter: "mock-hash-1",
-      bootstrapPending: true,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/work"],
-    }));
     const deps = {
-      applySetup,
-      loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-      verifyInferenceConfig: vi.fn(async () => ({
-        ok: true as const,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 12,
-      })),
+      loadOverview: async () => ({
+        ...overview(),
+        defaultModel: undefined,
+        setupModel: model,
+      }),
     };
-
-    const plan = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      { deps },
-    );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
-      applied: false,
+    vi.mocked(verifySetupInferenceConfig).mockImplementation(async () => {
+      mockConfig.set({ ...mockConfig.current(), gateway: { port: 19000 } });
+      return { ...verified(), latencyMs: 12 };
     });
-    expect(lines.join("\n")).toContain("Model choice: keep verified default openai/gpt-5.5.");
+    const operation = { kind: "setup" as const, workspace, model, agentName: "robby" };
+    const plan = await run(operation, { approved: false, deps });
+    expectRecordFields(plan, { applied: false });
+    expect(lines.join("\n")).toContain(`Model choice: keep verified setup ${model}.`);
     expect(applySetup).not.toHaveBeenCalled();
-
-    const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work", agentName: "robby" },
-      runtime,
-      {
-        approved: true,
-        auditDetails: { rescue: true },
-        deps,
-      },
-    );
-    expect(result.applied).toBe(true);
-    expect(result.bootstrapPending).toBe(true);
-
-    expect(lines.join("\n")).toContain("[openclaw] done: openclaw.setup");
-    expect(applySetup).toHaveBeenCalledWith(
-      {
-        workspace: "/tmp/work",
-        firstAgent: { name: "robby" },
-        expectedInferenceRoute: expect.any(Object),
-        surface: "cli",
-        runtime,
-      },
-      { beforePersistentApply: undefined },
-    );
-    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5 (verified and kept)");
-    const audit = readLastAuditEntry();
+    expect(await run(operation, { auditDetails: { rescue: true }, deps })).toEqual({
+      applied: true,
+      bootstrapPending: true,
+    });
+    expect(mockConfig.current().gateway?.port).toBe(19000);
+    expect(mockConfig.mutate).not.toHaveBeenCalled();
+    expectApplied({
+      workspace,
+      firstAgent: { name: "robby" },
+      expectedInferenceRoute: expect.any(Object),
+    });
     expectAuditRecord(
-      audit,
-      {
-        operation: "openclaw.setup",
-        summary: "Bootstrapped setup workspace",
-      },
+      readLastAuditEntry(),
+      { operation: "openclaw.setup", summary: "Bootstrapped setup workspace" },
       {
         rescue: true,
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-        modelSource: "live-verified default model",
+        workspace,
+        model,
+        modelSource: "live-verified setup model",
         inferenceLatencyMs: 12,
       },
     );
   });
 
-  it("rejects setup without a default model before any workspace or Gateway write", async () => {
-    const tempDir = opTempDirs.make("openclaw-no-inference-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const applySetup = vi.fn();
-    const deps = {
-      applySetup,
-      setupSurface: "gateway" as const,
-      loadOverview: async () => ({ defaultModel: undefined }) as never,
-    };
-
-    await expect(
-      executeSystemAgentOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
-        approved: true,
-        deps,
-      }),
-    ).rejects.toThrow("requires working inference first");
-
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running: openclaw.setup");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rejects setup when the current route fails its live inference check", async () => {
-    const tempDir = opTempDirs.make("openclaw-failed-inference-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
-      },
+  it.each([
+    ["missing model", "requires working inference first"],
+    ["failed inference", "failed a live check"],
+    ["route drift", "changed during setup verification"],
+    ["model switch", "`openclaw onboard` on the machine running OpenClaw"],
+  ])("rejects %s before setup writes", async (failure, error) => {
+    const missing = failure === "missing model";
+    if (missing) {
+      mockConfig.set({ agents: { entries: { main: {} } } });
+    } else if (failure === "route drift") {
+      mockConfig.set({ ...withModel(), auth: { order: { openai: ["openai:old"] } } });
+    }
+    vi.mocked(verifySetupInferenceConfig).mockImplementation(async () => {
+      if (failure === "failed inference") {
+        return { ok: false, status: "auth", error: "not authenticated" };
+      }
+      if (failure === "route drift") {
+        mockConfig.set({ ...withModel(), auth: { order: { openai: ["openai:new"] } } });
+      }
+      return verified();
     });
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const applySetup = vi.fn();
-
-    await expect(
-      executeSystemAgentOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
-        approved: true,
-        deps: {
-          applySetup,
-          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          verifyInferenceConfig: async () => ({
-            ok: false as const,
-            status: "auth" as const,
-            error: "not authenticated",
-          }),
-        },
-      }),
-    ).rejects.toThrow("failed a live check");
-
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] running: openclaw.setup");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rejects route drift during setup verification but preserves the concurrent edit", async () => {
-    mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
-      },
-      auth: { order: { openai: ["openai:old"] } },
-    });
-    const { runtime } = createSystemAgentTestRuntime();
-    const applySetup = vi.fn();
-
-    await expect(
-      executeSystemAgentOperation({ kind: "setup", workspace: "/tmp/work" }, runtime, {
-        approved: true,
-        deps: {
-          applySetup,
-          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          verifyInferenceConfig: async () => {
-            mockConfig.setConfig({
-              agents: {
-                defaults: { model: { primary: "openai/gpt-5.5" } },
-                entries: { main: { default: true } },
+    await expectRejectedSetup(
+      setup(
+        missing
+          ? {
+              deps: {
+                setupSurface: "gateway",
+                loadOverview: async () => ({ ...overview(), defaultModel: undefined }),
               },
-              auth: { order: { openai: ["openai:new"] } },
-            });
-            return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 8 };
-          },
-        },
-      }),
-    ).rejects.toThrow("changed during setup verification");
-
-    expect(applySetup).not.toHaveBeenCalled();
-    expect(mockConfig.currentConfig()).toMatchObject({
-      auth: { order: { openai: ["openai:new"] } },
-    });
-  });
-
-  it("preserves unrelated concurrent edits after re-verifying the same setup route", async () => {
-    mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
-      },
-      gateway: { port: 18789 },
-    });
-    const { runtime } = createSystemAgentTestRuntime();
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "mock-hash-0",
-      configHashAfter: "mock-hash-1",
-      bootstrapPending: false,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: [],
-    }));
-
-    const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work" },
-      runtime,
-      {
-        approved: true,
-        deps: {
-          applySetup,
-          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          verifyInferenceConfig: async () => {
-            mockConfig.setConfig({
-              agents: {
-                defaults: { model: { primary: "openai/gpt-5.5" } },
-                entries: { main: { default: true } },
-              },
-              gateway: { port: 19000 },
-            });
-            return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
-          },
-        },
-      },
-    );
-
-    expect(result.applied).toBe(true);
-    expect(mockConfig.currentConfig()).toMatchObject({ gateway: { port: 19000 } });
-    expect(applySetup).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedInferenceRoute: expect.any(Object) }),
-      { beforePersistentApply: undefined },
-    );
-  });
-
-  it("rejects a setup model switch before writing", async () => {
-    const tempDir = opTempDirs.make("openclaw-model-switch-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createSystemAgentTestRuntime();
-    const applySetup = vi.fn();
-
-    await expect(
-      executeSystemAgentOperation(
-        { kind: "setup", workspace: "/tmp/work", model: "acme/different" },
-        runtime,
-        {
-          approved: true,
-          deps: {
-            applySetup,
-            loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          },
-        },
+            }
+          : {},
+        failure === "model switch" ? { model: "acme/different" } : {},
       ),
-    ).rejects.toThrow("`openclaw onboard` on the machine running OpenClaw");
-
-    expect(applySetup).not.toHaveBeenCalled();
-  });
-
-  it("allows the same requested model while preserving it without a model write", async () => {
-    const tempDir = opTempDirs.make("openclaw-same-model-setup-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createSystemAgentTestRuntime();
-    mockConfig.setConfig({
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.5" } },
-        entries: { main: { default: true } },
-      },
-    });
-    const applySetup = vi.fn(async () => ({
-      configPath: path.join(tempDir, "openclaw.json"),
-      configHashBefore: "mock-hash-0",
-      configHashAfter: "mock-hash-1",
-      bootstrapPending: false,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/work"],
-    }));
-
-    const result = await executeSystemAgentOperation(
-      { kind: "setup", workspace: "/tmp/work", model: "openai/gpt-5.5" },
-      runtime,
-      {
-        approved: true,
-        deps: {
-          applySetup,
-          loadOverview: async () => ({ defaultModel: "openai/gpt-5.5" }) as never,
-          verifyInferenceConfig: async () => ({
-            ok: true as const,
-            modelRef: "openai/gpt-5.5",
-            latencyMs: 5,
-          }),
-        },
-      },
+      error,
     );
-
-    expect(result).toEqual({ applied: true, bootstrapPending: false });
-    expect(applySetup).toHaveBeenCalledWith(
-      {
-        workspace: "/tmp/work",
-        expectedInferenceRoute: expect.any(Object),
-        surface: "cli",
-        runtime,
-      },
-      { beforePersistentApply: undefined },
-    );
+    if (failure === "route drift") {
+      expect(mockConfig.current().auth?.order).toEqual({ openai: ["openai:new"] });
+    }
   });
+});
 
-  it("live-verifies a staged default model before writing and preserves concurrent edits", async () => {
-    const tempDir = opTempDirs.make("openclaw-verified-model-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    mockConfig.setConfig({
+describe("model changes", () => {
+  it("live-verifies the selected model before commit, preserves unrelated settings, and publishes the binding", async () => {
+    const oldModel = { primary: previousModel, fallbacks: ["openai/gpt-5.2"] };
+    const nextModel = { ...oldModel, primary: model };
+    const concurrent = {
+      gateway: { port: 18789 },
+      auth: { profiles: { "google:other": { provider: "google", mode: "api_key" } } },
       agents: {
         defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.2"] },
+          model: oldModel,
           systemAgent: { agentId: "main" },
+          models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
         },
-        entries: { main: { default: true, workspace: "/tmp/main" } },
+        entries: { main: { workspace: "/tmp/main" }, work: { workspace: "/tmp/work" } },
       },
-      gateway: { port: 18789 },
-      models: { providers: { openai: { baseUrl: "https://api.openai.com/v1" } } },
-    });
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
+      channels: { telegram: { enabled: true } },
+    } satisfies OpenClawConfig;
     const reboundBinding = { execution: { agentId: "main" } } as never;
     const onVerifiedInferenceChanged = vi.fn();
-    let verificationCalls = 0;
-    type VerifyInferenceParams = Parameters<
-      NonNullable<SystemAgentCommandDeps["verifyInferenceConfig"]>
-    >[0];
-    const verifyInferenceConfig = vi.fn(async (params: VerifyInferenceParams) => {
-      const { config, onVerifiedExecution } = params;
-      verificationCalls += 1;
-      const stagedDefaults = requireRecord(
-        requireRecord(config.agents, "agents").defaults,
-        "defaults",
-      );
-      expect(stagedDefaults.model).toEqual({
-        primary: "openai/gpt-5.5",
-        fallbacks: ["openai/gpt-5.2"],
-      });
-      expect(
-        requireRecord(
-          requireRecord(
-            requireRecord(mockConfig.currentConfig().agents, "agents").defaults,
-            "defaults",
-          ).model,
-          "persisted model",
-        ).primary,
-      ).toBe("anthropic/claude-sonnet-4-6");
-      if (verificationCalls === 1) {
-        const current = mockConfig.currentConfig();
-        const currentModels = requireRecord(current.models, "models");
-        const currentProviders = requireRecord(currentModels.providers, "providers");
-        mockConfig.setConfig({
-          ...current,
-          auth: {
-            profiles: { "google:other": { provider: "google", mode: "api_key" } },
-          },
-          models: {
-            ...currentModels,
-            providers: {
-              ...currentProviders,
-              google: {
-                baseUrl: "https://example.invalid",
-                models: [{ id: "unrelated", name: "Unrelated", contextWindow: 1, maxTokens: 1 }],
-              },
-            },
-          },
-          agents: {
-            ...requireRecord(current.agents, "agents"),
-            defaults: {
-              ...requireRecord(requireRecord(current.agents, "agents").defaults, "defaults"),
-              models: { "google/unrelated": { agentRuntime: { id: "openclaw" } } },
-            },
-            entries: {
-              main: { default: true, workspace: "/tmp/main" },
-              work: { workspace: "/tmp/work" },
-            },
-          },
-          channels: { telegram: { enabled: true } },
-        });
-      } else {
+    mockConfig.set(concurrent);
+    const verifyInferenceConfig = vi.fn<Verify>(
+      async ({ config, onVerifiedExecution, requireExecutionOwner }) => {
+        expect(requireExecutionOwner).toBe(true);
+        expect(config.agents?.defaults?.model).toEqual(nextModel);
+        expect(mockConfig.current().agents?.defaults?.model).toEqual(oldModel);
         onVerifiedExecution?.(reboundBinding);
-      }
-      return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 17 };
-    });
-
-    const result = await executeSystemAgentOperation(
-      { kind: "set-default-model", model: "openai/gpt-5.5" },
-      runtime,
-      { approved: true, deps: { verifyInferenceConfig }, onVerifiedInferenceChanged },
-    );
-
-    expect(result).toEqual({ applied: true });
-    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
-    expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ requireExecutionOwner: true }),
-    );
-    expect(verifyInferenceConfig).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        requireExecutionOwner: true,
-        onVerifiedExecution: expect.any(Function),
-      }),
-    );
-    expect(onVerifiedInferenceChanged).toHaveBeenCalledOnce();
-    expect(onVerifiedInferenceChanged).toHaveBeenCalledWith(reboundBinding);
-    expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
-    expect(mockConfig.mutateConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        writeOptions: {
-          auditOrigin: "system-agent",
-          preCommitRuntimePreflight: expect.any(Function),
-        },
-      }),
-    );
-    const persisted = mockConfig.currentConfig();
-    expect(
-      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").model,
-    ).toEqual({ primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.2"] });
-    expect(
-      requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").systemAgent,
-    ).toEqual({ agentId: "main" });
-    expect(requireRecord(persisted.agents, "agents").entries).toEqual({
-      main: { default: true, workspace: "/tmp/main" },
-      work: { workspace: "/tmp/work" },
-    });
-    expect(requireRecord(persisted.auth, "auth").profiles).toEqual({
-      "google:other": { provider: "google", mode: "api_key" },
-    });
-    expect(
-      requireRecord(requireRecord(persisted.models, "models").providers, "providers"),
-    ).toMatchObject({
-      openai: { baseUrl: "https://api.openai.com/v1" },
-      google: expect.any(Object),
-    });
-    expect(
-      requireRecord(
-        requireRecord(requireRecord(persisted.agents, "agents").defaults, "defaults").models,
-        "default models",
-      ),
-    ).toHaveProperty("google/unrelated");
-    expect(persisted.channels).toEqual({ telegram: { enabled: true } });
-    expect(lines.join("\n")).toContain("Default model: openai/gpt-5.5");
-
-    const audit = readLastAuditEntry();
-    expectAuditRecord(
-      audit,
-      {
-        operation: "config.setDefaultModel",
-        summary: "Set default model to openai/gpt-5.5",
+        return { ...verified(), latencyMs: 17 };
       },
+    );
+    expect(await setModel(verifyInferenceConfig, { onVerifiedInferenceChanged })).toEqual({
+      applied: true,
+    });
+    expect(onVerifiedInferenceChanged).toHaveBeenCalledExactlyOnceWith(reboundBinding);
+    Object.assign(concurrent.agents.defaults, {
+      model: nextModel,
+      models: { ...concurrent.agents.defaults.models, [model]: {} },
+    });
+    expect(mockConfig.current()).toEqual(concurrent);
+    expectAuditRecord(
+      readLastAuditEntry(),
+      { operation: "config.setDefaultModel", summary: `Set default model to ${model}` },
       {
-        requestedModel: "openai/gpt-5.5",
-        effectiveModel: "openai/gpt-5.5",
+        requestedModel: model,
+        effectiveModel: model,
         inferenceVerified: true,
         inferenceLatencyMs: 17,
       },
@@ -648,403 +461,251 @@ describe("parseSystemAgentOperation", () => {
   });
 
   it.each([
-    {
-      field: "system agent",
-      initial: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            systemAgent: { agentId: "main" },
-          },
-          entries: { main: { default: true }, work: {} },
-        },
-      },
-      change: (config: TestConfig) => {
-        const next = structuredClone(config);
-        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
-        defaults.systemAgent = { agentId: "work" };
-        return next;
-      },
-    },
-    {
-      field: "auth profile order",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true } },
-        },
-        auth: { order: { anthropic: ["anthropic:one"] } },
-      },
-      change: (config: TestConfig) => ({
-        ...structuredClone(config),
-        auth: { order: { anthropic: ["anthropic:two"] } },
-      }),
-    },
-    {
-      field: "runtime metadata",
-      initial: {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-sonnet-4-6" },
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
-          },
-          entries: { main: { default: true } },
-        },
-      },
-      change: (config: TestConfig) => {
-        const next = structuredClone(config);
-        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
-        defaults.models = {
-          "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-        };
-        return next;
-      },
-    },
-    {
-      field: "model",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true } },
-        },
-      },
-      change: (config: TestConfig) => {
-        const next = structuredClone(config);
-        const defaults = requireRecord(requireRecord(next.agents, "agents").defaults, "defaults");
-        defaults.model = { primary: "anthropic/claude-opus-4-6" };
-        return next;
-      },
-    },
-    {
-      field: "config-backed environment",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true } },
-        },
-        env: { vars: { ANTHROPIC_API_KEY: "first" } },
-      },
-      change: (config: TestConfig) => ({
-        ...structuredClone(config),
-        env: { vars: { ANTHROPIC_API_KEY: "second" } },
-      }),
-    },
-    {
-      field: "secret provider policy",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true } },
-        },
-        secrets: { defaults: { env: "first" } },
-      },
-      change: (config: TestConfig) => ({
-        ...structuredClone(config),
-        secrets: { defaults: { env: "second" } },
-      }),
-    },
-    {
-      field: "plugin load policy",
-      initial: {
-        agents: {
-          defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-          entries: { main: { default: true } },
-        },
-        plugins: { enabled: true },
-      },
-      change: (config: TestConfig) => ({
-        ...structuredClone(config),
-        plugins: { enabled: false },
-      }),
-    },
-  ])(
-    "aborts when concurrent $field changes invalidate the verified route",
-    async ({ initial, change }) => {
-      const tempDir = opTempDirs.make("openclaw-route-conflict-");
-      setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-      mockConfig.setConfig(initial);
-      mockConfig.mutateConfigFile.mockClear();
-      const { runtime, lines } = createSystemAgentTestRuntime();
-      const verifyInferenceConfig = vi.fn(async () => {
-        mockConfig.setConfig(change(mockConfig.currentConfig()));
-        return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 7 };
-      });
-
-      await expect(
-        executeSystemAgentOperation(
-          { kind: "set-default-model", model: "openai/gpt-5.5" },
-          runtime,
-          {
-            approved: true,
-            deps: { verifyInferenceConfig },
-          },
-        ),
-      ).rejects.toThrow("inference route changed during verification");
-
-      expect(mockConfig.mutateConfigFile).toHaveBeenCalledOnce();
-      expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-      await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-    },
+    [
+      { ok: false, status: "auth", error: "Provider authentication failed." },
+      "no longer passes live inference at the config commit boundary",
+    ],
+    [
+      { ...verified(), modelRef: "openai/gpt-5.4" },
+      "did not verify the exact model route at the config commit boundary",
+    ],
+  ] satisfies [Awaited<ReturnType<Verify>>, string][])(
+    "preserves the working model on a rejected commit-boundary probe: %j",
+    async (result, error) => rejectsModel(async () => result, error),
   );
-
-  it("keeps the working model and writes no audit when live inference fails", async () => {
-    const tempDir = opTempDirs.make("openclaw-rejected-model-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-      gateway: { port: 18789 },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const verifyInferenceConfig = vi.fn(async () => ({
-      ok: false as const,
-      status: "auth" as const,
-      error: "Provider authentication failed.",
-    }));
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-      }),
-    ).rejects.toThrow(
-      "The requested model failed a live inference test, so the current default model was not changed. Provider authentication failed. Fix provider authentication or model access, then retry.",
-    );
-
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("writes nothing when the exact latest route fails its locked recheck", async () => {
-    const tempDir = opTempDirs.make("openclaw-latest-route-rejected-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const verifyInferenceConfig = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 5 })
-      .mockResolvedValueOnce({ ok: false, status: "auth", error: "credential changed" });
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-      }),
-    ).rejects.toThrow("no longer passes live inference at the config commit boundary");
-
-    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rejects a live result from a different model before opening the write boundary", async () => {
-    const tempDir = opTempDirs.make("openclaw-mismatched-model-result-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const verifyInferenceConfig = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.4",
-      latencyMs: 5,
-    }));
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-      }),
-    ).rejects.toThrow("did not verify the exact model route");
-
-    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
-    expect(mockConfig.mutateConfigFile).not.toHaveBeenCalled();
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rejects a different model result from the final commit-boundary probe", async () => {
-    const tempDir = opTempDirs.make("openclaw-final-mismatched-model-result-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    const verifyInferenceConfig = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.5", latencyMs: 5 })
-      .mockResolvedValueOnce({ ok: true, modelRef: "openai/gpt-5.4", latencyMs: 5 });
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-      }),
-    ).rejects.toThrow("did not verify the exact model route at the config commit boundary");
-
-    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rechecks the existing inference binding inside the locked model transform", async () => {
-    const tempDir = opTempDirs.make("openclaw-model-binding-rotated-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    let bindingOwner = "verified";
-    const verifyInferenceConfig = vi.fn(async () => {
-      bindingOwner = "rotated";
-      return {
-        ok: true as const,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 5,
-      };
-    });
+  it("rechecks inference authority after the live probe", async () => {
+    const verify = vi.fn<Verify>(async () => verified());
     const beforePersistentApply = vi.fn(() => {
-      if (bindingOwner !== "verified") {
+      if (verify.mock.calls.length > 0) {
         throw new SystemAgentInferenceUnavailableError("conversation");
       }
     });
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-        beforePersistentApply,
-      }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-
-    expect(verifyInferenceConfig).toHaveBeenCalledOnce();
-    expect(beforePersistentApply).toHaveBeenCalledOnce();
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
-  });
-
-  it("rechecks the existing inference binding after the candidate's final live probe", async () => {
-    const tempDir = opTempDirs.make("openclaw-model-binding-final-probe-rotated-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const originalConfig = {
-      agents: {
-        defaults: { model: { primary: "anthropic/claude-sonnet-4-6" } },
-        entries: { main: { default: true } },
-      },
-    };
-    mockConfig.setConfig(originalConfig);
-    mockConfig.mutateConfigFile.mockClear();
-    const { runtime, lines } = createSystemAgentTestRuntime();
-    let bindingOwner = "verified";
-    let verificationCalls = 0;
-    const verifyInferenceConfig = vi.fn(async () => {
-      verificationCalls += 1;
-      if (verificationCalls === 2) {
-        bindingOwner = "rotated";
-      }
-      return {
-        ok: true as const,
-        modelRef: "openai/gpt-5.5",
-        latencyMs: 5,
-      };
-    });
-    const beforePersistentApply = vi.fn(() => {
-      if (bindingOwner !== "verified") {
-        throw new SystemAgentInferenceUnavailableError("conversation");
-      }
-    });
-
-    await expect(
-      executeSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" }, runtime, {
-        approved: true,
-        deps: { verifyInferenceConfig },
-        beforePersistentApply,
-      }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
-
-    expect(verifyInferenceConfig).toHaveBeenCalledTimes(2);
+    await rejectsModel(verify, SystemAgentInferenceUnavailableError, { beforePersistentApply });
+    expect(verify).toHaveBeenCalledOnce();
     expect(beforePersistentApply).toHaveBeenCalledTimes(2);
-    expect(mockConfig.currentConfig()).toEqual(originalConfig);
-    expect(lines.join("\n")).not.toContain("[openclaw] done: config.setDefaultModel");
-    await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
 
   it("stages and persists model changes at the effective default-agent owner", async () => {
-    const tempDir = opTempDirs.make("openclaw-default-agent-model-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    mockConfig.setConfig({
+    mockConfig.set({
       agents: {
         defaults: { model: { primary: "anthropic/global-default" } },
-        entries: {
-          work: {
-            default: true,
-            model: { primary: "anthropic/work-default" },
-          },
-        },
+        entries: { work: { model: { primary: "anthropic/work-default" } } },
       },
     });
-    const { runtime } = createSystemAgentTestRuntime();
-    const verifyInferenceConfig = vi.fn(async ({ config }: { config: TestConfig }) => {
-      const agents = requireRecord(config.agents, "agents");
-      expect(requireRecord(agents.defaults, "defaults").model).toEqual({
-        primary: "anthropic/global-default",
-      });
-      const work = listAgentEntries(config as OpenClawConfig).find((entry) => entry.id === "work");
-      expect(work?.model).toEqual({
-        primary: "openai/gpt-5.5",
-      });
-      return { ok: true as const, modelRef: "openai/gpt-5.5", latencyMs: 9 };
+    const verifyInferenceConfig = vi.fn<Verify>(async ({ config }) => {
+      expect(config.agents?.defaults?.model).toEqual({ primary: "anthropic/global-default" });
+      expect(config.agents?.entries?.work?.model).toEqual({ primary: model });
+      return verified();
     });
+    await setModel(verifyInferenceConfig);
+    expect(mockConfig.current().agents).toMatchObject({
+      defaults: { model: { primary: "anthropic/global-default" } },
+      entries: { work: { model: { primary: model } } },
+    });
+  });
+});
 
-    await executeSystemAgentOperation(
-      { kind: "set-default-model", model: "openai/gpt-5.5" },
-      runtime,
-      { approved: true, deps: { verifyInferenceConfig } },
+describe("local setup recovery", () => {
+  it("completes a v2026.9.4 interrupted runtime-bearing roster at its approved root", async () => {
+    const pending = pendingOwner();
+    const main = {
+      models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
+    };
+    const released: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-5" } }, entries: { main } },
+      wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
+    };
+    mockConfig.set(released);
+    const recovery = await loadLocalSetupRecovery();
+    recovery.applyOptions?.assertCommitPreconditions(released);
+    mockConfig.set(
+      applyLocalSetupWorkspaceConfig(released, recovery.workspace, {
+        allowWorkspaceChange: recovery.applyOptions?.allowWorkspaceChange,
+      }),
     );
+    await recovery.complete(configPath, async (effect) => effect());
+    expect(mockConfig.current().agents).toEqual({
+      defaults: { workspace, model: released.agents?.defaults?.model },
+      entries: { main },
+    });
+    expect(localOnboarding.complete).toHaveBeenCalledExactlyOnceWith({
+      configPath,
+      runId: pending.runId,
+    });
+    expectCompleted(pending);
+  });
 
-    const agents = requireRecord(mockConfig.currentConfig().agents, "agents");
-    expect(requireRecord(agents.defaults, "defaults").model).toEqual({
-      primary: "anthropic/global-default",
+  it.each(["completed receipt", "remote gateway", "gateway-hosted setup"])(
+    "does not adopt workspace authority from a %s",
+    async (kind) => {
+      const pending = pendingOwner();
+      if (kind === "completed receipt") {
+        localOnboarding.states.set(configPath, {
+          ...pending,
+          status: "completed",
+          completedAtMs: 2,
+        });
+      } else if (kind === "remote gateway") {
+        mockConfig.set({ ...mockConfig.current(), gateway: { mode: "remote" } });
+      }
+      const before = localOnboarding.states.get(configPath);
+      const deps = kind === "gateway-hosted setup" ? { setupSurface: "gateway" as const } : {};
+      expect((await setup({ deps })).applied).toBe(true);
+      expect(applySetup.mock.calls[0]?.[0]).not.toHaveProperty("resume", true);
+      expect(applySetup.mock.calls[0]?.[0]).not.toHaveProperty("allowWorkspaceChange", true);
+      expect(localOnboarding.complete).not.toHaveBeenCalled();
+      expect(localOnboarding.states.get(configPath)).toEqual(before);
+      if (kind === "gateway-hosted setup") {
+        expect(localOnboarding.readForConfig).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("completes a team receipt at its approved root with a custom coordinator", async () => {
+    const pending = pendingOwner();
+    mockConfig.set(teamConfig(pending, "project-lead"));
+    expect((await setup({}, { workspace: undefined })).applied).toBe(true);
+    expectApplied({ workspace, resume: true });
+    expectCompleted(pending);
+  });
+
+  it("restores the recorded first team after activation stops before roster creation", async () => {
+    const pending = pendingOwner("project-lead");
+    mockConfig.set({
+      agents: { defaults: { model: { primary: model } } },
+      wizard: { securityAcknowledgedAt: pending.securityAcknowledgedAt },
     });
-    const work = listAgentEntries(mockConfig.currentConfig() as OpenClawConfig).find(
-      (entry) => entry.id === "work",
+    afterSetup(() => mockConfig.set(teamConfig(pending, pending.teamCoordinatorId)));
+    expect((await setup({}, { workspace: undefined })).applied).toBe(true);
+    expectApplied({
+      firstAgent: { name: "project-lead", team: true },
+      teamCoordinatorId: "project-lead",
+    });
+    expectCompleted(pending);
+  });
+
+  it.each(["specialist workspace", "delegation targets"])(
+    "keeps the team receipt pending after changing the %s",
+    async (change) => {
+      const pending = pendingOwner();
+      const config = teamConfig(pending);
+      mockConfig.set(config);
+      await rejectsRecovery(pending, async () => {
+        if (change === "specialist workspace") {
+          config.agents.entries.writer!.workspace = `${workspace}/other`;
+        } else {
+          config.agents.entries.coordinator!.subagents.allowAgents = ["writer"];
+          config.agents.entries.coordinator!.workspace = workspace;
+        }
+        mockConfig.set(config);
+        return setupResult();
+      });
+    },
+  );
+
+  it("preserves recorded team intent when retry starts with a replaced coordinator", async () => {
+    const pending = pendingOwner("coordinator");
+    mockConfig.set(teamConfig(pending, "replacement"));
+    await rejectsRecovery(pending);
+  });
+
+  it.each([
+    ["workspace preparation", { workspaceReady: false }, "workspace could not be prepared"],
+    [
+      "gateway installation",
+      { gateway: { status: "failed", error: "service install failed" } },
+      "service install failed",
+    ],
+  ] satisfies [string, Partial<SystemAgentSetupApplyResult>, string][])(
+    "keeps onboarding pending when %s fails",
+    async (_label, overrides, error) => {
+      await rejectsRecovery(pendingOwner(), async () => setupResult(overrides), error);
+    },
+  );
+
+  it("never completes a competing onboarding owner after setup succeeds", async () => {
+    const pending = pendingOwner();
+    const replacement = { ...pending, runId: "replacement-run" };
+    afterSetup(() => localOnboarding.states.set(configPath, replacement));
+    await expect(setup()).rejects.toThrow("Another onboarding run replaced this setup operation");
+    expect(localOnboarding.complete).toHaveBeenCalledExactlyOnceWith({
+      configPath,
+      runId: pending.runId,
+    });
+    expect(localOnboarding.states.get(configPath)).toEqual(replacement);
+    expect(lines.join("\n")).not.toContain("[openclaw] done: openclaw.setup");
+  });
+
+  it("rejects a replaced config identity at the setup config-write boundary", async () => {
+    const pending = pendingOwner();
+    const setupEffects = vi.fn();
+    await rejectsRecovery(
+      pending,
+      async (params) => {
+        recoveryConfig(pending, "2026-08-03T00:00:00.000Z");
+        params.assertCommitPreconditions?.((await mockConfig.read()).sourceConfig);
+        setupEffects();
+        return setupResult();
+      },
+      "Another onboarding run replaced this setup operation",
     );
-    expect(work?.model).toEqual({
-      primary: "openai/gpt-5.5",
+    expect(setupEffects).not.toHaveBeenCalled();
+  });
+
+  it("keeps onboarding pending when its configuration disappears after setup", async () => {
+    await rejectsRecovery(pendingOwner(), async () => {
+      mockConfig.missing();
+      return setupResult();
     });
+  });
+
+  it.each(["installation identity", "effective workspace"])(
+    "rejects %s changed before acquiring the completion lock",
+    async (change) => {
+      const pending = pendingOwner();
+      mockConfig.exclusive.mockImplementationOnce(async (effect) => {
+        recoveryConfig(
+          pending,
+          change === "installation identity"
+            ? "2026-08-03T00:00:00.000Z"
+            : pending.securityAcknowledgedAt,
+          change === "effective workspace" ? "/tmp/changed-before-lock" : workspace,
+        );
+        return effect((await mockConfig.read()).sourceConfig);
+      });
+      await rejectsRecovery(pending);
+    },
+  );
+
+  it("rechecks setup authority immediately before completing onboarding", async () => {
+    const pending = pendingOwner();
+    const beforePersistentApply = afterFirstAuthorization(() => {
+      throw new SystemAgentInferenceUnavailableError("conversation");
+    });
+    await expect(setup({ beforePersistentApply })).rejects.toBeInstanceOf(
+      SystemAgentInferenceUnavailableError,
+    );
+    expect(applySetup).toHaveBeenCalledOnce();
+    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
+    expectPending(pending);
+  });
+
+  it("reads final config only after the completion authority check", async () => {
+    const pending = pendingOwner();
+    const beforePersistentApply = afterFirstAuthorization(() =>
+      recoveryConfig(pending, "2026-08-03T00:00:00.000Z"),
+    );
+    await rejectsRecovery(pending, undefined, undefined, { beforePersistentApply });
+    expect(beforePersistentApply).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects setup for a workspace owned by another onboarding run", async () => {
+    const pending = pendingOwner();
+    await expect(setup({}, { workspace: "/tmp/another-workspace" })).rejects.toThrow(
+      "Another onboarding run owns a different workspace",
+    );
+    expect(applySetup).not.toHaveBeenCalled();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
+    expect(localOnboarding.states.get(configPath)).toEqual(pending);
   });
 });

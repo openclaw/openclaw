@@ -20,7 +20,9 @@ describe("heartbeat active-hours runtime evidence", () => {
       timeoutMs: 5_000,
     });
 
-    expect(evidence.entries[0]?.result.status).toBe("pass");
+    expect(evidence.entries[0]?.result.status, JSON.stringify(evidence.entries[0]?.result)).toBe(
+      "pass",
+    );
     const summary = JSON.parse(
       await fs.readFile(path.join(artifactBase, "heartbeat-active-hours-summary.json"), "utf8"),
     ) as { observations: Array<{ outcome: string }> };

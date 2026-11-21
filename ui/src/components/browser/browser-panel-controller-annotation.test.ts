@@ -4,7 +4,7 @@ import {
   createBrowserPanelTestController,
   setupBrowserPanelTestCleanup,
 } from "./browser-panel-controller-test-support.ts";
-import type { BrowserPanelController } from "./browser-panel-controller.ts";
+import type { BrowserPanel } from "./browser-panel-owner.ts";
 
 setupBrowserPanelTestCleanup();
 
@@ -14,7 +14,7 @@ function pointer(type: string, pointerId: number, clientX: number, clientY: numb
   return event as PointerEvent;
 }
 
-function createOverlay(controller: BrowserPanelController) {
+function createOverlay(controller: BrowserPanel) {
   const overlay = document.createElement("canvas");
   const capturedPointers = new Set<number>();
   overlay.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
@@ -22,11 +22,11 @@ function createOverlay(controller: BrowserPanelController) {
   overlay.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
   for (const type of ["pointerup", "pointercancel", "lostpointercapture"]) {
     overlay.addEventListener(type, (event) =>
-      controller.handleOverlayPointerUp(event as PointerEvent),
+      controller.input.handleOverlayPointerUp(event as PointerEvent),
     );
   }
   overlay.addEventListener("pointerdown", (event) =>
-    controller.handleOverlayPointerDown(event as PointerEvent),
+    controller.input.handleOverlayPointerDown(event as PointerEvent),
   );
   overlay.addEventListener("pointermove", (event) =>
     controller.handleOverlayPointerMove(event as PointerEvent),
@@ -43,7 +43,7 @@ function createAnnotationController() {
   return controller;
 }
 
-describe("BrowserPanelController annotation pointer ownership", () => {
+describe("BrowserPanel annotation pointer ownership", () => {
   it("keeps a stroke owned until its pointer ends or loses capture", () => {
     const controller = createAnnotationController();
     const { overlay } = createOverlay(controller);
@@ -87,7 +87,7 @@ describe("BrowserPanelController annotation pointer ownership", () => {
     overlay.dispatchEvent(pointer("pointerdown", 7, 10, 20));
     expect(capturedPointers.has(7)).toBe(true);
 
-    controller.hostDisconnected();
+    controller.suspendView();
 
     expect(capturedPointers.has(7)).toBe(false);
     overlay.dispatchEvent(pointer("pointermove", 7, 30, 40));

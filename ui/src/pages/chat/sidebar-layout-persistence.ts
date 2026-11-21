@@ -31,7 +31,7 @@ export function updateSidebarSessionLayout(
   },
 ): SidebarSessionLayouts {
   const key = sessionKey.trim();
-  const layouts = normalizeSidebarSessionLayouts(current);
+  const layouts = { ...current };
   if (!key) {
     return layouts;
   }
@@ -47,13 +47,18 @@ export function updateSidebarSessionLayout(
           columns: previous.columns.map((column) => {
             const geometry = normalized.columns.find((candidate) => candidate.id === column.id);
             return geometry
-              ? { ...column, width: geometry.width, height: geometry.height }
+              ? {
+                  ...column,
+                  width: geometry.width,
+                  height: geometry.height,
+                  browserWidthPending: geometry.browserWidthPending,
+                }
               : column;
           }),
         }
       : normalized;
   delete layouts[key];
-  layouts[key] = normalizeSidebarLayout({
+  layouts[key] = {
     ...next,
     // Only an explicit presentation choice may replace the stored preference.
     // Other layout writes can carry stale metadata from a retained pane.
@@ -63,7 +68,7 @@ export function updateSidebarSessionLayout(
         : previous
           ? previous.dashboardPresentationOverride
           : null,
-  });
+  };
   return Object.fromEntries(Object.entries(layouts).slice(-MAX_SIDEBAR_SESSION_LAYOUTS));
 }
 
@@ -88,7 +93,7 @@ export function updateSidebarSessionActivePanel(
 ): SidebarSessionActivePanels {
   const key = sessionKey.trim();
   const id = panelId.trim();
-  const selections = normalizeSidebarSessionActivePanels(current);
+  const selections = { ...current };
   if (!key || !id) {
     return selections;
   }

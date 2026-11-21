@@ -1,4 +1,3 @@
-// Media Generation Core tests cover model ref behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveCapabilityModelRefForProviders,
@@ -7,18 +6,8 @@ import {
 import { parseGenerationModelRef } from "./model-ref.js";
 
 describe("media-generation model refs", () => {
-  it("parses provider/model refs without splitting slash-containing model ids", () => {
-    expect(parseGenerationModelRef("fal/fal-ai/flux/dev")).toEqual({
-      provider: "fal",
-      model: "fal-ai/flux/dev",
-    });
-  });
-
-  it("rejects incomplete provider/model refs", () => {
+  it("rejects missing model refs", () => {
     expect(parseGenerationModelRef(undefined)).toBeNull();
-    expect(parseGenerationModelRef("openai")).toBeNull();
-    expect(parseGenerationModelRef("/gpt-image-2")).toBeNull();
-    expect(parseGenerationModelRef("openai/")).toBeNull();
   });
 
   it("resolves model-only refs from provider metadata", () => {

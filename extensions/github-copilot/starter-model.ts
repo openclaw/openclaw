@@ -5,12 +5,7 @@ import { fetchCopilotModelCatalog, PROVIDER_ID, selectCopilotStarterModel } from
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
 import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
-function preferredCopilotStarterModelId(): string {
-  const prefix = `${PROVIDER_ID}/`;
-  return DEFAULT_COPILOT_MODEL.startsWith(prefix)
-    ? DEFAULT_COPILOT_MODEL.slice(prefix.length)
-    : DEFAULT_COPILOT_MODEL;
-}
+const PREFERRED_COPILOT_STARTER_MODEL_ID = DEFAULT_COPILOT_MODEL.slice(PROVIDER_ID.length + 1);
 
 export async function resolveCopilotStarterModel(params: {
   githubToken: string;
@@ -29,7 +24,7 @@ export async function resolveCopilotStarterModel(params: {
     baseUrl: auth.baseUrl,
     headers: buildCopilotRuntimeHeaders({ config: params.config }),
   });
-  const selected = selectCopilotStarterModel(models, preferredCopilotStarterModelId());
+  const selected = selectCopilotStarterModel(models, PREFERRED_COPILOT_STARTER_MODEL_ID);
   if (!selected) {
     throw new Error(
       "GitHub Copilot did not return an enabled, picker-visible chat model with streaming and tool-call support.",

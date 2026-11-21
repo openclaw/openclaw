@@ -4,6 +4,7 @@ import {
   fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
+  validateRecordedFullReleaseCandidateRequest,
 } from "../full-release-candidate-contract.mjs";
 import {
   downloadExactActionsArtifactArchive,
@@ -53,8 +54,8 @@ function timestamp(value) {
 
 function exactRequest(left, right) {
   return (
-    JSON.stringify(validateFullReleaseCandidateRequest(left)) ===
-    JSON.stringify(validateFullReleaseCandidateRequest(right))
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(left)) ===
+    JSON.stringify(validateRecordedFullReleaseCandidateRequest(right))
   );
 }
 
@@ -309,6 +310,9 @@ export function validateCandidateBinding(
 
 export function candidateArtifactJsonFromBinding(value) {
   const binding = validateFullReleaseCandidateBinding(value);
+  if (binding.request.packagePublished === undefined) {
+    fail("retained v1 candidate evidence cannot supply package provenance");
+  }
   return JSON.stringify({
     packagePublished: binding.request.packagePublished,
     packageArtifactName: binding.package.artifact.name,
@@ -447,23 +451,17 @@ function validateCandidateWorkflowJobs(workflowJobs, binding) {
     job.head_sha === binding.producer.workflowSha &&
     job.status === "completed" &&
     job.conclusion === "success";
-  const producerJobs = jobs.filter(
-    (job) =>
-      matchesExpectedAttempt(job) &&
-      String(job.id) === binding.producer.jobId &&
-      job.name === binding.producer.jobName,
-  );
-  if (producerJobs.length !== 1) {
-    fail("full release candidate producer job did not complete successfully");
-  }
-  const publisherJobs = jobs.filter(
-    (job) =>
-      matchesExpectedAttempt(job) &&
-      String(job.id) === binding.publisher.jobId &&
-      job.name === binding.publisher.jobName,
-  );
-  if (publisherJobs.length !== 1) {
-    fail("full release candidate publisher job did not complete successfully");
+  for (const role of ["producer", "publisher"]) {
+    const expected = binding[role];
+    const matching = jobs.filter(
+      (job) =>
+        matchesExpectedAttempt(job) &&
+        String(job.id) === expected.jobId &&
+        job.name === expected.jobName,
+    );
+    if (matching.length !== 1) {
+      fail(`full release candidate ${role} job did not complete successfully`);
+    }
   }
 }
 
@@ -558,7 +556,7 @@ export function resolveCandidateBinding({
   return validateCandidateBinding(hasReused ? reusedBinding : freshBinding, {
     minimumRemainingMs: MIN_CANDIDATE_REMAINING_MS,
     now,
-    request,
+    request: validateFullReleaseCandidateRequest(request),
   });
 }
 

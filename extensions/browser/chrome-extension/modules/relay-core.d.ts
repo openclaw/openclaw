@@ -9,11 +9,7 @@ export function parsePairingString(raw: unknown): {
   token: string;
   gatewayUrl?: string;
 } | null;
-export function createPairingConfigStore(storage: {
-  get(keys: string[]): Promise<Record<string, unknown>>;
-  set(values: Record<string, unknown>): Promise<void>;
-  remove(keys: string[]): Promise<void>;
-}): {
+export function createPairingConfigStore(): {
   readonly invalidationRevision: number;
   read(): Promise<{
     relayUrl: string;
@@ -33,13 +29,9 @@ export function createPairingConfigStore(storage: {
   clear(): Promise<void>;
 };
 
-export function buildRelayWsProtocols(): string[];
-
 export function directLoopbackRelayPort(raw: unknown): number | null;
 
 export function reconnectDelayMs(attempt: number): number;
-
-export function nearestGroupColor(hex: unknown): string;
 
 export function toRelayTabInfo(tab: {
   id: number;

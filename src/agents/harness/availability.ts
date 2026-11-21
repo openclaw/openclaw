@@ -72,6 +72,7 @@ export function resolveAgentHarnessAvailabilityDecision(
       ...params,
       provider,
       requestedRuntime: policy.runtime,
+      contextManagement: registered.harness.contextManagement,
       providerOwnership: params.resolveProviderOwnership?.(),
     }),
   );

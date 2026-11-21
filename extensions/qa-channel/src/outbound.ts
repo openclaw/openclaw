@@ -1,16 +1,20 @@
-// Qa Channel plugin module implements outbound behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
+import type { QaBusAttachment, QaBusToolCall } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { resolveQaChannelAccount } from "./accounts.js";
-import { buildQaTarget, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
-import type { QaBusAttachment, QaBusToolCall } from "./protocol.js";
+import {
+  buildQaTarget,
+  resolveQaTargetThread,
+  sendQaBusMessage,
+  type QaMessageSendHandoff,
+} from "./bus-client.js";
 import type { CoreConfig } from "./types.js";
 
-type QaChannelTextSendParams = {
+type QaChannelTextSendParams = QaMessageSendHandoff & {
   cfg: CoreConfig;
   accountId?: string | null;
   to: string;
@@ -28,6 +32,12 @@ type QaChannelMediaAccessParams = {
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
 
+export function collectQaMediaUrls(...urls: Array<string | undefined>): string[] {
+  return [
+    ...new Set(urls.filter((url): url is string => typeof url === "string" && Boolean(url.trim()))),
+  ];
+}
+
 export async function sendQaChannelText(params: QaChannelTextSendParams) {
   const account = resolveQaChannelAccount({ cfg: params.cfg, accountId: params.accountId });
   const resolved = resolveQaTargetThread({ target: params.to, threadId: params.threadId });
@@ -38,7 +48,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     to: buildQaTarget({
       chatType: parsed.chatType,
       conversationId: parsed.conversationId,
-      threadId: resolved.threadId,
     }),
     text: params.text,
     isError: params.isError,
@@ -46,6 +55,9 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
     senderName: account.botDisplayName,
     threadId: resolved.threadId,
     replyToId: params.replyToId == null ? undefined : String(params.replyToId),
+    signal: params.signal,
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     ...(params.attachments?.length ? { attachments: params.attachments } : {}),
     ...(params.toolCalls?.length ? { toolCalls: params.toolCalls } : {}),
   });
@@ -59,9 +71,6 @@ export async function sendQaChannelText(params: QaChannelTextSendParams) {
 export async function sendQaChannelMediaBatch(
   params: QaChannelTextSendParams & QaChannelMediaAccessParams & { mediaUrls: readonly string[] },
 ) {
-  if (params.mediaUrls.length === 0) {
-    throw new Error("QA channel media batch requires at least one media URL");
-  }
   const { mediaMaxBytes: maxBytes } = resolveQaChannelAccount(params);
   const attachments: QaBusAttachment[] = await Promise.all(
     params.mediaUrls.map(async (mediaUrl) => {

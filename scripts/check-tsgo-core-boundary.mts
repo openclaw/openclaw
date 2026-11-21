@@ -1,14 +1,18 @@
 #!/usr/bin/env node
 
 // Enforces core tsgo project boundaries and sparse-checkout safety.
+import { realpathSync } from "node:fs";
 import path from "node:path";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
+import { resolveRepoToolBinPath, resolveTypeCheckTool } from "./lib/local-check-runtime.mts";
 import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
+  expandTsgoExecutionGraphs,
+  findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
-  TSGO_CORE_TEST_MAX_ROOTS,
+  TSGO_CI_ADDITIONAL_GRAPHS,
   TSGO_CORE_GRAPHS,
   TSGO_CORE_TEST_SHARDS,
 } from "./lib/tsgo-core-test-shards.mts";
@@ -16,9 +20,9 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const tsgoPath = resolveRepoToolBinPath("tsgo", { cwd: repoRoot });
 const canonicalCoreTestConfig = "test/tsconfig/tsconfig.core.test.json";
 
-function normalizeFilePath(filePath: string) {
+function normalizeFilePath(filePath: string, cwd: string) {
   const normalized = filePath.trim().replaceAll("\\", "/");
-  const normalizedRoot = repoRoot.replaceAll("\\", "/");
+  const normalizedRoot = cwd.replaceAll("\\", "/");
   if (normalized.startsWith(`${normalizedRoot}/`)) {
     return normalized.slice(normalizedRoot.length + 1);
   }
@@ -34,7 +38,13 @@ export class CoreTsgoBoundaryInterruptedError extends Error {
   }
 }
 
-async function runTsgoQuery(config: string, query: string, label: string): Promise<string> {
+async function runCompilerQuery(
+  bin: string,
+  config: string,
+  query: string,
+  label: string,
+  cwd: string,
+): Promise<string> {
   const outputs: Buffer[][] = [[], []];
   const overflow = new AbortController();
   let outputBytes = 0;
@@ -42,9 +52,9 @@ async function runTsgoQuery(config: string, query: string, label: string): Promi
   let code: number;
   try {
     code = await runManagedCommand({
-      bin: tsgoPath,
+      bin,
       args: ["-p", config, "--pretty", "false", query],
-      cwd: repoRoot,
+      cwd,
       stdio: ["ignore", "pipe", "pipe"],
       signal: overflow.signal,
       requireProcessTreeExit: process.platform !== "win32",
@@ -86,11 +96,16 @@ async function runTsgoQuery(config: string, query: string, label: string): Promi
   return stdout!;
 }
 
-async function readGraphConfig(config: string): Promise<{
+async function readGraphConfig(
+  config: string,
+  cwd: string,
+): Promise<{
   compilerOptions?: { tsBuildInfoFile?: string };
   files?: string[];
 }> {
-  return JSON.parse(await runTsgoQuery(config, "--showConfig", `${config} config expansion`)) as {
+  return JSON.parse(
+    await runCompilerQuery(tsgoPath, config, "--showConfig", `${config} config expansion`, cwd),
+  ) as {
     compilerOptions?: { tsBuildInfoFile?: string };
     files?: string[];
   };
@@ -103,24 +118,53 @@ export type CoreTsgoGraph = {
   files: readonly string[];
 };
 
+/** Complete config membership, excluding the selected compiler's own libraries. */
+export async function readTsconfigFileMembership(
+  config: string,
+  cwd = repoRoot,
+): Promise<string[]> {
+  const bin = resolveRepoToolBinPath(resolveTypeCheckTool(), { cwd: repoRoot });
+  // Both compiler packages colocate their bundled libraries with the resolved
+  // native executable. Those are compiler identity, not repository membership.
+  const libraryDirectory = `${realpathSync(path.dirname(bin))}${path.sep}`;
+  return (await runCompilerQuery(bin, config, "--listFilesOnly", `${config} file listing`, cwd))
+    .split(/\r?\n/u)
+    .filter((file) => file && !path.resolve(cwd, file).startsWith(libraryDirectory));
+}
+
 /** Validates all boundaries and returns this invocation's compiler-resolved inputs. */
-export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
+export async function checkCoreTsgoGraphBoundary(
+  options: { cwd?: string } = {},
+): Promise<CoreTsgoGraph[]> {
+  const cwd = realpathSync(options.cwd ?? repoRoot);
+  return validateCoreGraphs(cwd);
+}
+
+async function validateCoreGraphs(cwd: string): Promise<CoreTsgoGraph[]> {
+  const normalize = (file: string) => normalizeFilePath(file, cwd);
   const testRootPattern = /\.test\.(?:ts|tsx)$/u;
-  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig)).files ?? [])
-    .map(normalizeFilePath)
+  const canonicalRoots = ((await readGraphConfig(canonicalCoreTestConfig, cwd)).files ?? [])
+    .map(normalize)
     .filter((file) => testRootPattern.test(file));
   const shardConfigs = [];
   for (const shard of TSGO_CORE_TEST_SHARDS) {
-    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config) });
+    shardConfigs.push({ ...shard, expanded: await readGraphConfig(shard.config, cwd) });
   }
+  const shardRoots = shardConfigs.map((shard) => ({
+    name: shard.name,
+    roots: (shard.expanded.files ?? []).map(normalize).filter((file) => testRootPattern.test(file)),
+  }));
+  // Shard size is a cost signal no single change owns: report it, never fail on it.
+  reportLimitViolations(
+    findOversizedTsgoCoreTestShards({ shards: shardRoots }).map((message) => ({
+      file: canonicalCoreTestConfig,
+      title: "Core test shard root budget",
+      message,
+    })),
+  );
   const shardViolations = findTsgoCoreTestShardViolations({
     canonicalRoots,
-    shards: shardConfigs.map((shard) => ({
-      name: shard.name,
-      roots: (shard.expanded.files ?? [])
-        .map(normalizeFilePath)
-        .filter((file) => testRootPattern.test(file)),
-    })),
+    shards: shardRoots,
   });
 
   const buildInfoOwners = new Map<string, string[]>();
@@ -141,32 +185,32 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
   }
 
   if (shardViolations.length > 0) {
-    console.error(
-      `Core test shards must cover every canonical test root exactly once and stay at or below ${TSGO_CORE_TEST_MAX_ROOTS} roots:`,
-    );
+    console.error("Core test shards must cover every canonical test root exactly once:");
     for (const violation of shardViolations) {
       console.error(`- ${violation}`);
     }
     throw new Error("Core test graph ownership validation failed");
   }
-
   const violations: string[] = [];
   const graphs: CoreTsgoGraph[] = [];
   for (const graph of TSGO_CORE_GRAPHS) {
-    const files = (
-      await runTsgoQuery(graph.config, "--listFilesOnly", `${graph.name} file listing`)
-    )
-      .split(/\r?\n/u)
-      .map(normalizeFilePath)
-      .filter(Boolean);
+    const files = (await readTsconfigFileMembership(graph.config, cwd)).map(normalize);
     graphs.push({
       ...graph,
       files,
       roots: (shardConfigs.find((shard) => shard.config === graph.config)?.expanded.files ?? [])
-        .map((file) => normalizeFilePath(path.resolve(repoRoot, path.dirname(graph.config), file)))
+        .map((file) => normalize(path.resolve(cwd, path.dirname(graph.config), file)))
         .filter((file) => testRootPattern.test(file)),
     });
-    const extensionFiles = files.filter((file) => file.startsWith("extensions/"));
+    const extensionFiles = files.filter(
+      (file) =>
+        file.startsWith("extensions/") &&
+        !(
+          (graph.name === "ui" || graph.name.startsWith("core-test-")) &&
+          (file === "extensions/active-memory/control-ui.presentation.json" ||
+            file === "extensions/memory-wiki/control-ui.presentation.json")
+        ),
+    );
     for (const file of extensionFiles) {
       violations.push(`${graph.name}: ${file}`);
     }
@@ -181,6 +225,21 @@ export async function checkCoreTsgoGraphBoundary(): Promise<CoreTsgoGraph[]> {
       "Move extension-owned behavior behind plugin SDK contracts, public artifacts, or extension-local tests.",
     );
     throw new Error("Core tsgo graphs include bundled extension files");
+  }
+  return graphs;
+}
+
+/** Noncore discovery requires the caller to retain a separate blocking core boundary. */
+export async function inspectCiTsgoCheckGraphs(
+  options: { cwd?: string; scope?: "all" | "noncore" } = {},
+): Promise<CoreTsgoGraph[]> {
+  const cwd = realpathSync(options.cwd ?? repoRoot);
+  const graphs = options.scope === "noncore" ? [] : await validateCoreGraphs(cwd);
+  for (const graph of expandTsgoExecutionGraphs(TSGO_CI_ADDITIONAL_GRAPHS)) {
+    const files = (await readTsconfigFileMembership(graph.config, cwd)).map((file) =>
+      normalizeFilePath(file, cwd),
+    );
+    graphs.push({ ...graph, files, roots: [] });
   }
   return graphs;
 }

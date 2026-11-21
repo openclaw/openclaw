@@ -6,6 +6,7 @@ export const FAILOVER_REASONS = [
   "overloaded",
   "billing",
   "server_error",
+  "route_unavailable",
   "timeout",
   "tls_certificate",
   "context_overflow",
@@ -16,5 +17,3 @@ export const FAILOVER_REASONS = [
   "unclassified",
   "unknown",
 ] as const;
-
-export type FailoverReason = (typeof FAILOVER_REASONS)[number];

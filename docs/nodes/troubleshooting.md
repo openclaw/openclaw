@@ -69,12 +69,54 @@ Healthy signals:
 - `nodes describe` includes the capability you're calling.
 - Exec approvals show the expected mode/allowlist.
 
+If `system.run.prepare` fails before a command starts, check the **node host's local file log**
+for `node host system.run.prepare failed`. That warning retains the exception stack
+available to the node preparation handler; the Gateway response remains message-only.
+It does not establish the cause of state contention or recover stacks already omitted
+by an underlying worker. Review and redact local logs before sharing; see
+[logging](/gateway/logging#file-based-logger).
+
 If startup preparation disables container session hosting that you enabled, check the node host's
 local stderr for `node host worker hosting disabled: ...` and follow the reported
 engine or context recovery guidance. The macOS app forwards worker stderr to its
 logger under subsystem `ai.openclaw`, category `node-host-worker`; see
 [macOS logging](/platforms/mac/logging) for capture options. After fixing the cause,
 restart the node host. Explicitly disabled hosting produces no such diagnostic.
+
+After a node-host restart, session capacity remains occupied until worker cleanup
+is verified. On Linux and macOS, released direct workers are recovered through
+their original process group even if its leader has already exited. Newer workers
+retain a cleanup anchor that records descendant completion before exiting; recovery also waits for its
+process group to disappear. If the anchor dies without that record, the node logs
+`lost its cleanup anchor without recorded lineage completion` and keeps the slot
+reserved. Inspect remaining worker descendants and the node-host logs; another
+restart alone cannot establish that cleanup finished. Other free slots remain
+available. See the [database compatibility contract](/reference/database-schemas/versioning)
+before downgrading a node with active workers.
+
+If automatic idle-worker cleanup fails, the node logs `Idle worker cleanup failed`
+and keeps its slot reserved while retrying every two minutes. Check the node host
+and, for container-isolated workers, its container engine. A completed turn stays
+completed.
+
+If a Windows node host exits before confirming worker cleanup, its unfinished
+claims and slots stay reserved across restarts. Losing or reusing a worker's PID
+does not prove that its descendants stopped. Cleanup confirmed by the original
+host still releases capacity normally; container-isolated workers on supported
+hosts use their container engine's removal confirmation.
+
+## Node runtime version differs from the CLI
+
+A packaged headless node can run a newer private runtime than the globally
+installed CLI. Use `openclaw nodes status --json` to check the connected node's
+version; `openclaw --version` reports the CLI version. For delayed updates,
+opt-outs, fallback, and migration or repair deferrals, see
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates).
+
+If an apparently idle node keeps deferring an update, check its installed
+plugins. A plugin without an idle-work callback cannot confirm that its
+background work has finished, so the node keeps running. Update the plugin, or
+finish its work before updating and restarting the node manually.
 
 ## Foreground requirements
 
@@ -135,7 +177,7 @@ SSH-verified and bootstrap enrollment can approve the first surface automaticall
 Trusted-network device approval does not. Later command, capability, or permission
 expansion still needs surface approval.
 
-For approval-backed `host=node` runs, the gateway also binds execution to the prepared canonical `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
+For approval-backed `host=node` runs, the gateway also binds execution to the prepared `systemRunPlan`. If a later caller mutates the command, cwd, or session metadata before the approved run is forwarded, the gateway rejects the run as an approval mismatch instead of trusting the edited payload.
 
 ## Common node error codes
 

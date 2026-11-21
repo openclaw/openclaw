@@ -4,6 +4,7 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
 
@@ -72,15 +73,8 @@ function pruneExecutionLineageHandoffs(nowMs: number): void {
       executionLineageHandoffs.delete(id);
     }
   }
-  // A lost local connection must not leave an unbounded process-lifetime registry.
-  // Oldest insertion wins because Map preserves insertion order.
-  while (executionLineageHandoffs.size >= MAX_EXECUTION_LINEAGE_HANDOFFS) {
-    const oldest = executionLineageHandoffs.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    executionLineageHandoffs.delete(oldest);
-  }
+  // Reserve one slot for the new handoff after retiring expired or revoked entries.
+  pruneMapToMaxSize(executionLineageHandoffs, MAX_EXECUTION_LINEAGE_HANDOFFS - 1);
 }
 
 /** Add process-local lineage without expanding or serializing the spawn context. */

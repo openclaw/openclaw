@@ -42,7 +42,7 @@ struct ChatStreamingRevealTests {
 
         let appended = step(state: initial, newText: "one two", now: 0.2)
         let frame = revealedOpacities(state: appended, now: 0.2)
-        #expect(frame.fullyRevealedPrefixCharacterOffset == 4)
+        #expect(frame.fading.first?.characterRange == 4..<7)
         #expect(frame.fading.count == 1)
     }
 
@@ -73,6 +73,64 @@ struct ChatStreamingRevealTests {
         #expect(state.words.count == 1)
         #expect(state.words.first?.characterRange == 0..<text.count)
         #expect(revealedOpacities(state: state, now: 6).fading.isEmpty)
-        #expect(revealedOpacities(state: state, now: 6).fullyRevealedPrefixCharacterOffset == text.count)
+    }
+
+    struct AppendScheduleCase: Sendable {
+        struct Sample: Sendable {
+            let index: Int
+            let range: Range<Int>
+            let fadeStart: Double
+            let deadline: Double
+        }
+
+        let initialText: String
+        let appendedText: String
+        let now: Double
+        let wordCount: Int
+        let samples: [Sample]
+    }
+
+    @Test(arguments: [
+        AppendScheduleCase(
+            initialText: "hel",
+            appendedText: "hello one",
+            now: 0.02,
+            wordCount: 2,
+            samples: [
+                .init(index: 0, range: 0..<5, fadeStart: 0, deadline: 0.12),
+                .init(index: 1, range: 6..<9, fadeStart: 0.06, deadline: 0.18),
+            ]),
+        AppendScheduleCase(
+            initialText: "one two",
+            appendedText: "one two three",
+            now: 0.06,
+            wordCount: 3,
+            samples: [
+                .init(index: 0, range: 0..<3, fadeStart: 0, deadline: 0.12),
+                .init(index: 1, range: 4..<7, fadeStart: 0.04, deadline: 0.16),
+                .init(index: 2, range: 8..<13, fadeStart: 0.14, deadline: 0.26),
+            ]),
+        AppendScheduleCase(
+            initialText: "a b c d e f g h i j k l m n o p q r s t u v",
+            appendedText: "a b c d e f g h i j k l m n o p q r s t u v w x y z",
+            now: 0.01,
+            wordCount: 24,
+            samples: [
+                .init(index: 0, range: 4..<5, fadeStart: 0.02666666666666667, deadline: 0.13),
+                .init(index: 23, range: 50..<51, fadeStart: 0.29, deadline: 0.41),
+            ]),
+    ])
+    func `append scheduling preserves partial words and retained fade timing`(_ sample: AppendScheduleCase) throws {
+        let initial = step(state: ChatStreamingRevealState(), newText: sample.initialText, now: 0)
+        let appended = step(state: initial, newText: sample.appendedText, now: sample.now)
+
+        #expect(appended.words.count == sample.wordCount)
+        for expected in sample.samples {
+            try #require(appended.words.indices.contains(expected.index))
+            let word = appended.words[expected.index]
+            #expect(word.characterRange == expected.range)
+            #expect(abs(word.fadeStart - expected.fadeStart) < 0.000000001)
+            #expect(abs(word.deadline - expected.deadline) < 0.000000001)
+        }
     }
 }

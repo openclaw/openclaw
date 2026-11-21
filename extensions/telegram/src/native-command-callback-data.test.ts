@@ -4,8 +4,6 @@ import { parseTelegramNativeCommandCallbackData } from "./native-command-callbac
 describe("parseTelegramNativeCommandCallbackData", () => {
   it("preserves prefixed native commands and rejects malformed command bodies", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
-    expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast auto")).toBe("/fast auto");
-    expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
   });
 });

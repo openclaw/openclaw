@@ -1,5 +1,3 @@
-// Shared setup wizard/types/helpers for plugin and channel setup surfaces.
-
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy } from "../config/types.js";
 // Registry readers (2026-07-22): @nodeskai/feishu, openclaw-channel-whatsapp-official,

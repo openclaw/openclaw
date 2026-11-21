@@ -38,6 +38,22 @@ const loginParams = {
   sendMessage: vi.fn(async (_message: string) => {}),
   unsupportedPromptMessage: "Open Control UI to enter credentials.",
 };
+const loginResult = {
+  providerId: "acme-cloud",
+  methodId: "device-code",
+  authRefresh: "refreshed",
+  profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
+};
+
+type LoginOptions = Parameters<typeof runProviderChannelLoginFlow>[0];
+function runLogin(options: Omit<LoginOptions, keyof typeof loginParams> & Partial<LoginOptions>) {
+  return runProviderChannelLoginFlow({ ...loginParams, ...options });
+}
+const unavailable = (options: Parameters<typeof runLogin>[0]) =>
+  expect(runLogin(options)).rejects.toThrow("no longer available");
+const pluginConfig = (enabled: boolean): OpenClawConfig => ({
+  plugins: { entries: { acme: { enabled } } },
+});
 
 describe("provider channel login runtime", () => {
   beforeEach(() => {
@@ -76,33 +92,31 @@ describe("provider channel login runtime", () => {
     cancelProviderLoginFlow({ flows, flowKey: "other" });
   });
 
-  it("uses the host config replaced before flow entry", async () => {
-    const config: OpenClawConfig = { plugins: { entries: { acme: { enabled: true } } } };
-    let currentConfig = config;
-    const readConfig = () => currentConfig;
-    currentConfig = { plugins: { entries: { acme: { enabled: false } } } };
-    resolveChoice.mockImplementation((_input, params) =>
-      params?.config?.plugins?.entries?.acme?.enabled === false
-        ? { status: "unsupported", choices: [] }
-        : { status: "resolved", choice },
-    );
-    const runLoginFlow = vi.fn(async () => ({
-      providerId: "acme-cloud",
-      methodId: "device-code",
-      authRefresh: "refreshed",
-      profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
-    }));
+  it.each(["before", "after"] as const)(
+    "allows another login when the caller cancels %s reservation",
+    (timing) => {
+      const flows = createProviderLoginFlowRegistry();
+      const controller = new AbortController();
+      const params = { flows, flowKey: "chat", providerLabel: "Acme" };
+      if (timing === "before") {
+        controller.abort();
+      }
+      reserveProviderLoginFlow({ ...params, signal: controller.signal });
+      controller.abort();
 
-    await expect(
-      runProviderChannelLoginFlow({ ...loginParams, config, readConfig, runLoginFlow }),
-    ).rejects.toThrow("no longer available");
-    expect(runLoginFlow).not.toHaveBeenCalled();
-  });
+      const replacement = reserveProviderLoginFlow(params);
+      try {
+        expect(replacement.status).toBe("reserved");
+      } finally {
+        cancelProviderLoginFlow(params);
+      }
+    },
+  );
 
-  it.each(["write", "url", "device-code"] as const)(
+  it.each(["entry", "write", "url", "device-code"] as const)(
     "rejects a disabled provider at the retained %s checkpoint",
     async (checkpoint) => {
-      const config: OpenClawConfig = { plugins: { entries: { acme: { enabled: true } } } };
+      const config = pluginConfig(true);
       let currentConfig = config;
       resolveChoice.mockImplementation((_input, params) =>
         params?.config?.plugins?.entries?.acme?.enabled === false
@@ -111,9 +125,9 @@ describe("provider channel login runtime", () => {
       );
       const persist = vi.fn();
       const sendDeviceCode = vi.fn();
-      const runLoginFlow = async (opts: ModelsAuthLoginFlowOptions) => {
+      const runLoginFlow = vi.fn(async (opts: ModelsAuthLoginFlowOptions) => {
         await Promise.resolve();
-        currentConfig = { plugins: { entries: { acme: { enabled: false } } } };
+        currentConfig = pluginConfig(false);
         if (checkpoint === "write") {
           opts.assertCurrent?.();
           persist();
@@ -122,86 +136,60 @@ describe("provider channel login runtime", () => {
         } else {
           await opts.prompter.deviceCode?.({ title: "Sign in", code: "ABCD-EFGH" });
         }
-        return {
-          providerId: "acme-cloud",
-          methodId: "device-code",
-          authRefresh: "refreshed",
-          profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
-        };
-      };
-      await expect(
-        runProviderChannelLoginFlow({
-          ...loginParams,
-          config,
-          readConfig: () => currentConfig,
-          runLoginFlow,
-          sendDeviceCode,
-        }),
-      ).rejects.toThrow("no longer available");
+        return loginResult;
+      });
+      if (checkpoint === "entry") {
+        currentConfig = pluginConfig(false);
+      }
+      await unavailable({ config, readConfig: () => currentConfig, runLoginFlow, sendDeviceCode });
+      if (checkpoint === "entry") {
+        expect(runLoginFlow).not.toHaveBeenCalled();
+      }
       expect(persist).not.toHaveBeenCalled();
       expect(loginParams.sendMessage).not.toHaveBeenCalled();
       expect(sendDeviceCode).not.toHaveBeenCalled();
     },
   );
 
-  it("checks live caller authority before saving credentials", async () => {
-    const config: OpenClawConfig = { commands: { ownerAllowFrom: ["owner"] } };
-    let currentConfig = config;
-    const persist = vi.fn();
-    const runLoginFlow = async (opts: ModelsAuthLoginFlowOptions) => {
-      await Promise.resolve();
-      currentConfig = { commands: { ownerAllowFrom: ["replacement"] } };
-      opts.assertCurrent?.();
-      persist();
-      return {
-        providerId: "acme-cloud",
-        methodId: "device-code",
-        authRefresh: "refreshed",
-        profiles: [{ profileId: "acme-cloud:new", provider: "acme-cloud", mode: "oauth" }],
+  it.each(["before", "after"] as const)(
+    "honors caller revocation %s credential persistence",
+    async (timing) => {
+      const config: OpenClawConfig = { commands: { ownerAllowFrom: ["owner"] } };
+      let currentConfig = config;
+      const revoke = () => {
+        currentConfig = { commands: { ownerAllowFrom: ["replacement"] } };
       };
-    };
-    await expect(
-      runProviderChannelLoginFlow({
-        ...loginParams,
+      const persist = vi.fn();
+      const result = runLogin({
         config,
         readConfig: () => currentConfig,
-        runLoginFlow,
+        runLoginFlow: async (opts) => {
+          await Promise.resolve();
+          if (timing === "before") {
+            revoke();
+          }
+          opts.assertCurrent?.();
+          persist();
+          if (timing === "after") {
+            revoke();
+          }
+          return loginResult;
+        },
         assertCurrent: (current) => {
           if (!current.commands?.ownerAllowFrom?.includes("owner")) {
             throw new Error("Caller no longer owns this login.");
           }
         },
-      }),
-    ).rejects.toThrow("Caller no longer owns this login");
-    expect(persist).not.toHaveBeenCalled();
-  });
-
-  it("preserves the saved result when caller authority changes after persistence", async () => {
-    let authorized = true;
-    const result = await runProviderChannelLoginFlow({
-      ...loginParams,
-      assertCurrent: () => {
-        if (!authorized) {
-          throw new Error("Caller no longer owns this login.");
-        }
-      },
-      runLoginFlow: async (opts) => {
-        opts.assertCurrent?.();
-        const saved = {
-          providerId: "acme-cloud",
-          methodId: "device-code",
-          authRefresh: "refreshed",
-          profiles: [{ profileId: "acme-cloud:saved", provider: "acme-cloud", mode: "oauth" }],
-        };
-        authorized = false;
-        return saved;
-      },
-    });
-    expect(result.profiles).toEqual([
-      { profileId: "acme-cloud:saved", provider: "acme-cloud", mode: "oauth" },
-    ]);
-    expect(loginParams.sendMessage).not.toHaveBeenCalled();
-  });
+      });
+      if (timing === "before") {
+        await expect(result).rejects.toThrow("Caller no longer owns this login");
+        expect(persist).not.toHaveBeenCalled();
+      } else {
+        expect((await result).profiles).toEqual(loginResult.profiles);
+        expect(loginParams.sendMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves a personal account selected after login started", () => {
     expect(
@@ -220,37 +208,30 @@ describe("provider channel login runtime", () => {
     ).toEqual({ status: "rejected" });
   });
 
-  it.each(["removed", "pluginId", "providerId", "methodId"] as const)(
+  it.each(["pluginId", "providerId", "methodId"] as const)(
     "rejects a stale %s before the provider can start",
     async (field) => {
-      resolveChoice.mockReturnValue(
-        field === "removed"
-          ? { status: "unsupported", choices: [] }
-          : { status: "resolved", choice: { ...choice, [field]: "replacement" } },
-      );
+      resolveChoice.mockReturnValue({
+        status: "resolved",
+        choice: { ...choice, [field]: "replacement" },
+      });
       const runLoginFlow = vi.fn();
-      await expect(runProviderChannelLoginFlow({ ...loginParams, runLoginFlow })).rejects.toThrow(
-        "no longer available",
-      );
+      await unavailable({ runLoginFlow });
       expect(runLoginFlow).not.toHaveBeenCalled();
     },
   );
 
   it("passes the selected owner and forbids chat credential input", async () => {
-    const runLoginFlow = vi.fn(async (opts: ModelsAuthLoginFlowOptions) => {
-      await opts.prompter.text({ message: "Enter your API key" });
-    });
-    await expect(runProviderChannelLoginFlow({ ...loginParams, runLoginFlow })).rejects.toThrow(
-      "Open Control UI",
-    );
-    expect(runLoginFlow).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const runLoginFlow = async (opts: ModelsAuthLoginFlowOptions) => {
+      expect(opts).toMatchObject({
         ownerPluginId: "acme",
         provider: "acme-cloud",
         method: "device-code",
         credentialOnly: true,
-      }),
-    );
+      });
+      await opts.prompter.text({ message: "Enter your API key" });
+    };
+    await expect(runLogin({ runLoginFlow })).rejects.toThrow("Open Control UI");
     expect(loginParams.sendMessage).toHaveBeenCalledExactlyOnceWith(
       "Open Control UI to enter credentials.",
     );

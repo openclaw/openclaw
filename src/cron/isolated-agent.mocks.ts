@@ -2,14 +2,15 @@
 // Isolated turns lazily consume this process-stable runtime after agent execution. Load it during
 // suite setup so first-test timings cover cron behavior rather than module initialization.
 import "../utils/usage-format.js";
+import "../model-catalog/usage-pricing.js";
 import { vi } from "vitest";
 
 const readPreparedModelCatalog = vi.hoisted(() => vi.fn());
 
-vi.mock("../agents/embedded-agent.js", () => ({
+vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
-  resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
 vi.mock("../agents/prepared-model-catalog.js", async () => {

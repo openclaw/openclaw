@@ -1,57 +1,71 @@
-// Channel plugin blocker tests cover doctor diagnostics for blocked channel plugin setup.
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
   isWarningBlockedByChannelPlugin,
-  scanConfiguredChannelPluginBlockers,
+  scanConfiguredChannelPluginBlockers as scan,
 } from "./channel-plugin-blockers.js";
-
-function createPackageChannelEnv(channelId: string, envVars: string[]) {
-  return {
-    id: channelId,
-    configuredState: { env: { anyOf: envVars } },
-  };
-}
 
 function plugin(
   id: string,
-  options: {
-    origin?: "bundled" | "config" | "global" | "workspace";
-    channelId?: string;
-    enabledByDefault?: boolean;
-    [key: string]: unknown;
-  } = {},
+  options: Partial<manifestRegistry.PluginManifestRecord> & { channelId?: string } = {},
 ) {
-  const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
+  const { channelId = id, ...metadata } = options;
   const rootDir = `/plugins/${id}`;
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    origin,
+    origin: "global",
     channels: [channelId],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    enabledByDefault,
+    enabledByDefault: false,
     rootDir,
     source: `${rootDir}/index.ts`,
-    manifestPath: `${rootDir}/openclaw.plugin.json`,
     ...metadata,
-  };
+  });
 }
-
-function mockManifestPlugins(plugins: unknown[]) {
+function packagePlugin(id: string, token: string, options: Parameters<typeof plugin>[1] = {}) {
+  return plugin(id, {
+    ...options,
+    packageChannel: { id: options.channelId ?? id, configuredState: { env: { anyOf: [token] } } },
+  });
+}
+const sharedOwner = (id: string, options: Parameters<typeof plugin>[1] = {}) =>
+  plugin(id, { origin: "config", channelId: "shared-chat", ...options });
+const bundledOwner = { origin: "bundled", enabledByDefault: true } as const;
+type Blocker = ReturnType<typeof scan>[number];
+function hit(channelId: string, reason: Blocker["reason"], pluginId = channelId): Blocker {
+  return { channelId, pluginId, reason };
+}
+function mockManifestPlugins(plugins: manifestRegistry.PluginManifestRecord[]) {
   vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
     plugins,
     diagnostics: [],
-  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistryCore>);
+  });
 }
+const discordChannels = { discord: { enabled: true, token: "configured" } };
+const legacyChannels = { "legacy-chat": { token: "configured" } };
+const disabledDiscord = { discord: { enabled: false } };
+const workspaceSource: OpenClawConfig = {
+  channels: { "workspace-chat": { enabled: true } },
+  plugins: { allow: ["browser"], entries: { "workspace-chat": { enabled: true } } },
+};
+const irc = () =>
+  plugin("irc", {
+    packageChannel: { id: "irc", configuredState: { env: { allOf: ["IRC_HOST", "IRC_NICK"] } } },
+  });
+type ScanCase = [
+  name: string,
+  plugins: manifestRegistry.PluginManifestRecord[],
+  cfg: OpenClawConfig,
+  expected: Blocker[],
+  env?: NodeJS.ProcessEnv,
+  source?: OpenClawConfig,
+  options?: Parameters<typeof scan>[3],
+];
 
 describe("channel plugin blockers", () => {
   beforeEach(() => {
@@ -59,55 +73,17 @@ describe("channel plugin blockers", () => {
     clearPluginMetadataLifecycleCaches();
   });
 
-  it("returns no blockers when config and package env have no channel surfaces", () => {
-    const registrySpy = vi
-      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
-      .mockReturnValue({
-        plugins: [],
-        diagnostics: [],
-      });
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      channels: {
-        defaults: {
-          groupPolicy: "disabled",
-        },
-      },
-    });
-
-    expect(hits).toStrictEqual([]);
-    expect(registrySpy).toHaveBeenCalled();
-  });
-
   it("reports external channel plugins that are installed but not explicitly enabled", () => {
     mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      channels: {
-        discord: {
-          enabled: true,
-          token: "configured",
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
-    expect(
-      channelPluginBlockerHitToHealthFinding(expectDefined(hits[0], "hits[0] test invariant")),
-    ).toEqual({
+    const hits = scan({ channels: discordChannels });
+    const message =
+      'channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.';
+    expect(hits).toEqual([hit("discord", "missing explicit enablement")]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([`- ${message}`]);
+    expect(channelPluginBlockerHitToHealthFinding(expectDefined(hits[0], "blocker"))).toEqual({
       checkId: "core/doctor/channel-plugin-blockers",
       severity: "warning",
-      message:
-        'channels.discord: channel is configured, but external plugin "discord" is installed without explicit trust. Add plugins.entries.discord.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+      message,
       path: "channels.discord",
       target: "discord",
       requirement: "missing explicit enablement",
@@ -115,956 +91,196 @@ describe("channel plugin blockers", () => {
     });
   });
 
-  it("uses provided manifest records without loading the registry", () => {
-    const registrySpy = vi
-      .spyOn(manifestRegistry, "loadPluginManifestRegistryCore")
-      .mockReturnValue({
-        plugins: [],
-        diagnostics: [],
-      });
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels: {
-          discord: {
-            token: "configured",
+  it.each<ScanCase>([
+    [
+      "explicit allowlist trust",
+      [plugin("discord")],
+      { plugins: { allow: ["discord"] }, channels: discordChannels },
+      [],
+    ],
+    [
+      "effective preferOver fallback disablement",
+      [
+        plugin("legacy-chat", bundledOwner),
+        plugin("modern-chat", {
+          origin: "config",
+          channelId: "legacy-chat",
+          channelConfigs: {
+            "legacy-chat": { schema: { type: "object" }, preferOver: ["legacy-chat"] },
           },
-        },
-      },
-      {},
-      {},
+        }),
+      ],
       {
-        manifestRecords: [
-          {
-            id: "discord",
-            origin: "global",
-            channels: ["discord"],
-            providers: [],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            enabledByDefault: false,
-            rootDir: "/plugins/discord",
-            source: "test",
-            manifestPath: "/plugins/discord/plugin.json",
-          },
-        ],
-      },
-    );
-
-    expect(registrySpy).not.toHaveBeenCalled();
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("reports blockers for enabled-only channel intent", () => {
-    mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        enabled: false,
-      },
-      channels: {
-        discord: {
-          enabled: true,
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "plugins disabled",
-      },
-    ]);
-  });
-
-  it("normalizes explicit channel ids before matching plugin owners", () => {
-    mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      channels: {
-        Discord: {
-          enabled: true,
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("accepts plugins.allow as explicit trust for external channel plugins", () => {
-    mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        allow: ["discord"],
-      },
-      channels: {
-        discord: {
-          enabled: true,
-          token: "configured",
-        },
-      },
-    });
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("diagnoses trust from the pre-auto-enable config", () => {
-    mockManifestPlugins([plugin("discord")]);
-
-    const channels = {
-      discord: {
-        enabled: true,
-        token: "configured",
-      },
-    };
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels,
+        channels: legacyChannels,
         plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
+          entries: { "legacy-chat": { enabled: false }, "modern-chat": { enabled: true } },
         },
       },
+      [hit("legacy-chat", "missing explicit enablement", "modern-chat")],
       process.env,
-      { channels },
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("uses effective config for preferOver fallback disablement", () => {
-    mockManifestPlugins([
-      plugin("legacy-chat", { origin: "bundled", enabledByDefault: true }),
-      plugin("modern-chat", {
-        origin: "config",
-        channelId: "legacy-chat",
-        channelConfigs: {
-          "legacy-chat": {
-            schema: { type: "object" },
-            preferOver: ["legacy-chat"],
-          },
-        },
-      }),
-    ]);
-
-    const channels = {
-      "legacy-chat": {
-        token: "configured",
-      },
-    };
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels,
-        plugins: {
-          entries: {
-            "legacy-chat": { enabled: false },
-            "modern-chat": { enabled: true },
-          },
-        },
-      },
-      process.env,
-      { channels },
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "legacy-chat",
-        pluginId: "modern-chat",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("diagnoses an env-only channel whose preferred external owner lacks trust", () => {
-    mockManifestPlugins([
-      plugin("telegram", { origin: "bundled", enabledByDefault: true }),
-      plugin("modern-telegram", {
-        origin: "config",
-        channelId: "telegram",
-        channelConfigs: {
-          telegram: {
-            schema: { type: "object" },
-            preferOver: ["telegram"],
-          },
-        },
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        plugins: {
-          entries: {
-            telegram: { enabled: false },
-            "modern-telegram": { enabled: true },
-          },
-        },
-      },
-      {
-        TELEGRAM_BOT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
+      { channels: legacyChannels },
+    ],
+    [
+      "suppressed startup environment",
+      [packagePlugin("discord", "DISCORD_FAKE_TEST_TRIGGER")],
       {},
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "telegram",
-        pluginId: "modern-telegram",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("diagnoses an external-only package env channel that lacks source trust", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
-      {
-        DISCORD_BOT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
+      [],
+      { DISCORD_FAKE_TEST_TRIGGER: "configured" },
       {},
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("suppresses ambient-only package env blockers for gateway startup", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),
-      }),
-    ]);
-
-    expect(
-      scanConfiguredChannelPluginBlockers(
-        {},
-        { DISCORD_FAKE_TEST_TRIGGER: "configured" } as NodeJS.ProcessEnv,
-        {},
-        { ambientEnvTriggers: "suppress" },
-      ),
-    ).toStrictEqual([]);
-  });
-
-  it("requires every package channel allOf environment variable", () => {
-    mockManifestPlugins([
-      plugin("irc", {
-        packageChannel: {
-          id: "irc",
-          configuredState: { env: { allOf: ["IRC_HOST", "IRC_NICK"] } },
-        },
-      }),
-    ]);
-
-    expect(
-      scanConfiguredChannelPluginBlockers({}, { IRC_HOST: "configured" } as NodeJS.ProcessEnv),
-    ).toStrictEqual([]);
-    expect(
-      scanConfiguredChannelPluginBlockers({}, {
-        IRC_HOST: "configured",
-        IRC_NICK: "configured",
-      } as NodeJS.ProcessEnv),
-    ).toEqual([
-      {
-        channelId: "irc",
-        pluginId: "irc",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("keeps package env trust diagnostics scoped to the declaring owner", () => {
-    mockManifestPlugins([
-      plugin("bundled-chat", {
-        origin: "bundled",
-        channelId: "shared-chat",
-        enabledByDefault: true,
-      }),
-      plugin("external-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["EXTERNAL_CHAT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        plugins: {
-          entries: {
-            "external-chat": { enabled: true },
-          },
-        },
-      },
-      {
-        EXTERNAL_CHAT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
+      { ambientEnvTriggers: "suppress" },
+    ],
+    ["incomplete allOf environment", [irc()], {}, [], { IRC_HOST: "configured" }],
+    [
+      "complete allOf environment",
+      [irc()],
       {},
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "shared-chat",
-        pluginId: "external-chat",
-        reason: "missing explicit enablement",
-        channelAvailable: true,
-      },
-    ]);
-  });
-
-  it("preserves channel-wide warnings when only a co-owner is blocked", () => {
-    expect(
-      isWarningBlockedByChannelPlugin("channels.shared-chat.groupPolicy: warning", [
-        {
+      [hit("irc", "missing explicit enablement")],
+      { IRC_HOST: "configured", IRC_NICK: "configured" },
+    ],
+    [
+      "package environment scoped to declaring owner",
+      [
+        sharedOwner("bundled-chat", bundledOwner),
+        packagePlugin("external-chat", "EXTERNAL_CHAT_TOKEN", {
+          origin: "config",
           channelId: "shared-chat",
-          pluginId: "external-chat",
-          reason: "missing explicit enablement",
+        }),
+      ],
+      { plugins: { entries: { "external-chat": { enabled: true } } } },
+      [
+        {
+          ...hit("shared-chat", "missing explicit enablement", "external-chat"),
           channelAvailable: true,
         },
-      ]),
-    ).toBe(false);
-    expect(
-      isWarningBlockedByChannelPlugin("channels.shared-chat.groupPolicy: warning", [
-        {
+      ],
+      { EXTERNAL_CHAT_TOKEN: "configured" },
+      {},
+    ],
+    [
+      "available co-owner for the same environment trigger",
+      [
+        packagePlugin("bundled-chat", "SHARED_CHAT_TOKEN", {
           channelId: "shared-chat",
-          pluginId: "external-chat",
-          reason: "missing explicit enablement",
-        },
-      ]),
-    ).toBe(true);
-  });
-
-  it("accepts an available co-owner for the same package env trigger", () => {
-    mockManifestPlugins([
-      plugin("bundled-chat", {
-        origin: "bundled",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
-        enabledByDefault: true,
-      }),
-      plugin("external-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({}, {
-      SHARED_CHAT_TOKEN: "configured",
-    } as NodeJS.ProcessEnv);
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("deduplicates global plugin disablement across package env triggers", () => {
-    mockManifestPlugins([
-      plugin("first-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["FIRST_CHAT_TOKEN"]),
-      }),
-      plugin("second-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SECOND_CHAT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
+          ...bundledOwner,
+        }),
+        packagePlugin("external-chat", "SHARED_CHAT_TOKEN", {
+          channelId: "shared-chat",
+          origin: "config",
+        }),
+      ],
+      {},
+      [],
+      { SHARED_CHAT_TOKEN: "configured" },
+    ],
+    [
+      "deduplicated global disablement",
+      ["first", "second"].map((name) =>
+        packagePlugin(`${name}-chat`, `${name.toUpperCase()}_CHAT_TOKEN`, {
+          origin: "config",
+          channelId: "shared-chat",
+        }),
+      ),
+      { plugins: { enabled: false } },
+      [hit("shared-chat", "plugins disabled", "first-chat")],
+      { FIRST_CHAT_TOKEN: "configured", SECOND_CHAT_TOKEN: "configured" },
+    ],
+    [
+      "explicit channel disablement",
+      [packagePlugin("discord", "DISCORD_BOT_TOKEN")],
+      { channels: disabledDiscord, plugins: { entries: { discord: { enabled: true } } } },
+      [],
+      { DISCORD_BOT_TOKEN: "configured" },
+      { channels: disabledDiscord },
+    ],
+    [
+      "workspace trust across an auto-materialized allowlist",
+      [plugin("workspace-chat", { origin: "workspace" })],
       {
-        plugins: {
-          enabled: false,
-        },
+        ...workspaceSource,
+        plugins: { ...workspaceSource.plugins, allow: ["browser", "workspace-chat"] },
       },
-      {
-        FIRST_CHAT_TOKEN: "configured",
-        SECOND_CHAT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "shared-chat",
-        pluginId: "first-chat",
-        reason: "plugins disabled",
-      },
-    ]);
-  });
-
-  it("does not report unrelated blocked owners for a package env trigger", () => {
-    mockManifestPlugins([
-      plugin("triggered-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["TRIGGERED_CHAT_TOKEN"]),
-      }),
-      plugin("unrelated-chat", { origin: "config", channelId: "shared-chat" }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({}, {
-      TRIGGERED_CHAT_TOKEN: "configured",
-    } as NodeJS.ProcessEnv);
-
-    expect(hits).toEqual([
-      {
-        channelId: "shared-chat",
-        pluginId: "triggered-chat",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("ignores package env mappings for channels the plugin does not own", () => {
-    mockManifestPlugins([
-      plugin("external-chat", {
-        origin: "config",
-        packageChannel: createPackageChannelEnv("discord", ["EXTERNAL_CHAT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({}, {
-      EXTERNAL_CHAT_TOKEN: "configured",
-    } as NodeJS.ProcessEnv);
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("diagnoses a package env channel whose bundled owner is opt-in", () => {
-    mockManifestPlugins([
-      plugin("twitch", {
-        origin: "bundled",
-        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({}, {
-      OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
-    } as NodeJS.ProcessEnv);
-
-    expect(hits).toEqual([
-      {
-        channelId: "twitch",
-        pluginId: "twitch",
-        reason: "not enabled",
-      },
-    ]);
-    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.twitch: channel is configured, but plugin "twitch" is installed but not enabled. Add plugins.entries.twitch.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
-  });
-
-  it("includes both actions for a bundled opt-in owner under a restrictive allowlist", () => {
-    mockManifestPlugins([
-      plugin("twitch", {
-        origin: "bundled",
-        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        plugins: {
-          allow: ["browser"],
-        },
-      },
-      {
-        OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "twitch",
-        pluginId: "twitch",
-        reason: "not enabled and not in allowlist",
-      },
-    ]);
-    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.twitch: channel is configured, but plugin "twitch" is not enabled and is omitted from plugins.allow. Add plugins.entries.twitch.enabled=true and include "twitch" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
-  });
-
-  it("keeps package env blockers when another channel is explicitly configured", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
-        },
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
-      {
-        DISCORD_BOT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
-      {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
-        },
-      },
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("honors explicit channel disablement over package env triggers", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels: {
-          discord: {
-            enabled: false,
-          },
-        },
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
-      {
-        DISCORD_BOT_TOKEN: "configured",
-      } as NodeJS.ProcessEnv,
-      {
-        channels: {
-          discord: {
-            enabled: false,
-          },
-        },
-      },
-    );
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("accepts an auto-enabled bundled owner under a restrictive source allowlist", () => {
-    mockManifestPlugins([
-      plugin("telegram-plugin", { origin: "bundled", channelId: "telegram" }),
-      plugin("untrusted-telegram", { origin: "config", channelId: "telegram" }),
-    ]);
-
-    const channels = {
-      telegram: {
-        botToken: "configured",
-      },
-    };
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels,
-        plugins: {
-          allow: ["browser", "telegram-plugin"],
-          entries: {
-            "telegram-plugin": { enabled: true },
-          },
-        },
-      },
+      [],
       process.env,
+      workspaceSource,
+    ],
+    [
+      "workspace slot activation",
+      [plugin("workspace-chat", { origin: "workspace" })],
       {
-        channels,
-        plugins: {
-          allow: ["browser"],
-        },
+        plugins: { allow: ["browser"], slots: { contextEngine: "workspace-chat" } },
+        channels: { "workspace-chat": { token: "configured" } },
       },
-    );
-
-    expect(hits).toStrictEqual([]);
+      [],
+    ],
+  ])("handles %s", (_name, plugins, cfg, expected, env, source, options) => {
+    mockManifestPlugins(plugins);
+    const hits = scan(cfg, env, source, options);
+    if (expected.length === 0) {
+      expect(hits).toStrictEqual([]);
+    } else {
+      expect(hits).toEqual(expected);
+    }
   });
 
-  it("preserves explicit external trust across an auto-materialized allowlist", () => {
-    mockManifestPlugins([plugin("discord")]);
+  it.each([
+    [true, false],
+    [false, true],
+  ])(
+    "preserves channel-wide warnings when a co-owner is available (available=%s)",
+    (available, blocked) => {
+      const blocker = hit("shared-chat", "missing explicit enablement", "external-chat");
+      expect(
+        isWarningBlockedByChannelPlugin("channels.shared-chat.groupPolicy: warning", [
+          available ? { ...blocker, channelAvailable: true } : blocker,
+        ]),
+      ).toBe(blocked);
+    },
+  );
 
-    const sourceConfig: OpenClawConfig = {
-      channels: {
-        discord: {
-          enabled: true,
-        },
-      },
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          discord: { enabled: true },
-        },
-      },
-    };
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        ...sourceConfig,
-        plugins: {
-          ...sourceConfig.plugins,
-          allow: ["browser", "discord"],
-        },
-      },
-      process.env,
-      sourceConfig,
-    );
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("preserves explicit workspace trust across an auto-materialized allowlist", () => {
+  it.each([
+    {
+      plugins: undefined,
+      reason: "not enabled" as const,
+      warning:
+        '- channels.twitch: channel is configured, but plugin "twitch" is installed but not enabled. Add plugins.entries.twitch.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
+    },
+    {
+      plugins: { allow: ["browser"] },
+      reason: "not enabled and not in allowlist" as const,
+      warning:
+        '- channels.twitch: channel is configured, but plugin "twitch" is not enabled and is omitted from plugins.allow. Add plugins.entries.twitch.enabled=true and include "twitch" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
+    },
+  ])("diagnoses bundled opt-in owner: $reason", ({ plugins, reason, warning }) => {
     mockManifestPlugins([
-      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
+      packagePlugin("twitch", "OPENCLAW_TWITCH_ACCESS_TOKEN", { origin: "bundled" }),
     ]);
-
-    const sourceConfig: OpenClawConfig = {
-      channels: {
-        "workspace-chat": {
-          enabled: true,
-        },
-      },
-      plugins: {
-        allow: ["browser"],
-        entries: {
-          "workspace-chat": { enabled: true },
-        },
-      },
-    };
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        ...sourceConfig,
-        plugins: {
-          ...sourceConfig.plugins,
-          allow: ["browser", "workspace-chat"],
-        },
-      },
-      process.env,
-      sourceConfig,
-    );
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("accepts an env-auto-enabled bundled owner absent from the source config", () => {
-    mockManifestPlugins([plugin("telegram", { origin: "bundled", channelId: "telegram" })]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        channels: {
-          telegram: {
-            enabled: true,
-          },
-        },
-        plugins: {
-          allow: ["browser", "telegram"],
-        },
-      },
-      process.env,
-      {
-        plugins: {
-          allow: ["browser"],
-        },
-      },
-    );
-
-    expect(hits).toStrictEqual([]);
+    const hits = scan(plugins ? { plugins } : {}, { OPENCLAW_TWITCH_ACCESS_TOKEN: "configured" });
+    expect(hits).toEqual([hit("twitch", reason)]);
+    expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([warning]);
   });
 
   it("reports external channel plugins omitted from a restrictive allowlist", () => {
     mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        allow: ["brave"],
-      },
-      channels: {
-        discord: {
-          enabled: true,
-          token: "configured",
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "not in allowlist",
-      },
-    ]);
+    const hits = scan({ plugins: { allow: ["brave"] }, channels: discordChannels });
+    expect(hits).toEqual([hit("discord", "not in allowlist")]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
       '- channels.discord: channel is configured, but plugin "discord" is installed but omitted from plugins.allow. Include "discord" in plugins.allow. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
   });
 
   it("keeps blocker reasons scoped to each external owner", () => {
-    mockManifestPlugins([
-      plugin("denied-chat", { origin: "config", channelId: "shared-chat" }),
-      plugin("untrusted-chat", { origin: "config", channelId: "shared-chat" }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        deny: ["denied-chat"],
-      },
-      channels: {
-        "shared-chat": {
-          token: "configured",
-        },
-      },
+    mockManifestPlugins([sharedOwner("denied-chat"), sharedOwner("untrusted-chat")]);
+    const hits = scan({
+      plugins: { deny: ["denied-chat"] },
+      channels: { "shared-chat": { token: "configured" } },
     });
-
     expect(hits).toEqual([
-      {
-        channelId: "shared-chat",
-        pluginId: "denied-chat",
-        reason: "blocked by denylist",
-      },
-      {
-        channelId: "shared-chat",
-        pluginId: "untrusted-chat",
-        reason: "missing explicit enablement",
-      },
-    ]);
-  });
-
-  it("reports a single channel owner blocked by plugins.deny", () => {
-    mockManifestPlugins([plugin("discord")]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        deny: ["discord"],
-      },
-      channels: {
-        discord: {
-          enabled: true,
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "discord",
-        pluginId: "discord",
-        reason: "blocked by denylist",
-      },
+      hit("shared-chat", "blocked by denylist", "denied-chat"),
+      hit("shared-chat", "missing explicit enablement", "untrusted-chat"),
     ]);
     expect(collectConfiguredChannelPluginBlockerWarnings(hits)).toEqual([
-      '- channels.discord: channel is configured, but plugin "discord" is blocked by plugins.deny. Remove "discord" from plugins.deny. Fix plugin enablement before relying on setup guidance for this channel.',
-    ]);
-  });
-
-  it("accepts workspace channel owners activated through a plugin slot", () => {
-    mockManifestPlugins([
-      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        allow: ["browser"],
-        slots: {
-          contextEngine: "workspace-chat",
-        },
-      },
-      channels: {
-        "workspace-chat": {
-          token: "configured",
-        },
-      },
-    });
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("still evaluates configured channels when plugins are disabled globally", () => {
-    mockManifestPlugins([plugin("slack", { origin: "bundled", enabledByDefault: true })]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        enabled: false,
-      },
-      channels: {
-        slack: {
-          accounts: {
-            work: {
-              allowFrom: ["alice"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "slack",
-        pluginId: "slack",
-        reason: "plugins disabled",
-      },
-    ]);
-  });
-
-  it("ignores ambient channel env when reporting plugin blockers", () => {
-    mockManifestPlugins([
-      plugin("slack", { origin: "bundled", enabledByDefault: true }),
-      plugin("telegram", { origin: "bundled", enabledByDefault: true }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers(
-      {
-        plugins: {
-          enabled: false,
-        },
-        channels: {
-          telegram: {
-            botToken: "configured",
-          },
-        },
-      },
-      {
-        SLACK_BOT_TOKEN: "ambient",
-      } as NodeJS.ProcessEnv,
-    );
-
-    expect(hits).toEqual([
-      {
-        channelId: "telegram",
-        pluginId: "telegram",
-        reason: "plugins disabled",
-      },
-    ]);
-  });
-
-  it("does not report a disabled bundled owner when a configured external plugin owns the channel", () => {
-    mockManifestPlugins([
-      plugin("feishu", { origin: "bundled", enabledByDefault: true }),
-      plugin("openclaw-lark", {
-        origin: "config",
-        channelId: "feishu",
-        channelConfigs: {
-          feishu: {
-            schema: {
-              type: "object",
-            },
-          },
-        },
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        entries: {
-          feishu: {
-            enabled: false,
-          },
-          "openclaw-lark": {
-            enabled: true,
-          },
-        },
-      },
-      channels: {
-        feishu: {
-          footer: {
-            model: false,
-          },
-        },
-      },
-    });
-
-    expect(hits).toStrictEqual([]);
-  });
-
-  it("reports each blocked owner when no channel owner is active", () => {
-    mockManifestPlugins([
-      plugin("feishu", { origin: "bundled", enabledByDefault: true }),
-      plugin("openclaw-lark", {
-        origin: "config",
-        channelId: "feishu",
-        channelConfigs: {
-          feishu: {
-            schema: {
-              type: "object",
-            },
-          },
-        },
-      }),
-    ]);
-
-    const hits = scanConfiguredChannelPluginBlockers({
-      plugins: {
-        entries: {
-          feishu: {
-            enabled: false,
-          },
-        },
-      },
-      channels: {
-        feishu: {
-          footer: {
-            model: false,
-          },
-        },
-      },
-    });
-
-    expect(hits).toEqual([
-      {
-        channelId: "feishu",
-        pluginId: "feishu",
-        reason: "disabled in config",
-      },
-      {
-        channelId: "feishu",
-        pluginId: "openclaw-lark",
-        reason: "missing explicit enablement",
-      },
+      '- channels.shared-chat: channel is configured, but plugin "denied-chat" is blocked by plugins.deny. Remove "denied-chat" from plugins.deny. Fix plugin enablement before relying on setup guidance for this channel.',
+      '- channels.shared-chat: channel is configured, but external plugin "untrusted-chat" is installed without explicit trust. Add plugins.entries.untrusted-chat.enabled=true. Fix plugin enablement before relying on setup guidance for this channel.',
     ]);
   });
 });

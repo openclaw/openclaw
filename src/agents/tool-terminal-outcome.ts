@@ -1,4 +1,5 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   consumeTrackedToolExecutionStarted,
   peekAdjustedParamsForToolCall,
@@ -6,8 +7,8 @@ import {
 } from "./agent-tools.before-tool-call.state.js";
 import { projectPluginMessageDeliveryFact } from "./embedded-agent-message-delivery.js";
 import type { EmbeddedRunAttemptParams } from "./embedded-agent-runner/run/types.js";
+import { isToolCallDispatcherName, unwrapToolCallForDisplay } from "./tool-display-call.js";
 import { buildToolEffectReceipt, readToolEffectReceipt } from "./tool-effect-receipt.js";
-import { createToolErrorState } from "./tool-error-state.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { readToolResultDetails } from "./tool-result-error.js";
@@ -36,7 +37,7 @@ function readTimeoutDiagnostic(result: unknown): ToolErrorSummary["terminalDiagn
 export function createToolTerminalObserver(
   runId: string,
 ): NonNullable<EmbeddedRunAttemptParams["observeToolTerminal"]> {
-  const errors = createToolErrorState();
+  let lastToolError: ToolErrorSummary | undefined;
 
   return (observation) => {
     const effectReceipt = readToolEffectReceipt(observation.result);
@@ -61,29 +62,43 @@ export function createToolTerminalObserver(
       : (observation.nativeMutation ??
         buildToolMutationState(observation.toolName, executedArguments));
     const replaySafe = observation.replaySafe ?? mutation.replaySafe;
-    let lastToolError: ToolErrorSummary | undefined;
-    if (observation.outcome === "failure") {
+    const details = readToolResultDetails(observation.result);
+    // Steering skips and handled message omissions neither fail nor recover earlier work.
+    const preservesFailure =
+      (!executionStarted && details?.status === "skipped" && details.deniedReason === "steering") ||
+      (observation.outcome !== "failure" &&
+        observation.toolName === "message" &&
+        projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed");
+    if (!preservesFailure && observation.outcome === "failure") {
       const mutatingAction = executionStarted && mutation.mutatingAction;
       const terminalDiagnostic =
         observation.failure?.terminalDiagnostic ??
         (executionStarted ? readTimeoutDiagnostic(observation.result) : undefined);
-      const failure: ToolErrorSummary = {
+      const dispatchedToolName = isToolCallDispatcherName(observation.toolName)
+        ? unwrapToolCallForDisplay({ name: observation.toolName, args: executedArguments }).name
+        : undefined;
+      lastToolError = {
         toolName: observation.toolName,
+        ...(dispatchedToolName && dispatchedToolName !== observation.toolName
+          ? { dispatchedToolName }
+          : {}),
         ...(observation.meta ? { meta: observation.meta } : {}),
         ...observation.failure,
         ...(terminalDiagnostic ? { terminalDiagnostic } : {}),
         executionStarted,
         mutatingAction,
       };
-      lastToolError = errors.recordFailure(failure).lastToolError;
     } else if (
-      observation.toolName === "message" &&
-      projectPluginMessageDeliveryFact(observation.result)?.status === "suppressed"
+      !preservesFailure &&
+      lastToolError &&
+      // A call to a missing tool did nothing and has no name a retry could reuse, so the
+      // next successful executed call recovers it. Otherwise only the same tool recovers.
+      (lastToolError.unknownTool
+        ? executionStarted
+        : normalizeLowercaseStringOrEmpty(lastToolError.toolName) ===
+          normalizeLowercaseStringOrEmpty(observation.toolName))
     ) {
-      // A handled omission does not recover an earlier failed delivery.
-      lastToolError = errors.read().lastToolError;
-    } else {
-      lastToolError = errors.recordSuccess(observation.toolName).lastToolError;
+      lastToolError = undefined;
     }
 
     return {

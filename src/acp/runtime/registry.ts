@@ -1,4 +1,3 @@
-/** Process-wide registry for ACP runtime backends contributed by plugins. */
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -40,7 +39,7 @@ function resolveAcpRuntimeRegistryGlobalState(): AcpRuntimeRegistryGlobalState {
 
 const ACP_BACKENDS_BY_ID = resolveAcpRuntimeRegistryGlobalState().backendsById;
 
-function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
+export function isAcpRuntimeBackendHealthy(backend: AcpRuntimeBackend): boolean {
   if (!backend.healthy) {
     return true;
   }
@@ -51,7 +50,6 @@ function isBackendHealthy(backend: AcpRuntimeBackend): boolean {
   }
 }
 
-/** Registers or replaces an ACP runtime backend by normalized id. */
 export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   const id = normalizeOptionalLowercaseString(backend.id) || "";
   if (!id) {
@@ -66,7 +64,6 @@ export function registerAcpRuntimeBackend(backend: AcpRuntimeBackend): void {
   });
 }
 
-/** Removes a registered ACP runtime backend by id. */
 export function unregisterAcpRuntimeBackend(id: string): void {
   const normalized = normalizeOptionalLowercaseString(id) || "";
   if (!normalized) {
@@ -85,7 +82,7 @@ export function getAcpRuntimeBackend(id?: string): AcpRuntimeBackend | null {
     return null;
   }
   for (const backend of ACP_BACKENDS_BY_ID.values()) {
-    if (isBackendHealthy(backend)) {
+    if (isAcpRuntimeBackendHealthy(backend)) {
       return backend;
     }
   }
@@ -102,7 +99,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
       "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
     );
   }
-  if (!isBackendHealthy(backend)) {
+  if (!isAcpRuntimeBackendHealthy(backend)) {
     throw new AcpRuntimeError(
       "ACP_BACKEND_UNAVAILABLE",
       "ACP runtime backend is currently unavailable. Try again in a moment.",

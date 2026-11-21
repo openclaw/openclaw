@@ -1,38 +1,20 @@
-// Pre-auth connection budget caps unauthenticated WebSocket handshakes per client IP before full gateway auth runs.
-import {
-  parseStrictPositiveInteger,
-  resolveIntegerOption,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 
-const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
+const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 128;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
-
-function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.env): number {
-  const configured =
-    env.OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP ||
-    (isVitestRuntimeEnv(env) ? env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP : undefined);
-  if (!configured) {
-    return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
-  }
-  const parsed = parseStrictPositiveInteger(configured);
-  if (parsed === undefined) {
-    return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
-  }
-  return parsed;
-}
 
 export type PreauthConnectionBudget = {
   acquire(clientIp: string | undefined): boolean;
   release(clientIp: string | undefined): void;
 };
 
-export function createPreauthConnectionBudget(
-  limit = getMaxPreauthConnectionsPerIpFromEnv(),
-): PreauthConnectionBudget {
-  const maxConnectionsPerIp = resolveIntegerOption(limit, getMaxPreauthConnectionsPerIpFromEnv(), {
-    min: 1,
-  });
+export function createPreauthConnectionBudget(): PreauthConnectionBudget {
+  const configured =
+    process.env.OPENCLAW_MAX_PREAUTH_CONNECTIONS_PER_IP ||
+    (isVitestRuntimeEnv() ? process.env.OPENCLAW_TEST_MAX_PREAUTH_CONNECTIONS_PER_IP : undefined);
+  const maxConnectionsPerIp =
+    parseStrictPositiveInteger(configured) ?? DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
   const counts = new Map<string, number>();
   const normalizeBudgetKey = (clientIp: string | undefined) => {
     const ip = clientIp?.trim();

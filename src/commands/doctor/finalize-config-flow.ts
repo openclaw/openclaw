@@ -1,8 +1,13 @@
-// Final doctor config-write decision after preview/repair mode has collected mutations.
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 
-/** Decide whether doctor should write the repaired candidate config or only print hints. */
+export function doctorConfigRevision(snapshot: Pick<ConfigFileSnapshot, "path" | "hash" | "raw">) {
+  return {
+    path: snapshot.path,
+    hash: snapshot.hash ?? hashConfigRaw(snapshot.raw),
+  };
+}
+
 export async function finalizeDoctorConfigFlow(params: {
   cfg: OpenClawConfig;
   candidate: OpenClawConfig;
@@ -15,42 +20,21 @@ export async function finalizeDoctorConfigFlow(params: {
 }): Promise<{
   cfg: OpenClawConfig;
   shouldWriteConfig: boolean;
-  confirmedConfigSource?: { path: string; hash: string };
+  confirmedConfigSource: { path: string; hash: string };
 }> {
+  const confirmedConfigSource = doctorConfigRevision(params.snapshot);
+  let cfg = params.cfg;
+  let shouldWriteConfig = params.shouldRepair && params.pendingChanges;
   if (!params.shouldRepair && params.pendingChanges) {
-    const confirmedConfigSource = {
-      path: params.snapshot.path,
-      hash: params.snapshot.hash ?? hashConfigRaw(params.snapshot.raw),
-    };
-    const shouldApply = await params.confirm({
+    shouldWriteConfig = await params.confirm({
       message: "Apply recommended config repairs now?",
       initialValue: true,
     });
-    if (shouldApply) {
-      return {
-        cfg: params.candidate,
-        shouldWriteConfig: true,
-        confirmedConfigSource,
-      };
-    }
-    if (params.fixHints.length > 0) {
+    if (shouldWriteConfig) {
+      cfg = params.candidate;
+    } else if (params.fixHints.length > 0) {
       params.note(params.fixHints.join("\n"), "Doctor");
     }
-    return {
-      cfg: params.cfg,
-      shouldWriteConfig: false,
-    };
   }
-
-  if (params.shouldRepair && params.pendingChanges) {
-    return {
-      cfg: params.cfg,
-      shouldWriteConfig: true,
-    };
-  }
-
-  return {
-    cfg: params.cfg,
-    shouldWriteConfig: false,
-  };
+  return { cfg, shouldWriteConfig, confirmedConfigSource };
 }

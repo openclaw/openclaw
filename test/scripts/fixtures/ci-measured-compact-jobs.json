@@ -1,0 +1,769 @@
+{
+  "sourceRevision": "3561ae30cbbfc281a634f650195859a78781b792",
+  "toolingJobs": [
+    {
+      "checkName": "measured-0",
+      "shardName": "measured-0",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/pr-merge-outcome.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          }
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 206,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-1",
+      "shardName": "measured-1",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/ci-linux-git.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          }
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 204,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-2",
+      "shardName": "measured-2",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/vitest-report-owner.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-3",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          }
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 203,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-3",
+      "shardName": "measured-3",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/vitest-worker-artifacts.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-4",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          }
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 188,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-4",
+      "shardName": "measured-4",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/ci-git-owner.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-5",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          }
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 187,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-5",
+      "shardName": "measured-5",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/openclaw-performance-git-lifecycle.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-6-hosted-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-6#selector-79-c6bdebbcb2d0#generation-b70e70e36773#part-1-of-2#include-1-ce16c65aa7f6"
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 136,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-6",
+      "shardName": "measured-6",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/run-vitest-state-cleanup.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-7-hosted-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-7#selector-84-203f07d4b9b3#generation-88d4675a18cf#part-1-of-2#include-1-13c347573370"
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 127,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-7",
+      "shardName": "measured-7",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/full-release-artifact-contract.test.ts",
+            "test/scripts/gateway-bench-profile.test.ts",
+            "test/scripts/incremental-line-reader.test.ts",
+            "test/scripts/install-smoke-no-push-workflow.test.ts",
+            "test/scripts/ios-run.test.ts",
+            "test/scripts/kova-report-gate.test.ts",
+            "test/scripts/linux-updater-manifest.test.ts",
+            "test/scripts/make-appcast.test.ts",
+            "test/scripts/mantis-telegram-failure.test.ts",
+            "test/scripts/mobile-release-version.test.ts",
+            "test/scripts/npm-placeholder-publication.test.ts",
+            "test/scripts/openai-image-auth-docker-client.test.ts",
+            "test/scripts/openclaw-npm-extended-stable-workflow.test.ts",
+            "test/scripts/pr-merge-body-provenance.test.ts",
+            "test/scripts/pr-metadata.test.ts",
+            "test/scripts/pr-wrappers.test.ts",
+            "test/scripts/process-fixture-cleanup.test.ts",
+            "test/scripts/qa-lab-up.test.ts",
+            "test/scripts/release-clawhub-children.test.ts",
+            "test/scripts/release-publish-gates.test.ts",
+            "test/scripts/release-validation-skill-update.test.ts",
+            "test/scripts/resolve-frozen-codex-live-suite.test.ts",
+            "test/scripts/tsgo-core-test-shards.test.ts",
+            "test/scripts/upgrade-survivor-baseline-check.test.ts",
+            "test/scripts/upgrade-survivor-migration-order.test.ts",
+            "test/scripts/upgrade-survivor-systemd.test.ts",
+            "test/scripts/verify-pr-hosted-gates.test.ts",
+            "test/scripts/vitest-process-cache.test.ts",
+            "test/scripts/vitest-worker-artifacts.transforms.test.ts",
+            "test/scripts/vitest-worker-slots.test.ts",
+            "test/setup-home-isolation.test.ts",
+            "test/vitest-performance-config.test.ts",
+            "test/vitest/vitest.pattern-file.test.ts",
+            "src/scripts/prepare-codex-ci-auth.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-12-hosted-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-12#selector-109-180a9105b087#generation-d53699145648#part-1-of-2#include-34-8dda20f12b52"
+        },
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/appcast.test.ts",
+            "test/architecture-smells.test.ts",
+            "test/buzz-account-config-mutation.test.ts",
+            "test/channel-message-read-authority.integration.test.ts",
+            "test/cli-message-authority.integration.test.ts",
+            "test/codex-node-cancellation.integration.test.ts",
+            "test/helpers/process-wait.test.ts",
+            "test/helpers/stt-live-audio.test.ts",
+            "test/linux-quickchat-stream.test.ts",
+            "test/node-host-launcher.test.ts",
+            "test/openclaw-npm-release-check.test.ts",
+            "test/plugin-clawhub-metadata.test.ts",
+            "test/plugins/fireworks-model-alias.test.ts",
+            "test/provider-auth-method.radius.integration.test.ts",
+            "test/scripts/agent-plugin-gateway-e2e.test.ts",
+            "test/scripts/android-pin-version.test.ts",
+            "test/scripts/android-screenshots.test.ts",
+            "test/scripts/auth-monitor.test.ts",
+            "test/scripts/bench-gateway-concurrency.test.ts",
+            "test/scripts/bench-task-registry-sqlite.test.ts",
+            "test/scripts/build-external-plugin-local-dist.test.ts",
+            "test/scripts/capability-catalog-artifacts.test.ts",
+            "test/scripts/changed-lanes.test.ts",
+            "test/scripts/check-built-plugin-control-plane-modules.test.ts",
+            "test/scripts/check-coercion-helper-declarations.io.test.ts",
+            "test/scripts/check-deadcode-reporting.test.ts",
+            "test/scripts/check-dynamic-import-warts.test.ts",
+            "test/scripts/check-gateway-watch-regression.test.ts",
+            "test/scripts/check-no-random-messaging-tmp.test.ts",
+            "test/scripts/check-package-patches.test.ts",
+            "test/scripts/check-workflows.test.ts",
+            "test/scripts/ci-git-owner-auth.test.ts",
+            "test/scripts/ci-node-pretest-admission.test.ts",
+            "test/scripts/ci-swift-cache-lifetime.test.ts",
+            "test/scripts/clawhub-bootstrap-artifact.test.ts",
+            "test/scripts/close-duplicate-prs-after-merge.test.ts",
+            "test/scripts/codex-client-version-contract.test.ts",
+            "test/scripts/control-ui-performance.test.ts",
+            "test/scripts/crabbox-wrapper.test.ts",
+            "test/scripts/cron-mcp-cleanup-docker-client.test.ts",
+            "test/scripts/dependency-vulnerability-gate.test.ts",
+            "test/scripts/docker-all-scheduler.test.ts",
+            "test/scripts/docker-stats-resource-ceiling.test.ts",
+            "test/scripts/doctor-install-switch-transport.test.ts",
+            "test/scripts/install-sh.test.ts",
+            "test/scripts/kitchen-sink-rpc-walk.test.ts",
+            "test/scripts/openclaw-live-updater.test.ts",
+            "test/scripts/plugin-gateway-gauntlet.test.ts",
+            "test/scripts/plugin-sdk-surface-report.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-13-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-13#selector-85-f0af1237eca0#generation-baf4ae30f143#part-2-of-2#include-49-f1f1cdb82bd8"
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 150,
+      "timeoutMinutes": 20
+    },
+    {
+      "checkName": "measured-8",
+      "shardName": "measured-8",
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/cron-conversation-delivery.codex.integration.test.ts",
+            "test/discord-live-policy.integration.test.ts",
+            "test/discord-metadata-read-authority.integration.test.ts",
+            "test/e2e/qa-lab/media/hosted-media-provider-live.test.ts",
+            "test/e2e/qa-lab/media/realtime-talk-live.test.ts",
+            "test/e2e/qa-lab/plugins/clawhub-release-candidate-install.test.ts",
+            "test/e2e/qa-lab/runtime/cached-health-snapshot-boundaries.test.ts",
+            "test/e2e/qa-lab/runtime/diagnostic-events-boundary-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/docker-e2e-lane.fixture.test.ts",
+            "test/e2e/qa-lab/runtime/doctor-gateway-startup-recovery.test.ts",
+            "test/e2e/qa-lab/runtime/gateway-mcp-real-transports.test.ts",
+            "test/e2e/qa-lab/runtime/gateway-node-mcp.test-support.test.ts",
+            "test/e2e/qa-lab/runtime/gateway-rpc-account-health.test.ts",
+            "test/e2e/qa-lab/runtime/gateway-ssh-tunnels.test.ts",
+            "test/e2e/qa-lab/runtime/gateway-stability-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/managed-gateway-service-lifecycle-product-proof.test.ts",
+            "test/e2e/qa-lab/runtime/otel-generation-config-watcher-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/quota-reset-provider.test.ts",
+            "test/e2e/qa-lab/runtime/remote-log-tailing-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/script-evidence.test.ts",
+            "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.test.ts",
+            "test/e2e/qa-lab/runtime/update-run-package-self-upgrade.test.ts",
+            "test/e2e/qa-lab/runtime/voice-call-runtime-plugin.test.ts",
+            "test/e2e/qa-lab/tui/tui-pty-evidence-producer.test.ts",
+            "test/feishu-message-mutations.integration.test.ts",
+            "test/feishu-message-read-authority.integration.test.ts",
+            "test/git-hooks-pre-commit-boundaries.test.ts",
+            "test/git-hooks-pre-commit.test.ts",
+            "test/helpers/auth-wizard.test.ts",
+            "test/helpers/gateway-client.test.ts",
+            "test/helpers/gateway-multi-acquisition.test.ts",
+            "test/helpers/openclaw-test-instance.acquisition.test.ts",
+            "test/helpers/openclaw-test-instance.port-collision.test.ts",
+            "test/helpers/openclaw-test-instance.runtime.test.ts",
+            "test/helpers/openclaw-test-instance.test.ts",
+            "test/helpers/openclaw-test-instance.unjoined.test.ts",
+            "test/helpers/openclaw-test-instance.windows-job.test.ts",
+            "test/helpers/run-node-script.test.ts",
+            "test/linux-dashboard-recovery.test.ts",
+            "test/msteams-read-target.integration.test.ts",
+            "test/openclaw-npm-postpublish-verify.test.ts",
+            "test/package-scripts.test.ts",
+            "test/plugins/crabbox-service-replacement.test.ts",
+            "test/progress-card-channel-literals.integration.test.ts",
+            "test/scripts-update-gateway.test.ts",
+            "test/scripts/android-perf-scripts.test.ts",
+            "test/scripts/android-release-wrapper-args.test.ts",
+            "test/scripts/apple-release-source-check.test.ts",
+            "test/scripts/bench-cli-startup.test.ts",
+            "test/scripts/bench-sqlite-state.test.ts",
+            "test/scripts/build-artifact-cache.test.ts",
+            "test/scripts/bundled-plugin-source-utils.test.ts",
+            "test/scripts/check-assertion-safety-ratchet.test.ts",
+            "test/scripts/check-cli-startup-memory.test.ts",
+            "test/scripts/check-deadcode-exports.test.ts",
+            "test/scripts/check-docs-mdx.test.ts",
+            "test/scripts/check-gateway-cpu-scenarios.test.ts",
+            "test/scripts/check-no-conflict-markers.test.ts",
+            "test/scripts/check-package-dist-imports.test.ts",
+            "test/scripts/check-script-erasability.test.ts",
+            "test/scripts/ci-docker-seed-plan.test.ts",
+            "test/scripts/ci-live-command-retry.test.ts",
+            "test/scripts/ci-security-fast-workflow.test.ts",
+            "test/scripts/claude-auth-status.test.ts",
+            "test/scripts/cli-startup-bench-spawner.test.ts",
+            "test/scripts/codex-app-server-protocol-source.test.ts",
+            "test/scripts/control-ui-performance-base.test.ts",
+            "test/scripts/create-dmg.test.ts",
+            "test/scripts/dependency-ownership-surface-report.test.ts",
+            "test/scripts/docker-all-lifecycle.test.ts",
+            "test/scripts/docker-release-artifacts.test.ts",
+            "test/scripts/docs-sync-publish.test.ts",
+            "test/scripts/e2e-text-file-utils.test.ts",
+            "test/scripts/fixture-config.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-12-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-12#selector-109-180a9105b087#generation-d53699145648#part-2-of-2#include-75-77703957356d"
+        },
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/ci-platform-checkout.test.ts",
+            "test/scripts/e2e-websocket-open.test.ts",
+            "test/scripts/fixture-lifetime.test.ts",
+            "test/scripts/full-release-artifacts.test.ts",
+            "test/scripts/gateway-bench-runtime.test.ts",
+            "test/scripts/install-cli.freebsd.test.ts",
+            "test/scripts/inventory-report-cli.test.ts",
+            "test/scripts/ios-screenshot-evidence.test.ts",
+            "test/scripts/kova-report-publish-files.test.ts",
+            "test/scripts/live-docker-auth.test.ts",
+            "test/scripts/managed-child-process.output.test.ts",
+            "test/scripts/mantis-telegram-storage-cleanup.test.ts",
+            "test/scripts/mock-openai-http.test.ts",
+            "test/scripts/npm-prepared-bundle.test.ts",
+            "test/scripts/openclaw-bws-resolver.test.ts",
+            "test/scripts/openclaw-npm-plugin-recovery-workflow.test.ts",
+            "test/scripts/pr-merge-hosted.test.ts",
+            "test/scripts/pr-review-artifact-validation.test.ts",
+            "test/scripts/preinstall-package-manager-warning.test.ts",
+            "test/scripts/prompt-snapshots.test.ts",
+            "test/scripts/real-behavior-proof-policy.test.ts",
+            "test/scripts/release-no-push-workflow.test.ts",
+            "test/scripts/release-publish-preflight-interface.test.ts",
+            "test/scripts/release-version.test.ts",
+            "test/scripts/resolve-openclaw-package-candidate-ip-bypass.test.ts",
+            "test/scripts/ui.test.ts",
+            "test/scripts/upgrade-survivor-baselines.test.ts",
+            "test/scripts/upgrade-survivor-missing-plugin-proxy.test.ts",
+            "test/scripts/upgrade-survivor-watchos-direct-node.test.ts",
+            "test/scripts/verify-stable-main-closeout.test.ts",
+            "test/scripts/vitest-process-group.test.ts",
+            "test/scripts/website-installer-sync-workflow.test.ts",
+            "test/subagent-announce-origin.integration.test.ts",
+            "test/vitest-redacting-reporter.test.ts",
+            "src/scripts/ci-changed-scope.control-ui.test.ts",
+            "src/scripts/sync-plugin-versions.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-13-hosted-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-13#selector-85-f0af1237eca0#generation-baf4ae30f143#part-1-of-2#include-36-c1ca06b2d297"
+        }
+      ],
+      "requiresDist": false,
+      "planConcurrency": 1,
+      "predictedSeconds": 150,
+      "timeoutMinutes": 20
+    }
+  ],
+  "cliTailJob": {
+    "checkName": "measured-cli-tail",
+    "shardName": "measured-cli-tail",
+    "runner": "blacksmith-8vcpu-ubuntu-2404",
+    "groups": [
+      {
+        "configs": [
+          "test/vitest/vitest.cli-process.config.ts"
+        ],
+        "requiresDist": false,
+        "runner": "blacksmith-4vcpu-ubuntu-2404",
+        "shard_name": "agentic-cli-process-hosted-6",
+        "env": {
+          "OPENCLAW_VITEST_MAX_WORKERS": "2"
+        },
+        "includePatterns": [
+          "src/cli/directory-cli.test.ts",
+          "src/cli/update-cli/update-command-candidate-authority.process.test.ts",
+          "src/cli/update-cli/update-command-fresh-preview.test.ts",
+          "src/cli/agent-session-affinity.process.test.ts",
+          "src/cli/completion-cli.shadowed-options.process.test.ts",
+          "src/cli/cron-output.process.test.ts",
+          "src/cli/help-exit.process.test.ts",
+          "src/cli/mcp-cli.import-boundary.test.ts",
+          "src/cli/skills-cli.sag.process.test.ts",
+          "src/cli/update-cli/update-command-service-custody.test.ts",
+          "src/cli/cold-command-plugin-imports.process.test.ts",
+          "src/cli/mcp-cli.probe-exit.process.test.ts",
+          "src/cli/state-dir-gateway-check.process.test.ts",
+          "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts"
+        ],
+        "timing_key": "agentic-cli-process#selector-54-f7826a9ef2c4#generation-8e36d2d43531#part-6-of-7#include-14-4eac8c23d157"
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.cli-process.config.ts"
+        ],
+        "requiresDist": false,
+        "runner": "blacksmith-4vcpu-ubuntu-2404",
+        "shard_name": "agentic-cli-process-hosted-7",
+        "env": {
+          "OPENCLAW_VITEST_MAX_WORKERS": "2"
+        },
+        "includePatterns": [
+          "src/cli/update-cli/update-command-candidate-exit.test.ts",
+          "src/cli/update-cli/update-command-fresh-doctor-authority.test.ts",
+          "src/cli/update-cli/update-command-runtime-preview.test.ts",
+          "src/cli/capability-local-audio-path.process.test.ts",
+          "src/cli/cli-process-child.test-helpers.test.ts",
+          "src/cli/gateway-service-capability.process.test.ts",
+          "src/cli/hooks-cli.process.test.ts",
+          "src/cli/plugins-authoring.process.test.ts",
+          "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
+          "src/cli/update-cli/update-command-executor-native.test.ts",
+          "src/cli/one-shot-exit.test.ts",
+          "src/cli/runtime-cleanup-scope.windows.process.test.ts",
+          "src/cli/update-finalization-output.process.test.ts",
+          "src/cli/claws-authoring-state.process.test.ts",
+          "src/cli/state-dir-gateway-check.server.test.ts"
+        ],
+        "timing_key": "agentic-cli-process#selector-54-f7826a9ef2c4#generation-8e36d2d43531#part-7-of-7#include-15-d305c0ae5c0a"
+      }
+    ],
+    "requiresDist": false,
+    "planConcurrency": 1,
+    "predictedSeconds": 216,
+    "timeoutMinutes": 20
+  },
+  "cliChildJobWallSeconds": [
+    558,
+    703
+  ],
+  "toolingTailJobs": [
+    {
+      "checkName": "checks-node-compact-small-32",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts"
+          ],
+          "pretestBuildMode": "runtime",
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-9-hosted-1",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-9#selector-44-341cfbde9b0a#generation-0586a32d256e#part-1-of-2#include-1-d1e3db42593c"
+        },
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/compile-opengrep-rules.test.ts",
+            "test/scripts/crabbox-staging-fsync.test.ts",
+            "test/scripts/cross-os-release-npm-diagnostics.test.ts",
+            "test/scripts/dev-tooling-safety.test.ts",
+            "test/scripts/docker-e2e-plan.test.ts",
+            "test/scripts/docs-list.test.ts",
+            "test/scripts/e2e-mock-config-limits.test.ts",
+            "test/scripts/ensure-extension-memory-build.test.ts",
+            "test/scripts/format-generated-module.test.ts",
+            "test/scripts/full-release-validation-at-sha.test.ts",
+            "test/scripts/generate-npm-package-lock.test.ts",
+            "test/scripts/install-previous-version.test.ts",
+            "test/scripts/ios-pull-gateway-log.test.ts",
+            "test/scripts/k8s-deploy.test.ts",
+            "test/scripts/labeler-label-cap.test.ts",
+            "test/scripts/mac-elevation-artifact.test.ts",
+            "test/scripts/managed-handoff-build-config.test.ts",
+            "test/scripts/meme-maker.test.ts",
+            "test/scripts/npm-onboard-channel-agent-assertions.test.ts",
+            "test/scripts/ocm-npm-workspace-deps.test.ts",
+            "test/scripts/openclaw-cross-os-release-checks.test.ts",
+            "test/scripts/pr-cross-checkout.test.ts",
+            "test/scripts/pr-merge-receipt.test.ts",
+            "test/scripts/pr-worktree-interruption.test.ts",
+            "test/scripts/prepublish-plugin-registry-artifact.test.ts",
+            "test/scripts/prune-mac-node-worker.test.ts",
+            "test/scripts/release-candidate-plan.test.ts",
+            "test/scripts/release-preflight.test.ts",
+            "test/scripts/release-tooling-bootstrap.test.ts",
+            "test/scripts/render-github-release-notes.test.ts",
+            "test/scripts/tsdown-build.test.ts",
+            "test/scripts/update-gateway.test.ts",
+            "test/scripts/upgrade-survivor-exec-approvals.test.ts",
+            "test/scripts/upgrade-survivor-probe-gateway.test.ts",
+            "test/scripts/vercel-container-registry-publish.test.ts",
+            "test/scripts/vitest-isolated.test.ts",
+            "test/scripts/vitest-worker-artifacts.verification.test.ts",
+            "test/scripts/write-cli-startup-metadata.test.ts",
+            "test/test-env.test.ts",
+            "test/vitest-ui-e2e-preflight.test.ts",
+            "src/scripts/ci-ios-screenshot-scope.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-8-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-8#selector-42-bb069b36bffb#generation-218c0980436d#part-2-of-2#include-41-f4f530b05d87"
+        }
+      ],
+      "pretestBuildMode": "runtime",
+      "requiresDist": false,
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "shardName": "compact-small-32",
+      "planConcurrency": 1,
+      "predictedSeconds": 147
+    },
+    {
+      "checkName": "checks-node-compact-small-34",
+      "groups": [
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/root-package-overrides.test.ts",
+            "test/scripts/run-additional-boundary-checks.test.ts",
+            "test/scripts/run-android-gradle.test.ts",
+            "test/scripts/run-node-lifecycle.test.ts",
+            "test/scripts/run-node-package-bin.test.ts",
+            "test/scripts/run-opengrep.test.ts",
+            "test/scripts/run-oxlint.test.ts",
+            "test/scripts/run-tsgo-worktree.test.ts",
+            "test/scripts/run-tsgo.test.ts",
+            "test/scripts/run-vitest-bounded.test.ts",
+            "test/scripts/run-vitest-profile.test.ts",
+            "test/scripts/run-vitest-progress.test.ts",
+            "test/scripts/run-vitest.test.ts",
+            "test/scripts/run-with-env.test.ts",
+            "test/scripts/runtime-postbuild-stamp.test.ts",
+            "test/scripts/runtime-postbuild.test.ts",
+            "test/scripts/sandbox-common-smoke-workflow.test.ts",
+            "test/scripts/sanitize-bundler-helper-dts-exports.test.ts",
+            "test/scripts/secret-scanning-maintainer.test.ts",
+            "test/scripts/security-review-event.test.ts",
+            "test/scripts/security-review-rollout.test.ts",
+            "test/scripts/security-review-script.test.ts",
+            "test/scripts/security-review-workflow.test.ts",
+            "test/scripts/security-sensitive-guard-script.test.ts",
+            "test/scripts/session-log-mentions.test.ts",
+            "test/scripts/setup-node-env-bun.test.ts",
+            "test/scripts/setup-node-env-dependency-fingerprint.test.ts",
+            "test/scripts/setup-pnpm-archive-download.test.ts",
+            "test/scripts/setup-pnpm-store-cache-ensure-node.test.ts",
+            "test/scripts/setup-pnpm-store-cache-image.test.ts",
+            "test/scripts/shared-image-artifact.test.ts",
+            "test/scripts/shrink-ratchet.test.ts",
+            "test/scripts/sleep.test.ts",
+            "test/scripts/source-file-scan-cache.test.ts",
+            "test/scripts/sqlite-reliability-process.test.ts",
+            "test/scripts/sqlite-session-schema-baseline.test.ts",
+            "test/scripts/stage-bundled-plugin-runtime.test.ts",
+            "test/scripts/stage-cloudflared-macos.test.ts",
+            "test/scripts/summarize-cpuprofile.test.ts",
+            "test/scripts/swift-build-cache-metadata.test.ts",
+            "test/scripts/sync-labels.test.ts",
+            "test/scripts/sync-plugin-sdk-exports.test.ts",
+            "test/scripts/targeted-docker-lane-groups.test.ts",
+            "test/scripts/telegram-bot-api.test.ts",
+            "test/scripts/telegram-e2e-userbot-skill.test.ts",
+            "test/scripts/test-built-status-message-runtime.test.ts",
+            "test/scripts/test-device-pair-telegram.test.ts",
+            "test/scripts/test-env-mutation-report.test.ts",
+            "test/scripts/test-extension.test.ts",
+            "test/scripts/test-group-report.test.ts",
+            "test/scripts/test-helpers.test.ts",
+            "test/scripts/test-hotspots.test.ts",
+            "test/scripts/test-install-sh-docker.test.ts",
+            "test/scripts/test-live-acp-bind-docker.test.ts",
+            "test/scripts/test-live-cli-backend-docker.test.ts",
+            "test/scripts/test-live-codex-harness-docker.test.ts",
+            "test/scripts/test-live-models-docker.test.ts",
+            "test/scripts/test-live-shard.test.ts",
+            "test/scripts/test-live.test.ts",
+            "test/scripts/test-perf-budget.test.ts",
+            "test/scripts/test-projects-empty-native.test.ts",
+            "test/scripts/test-report-utils.test.ts",
+            "test/scripts/test-shell-completion.test.ts",
+            "test/scripts/test-skip-inventory.test.ts",
+            "test/scripts/testbox-base.test.ts",
+            "test/scripts/testbox-command-cwd.test.ts",
+            "test/scripts/testbox-lease-freshness.test.ts",
+            "test/scripts/ts-guard-utils.test.ts",
+            "test/scripts/update-first-hop-package-fixtures.test.ts",
+            "test/scripts/upgrade-survivor-cron-seed.test.ts",
+            "test/scripts/upgrade-survivor-plugin-registry.test.ts",
+            "test/scripts/validate-release-publish-approval.test.ts",
+            "test/scripts/vitest-forks-pool.test.ts",
+            "test/scripts/vitest-worker-artifacts.ci.test.ts",
+            "test/scripts/write-build-info.test.ts",
+            "test/test-env.state-lifetime.test.ts",
+            "test/vitest-ui-e2e-prebuilt.test.ts",
+            "src/scripts/ci-changed-scope.windows.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-6-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-6#selector-79-c6bdebbcb2d0#generation-b70e70e36773#part-2-of-2#include-78-9672973bf730"
+        },
+        {
+          "configs": [
+            "test/vitest/vitest.tooling.config.ts"
+          ],
+          "includePatterns": [
+            "test/scripts/compiler-input-snapshot.test.ts",
+            "test/scripts/computer-use-live-rig.test.ts",
+            "test/scripts/config-reload-log-scanner.test.ts",
+            "test/scripts/crabbox-staging-location.test.ts",
+            "test/scripts/dated-todo-scan.test.ts",
+            "test/scripts/direct-run-entrypoints.test.ts",
+            "test/scripts/docker-e2e-source-roots.test.ts",
+            "test/scripts/docs-mirror-freshness.test.ts",
+            "test/scripts/e2e-run-with-pty.test.ts",
+            "test/scripts/ensure-playwright-chromium.test.ts",
+            "test/scripts/frv-proof-broker.test.ts",
+            "test/scripts/full-release-validation-continuation-workflow.test.ts",
+            "test/scripts/gh-read.test.ts",
+            "test/scripts/install-ps1.test.ts",
+            "test/scripts/ios-release-fastlane-gates.test.ts",
+            "test/scripts/k8s-manifests.test.ts",
+            "test/scripts/lint-status.test.ts",
+            "test/scripts/mac-elevation-host.test.ts",
+            "test/scripts/managed-windows-job.test.ts",
+            "test/scripts/mobile-release-authority.test.ts",
+            "test/scripts/npm-onboard-channel-agent-shell.test.ts",
+            "test/scripts/onboard-config-fixtures.test.ts",
+            "test/scripts/openclaw-cross-os-release-workflow.test.ts",
+            "test/scripts/pr-git-maintenance.test.ts",
+            "test/scripts/pr-merge-recovery.test.ts",
+            "test/scripts/pr-worktree-provision.test.ts",
+            "test/scripts/prepublish-plugin-registry-shell.test.ts",
+            "test/scripts/publish-model-catalog.test.ts",
+            "test/scripts/release-changelog.test.ts",
+            "test/scripts/release-prepare.test.ts",
+            "test/scripts/release-tooling-identity.test.ts",
+            "test/scripts/render-maturity-docs.test.ts",
+            "test/scripts/tsdown-config.test.ts",
+            "test/scripts/update-node-runner-build.test.ts",
+            "test/scripts/upgrade-survivor-first-hop.test.ts",
+            "test/scripts/upgrade-survivor-project-worktree-startup.test.ts",
+            "test/scripts/verify-clawhub-published-artifact.test.ts",
+            "test/scripts/vitest-local-scheduling.test.ts",
+            "test/scripts/vitest-worker-cache-lifecycle.test.ts",
+            "test/scripts/write-package-dist-inventory.test.ts",
+            "test/transcripts-discord-audio.integration.test.ts",
+            "test/vitest-ui-package-config.test.ts",
+            "src/scripts/control-ui-i18n-report.test.ts"
+          ],
+          "requiresDist": false,
+          "runner": "blacksmith-4vcpu-ubuntu-2404",
+          "shard_name": "core-tooling-9-hosted-2",
+          "env": {
+            "OPENCLAW_VITEST_MAX_WORKERS": "2"
+          },
+          "timing_key": "core-tooling-9#selector-44-341cfbde9b0a#generation-0586a32d256e#part-2-of-2#include-43-065d1be7f340"
+        }
+      ],
+      "requiresDist": false,
+      "runner": "blacksmith-8vcpu-ubuntu-2404",
+      "shardName": "compact-small-34",
+      "planConcurrency": 1,
+      "predictedSeconds": 121
+    }
+  ]
+}

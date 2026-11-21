@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { validateExplicitPluginConfig } from "./validation-plugin-config.js";
+import { preparePluginSchemaValidations } from "./validation-prepared.js";
 
 const roots = createTempDirTracker();
 afterEach(() => {
@@ -23,8 +23,7 @@ function missingPluginWarningPaths(config: OpenClawConfig): string[] {
     env: { HOME: home, OPENCLAW_HOME: home, OPENCLAW_STATE_DIR: home },
     applyDefaults: false,
     registry: { plugins: [], diagnostics: [] },
-    knownIds: new Set(),
-    normalizedPlugins: normalizePluginsConfig(config.plugins),
+    schemaValidations: preparePluginSchemaValidations(),
     ensureCompatPluginIds: () => new Set(),
     ensureOverriddenPluginIds: () => new Set(),
     replacePluginEntryConfig: () => {

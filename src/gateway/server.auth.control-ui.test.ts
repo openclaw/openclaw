@@ -24,7 +24,7 @@ describe("gateway server auth/connect", () => {
   registerControlUiTrustedProxySuite();
   registerControlUiDeviceTokenSuite();
   registerControlUiPairingSuite();
-  registerControlUiMobileBootstrapSuite();
+  describe("mobile bootstrap", registerControlUiMobileBootstrapSuite);
   registerControlUiMobileReconnectSuite();
   registerControlUiBootstrapLifecycleSuite();
   registerControlUiOwnerBootstrapSuite();

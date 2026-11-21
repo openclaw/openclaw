@@ -5,17 +5,11 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 const workers = vi.hoisted(() => [] as Worker[]);
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
-  return {
-    ...actual,
-    Worker: class extends actual.Worker {
-      constructor(...args: ConstructorParameters<typeof actual.Worker>) {
-        super(...args);
-        workers.push(this);
-      }
-    },
-  };
+  const { observeWorkerConstructors } = await import("../../test/helpers/worker-observer.js");
+  return observeWorkerConstructors(actual, workers);
 });
 
+import { normalizeAnthropicInlineContentBlocks } from "./anthropic-inline-images.js";
 import { createImageProcessor, getImageMetadata, resizeToJpeg } from "./image-ops.js";
 
 afterAll(async () => {
@@ -28,6 +22,24 @@ const png = Buffer.from(
 );
 
 describe("image worker", () => {
+  it("normalizes unsupported inline images through the real image worker", async () => {
+    // One red pixel in an uncompressed 24-bit BMP.
+    const data = "Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAD/AA==";
+    const normalized = await normalizeAnthropicInlineContentBlocks([
+      { type: "image", data, mimeType: "image/bmp" },
+    ]);
+    expect(normalized).toEqual([
+      { type: "image", data: expect.any(String), mimeType: "image/png" },
+    ]);
+    const image = normalized.find((block) => block.type === "image")!;
+    const output = Buffer.from(image.data, "base64");
+    expect(output.subarray(0, 8)).toEqual(Buffer.from("89504e470d0a1a0a", "hex"));
+    await expect(getImageMetadata(output)).resolves.toEqual({
+      width: 1,
+      height: 1,
+    });
+  });
+
   it("returns encoded Buffer bytes without detaching the caller's input view", async () => {
     const source = Buffer.concat([Buffer.from("prefix"), png, Buffer.from("suffix")]);
     const input = source.subarray(6, -6);

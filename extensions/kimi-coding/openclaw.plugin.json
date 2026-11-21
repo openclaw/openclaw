@@ -31,7 +31,7 @@
   },
   "modelCatalog": {
     "modelsDev": {
-      "kimi": "kimi-for-coding"
+      "kimi": "kimi-code-plan-cn"
     },
     "providers": {
       "kimi": {
@@ -41,6 +41,7 @@
           "User-Agent": "claude-code/0.1.0"
         },
         "defaultModel": "kimi-for-coding",
+        "family": "moonshot",
         "models": [
           {
             "id": "k3",
@@ -48,7 +49,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -66,6 +66,10 @@
               "cacheWrite": 0
             },
             "compat": {
+              "supportedReasoningEfforts": ["low", "high", "max"],
+              "defaultThinkingLevel": "high",
+              "adaptiveThinking": true,
+              "thinkingRequired": true,
               "codeMode": "preferred"
             }
           },
@@ -75,7 +79,6 @@
             "reasoning": true,
             "upstreamModel": "moonshot/kimi-k3",
             "thinkingLevelMap": {
-              "off": null,
               "minimal": "low",
               "low": "low",
               "medium": "high",
@@ -93,7 +96,57 @@
               "cacheWrite": 0
             },
             "compat": {
+              "supportedReasoningEfforts": ["low", "high", "max"],
+              "defaultThinkingLevel": "high",
+              "adaptiveThinking": true,
+              "thinkingRequired": true,
               "codeMode": "preferred"
+            }
+          },
+          {
+            "id": "k3.1-pro",
+            "name": "Kimi K3.1 Pro",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "compat": {
+              "supportedReasoningEfforts": ["low", "high", "max"],
+              "defaultThinkingLevel": "high",
+              "adaptiveThinking": true,
+              "thinkingRequired": true
+            }
+          },
+          {
+            "id": "k3.1-pro-highspeed",
+            "name": "Kimi K3.1 Pro Highspeed",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": "low",
+              "low": "low",
+              "medium": "high",
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 131072,
+            "compat": {
+              "supportedReasoningEfforts": ["low", "high", "max"],
+              "defaultThinkingLevel": "high",
+              "adaptiveThinking": true,
+              "thinkingRequired": true
             }
           },
           {
@@ -134,7 +187,7 @@
   "modelPricing": {
     "providers": {
       "kimi": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {
@@ -142,7 +195,7 @@
         }
       },
       "kimi-coding": {
-        "openRouter": {
+        "modelsDev": {
           "provider": "moonshotai"
         },
         "liteLLM": {

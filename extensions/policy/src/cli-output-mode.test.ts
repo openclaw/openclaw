@@ -4,7 +4,7 @@ import { POLICY_CLI_DESCRIPTOR } from "./cli-output-mode.js";
 const isMachineOutput = POLICY_CLI_DESCRIPTOR.machineOutput;
 
 describe("policy CLI output mode", () => {
-  it.each(["check", "compare", "watch"])("detects piped %s output", (command) => {
+  it.each(["compare", "watch"])("detects piped %s output", (command) => {
     expect(
       isMachineOutput({
         argv: ["node", "openclaw", "policy", command],

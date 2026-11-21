@@ -1,0 +1,64 @@
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
+import { withScopedOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-scope.js";
+import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
+import type {
+  SessionBranchSummaryReadRequest,
+  SessionBranchSummaryReadResult,
+} from "./session-accessor.sqlite-branches.js";
+import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+
+export function readSessionBranchSnapshot(
+  database: OpenClawAgentReadOnlyDatabase,
+  request: Pick<SessionBranchSummaryReadRequest, "sessionKey" | "previous">,
+): SessionBranchSummaryReadResult {
+  return runSqliteReadSnapshotSync<SessionBranchSummaryReadResult>(
+    database.db,
+    () => {
+      const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
+      const entry = readSessionEntryIdentity(database, request.sessionKey);
+      if (!entry?.sessionId) {
+        return { status: "missing-session" };
+      }
+      // The watermark and rows must describe the same snapshot, even when a peer appends.
+      const watermark = readSessionTranscriptHotWatermark(database, entry.sessionId, {
+        requireHot: true,
+      });
+      const previous = request.previous;
+      const cached =
+        previous?.source?.sessionId === entry.sessionId &&
+        previous.source.databaseIdentity === databaseIdentity &&
+        previous.generation === watermark.generation &&
+        previous.maxSeq !== null &&
+        watermark.maxSeq !== null &&
+        previous.maxSeq <= watermark.maxSeq
+          ? previous
+          : undefined;
+      const summaries =
+        cached?.maxSeq === watermark.maxSeq
+          ? cached
+          : readSessionBranchSummaries(database, entry.sessionId, cached);
+      return {
+        status: "ok",
+        source: { sessionId: entry.sessionId, databaseIdentity },
+        ...watermark,
+        appendSafe: summaries.appendSafe,
+        branches: summaries.branches,
+      };
+    },
+    { operationLabel: "session branch summaries read" },
+  );
+}
+
+/** Reuse the worker's reader without retaining a read snapshot between requests. */
+export function readSessionBranchSummariesInWorker(
+  request: SessionBranchSummaryReadRequest,
+): SessionBranchSummaryReadResult {
+  const result = withScopedOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionBranchSnapshot(database, request),
+    request.database,
+  );
+  return result.found ? result.value : { status: "missing-session" };
+}

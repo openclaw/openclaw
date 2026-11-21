@@ -2,6 +2,18 @@ type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
 
+export function firstMockCall(mock: MockWithCalls, label: string): unknown[] {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
+
+export function firstMockArg(mock: MockWithCalls, label: string) {
+  return firstMockCall(mock, label)[0];
+}
+
 export function objectArgAt(
   mock: MockWithCalls,
   callIndex: number,

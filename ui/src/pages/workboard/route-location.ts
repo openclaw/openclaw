@@ -28,45 +28,30 @@ export function resolveWorkboardRouteLocation(
 ): WorkboardRouteData {
   const location = workboardRouteLocation(sourceLocation);
   const pathBoardId = workboardBoardIdFromPath(location.pathname, basePath);
-  if (pathBoardId) {
-    const params = new URLSearchParams(location.search);
-    const hadLegacyBoard = params.has("board");
-    params.delete("board");
-    const search = params.toString();
-    return {
-      boardFilter: pathBoardId,
-      search: search ? `?${search}` : "",
-      ...(hadLegacyBoard
-        ? {
-            canonicalLocation: {
-              pathname: pathForWorkboardBoard(pathBoardId, basePath),
-              search: search ? `?${search}` : "",
-              hash: location.hash,
-            },
-          }
-        : {}),
-    };
-  }
   const params = new URLSearchParams(location.search);
-  if (!params.has("board")) {
+  const hadLegacyBoard = params.has("board");
+  if (!pathBoardId && !hadLegacyBoard) {
     return { boardFilter: WORKBOARD_ALL_BOARDS_FILTER, search: location.search };
   }
   const legacyBoardValue = params.get("board")?.trim() ?? "";
   params.delete("board");
   const search = params.toString();
-  const boardFilter = isValidWorkboardBoardId(legacyBoardValue)
-    ? legacyBoardValue
-    : WORKBOARD_ALL_BOARDS_FILTER;
-  return {
+  const boardFilter =
+    pathBoardId ??
+    (isValidWorkboardBoardId(legacyBoardValue) ? legacyBoardValue : WORKBOARD_ALL_BOARDS_FILTER);
+  const route: WorkboardRouteData = {
     boardFilter,
     search: search ? `?${search}` : "",
-    canonicalLocation: {
+  };
+  if (hadLegacyBoard) {
+    route.canonicalLocation = {
       pathname:
         boardFilter === WORKBOARD_ALL_BOARDS_FILTER
           ? pathForRoute("workboard", basePath)
           : pathForWorkboardBoard(boardFilter, basePath),
-      search: search ? `?${search}` : "",
+      search: route.search,
       hash: location.hash,
-    },
-  };
+    };
+  }
+  return route;
 }

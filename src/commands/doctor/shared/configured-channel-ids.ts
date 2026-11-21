@@ -22,14 +22,18 @@ type DoctorConfiguredChannelIdOptions = {
   sort?: "codepoint" | "locale";
 };
 
-function includesConfigEntry(value: unknown, policy: ConfiguredChannelEntryPolicy): boolean {
+function includesConfigEntry(
+  value: unknown,
+  policy: ConfiguredChannelEntryPolicy,
+  channelId: string,
+): boolean {
   if (policy === "raw") {
     return true;
   }
   if (policy === "enabled") {
     return !isRecord(value) || value.enabled !== false;
   }
-  const meaningful = hasMeaningfulChannelConfig(value);
+  const meaningful = hasMeaningfulChannelConfig(value, channelId);
   return policy === "meaningful"
     ? meaningful
     : (isRecord(value) && value.enabled === true) || meaningful;
@@ -66,7 +70,7 @@ export function listDoctorConfiguredChannelIds(
   const channels = isRecord(root.channels) ? root.channels : null;
   if (channels) {
     for (const [channelId, entry] of Object.entries(channels)) {
-      if (includesConfigEntry(entry, options.configEntryPolicy)) {
+      if (includesConfigEntry(entry, options.configEntryPolicy, channelId)) {
         add(channelId);
       }
     }

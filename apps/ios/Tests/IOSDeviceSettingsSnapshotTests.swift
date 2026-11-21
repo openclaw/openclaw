@@ -92,11 +92,9 @@ struct IOSDeviceSettingsSnapshotTests {
     }
 
     @Test func `permission wire statuses retain limited and unavailable distinctions`() {
-        #expect(IOSDeviceSettingsPermissions.permissionGrant(DevicePermissionStatusMap.contacts(.limited)) == .limited)
-        #expect(IOSDeviceSettingsPermissions.permissionGrant(
-            DevicePermissionStatusMap.eventKitRead(.writeOnly)) == .limited)
-        #expect(IOSDeviceSettingsPermissions.permissionGrant(
-            DevicePermissionStatusMap.eventKitRead(.fullAccess)) == .granted)
+        #expect(DevicePermissionStatusMap.contacts(.limited) == .limited)
+        #expect(DevicePermissionStatusMap.eventKitRead(.writeOnly) == .limited)
+        #expect(DevicePermissionStatusMap.eventKitRead(.fullAccess) == .granted)
         #expect(IOSDeviceSettingsPermissions.location(.authorizedAlways, servicesEnabled: false) == .unavailable)
         #expect(IOSDeviceSettingsPermissions.location(.authorizedWhenInUse, servicesEnabled: true) == .granted)
         #expect(IOSDeviceSettingsPermissions.location(.notDetermined, servicesEnabled: true) == .notDetermined)

@@ -35,12 +35,16 @@ function evidenceEntryMatches(state: UiState, entry: EvidenceEntryView): boolean
   return haystack.includes(query);
 }
 
-function renderEvidenceMetric(label: string, value: string | number, tone?: string): string {
-  return `<div class="evidence-metric${tone ? ` evidence-metric-${esc(tone)}` : ""}">
+function createMetricRenderer(className: string) {
+  return (label: string, value: string | number, tone?: string): string =>
+    `<div class="${className}${tone ? ` ${className}-${esc(tone)}` : ""}">
     <span>${esc(label)}</span>
     <strong>${esc(String(value))}</strong>
   </div>`;
 }
+
+const renderEvidenceMetric = createMetricRenderer("evidence-metric");
+const renderProducerContextMetric = createMetricRenderer("evidence-producer-metric");
 
 function renderEvidenceCoverage(entry: EvidenceEntryView): string {
   if (entry.coverage.length === 0) {
@@ -152,13 +156,6 @@ function renderEvidenceDetail(entry: EvidenceEntryView | null): string {
           : '<div class="empty-state">No execution artifacts recorded for this entry.</div>'
       }
     </section>
-  </div>`;
-}
-
-function renderProducerContextMetric(label: string, value: string | number): string {
-  return `<div class="evidence-producer-metric">
-    <span>${esc(label)}</span>
-    <strong>${esc(String(value))}</strong>
   </div>`;
 }
 
@@ -365,7 +362,7 @@ export function renderEvidenceView(state: UiState): string {
         <p>Saved QA evidence bundles, proof artifacts, logs, and producer context.</p>
       </div>
       <div class="evidence-toolbar-main">
-        <label class="capture-search-field">Evidence path
+        <label class="evidence-search-field">Evidence path
           <input id="evidence-path" value="${esc(state.evidencePathDraft)}" placeholder=".artifacts/qa-e2e/suite-.../qa-evidence.json" />
         </label>
         <button class="btn-primary" data-action="load-evidence"${state.evidenceLoading ? " disabled" : ""}>Load</button>
@@ -391,7 +388,7 @@ export function renderEvidenceView(state: UiState): string {
               .join("")}
           </select>
         </label>
-        <label class="capture-search-field">Search
+        <label class="evidence-search-field">Search
           <input id="evidence-search" value="${esc(state.evidenceSearchText)}" placeholder="coverage, title, artifact..." />
         </label>
       </div>

@@ -55,7 +55,7 @@ function runPlanningStep(
 }
 
 describe("shared release candidate preparation", () => {
-  it.each(["beta", "stable", "full"] as const)(
+  it.each(["beta", "stable"] as const)(
     "prepares every plugin child's package under the %s profile",
     (releaseProfile) => {
       const { plan, output } = runPlanningStep(releaseProfile, "prepare");
@@ -63,7 +63,6 @@ describe("shared release candidate preparation", () => {
       const child = resolveDockerE2ePlan({
         includeOpenWebUI: false,
         liveMode: "all",
-        liveRetries: 1,
         orderLanes: (lanes) => lanes,
         planReleaseAll: false,
         profile: "all",

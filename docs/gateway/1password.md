@@ -132,7 +132,7 @@ One-time passcodes are filled by 1Password on the same page; never relay verific
 
 ## Troubleshooting
 
-- `op` is missing: install the CLI on the Gateway host, ensure it is on `PATH`,
+- `op` is missing: install the CLI on the Gateway host, check that it is on `PATH`,
   or set `CLAW_1PASSWORD_OP` to its absolute path.
 - `op` is not trusted: use an executable owned by the current user or root and
   remove group/other write access from the executable and its parent chain.

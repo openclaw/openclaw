@@ -8,7 +8,7 @@ const INSTALLATION_KEY = "current";
 export async function getClickClackDiscussionInstallationId(
   runtime: PluginRuntime,
 ): Promise<string> {
-  const store = runtime.state.openKeyedStore<{ id: string }>({
+  const store = runtime.state.openKeyedStoreV2<{ id: string }>({
     namespace: INSTALLATION_NAMESPACE,
     maxEntries: 1,
     overflowPolicy: "reject-new",

@@ -1,11 +1,16 @@
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
 
 /** Resolve the saved DOM text offsets without changing the transcript's text nodes. */
-export function resolveChatCommentAnchor(root: HTMLElement, source: ChatSelectionSource) {
-  const bubble = Array.from(root.querySelectorAll<HTMLElement>(".chat-bubble")).find((element) =>
-    source.entryId
-      ? element.dataset.entryId === source.entryId
-      : Boolean(source.messageId) && element.dataset.messageId === source.messageId,
+export function resolveChatCommentAnchor(
+  bubbles: Iterable<HTMLElement>,
+  source: ChatSelectionSource,
+) {
+  const bubble = Array.from(bubbles).find(
+    (element) =>
+      element.isConnected &&
+      (source.entryId
+        ? element.dataset.entryId === source.entryId
+        : Boolean(source.messageId) && element.dataset.messageId === source.messageId),
   );
   if (!bubble) {
     return null;

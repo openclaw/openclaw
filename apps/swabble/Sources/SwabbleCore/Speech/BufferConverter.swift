@@ -21,7 +21,7 @@ final class BufferConverter {
         if inputFormat == format {
             return buffer
         }
-        if converter == nil || converter?.outputFormat != format {
+        if converter?.inputFormat != inputFormat || converter?.outputFormat != format {
             converter = AVAudioConverter(from: inputFormat, to: format)
             converter?.primeMethod = .none
         }

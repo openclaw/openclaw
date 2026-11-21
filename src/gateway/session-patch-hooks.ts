@@ -1,30 +1,25 @@
-// Session patch hook dispatcher.
 // Publishes internal mutation notifications after Gateway session patch calls.
-import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
-import type { SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  SessionPatchHookContext,
+  SessionPatchHookEvent,
+} from "../hooks/internal-hook-types.js";
 import {
   hasInternalHookListeners,
+  omitHookSessionOperatorSources,
   triggerInternalHook,
-  type SessionPatchHookContext,
-  type SessionPatchHookEvent,
 } from "../hooks/internal-hooks.js";
 
 // Session patch hooks are fire-and-forget internal hooks. The context is cloned
 // so hook listeners cannot mutate the live session entry or patch object.
-/** Triggers internal session patch hooks when listeners are registered. */
-export function triggerSessionPatchHook(params: {
-  cfg: OpenClawConfig;
-  sessionEntry: SessionEntry;
-  sessionKey: string;
-  patch: SessionsPatchParams;
-}): void {
+export function triggerSessionPatchHook(
+  params: SessionPatchHookContext & Pick<SessionPatchHookEvent, "sessionKey">,
+): void {
   if (!hasInternalHookListeners("session", "patch")) {
     return;
   }
 
   const hookContext: SessionPatchHookContext = structuredClone({
-    sessionEntry: params.sessionEntry,
+    sessionEntry: omitHookSessionOperatorSources(params.sessionEntry),
     patch: params.patch,
     cfg: params.cfg,
   });

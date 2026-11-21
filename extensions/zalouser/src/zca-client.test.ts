@@ -14,11 +14,11 @@ describe("zca-client runtime loading", () => {
       const zcaClient = await import("./zca-client.js");
       expect(require.cache[entry]).toBeUndefined();
 
-      const zalo = await zcaClient.createZalo({ logging: false, selfListen: true });
+      const zalo = await zcaClient.createZalo();
 
       expect(require.cache[entry]).toBeDefined();
       expect(zalo).toMatchObject({
-        options: { logging: false, selfListen: true },
+        options: { logging: false, selfListen: false },
         login: expect.any(Function),
         loginQR: expect.any(Function),
       });

@@ -1,7 +1,7 @@
 /** Demand-loaded auth-profile resolution for MCP bearer injection and projection. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
-import { loadAuthProfileStoreForSecretsRuntime } from "./auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "./auth-profiles/store-runtime.js";
 
 export async function resolveMcpAuthProfileBearerToken(params: {
   serverName: string;
@@ -9,9 +9,11 @@ export async function resolveMcpAuthProfileBearerToken(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
 }): Promise<string> {
-  const store = loadAuthProfileStoreForSecretsRuntime(params.agentDir, {
+  const store = await loadAuthProfileStoreForRuntimeAsync(params.agentDir, {
     config: params.cfg,
     externalCliProfileIds: [params.profileId],
+    readOnly: true,
+    allowKeychainPrompt: false,
   });
   const credential = store.profiles[params.profileId];
   if (!credential) {

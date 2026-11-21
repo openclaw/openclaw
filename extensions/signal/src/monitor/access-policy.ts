@@ -1,11 +1,9 @@
-// Signal plugin module implements access policy behavior.
 import {
-  createChannelIngressResolver,
   type ChannelIngressContextBinding,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   formatSignalSenderId,
@@ -13,9 +11,7 @@ import {
   normalizeSignalAllowRecipient,
   type SignalSender,
 } from "../identity.js";
-
-type SignalDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-type SignalGroupPolicy = "open" | "allowlist" | "disabled";
+import { getSignalRuntime } from "../runtime.js";
 
 const SIGNAL_UUID_KIND = "plugin:signal-uuid" as const;
 const SIGNAL_GROUP_KIND = "plugin:signal-group" as const;
@@ -58,14 +54,6 @@ function normalizeSignalUuidEntry(entry: string): string | null {
   return looksLikeUuid(signalStripped) ? signalStripped : null;
 }
 
-function normalizeSignalPhoneEntry(entry: string): string | null {
-  const parsed = strippedSignalEntry(entry);
-  if (!parsed) {
-    return null;
-  }
-  return normalizeSignalAllowRecipient(parsed.trimmed) ?? null;
-}
-
 const signalIngressIdentity = defineStableChannelIngressIdentity({
   key: "stable",
   normalizeEntry: () => null,
@@ -73,7 +61,7 @@ const signalIngressIdentity = defineStableChannelIngressIdentity({
     {
       key: "phone",
       kind: "phone",
-      normalizeEntry: normalizeSignalPhoneEntry,
+      normalizeEntry: (entry) => normalizeSignalAllowRecipient(entry) ?? null,
       normalizeSubject: (value: string) => value,
       sensitivity: "pii",
     },
@@ -112,8 +100,8 @@ function signalSubjectInput(params: { sender: SignalSender; groupId?: string }) 
 
 export async function resolveSignalAccessState(params: {
   accountId: string;
-  dmPolicy: SignalDmPolicy;
-  groupPolicy: SignalGroupPolicy;
+  dmPolicy: DmPolicy;
+  groupPolicy: GroupPolicy;
   allowFrom: string[];
   groupAllowFrom: string[];
   sender: SignalSender;
@@ -132,7 +120,7 @@ export async function resolveSignalAccessState(params: {
           directGroupAllowFrom: "effective" as const,
         }
       : undefined;
-  const ingress = createChannelIngressResolver({
+  const ingress = getSignalRuntime().channel.inbound.ingress.createResolver({
     channelId: "signal",
     accountId: params.accountId,
     identity: signalIngressIdentity,
@@ -161,7 +149,7 @@ export async function resolveSignalAccessState(params: {
 }
 
 export async function handleSignalDirectMessageAccess(params: {
-  dmPolicy: SignalDmPolicy;
+  dmPolicy: DmPolicy;
   dmAccessDecision: "allow" | "block" | "pairing";
   senderId: string;
   senderIdLine: string;

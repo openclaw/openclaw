@@ -8,6 +8,7 @@ import { isCliProvider } from "../agents/model-selection-cli.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createRuntimeTestRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -48,7 +49,7 @@ describe("runtime CLI backend consumers", () => {
     expect(isCliProvider(" FIXTURE-CLI ")).toBe(true);
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe("first-provider");
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "first-provider", runtime: "fixture-cli", pluginId: "first-provider" },
+      { provider: "first-provider", runtime: "fixture-cli" },
     ]);
     const retained = resolveCliBackendConfig("fixture-cli");
     expect(retained?.config.command).toBe("first-provider-cli");
@@ -60,11 +61,25 @@ describe("runtime CLI backend consumers", () => {
 
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe("second-provider");
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "second-provider", runtime: "fixture-cli", pluginId: "second-provider" },
+      { provider: "second-provider", runtime: "fixture-cli" },
     ]);
     expect(resolveCliBackendConfig("fixture-cli")?.config.command).toBe("second-provider-cli");
     expect(() => retained?.resolveModelId?.({ modelId: "demo" })).toThrow(
       /reloaded|disabled|retir/i,
     );
+  });
+
+  it("keeps request-scoped CLI ownership ahead of the ambient registry", async () => {
+    const ambient = registerBackend("ambient-provider");
+    const scoped = registerBackend("scoped-provider");
+    setActivePluginRegistry(ambient.builder.registry);
+    await withPluginRuntimeRegistryScope(scoped.builder.registry, async () => {
+      await Promise.resolve();
+      expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe(
+        "scoped-provider",
+      );
+      expect(resolveCliBackendConfig("fixture-cli")?.config.command).toBe("scoped-provider-cli");
+    });
+    expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe("ambient-provider");
   });
 });

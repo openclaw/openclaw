@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { openRootFileSync } from "./boundary-file-read.js";
+import { sha256FileSync } from "./crypto-digest.js";
 
 /** SQLite main database plus every journal-mode sidecar that can contain database pages. */
 const SQLITE_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -37,7 +37,6 @@ export function isAppleDoubleMetadataFile(pathname: string): boolean {
   }
 }
 
-const SQLITE_SIDECAR_HASH_BUFFER_BYTES = 1024 * 1024;
 const sqliteFilesLog = createSubsystemLogger("state/sqlite");
 
 class SqliteOrphanedSidecarsError extends Error {
@@ -61,21 +60,11 @@ export function resolveSqliteDatabaseFilePaths(pathname: string): string[] {
   return SQLITE_DATABASE_FILE_SUFFIXES.map((suffix) => `${pathname}${suffix}`);
 }
 
-function sha256FileSync(pathname: string): string {
-  const descriptor = fs.openSync(pathname, "r");
-  const digest = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(SQLITE_SIDECAR_HASH_BUFFER_BYTES);
-  try {
-    while (true) {
-      const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
-      if (bytesRead === 0) {
-        return digest.digest("hex");
-      }
-      digest.update(buffer.subarray(0, bytesRead));
-    }
-  } finally {
-    fs.closeSync(descriptor);
-  }
+export function hasOrphanedSqliteSidecars(pathname: string): boolean {
+  return (
+    !fs.existsSync(pathname) &&
+    SQLITE_SIDECAR_SUFFIXES.some((suffix) => fs.existsSync(`${pathname}${suffix}`))
+  );
 }
 
 function findMatchingOrphanedSidecarCopy(

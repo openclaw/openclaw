@@ -1,52 +1,22 @@
 // `openclaw plugins list`: builds registry reports and defers terminal-only formatting modules.
-import { getRuntimeConfig } from "../config/config.js";
-import type { PluginRecord } from "../plugins/registry.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
-/** Options accepted by the plugin list command. */
 export type PluginsListOptions = {
   json?: boolean;
   enabled?: boolean;
   verbose?: boolean;
 };
 
-function toPluginListJsonRecord(plugin: PluginRecord): Omit<PluginRecord, "agentHarnessIds"> {
-  // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
-  // Omit the field instead of serializing the registry-compatible empty placeholder.
-  const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
-  return record;
-}
-
-async function loadHumanListModules() {
-  const [sourceDisplay, table, themeModule, commandFormat, listFormat] = await Promise.all([
-    import("../plugins/source-display.js"),
-    import("../../packages/terminal-core/src/table.js"),
-    import("../../packages/terminal-core/src/theme.js"),
-    import("./command-format.js"),
-    import("./plugins-list-format.js"),
-  ]);
-
-  return {
-    formatPluginLine: listFormat.formatPluginLine,
-    formatPluginStatus: listFormat.formatPluginStatus,
-    formatPluginSourceForTable: sourceDisplay.formatPluginSourceForTable,
-    formatCliCommand: commandFormat.formatCliCommand,
-    getTerminalTableWidth: table.getTerminalTableWidth,
-    renderTable: table.renderTable,
-    resolvePluginSourceRoots: sourceDisplay.resolvePluginSourceRoots,
-    theme: themeModule.theme,
-  };
-}
-
-/** Render installed plugin discovery state as JSON, compact table, or verbose text. */
 export async function runPluginsListCommand(
   opts: PluginsListOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { buildPluginRegistrySnapshotReport } = await import("../plugins/status-snapshot.js");
   // The inventory projector owns plugin metadata validation from the installed index.
-  const cfg = getRuntimeConfig({ skipPluginValidation: true });
+  const cfg = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
   const report = buildPluginRegistrySnapshotReport({
     config: cfg,
     ...(opts.json ? { logger: quietPluginJsonLogger } : {}),
@@ -61,23 +31,31 @@ export async function runPluginsListCommand(
         source: report.registrySource,
         diagnostics: report.registryDiagnostics,
       },
-      plugins: list.map(toPluginListJsonRecord),
+      plugins: list.map((plugin) => {
+        // Snapshot listing never imports plugin runtimes, so it cannot observe harness registrations.
+        // Omit the field instead of serializing the registry-compatible empty placeholder.
+        const { agentHarnessIds: _agentHarnessIds, ...record } = plugin;
+        return record;
+      }),
       diagnostics: report.diagnostics,
     };
     writeRuntimeJson(runtime, payload);
     return;
   }
 
-  const {
-    formatCliCommand,
-    formatPluginLine,
-    formatPluginStatus,
-    formatPluginSourceForTable,
-    getTerminalTableWidth,
-    renderTable,
-    resolvePluginSourceRoots,
-    theme,
-  } = await loadHumanListModules();
+  const [
+    { formatPluginSourceForTable, resolvePluginSourceRoots },
+    { getTerminalTableWidth, renderTable },
+    { theme },
+    { formatCliCommand },
+    { formatPluginLine, formatPluginStatus, formatPluginTrustLabel },
+  ] = await Promise.all([
+    import("../plugins/source-display.js"),
+    import("../../packages/terminal-core/src/table.js"),
+    import("../../packages/terminal-core/src/theme.js"),
+    import("./command-format.js"),
+    import("./plugins-list-format.js"),
+  ]);
 
   const diagnostics = [...report.diagnostics, ...report.registryDiagnostics].filter(
     (diagnostic) =>
@@ -87,7 +65,7 @@ export async function runPluginsListCommand(
   );
   for (const { level, message } of diagnostics) {
     const format = level === "error" ? theme.error : theme.warn;
-    runtime.log(format(`${level === "error" ? "Error" : "Warning"}: ${message}`));
+    runtime.log(format(terminalText`${level === "error" ? "Error" : "Warning"}: ${message}`));
   }
   if (diagnostics.length > 0) {
     runtime.log("");
@@ -106,8 +84,9 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const enabled = list.filter((p) => p.enabled).length;
+  const enabled = list.reduce((count, plugin) => count + (plugin.enabled ? 1 : 0), 0);
   runtime.log(`${theme.heading("Plugins")} ${theme.muted(`(${enabled}/${list.length} enabled)`)}`);
+  runtime.log(theme.muted("Trust is provenance, not a code-safety guarantee."));
 
   if (!opts.verbose) {
     const tableWidth = getTerminalTableWidth();
@@ -117,18 +96,23 @@ export async function runPluginsListCommand(
     const usedRoots = new Set<keyof typeof sourceRoots>();
     const rows = list.map((plugin) => {
       const error = plugin.status === "error" && plugin.error;
-      const desc = error ? theme.error(error) : theme.muted(plugin.description ?? "");
+      const desc = error
+        ? theme.error(terminalText`${error}`)
+        : theme.muted(terminalText`${plugin.description ?? ""}`);
       const formattedSource = formatPluginSourceForTable(plugin, sourceRoots);
       if (formattedSource.rootKey) {
         usedRoots.add(formattedSource.rootKey);
       }
       return {
-        Name: plugin.name || plugin.id,
-        ID: plugin.name && plugin.name !== plugin.id ? plugin.id : "",
-        Format: plugin.format ?? "openclaw",
+        Name: terminalText`${plugin.name || plugin.id}`,
+        ID: plugin.name && plugin.name !== plugin.id ? terminalText`${plugin.id}` : "",
+        Format: terminalText`${plugin.format ?? "openclaw"}`,
         Status: formatPluginStatus(plugin),
-        Source: desc ? `${formattedSource.value}\n${desc}` : formattedSource.value,
-        Version: plugin.version ?? "",
+        Source: desc
+          ? `${terminalText`${formattedSource.value}`}\n${desc}`
+          : terminalText`${formattedSource.value}`,
+        Version: terminalText`${plugin.version ?? ""}`,
+        Trust: formatPluginTrustLabel(plugin),
       };
     });
 
@@ -142,7 +126,7 @@ export async function runPluginsListCommand(
         if (!dir) {
           continue;
         }
-        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(dir)}`);
+        runtime.log(`  ${theme.command(`${key}:`)} ${theme.muted(terminalText`${dir}`)}`);
       }
       runtime.log("");
     }
@@ -157,6 +141,7 @@ export async function runPluginsListCommand(
           { key: "Status", header: "Status", minWidth: 10 },
           { key: "Source", header: "Source", minWidth: 26, flex: true },
           { key: "Version", header: "Version", minWidth: 8 },
+          { key: "Trust", header: "Trust", minWidth: 12, flex: true },
         ],
         rows,
       }).trimEnd(),
@@ -164,10 +149,5 @@ export async function runPluginsListCommand(
     return;
   }
 
-  const lines: string[] = [];
-  for (const plugin of list) {
-    lines.push(formatPluginLine(plugin));
-    lines.push("");
-  }
-  runtime.log(lines.join("\n").trim());
+  runtime.log(list.map(formatPluginLine).join("\n\n").trim());
 }

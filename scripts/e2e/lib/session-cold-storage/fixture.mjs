@@ -5,6 +5,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../../lib/sqlite-transcript-payload.mjs";
 
 // Use the supported legacy import boundary; never backdate the live database.
 export async function seedColdStorageFixture({ stateDir, workspaceDir }) {
@@ -134,11 +138,58 @@ export function readTranscriptRows(stateDir, sessionId) {
   return readDatabase(stateDir, (database) =>
     database
       .prepare(
-        "SELECT seq, event_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq",
+        `SELECT seq, ${sqliteTranscriptPayloadColumns(database)}, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq`,
       )
       .all(sessionId)
-      .map(({ seq, event_json, created_at }) => ({ seq, event_json, created_at })),
+      .map((row) => ({
+        seq: row.seq,
+        event_json: readSqliteTranscriptPayload(row),
+        created_at: row.created_at,
+      })),
   );
+}
+
+export function assertColdTranscriptRows(stateDir, session) {
+  assert.equal(
+    readColdArchives(stateDir).find((archive) => archive.session_id === session.sessionId)
+      ?.event_count,
+    session.rows.length,
+    "archive must preserve the original event count",
+  );
+  if (process.env.OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE === "legacy") {
+    const rows = readTranscriptRows(stateDir, session.sessionId);
+    assert.deepEqual(rows, [], "legacy archival must remove hot event rows");
+    return rows;
+  }
+  const rows = readDatabase(stateDir, (database) =>
+    database
+      .prepare(
+        `SELECT seq, ${sqliteTranscriptPayloadColumns(database)}, navigation_json, created_at FROM transcript_events WHERE session_id = ? ORDER BY seq`,
+      )
+      .all(session.sessionId),
+  );
+  assert.deepEqual(
+    rows.map(({ seq, created_at }) => ({ seq, created_at })),
+    session.rows.map(({ seq, created_at }) => ({ seq, created_at })),
+    "archival must retain event positions and timestamps",
+  );
+  for (const [index, row] of rows.entries()) {
+    const original = session.rows[index];
+    const event = JSON.parse(original.event_json);
+    if (event.type === "message") {
+      assert.equal(row.event_json, null, "fixture message payload must be offloaded");
+      assert.equal(row.event_zstd, null, "fixture message payload must be offloaded");
+      const navigation = JSON.parse(row.navigation_json).navigation;
+      assert.equal(navigation.type, event.type);
+      assert.equal(navigation.id, event.id);
+      assert.equal(navigation.parentId, event.parentId);
+      assert.equal(navigation.message.role, event.message.role);
+    } else {
+      // Headers remain resident so opening a cold transcript can retain its session metadata.
+      assert.equal(readSqliteTranscriptPayload(row), original.event_json);
+    }
+  }
+  return rows;
 }
 
 export function readColdArchives(stateDir) {

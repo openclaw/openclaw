@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { isSafeToCopyOAuthRoutingScope } from "./oauth-identity.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import type { AuthProfileStore } from "./types.js";
@@ -18,6 +19,9 @@ export function shouldUseMainOwnerForLocalOAuthCredential(params: {
   if (params.local.type !== "oauth" || params.main?.type !== "oauth") {
     return false;
   }
+  if (!isSafeToCopyOAuthRoutingScope(params.local, params.main)) {
+    return false;
+  }
   // One single-use refresh generation has one durable owner even when access
   // tokens, identity metadata, or expiry drift between copied agent stores.
   if (
@@ -31,9 +35,6 @@ export function shouldUseMainOwnerForLocalOAuthCredential(params: {
   }
   if (!isSafeToAdoptMainStoreOAuthIdentity(params.local, params.main)) {
     return false;
-  }
-  if (isDeepStrictEqual(params.local, params.main)) {
-    return true;
   }
   const mainExpires = asDateTimestampMs(params.main.expires);
   if (mainExpires === undefined) {

@@ -105,7 +105,7 @@ To inspect it live in a conversation:
 What the key fields do:
 
 - `plugins.entries.active-memory.enabled: true` turns the plugin on
-- `config.mode: "escalate"` runs deep recall only for recall intent without a strong deterministic hit
+- `config.mode: "escalate"` runs deep recall only for recall intent without a strong rule-based recall hit
 - `config.agents: ["main"]` opts only the `main` agent in
 - `config.allowedChatTypes: ["direct"]` scopes it to direct-message sessions (opt in groups/channels explicitly)
 - `config.model` (optional) pins a dedicated recall model; unset inherits the current session model

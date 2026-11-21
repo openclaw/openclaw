@@ -1,21 +1,14 @@
-/**
- * Shared sandbox backend registration contracts.
- *
- * Runtime creation and lifecycle cleanup stay behind this backend boundary.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SandboxBackendHandle } from "./backend-handle.types.js";
 import type { SandboxRegistryEntry } from "./registry.js";
 import type { SandboxConfig } from "./types.js";
 
-/** Current runtime state reported by a sandbox backend manager. */
 export type SandboxBackendRuntimeInfo = {
   running: boolean;
   actualConfigLabel?: string;
   configLabelMatch: boolean;
 };
 
-/** Optional lifecycle manager for an existing registered sandbox runtime. */
 export type SandboxBackendManager = {
   describeRuntime(params: {
     entry: SandboxRegistryEntry;
@@ -29,7 +22,6 @@ export type SandboxBackendManager = {
   }): Promise<void>;
 };
 
-/** Inputs needed to create a sandbox backend handle for one session scope. */
 export type CreateSandboxBackendParams = {
   sessionKey: string;
   scopeKey: string;
@@ -40,13 +32,15 @@ export type CreateSandboxBackendParams = {
   /** Synchronously recheck this generation immediately before runtime side effects. */
   assertRuntimeCurrent?: () => void;
   workspaceDir: string;
+  /** Prepared managed projection; retain its exact mount owner before allocation. */
+  workspaceSource?: "managed-worktree";
   agentWorkspaceDir: string;
   skillsWorkspaceDir?: string;
+  readOnlyResourceMounts?: Array<{ hostPath: string; containerPath: string }>;
   cfg: SandboxConfig;
   requireCurrentConfig?: boolean;
 };
 
-/** Factory that creates a backend handle for a sandbox session. */
 export type SandboxBackendFactory = (
   params: CreateSandboxBackendParams,
 ) => Promise<SandboxBackendHandle>;
@@ -64,13 +58,16 @@ export type ReservedSandboxBackendFactoryV1 = (
 /** Resolve the runtime workdir without creating or starting the backend. */
 export type SandboxBackendWorkdirResolver = (params: CreateSandboxBackendParams) => string;
 
-/** Registry input accepted for sandbox backend registration. */
 export type SandboxBackendRegistration = SandboxBackendFactory | RegisteredSandboxBackend;
 
-/** Normalized backend registration stored in the sandbox backend registry. */
 export type RegisteredSandboxBackend = {
   manager?: SandboxBackendManager;
   resolveWorkdir?: SandboxBackendWorkdirResolver;
+  /** Static backend features available before a runtime is provisioned. */
+  capabilities?: {
+    /** Can project host-owned directories read-only into the execution environment. */
+    readOnlyResourceMounts?: boolean;
+  };
 } & (
   | { factory: SandboxBackendFactory; reserveRuntimeId?: undefined }
   | {

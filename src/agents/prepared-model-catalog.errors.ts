@@ -4,3 +4,12 @@ export class PreparedModelCatalogConfigReplacedError extends Error {
     this.name = "PreparedModelCatalogConfigReplacedError";
   }
 }
+
+export class PreparedModelCatalogAdmissionStalledError extends Error {
+  constructor(pluginId: string | undefined, idleMs: number) {
+    super(
+      `${pluginId ? `Plugin ${pluginId} native reference verification` : "Catalog preparation"} stalled after ${idleMs} ms without progress; reload the plugin or restart the Gateway to retry`,
+    );
+    this.name = "PreparedModelCatalogAdmissionStalledError";
+  }
+}

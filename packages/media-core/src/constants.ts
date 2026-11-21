@@ -24,9 +24,6 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   if (mime.startsWith("video/")) {
     return "video";
   }
-  if (mime === "application/pdf") {
-    return "document";
-  }
   if (mime.startsWith("text/")) {
     return "document";
   }
@@ -36,18 +33,13 @@ export function mediaKindFromMime(mime?: string | null): MediaKind | undefined {
   return undefined;
 }
 
+const MAX_BYTES_BY_KIND = new Map<MediaKind, number>([
+  ["image", MAX_IMAGE_BYTES],
+  ["audio", MAX_AUDIO_BYTES],
+  ["video", MAX_VIDEO_BYTES],
+]);
+
 /** Returns the default byte cap for a classified media family. */
 export function maxBytesForKind(kind: MediaKind): number {
-  switch (kind) {
-    case "image":
-      return MAX_IMAGE_BYTES;
-    case "audio":
-      return MAX_AUDIO_BYTES;
-    case "video":
-      return MAX_VIDEO_BYTES;
-    case "document":
-      return MAX_DOCUMENT_BYTES;
-    default:
-      return MAX_DOCUMENT_BYTES;
-  }
+  return MAX_BYTES_BY_KIND.get(kind) ?? MAX_DOCUMENT_BYTES;
 }

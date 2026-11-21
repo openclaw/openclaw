@@ -26,7 +26,6 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       await import("../shared/device-bootstrap-profile.js");
     const { resolveSharedGatewaySessionGeneration } =
       await import("./server/ws-shared-generation.js");
-    const { prepareSessionWorkspaceIcon } = await import("./workspace-icon-http.js");
     const { mutateConfigFile } = await import("../config/config.js");
     const stateDir = process.env.OPENCLAW_STATE_DIR;
     if (!stateDir) {
@@ -98,10 +97,9 @@ export function registerControlUiOwnerBootstrapSuite(): void {
         throw new Error("expected control ui owner device token");
       }
       expect(recoveryScope).toMatch(/^[A-Za-z0-9_-]+$/u);
-      expect((await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect((await rpcReq(wsBootstrap, "exec.approvals.get", {})).ok).toBe(true);
       wsBootstrap.close();
 
-      await prepareSessionWorkspaceIcon({ sessionKey });
       const iconResponse = await fetch(
         `http://127.0.0.1:${port}/__openclaw__/workspace-icon/${encodeURIComponent(sessionKey)}`,
         { headers: { Authorization: `Bearer ${deviceToken}` } },
@@ -216,9 +214,9 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       expect(auth?.scopes).toEqual([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]);
       expect(auth?.scopes).not.toContain("operator.admin");
       expect(auth?.scopes).not.toContain("operator.pairing");
-      const adminMutation = await rpcReq(wsBootstrap, "set-heartbeats", { enabled: false });
-      expect(adminMutation.ok).toBe(false);
-      expect(adminMutation.error?.message ?? "").toContain("missing scope");
+      const adminOperation = await rpcReq(wsBootstrap, "exec.approvals.get", {});
+      expect(adminOperation.ok).toBe(false);
+      expect(adminOperation.error?.message ?? "").toContain("missing scope");
       wsBootstrap.close();
 
       expect(
@@ -290,7 +288,7 @@ export function registerControlUiOwnerBootstrapSuite(): void {
       }
       expect(upgradedToken).not.toBe(previousToken);
       expect(auth?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
-      expect((await rpcReq(wsUpgrade, "set-heartbeats", { enabled: false })).ok).toBe(true);
+      expect((await rpcReq(wsUpgrade, "exec.approvals.get", {})).ok).toBe(true);
       wsUpgrade.close();
 
       expect(

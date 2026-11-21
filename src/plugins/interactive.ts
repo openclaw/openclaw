@@ -1,4 +1,4 @@
-// Resolves interactive plugin entries from registry metadata.
+import { agentControlValue } from "../interactive/agent-control.js";
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
   resolvePluginInteractiveRegistrationsMatch,
@@ -12,10 +12,6 @@ import {
 import { getActivePluginRegistry } from "./runtime.js";
 import type { PluginInteractiveRegistration } from "./types.js";
 
-type InteractiveDispatchResult<TResult = unknown> =
-  | { matched: false; handled: false; duplicate: false }
-  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult };
-
 type PluginInteractiveDispatchRegistration = {
   channel: string;
   namespace: string;
@@ -24,6 +20,7 @@ type PluginInteractiveDispatchRegistration = {
 /** Resolved interactive handler match passed to plugin callback dispatch. */
 type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispatchRegistration> = {
   registration: RegisteredInteractiveHandler & TRegistration;
+  data: string;
   namespace: string;
   payload: string;
 };
@@ -40,40 +37,10 @@ type ChannelInteractiveDispatchBase = {
   threadId?: string | number;
   auth: { isAuthorizedSender: boolean };
 };
-type ChannelInteractiveHandlerContext<
-  TChannel extends string,
-  TInteractiveKey extends PropertyKey,
-> = ChannelInteractiveDispatchBase & {
-  channel: TChannel;
-  respond: unknown;
-} & Record<TInteractiveKey, ChannelInteractivePayload>;
-type ChannelInteractiveOwnedContextKey<TInteractiveKey> =
-  | TInteractiveKey
-  | "respond"
-  | "channel"
-  | "requestConversationBinding"
-  | "detachConversationBinding"
-  | "getCurrentConversationBinding";
-type ChannelInteractiveDispatchContext<
-  TContext,
-  TInteractiveKey extends keyof TContext,
-  TDispatchInteractiveKey extends PropertyKey,
-> = Omit<TContext, ChannelInteractiveOwnedContextKey<TInteractiveKey>> &
-  ChannelInteractiveDispatchBase &
-  Record<TDispatchInteractiveKey, ChannelInteractiveDispatchPayload<TContext[TInteractiveKey]>>;
-
 export {
   clearPluginInteractiveHandlers,
   registerPluginInteractiveHandler,
 } from "./interactive-registry.js";
-
-function resolveActivePluginInteractiveNamespaceMatch(channel: string, data: string) {
-  return resolvePluginInteractiveRegistrationsMatch(
-    getActivePluginRegistry()?.interactiveHandlers ?? [],
-    channel,
-    data,
-  );
-}
 
 /** Dispatches one interactive callback payload to a matching plugin handler. */
 export async function dispatchPluginInteractiveHandler<
@@ -86,8 +53,17 @@ export async function dispatchPluginInteractiveHandler<
   onMatched?: () => Promise<void> | void;
   invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
   afterInvoke?: (result: TResult) => Promise<void> | void;
-}): Promise<InteractiveDispatchResult<TResult>> {
-  const match = resolveActivePluginInteractiveNamespaceMatch(params.channel, params.data);
+}): Promise<
+  | { matched: false; handled: false; duplicate: false }
+  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult }
+> {
+  // A plugin claims an agent-authored control by its value, never by its mark.
+  const data = agentControlValue(params.data) ?? params.data;
+  const match = resolvePluginInteractiveRegistrationsMatch(
+    getActivePluginRegistry()?.interactiveHandlers ?? [],
+    params.channel,
+    data,
+  );
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
   }
@@ -99,7 +75,10 @@ export async function dispatchPluginInteractiveHandler<
 
   try {
     await params.onMatched?.();
-    const resolved = await params.invoke(match as PluginInteractiveMatch<TRegistration>);
+    const resolved = await params.invoke({
+      ...match,
+      data,
+    } as PluginInteractiveMatch<TRegistration>);
     // Channel post-processing stays inside the dedupe claim. Committing first
     // would swallow a retry after a retryable post-handler failure.
     await params.afterInvoke?.(resolved);
@@ -129,7 +108,10 @@ export async function dispatchPluginInteractiveHandler<
 export function createChannelInteractiveDispatcher<
   TChannel extends string,
   TInteractiveKey extends PropertyKey,
-  TContext extends ChannelInteractiveHandlerContext<TChannel, TInteractiveKey>,
+  TContext extends ChannelInteractiveDispatchBase & {
+    channel: TChannel;
+    respond: unknown;
+  } & Record<TInteractiveKey, ChannelInteractivePayload>,
   TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
   TDispatchInteractiveKey extends PropertyKey = TInteractiveKey,
 >(config: {
@@ -138,15 +120,20 @@ export function createChannelInteractiveDispatcher<
   dispatchInteractiveKey?: TDispatchInteractiveKey;
 }) {
   type Registration = PluginInteractiveRegistration<TContext, TChannel, TResult>;
-  type DispatchContext = ChannelInteractiveDispatchContext<
-    TContext,
-    TInteractiveKey,
-    TDispatchInteractiveKey
-  >;
   return async (params: {
     data: string;
     dedupeId: string;
-    ctx: DispatchContext;
+    ctx: Omit<
+      TContext,
+      | TInteractiveKey
+      | "respond"
+      | "channel"
+      | "requestConversationBinding"
+      | "detachConversationBinding"
+      | "getCurrentConversationBinding"
+    > &
+      ChannelInteractiveDispatchBase &
+      Record<TDispatchInteractiveKey, ChannelInteractiveDispatchPayload<TContext[TInteractiveKey]>>;
     respond: TContext["respond"];
     conversation?: Parameters<
       typeof createInteractiveConversationBindingHelpers
@@ -160,7 +147,7 @@ export function createChannelInteractiveDispatcher<
       dedupeId: params.dedupeId,
       onMatched: params.onMatched,
       afterInvoke: params.afterInvoke,
-      invoke: ({ registration, namespace, payload }) => {
+      invoke: ({ registration, data, namespace, payload }) => {
         const dispatchInteractiveKey = config.dispatchInteractiveKey ?? config.interactiveKey;
         const { [dispatchInteractiveKey]: interactiveContext, ...handlerContext } = params.ctx;
         const conversation = params.conversation ?? {
@@ -190,7 +177,7 @@ export function createChannelInteractiveDispatcher<
           channel: config.channel,
           [config.interactiveKey]: {
             ...interactiveContext,
-            data: params.data,
+            data,
             namespace,
             payload,
           },

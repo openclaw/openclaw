@@ -1,168 +1,41 @@
-// Matrix plugin module implements media behavior.
-import { parseBuffer, type IFileInfo } from "music-metadata";
-import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
-import type {
-  DimensionalFileInfo,
-  EncryptedFile,
-  FileWithThumbnailInfo,
-  MatrixClient,
-  TimedFileInfo,
-  VideoFileInfo,
-} from "../sdk.js";
-import type {
-  MatrixMediaContent,
-  MatrixMediaInfo,
-  MatrixMediaMsgType,
-  MatrixRelation,
-} from "./types.js";
-
-function buildMatrixMediaInfo(params: {
-  size: number;
-  mimetype?: string;
-  durationMs?: number;
-  imageInfo?: DimensionalFileInfo;
-}): MatrixMediaInfo | undefined {
-  const base: FileWithThumbnailInfo = {};
-  if (Number.isFinite(params.size)) {
-    base.size = params.size;
-  }
-  if (params.mimetype) {
-    base.mimetype = params.mimetype;
-  }
-  if (params.imageInfo) {
-    const dimensional: DimensionalFileInfo = {
-      ...base,
-      ...params.imageInfo,
-    };
-    if (typeof params.durationMs === "number") {
-      const videoInfo: VideoFileInfo = {
-        ...dimensional,
-        duration: params.durationMs,
-      };
-      return videoInfo;
-    }
-    return dimensional;
-  }
-  if (typeof params.durationMs === "number") {
-    const timedInfo: TimedFileInfo = {
-      ...base,
-      duration: params.durationMs,
-    };
-    return timedInfo;
-  }
-  if (Object.keys(base).length === 0) {
-    return undefined;
-  }
-  return base;
-}
-
-export function buildMediaContent(params: {
-  msgtype: MatrixMediaMsgType;
-  body: string;
-  url?: string;
-  filename?: string;
-  mimetype?: string;
-  size: number;
-  relation?: MatrixRelation;
-  isVoice?: boolean;
-  durationMs?: number;
-  imageInfo?: DimensionalFileInfo;
-  file?: EncryptedFile;
-}): MatrixMediaContent {
-  const info = buildMatrixMediaInfo({
-    size: params.size,
-    mimetype: params.mimetype,
-    durationMs: params.durationMs,
-    imageInfo: params.imageInfo,
-  });
-  const base: MatrixMediaContent = {
-    msgtype: params.msgtype,
-    body: params.body,
-    filename: params.filename,
-    info: info ?? undefined,
-  };
-  // Encrypted media should only include the "file" payload, not top-level "url".
-  if (!params.file && params.url) {
-    base.url = params.url;
-  }
-  // For encrypted files, add the file object
-  if (params.file) {
-    base.file = params.file;
-  }
-  if (params.isVoice) {
-    base["org.matrix.msc3245.voice"] = {};
-    if (typeof params.durationMs === "number") {
-      base["org.matrix.msc1767.audio"] = {
-        duration: params.durationMs,
-      };
-    }
-  }
-  if (params.relation) {
-    base["m.relates_to"] = params.relation;
-  }
-  return base;
-}
+import type { DimensionalFileInfo, EncryptedFile, MatrixClient } from "../sdk.js";
 
 const THUMBNAIL_MAX_SIDE = 800;
 const THUMBNAIL_QUALITY = 80;
-const AIFC_IMA4_BYTES_PER_CHANNEL_PACKET = 34;
-const AIFC_IMA4_FRAMES_PER_PACKET = 64;
+// MSC4230: Element badges PNG/WebP/GIF/APNG/AVIF as "GIF" unless the event says they are still.
+const MSC4230_IS_ANIMATED = "org.matrix.msc4230.is_animated";
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-function resolveAifcIma4DurationSeconds(buffer: Buffer, sampleRate?: number): number | undefined {
+/** True only when the bytes prove a single-frame JPEG, PNG or WebP; unknown stays unclaimed. */
+function isStillImageBuffer(buffer: Buffer): boolean {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return true;
+  }
+  if (buffer.subarray(0, 8).equals(PNG_SIGNATURE)) {
+    // An APNG declares acTL before its first IDAT.
+    for (let offset = 8; offset + 12 <= buffer.length;) {
+      const type = buffer.toString("latin1", offset + 4, offset + 8);
+      if (type === "acTL") {
+        return false;
+      }
+      if (type === "IDAT") {
+        return true;
+      }
+      offset += 12 + buffer.readUInt32BE(offset);
+    }
+    return false;
+  }
   if (
-    !sampleRate ||
-    !Number.isFinite(sampleRate) ||
-    buffer.length < 12 ||
-    buffer.toString("ascii", 0, 4) !== "FORM" ||
-    buffer.toString("ascii", 8, 12) !== "AIFC"
+    buffer.length >= 21 &&
+    buffer.toString("latin1", 0, 4) === "RIFF" &&
+    buffer.toString("latin1", 8, 12) === "WEBP"
   ) {
-    return undefined;
+    const chunk = buffer.toString("latin1", 12, 16);
+    // Simple lossy/lossless WebP is single-frame; VP8X carries the animation flag.
+    return chunk === "VP8 " || chunk === "VP8L" || (chunk === "VP8X" && (buffer[20]! & 0x02) === 0);
   }
-
-  let channels: number | undefined;
-  let declaredFrameCount: number | undefined;
-  let soundDataBytes: number | undefined;
-  for (let offset = 12; offset + 8 <= buffer.length;) {
-    const chunkType = buffer.toString("ascii", offset, offset + 4);
-    const chunkSize = buffer.readUInt32BE(offset + 4);
-    const chunkStart = offset + 8;
-    if (chunkSize > buffer.length - chunkStart) {
-      return undefined;
-    }
-    if (chunkType === "COMM") {
-      if (chunkSize < 22 || buffer.toString("ascii", chunkStart + 18, chunkStart + 22) !== "ima4") {
-        return undefined;
-      }
-      channels = buffer.readUInt16BE(chunkStart);
-      declaredFrameCount = buffer.readUInt32BE(chunkStart + 2);
-    } else if (chunkType === "SSND") {
-      if (chunkSize < 8) {
-        return undefined;
-      }
-      const soundDataOffset = buffer.readUInt32BE(chunkStart);
-      if (soundDataOffset > chunkSize - 8) {
-        return undefined;
-      }
-      soundDataBytes = chunkSize - 8 - soundDataOffset;
-    }
-    offset = chunkStart + chunkSize + (chunkSize & 1);
-  }
-
-  if (!channels || !declaredFrameCount || !soundDataBytes) {
-    return undefined;
-  }
-  const packetSize = channels * AIFC_IMA4_BYTES_PER_CHANNEL_PACKET;
-  if (soundDataBytes % packetSize !== 0) {
-    return undefined;
-  }
-  const packetCount = soundDataBytes / packetSize;
-  if (packetCount !== declaredFrameCount) {
-    return undefined;
-  }
-  // Apple AIFC stores IMA4 packet count in COMM; each packet decodes to 64
-  // sample frames. Other encoders can store decoded frames, so verify SSND first.
-  return (packetCount * AIFC_IMA4_FRAMES_PER_PACKET) / sampleRate;
+  return false;
 }
 
 export async function prepareImageInfo(params: {
@@ -176,7 +49,11 @@ export async function prepareImageInfo(params: {
   if (!meta) {
     return undefined;
   }
-  const imageInfo: DimensionalFileInfo = { w: meta.width, h: meta.height };
+  const imageInfo: DimensionalFileInfo & { [MSC4230_IS_ANIMATED]?: boolean } = {
+    w: meta.width,
+    h: meta.height,
+    ...(isStillImageBuffer(params.buffer) ? { [MSC4230_IS_ANIMATED]: false } : {}),
+  };
   const maxDim = Math.max(meta.width, meta.height);
   if (maxDim > THUMBNAIL_MAX_SIDE) {
     try {
@@ -211,40 +88,6 @@ export async function prepareImageInfo(params: {
     }
   }
   return imageInfo;
-}
-
-export async function resolveMediaDurationMs(params: {
-  buffer: Buffer;
-  contentType?: string;
-  fileName?: string;
-  kind: Exclude<MediaKind, "sticker">;
-}): Promise<number | undefined> {
-  if (params.kind !== "audio" && params.kind !== "video") {
-    return undefined;
-  }
-  try {
-    const fileInfo: IFileInfo | string | undefined =
-      params.contentType || params.fileName
-        ? {
-            mimeType: params.contentType,
-            size: params.buffer.byteLength,
-            path: params.fileName,
-          }
-        : undefined;
-    const metadata = await parseBuffer(params.buffer, fileInfo, {
-      duration: true,
-      skipCovers: true,
-    });
-    const durationSeconds =
-      resolveAifcIma4DurationSeconds(params.buffer, metadata.format.sampleRate) ??
-      metadata.format.duration;
-    if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
-      return Math.max(0, Math.round(durationSeconds * 1000));
-    }
-  } catch {
-    // Duration is optional; ignore parse failures.
-  }
-  return undefined;
 }
 
 export async function uploadMediaWithEncryption(

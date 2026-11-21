@@ -18,14 +18,8 @@ const policy = {
 } satisfies ExtensionWildcardReexportPolicy;
 const scanner = createExtensionWildcardReexportScanner(policy);
 
-/**
- * Finds wildcard plugin SDK re-export lines in an extension API barrel.
- */
 export const findPluginSdkWildcardReexports = scanner.findLines;
 
-/**
- * Runs the plugin SDK wildcard re-export guard.
- */
 export const main = scanner.main;
 
 await scanner.exitIfMain(import.meta.url);

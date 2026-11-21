@@ -1,9 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "../../../packages/agent-core/src/errors.js";
+import { TOOL_REPEAT_LIMIT_CODE } from "../../../packages/agent-core/src/tool-repeat-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
-import type { AssistantMessage } from "../../llm/types.js";
+import { REPETITIVE_OUTPUT_ERROR_CODE, type AssistantMessage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  CONTEXT_OVERFLOW_ERROR_MESSAGE,
   extractErrorHttpStatus,
   extractLeadingHttpStatus,
   formatProviderRefusalText,
@@ -18,16 +21,21 @@ import {
   renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
+  renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
+import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
   classifyFailoverSignal,
   isProviderCompletedErrorFinishReasonMessage,
   isTimeoutErrorMessage,
 } from "../failover/classify.js";
 import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
+import { resolveExecutionApprovalFailureMessage } from "../failover/message-patterns.js";
 import type { PreparedProviderFailoverOwner } from "../failover/provider-patterns.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
+  OAUTH_REFRESH_CONTENTION_USER_TEXT,
+  TLS_CERTIFICATE_ERROR_USER_TEXT,
   formatBillingErrorMessage,
   formatDiskSpaceErrorCopy,
   isInvalidStreamingEventOrderError,
@@ -36,37 +44,43 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
-import { formatSandboxToolPolicyBlockedMessage } from "../sandbox/runtime-status.js";
+import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
+import {
+  formatSandboxToolPolicyBlockedMessage,
+  type resolveSandboxRuntimeStatus,
+} from "../sandbox/runtime-status.js";
 import { buildAssistantFailoverSignal } from "./assistant-message-failures.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 const log = createSubsystemLogger("errors");
+const TOOL_REPEAT_LIMIT_FALLBACK =
+  "OpenClaw stopped this turn: the model repeated the same tool call too many times. Send a new message to continue.";
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
 export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
-  "The selected model was not found by the provider. Check the model id or choose a different model.";
+  "This model was not found. Choose another model in the OpenClaw app.";
 const RUNTIME_FAILURE_COPY: Partial<
   Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
 > = {
-  auth_refresh: "Authentication refresh failed. Re-authenticate this provider and try again.",
-  refresh_contention:
-    "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+  auth_refresh:
+    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
+  refresh_contention: OAUTH_REFRESH_CONTENTION_USER_TEXT,
   refresh_timeout:
-    "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
+    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
   callback_timeout:
-    "Browser OAuth did not complete before manual fallback kicked in. Retry the login flow and paste the redirect URL if prompted.",
+    "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
   callback_validation:
-    "Browser OAuth returned an invalid or incomplete callback. Retry the login flow and make sure the full redirect URL is pasted if prompted.",
+    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
   auth_scope:
-    "Authentication is missing the required OpenAI ChatGPT scopes. Re-run OpenAI login and try again.",
+    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
   auth_html:
-    "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
   upstream_html:
-    "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
-  proxy: "LLM request failed: proxy or tunnel configuration blocked the provider request.",
-  tls_certificate:
-    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
+    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+  proxy:
+    "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+  tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
   model_not_found: MODEL_NOT_FOUND_USER_TEXT,
 };
 const TOOL_CALL_INPUT_MISSING_RE =
@@ -82,6 +96,7 @@ type AssistantErrorTextOptions = {
   model?: string;
   /** Credential auth mode; OAuth/token billing copy omits API-key language (#80877). */
   authMode?: string;
+  sandboxRuntime?: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 type ClassifiedAssistantErrorFacts = ReturnType<typeof classifyAssistantErrorFacts>;
 function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErrorTextOptions) {
@@ -95,22 +110,14 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
   return {
     provider: opts?.provider ?? msg.provider ?? opts?.providerOwner?.id,
     model: opts?.model ?? msg.model,
-    reason:
-      classification?.kind === "reason"
-        ? classification.reason
-        : classification
-          ? ("context_overflow" as const)
-          : null,
+    reason: failoverReasonFromClassification(classification),
     status: signal.status ?? extractErrorHttpStatus(signal.message ?? "")?.code,
     providerRuntimeFailureKind: classifyProviderRuntimeFailureKind(signal, { providerPlugin }),
     storageFailure: classifyGatewayStorageFailure(msg),
     code: signal.code,
+    rateLimitResetAt:
+      signal.retryAfterMs === undefined ? undefined : Date.now() + signal.retryAfterMs,
   };
-}
-function isMissingToolCallInputError(raw: string): boolean {
-  return (
-    Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
-  );
 }
 export function formatAssistantErrorText(
   msg: AssistantMessage,
@@ -136,16 +143,21 @@ export function formatAssistantErrorText(
     status: formatStatus,
     providerRuntimeFailureKind,
   } = classifiedFacts;
+  if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
+    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+  }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
-  if (unknownTool?.[1]) {
+  // Error formatting uses prepared policy only; missing facts preserve the provider error.
+  if (unknownTool?.[1] && opts?.sandboxRuntime) {
     const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       agentId: opts?.agentId,
       toolName: unknownTool[1],
+      preparedRuntimeStatus: opts.sandboxRuntime,
       audit,
     });
     if (rewritten) {
@@ -168,7 +180,13 @@ export function formatAssistantErrorText(
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
-      ? renderRateLimitOrOverloadedCopy({ reason: failoverReason, raw })
+      ? renderRateLimitOrOverloadedCopy({
+          ...classifiedFacts,
+          reason: failoverReason,
+          raw,
+          locale: opts?.cfg?.ui?.prefs?.locale,
+          timeZone: opts?.cfg?.agents?.defaults?.userTimezone,
+        })
       : undefined;
   if (transientCopy) {
     return transientCopy;
@@ -176,15 +194,13 @@ export function formatAssistantErrorText(
 
   if (
     (formatStatus === 400 || formatStatus === 422) &&
-    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT
+    formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT &&
+    !formatCopy.startsWith("LLM request rejected:")
   ) {
     return formatCopy;
   }
   if (failoverReason === "context_overflow") {
-    return (
-      "Context overflow: prompt too large for the model. " +
-      "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-    );
+    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
     return (
@@ -209,11 +225,11 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (isMissingToolCallInputError(raw)) {
+  if (raw && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))) {
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
-      "If this keeps happening, reset the session or delete the corrupted session transcript."
+      "If this keeps happening, reset the session or delete the corrupted chat history."
     );
   }
 
@@ -307,15 +323,38 @@ export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
 ): string {
+  if (msg.errorCode === REPETITIVE_OUTPUT_ERROR_CODE) {
+    return REPETITIVE_OUTPUT_ERROR_MESSAGE;
+  }
+  if (msg.errorCode === TOOL_REPEAT_LIMIT_CODE) {
+    // Show only the agent-core template; never arbitrary text carried under this code.
+    return msg.errorMessage &&
+      /^OpenClaw stopped this turn: the model called (?:[\w.-]{1,64}|a tool) with the same arguments \d+ times in a row\. Send a new message to continue\.$/.test(
+        msg.errorMessage,
+      )
+      ? msg.errorMessage
+      : TOOL_REPEAT_LIMIT_FALLBACK;
+  }
+  const modelLoadCopy = renderModelLoadFailureCopy(msg);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
+  }
   const rawError = msg.errorMessage?.trim();
+  const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
+  if (approvalMessage) {
+    return `⚠️ ${approvalMessage}`;
+  }
   const facts = classifyAssistantErrorFacts(msg, opts);
+  if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
+    return MODEL_REQUEST_POLICY_DENIED_TEXT;
+  }
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =
     friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
     friendlyError?.startsWith("LLM request rejected:");
   const safeFriendlyError =
-    (schemaFriendlyError ? renderAssistantFormatFailureCopy(msg) : undefined) ??
+    (schemaFriendlyError ? renderAssistantFormatFailureCopy(msg, facts.reason) : undefined) ??
     (rawPassthrough
       ? schemaFriendlyError
         ? PROVIDER_SCHEMA_REJECTION_USER_TEXT

@@ -1,221 +1,86 @@
-// Verifies Docker sandbox config security audit findings.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SandboxDockerSettings } from "../config/types.sandbox.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
 } from "./audit-extra.sync.js";
 
-type FindingUnderTest = {
-  checkId: string;
-  severity: string;
-};
-
-function expectFindingSet(params: {
-  findings: FindingUnderTest[];
-  name: string;
-  expectedPresent?: readonly string[];
-  expectedAbsent?: readonly string[];
-  severity?: string;
-}) {
-  const severity = params.severity ?? "warn";
-  for (const checkId of params.expectedPresent ?? []) {
-    expect(
-      params.findings.some(
-        (finding) => finding.checkId === checkId && finding.severity === severity,
-      ),
-      `${params.name}:${checkId}`,
-    ).toBe(true);
-  }
-  for (const checkId of params.expectedAbsent ?? []) {
-    expect(
-      params.findings.some((finding) => finding.checkId === checkId),
-      `${params.name}:${checkId}`,
-    ).toBe(false);
-  }
+const image = { image: "ghcr.io/example/sandbox:latest" };
+const finding = (suffix: string, extra = {}) =>
+  expect.objectContaining({ checkId: `sandbox.${suffix}`, ...extra });
+function sandboxConfig(docker: SandboxDockerSettings, mode: "all" | "off" = "all"): OpenClawConfig {
+  return { agents: { defaults: { sandbox: { mode, docker } } } };
+}
+function collect(cfg: OpenClawConfig) {
+  return [...collectSandboxDockerNoopFindings(cfg), ...collectSandboxDangerousConfigFindings(cfg)];
 }
 
 describe("security audit sandbox docker config", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   it("evaluates sandbox docker config findings", async () => {
     const isolatedHome = path.join(os.tmpdir(), "openclaw-security-audit-home");
     vi.spyOn(os, "homedir").mockReturnValue(isolatedHome);
     await withEnvAsync({ HOME: isolatedHome, USERPROFILE: isolatedHome }, async () => {
-      const cases = [
-        {
-          name: "mode off with docker config only",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "off",
-                  docker: { image: "ghcr.io/example/sandbox:latest" },
-                },
-              },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [{ checkId: "sandbox.docker_config_mode_off" }],
-        },
-        {
-          name: "agent enables sandbox mode",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "off",
-                  docker: { image: "ghcr.io/example/sandbox:latest" },
-                },
-              },
-              entries: { ops: { sandbox: { mode: "all" } } },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [],
-          expectedAbsent: ["sandbox.docker_config_mode_off"],
-        },
-        {
-          name: "dangerous binds, host network, seccomp, and apparmor",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  docker: {
-                    binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
-                    network: "host",
-                    seccompProfile: "unconfined",
-                    apparmorProfile: "unconfined",
-                  },
-                },
-              },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [
-            { checkId: "sandbox.dangerous_bind_mount", severity: "critical" },
-            { checkId: "sandbox.dangerous_network_mode", severity: "critical" },
-            { checkId: "sandbox.dangerous_seccomp_profile", severity: "critical" },
-            { checkId: "sandbox.dangerous_apparmor_profile", severity: "critical" },
-          ],
-        },
-        {
-          name: "home credential bind is treated as dangerous",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  docker: {
-                    binds: [path.join(isolatedHome, ".docker", "config.json") + ":/mnt/docker:ro"],
-                  },
-                },
-              },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [
-            {
-              checkId: "sandbox.dangerous_bind_mount",
-              severity: "critical",
-              title: "Dangerous bind mount in sandbox config",
-            },
-          ],
-        },
-        {
-          name: "Windows drive-letter bind is absolute",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  docker: {
-                    binds: ["D:/data/openclaw/src:/src:ro"],
-                  },
-                },
-              },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [],
-          expectedAbsent: ["sandbox.bind_mount_non_absolute"],
-        },
-        {
-          name: "container namespace join network mode",
-          cfg: {
-            agents: {
-              defaults: {
-                sandbox: {
-                  mode: "all",
-                  docker: {
-                    network: "container:peer",
-                  },
-                },
-              },
-            },
-          } as OpenClawConfig,
-          expectedFindings: [
-            {
-              checkId: "sandbox.dangerous_network_mode",
-              severity: "critical",
-              title: "Dangerous network mode in sandbox config",
-            },
-          ],
-        },
-      ] as const;
-
-      await Promise.all(
-        cases.map(async (testCase) => {
-          const findings = [
-            ...collectSandboxDockerNoopFindings(testCase.cfg),
-            ...collectSandboxDangerousConfigFindings(testCase.cfg),
-          ];
-          for (const expectedFinding of testCase.expectedFindings) {
-            const finding = findings.find((entry) => entry.checkId === expectedFinding.checkId);
-            expect(finding?.checkId, testCase.name).toBe(expectedFinding.checkId);
-            if ("severity" in expectedFinding) {
-              expect(finding?.severity, testCase.name).toBe(expectedFinding.severity);
-            }
-            if ("title" in expectedFinding) {
-              expect(finding?.title, testCase.name).toBe(expectedFinding.title);
-            }
-          }
-          expectFindingSet({
-            findings,
-            name: testCase.name,
-            expectedAbsent: "expectedAbsent" in testCase ? testCase.expectedAbsent : [],
-          });
-        }),
+      expect(collect(sandboxConfig(image, "off"))).toContainEqual(
+        finding("docker_config_mode_off"),
       );
+      const enabled = sandboxConfig(image, "off");
+      enabled.agents = { ...enabled.agents, entries: { ops: { sandbox: { mode: "all" } } } };
+      expect(collect(enabled)).not.toContainEqual(finding("docker_config_mode_off"));
+
+      const cases: Array<[SandboxDockerSettings, string[]]> = [
+        [
+          {
+            binds: ["/etc/passwd:/mnt/passwd:ro", "/run:/run"],
+            network: "host",
+            seccompProfile: "unconfined",
+            apparmorProfile: "unconfined",
+          },
+          ["bind_mount", "network_mode", "seccomp_profile", "apparmor_profile"],
+        ],
+        [
+          { binds: [path.join(isolatedHome, ".docker", "config.json") + ":/mnt/docker:ro"] },
+          ["bind_mount"],
+        ],
+        [{ network: "container:peer" }, ["network_mode"]],
+      ];
+      for (const [docker, suffixes] of cases) {
+        const findings = collect(sandboxConfig(docker));
+        for (const suffix of suffixes) {
+          expect(findings).toContainEqual(finding(`dangerous_${suffix}`, { severity: "critical" }));
+        }
+      }
+      expect(
+        collect(sandboxConfig({ binds: ["D:/data/openclaw/src:/src:ro"] })),
+      ).not.toContainEqual(finding("bind_mount_non_absolute"));
     });
   });
 
   it("reports canonical agent paths for docker sandbox findings", () => {
-    const config = {
+    const config: OpenClawConfig = {
       agents: {
         entries: {
           ops: {
-            sandbox: {
-              mode: "off",
-              docker: {
-                image: "ghcr.io/example/sandbox:latest",
-                binds: ["/etc/passwd:/mnt/passwd:ro"],
-              },
-            },
+            sandbox: { mode: "off", docker: { ...image, binds: ["/etc/passwd:/mnt/passwd:ro"] } },
           },
         },
       },
-    } satisfies OpenClawConfig;
-
-    const noOpFinding = collectSandboxDockerNoopFindings(config).find(
-      (entry) => entry.checkId === "sandbox.docker_config_mode_off",
-    );
-    expect(noOpFinding?.detail).toContain("agents.entries.ops.sandbox.docker");
-
-    const dangerousFinding = collectSandboxDangerousConfigFindings(config).find(
-      (entry) => entry.checkId === "sandbox.dangerous_bind_mount",
-    );
-    expect(dangerousFinding?.detail).toContain("agents.entries.ops.sandbox.docker.binds");
+    };
+    const findings = collect(config);
+    for (const [suffix, field] of [
+      ["docker_config_mode_off", ""],
+      ["dangerous_bind_mount", ".binds"],
+    ] as const) {
+      expect(findings).toContainEqual(
+        finding(suffix, {
+          detail: expect.stringContaining(`agents.entries.ops.sandbox.docker${field}`),
+        }),
+      );
+    }
   });
 });

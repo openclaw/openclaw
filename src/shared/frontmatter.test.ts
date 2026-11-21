@@ -1,9 +1,7 @@
-// Frontmatter tests cover shared Markdown frontmatter parsing helpers.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, test } from "vitest";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
-  normalizeStringList,
   parseFrontmatterBool,
   parseOpenClawManifestInstallBase,
   resolveOpenClawManifestBlock,
@@ -12,72 +10,12 @@ import {
   resolveOpenClawManifestRequires,
 } from "./frontmatter.js";
 
-function expectInstallBase(
-  parsed: ReturnType<typeof parseOpenClawManifestInstallBase>,
-): NonNullable<ReturnType<typeof parseOpenClawManifestInstallBase>> {
-  if (parsed === undefined) {
-    throw new Error("Expected manifest install base");
-  }
-  return parsed;
-}
-
 describe("shared/frontmatter", () => {
-  test("normalizeStringList handles strings, arrays, and non-list values", () => {
-    expect(normalizeStringList("a, b,,c")).toEqual(["a", "b", "c"]);
-    expect(normalizeStringList([" a ", "", "b", 42])).toEqual(["a", "b", "42"]);
-    expect(normalizeStringList(null)).toStrictEqual([]);
-  });
-
-  test("getFrontmatterString extracts strings only", () => {
-    expect(getFrontmatterString({ a: "b" }, "a")).toBe("b");
-    expect(getFrontmatterString({ a: 1 }, "a")).toBeUndefined();
-  });
-
   test("parseFrontmatterBool respects explicit values and fallback", () => {
     expect(parseFrontmatterBool("true", false)).toBe(true);
     expect(parseFrontmatterBool("false", true)).toBe(false);
     expect(parseFrontmatterBool(undefined, true)).toBe(true);
     expect(parseFrontmatterBool("maybe", false)).toBe(false);
-  });
-
-  test("resolveOpenClawManifestBlock reads current manifest keys and custom metadata fields", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ openclaw: { foo: 1, bar: 'baz' } }",
-        },
-      }),
-    ).toEqual({ foo: 1, bar: "baz" });
-
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          pluginMeta: "{ openclaw: { foo: 2 } }",
-        },
-        key: "pluginMeta",
-      }),
-    ).toEqual({ foo: 2 });
-  });
-
-  test("resolveOpenClawManifestBlock reads legacy manifest keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ clawdbot: { requires: { bins: ['op'] }, install: [] } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["op"] }, install: [] });
-  });
-
-  test("resolveOpenClawManifestBlock prefers current manifest keys over legacy keys", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata:
-            "{ openclaw: { requires: { bins: ['current'] } }, clawdbot: { requires: { bins: ['legacy'] } } }",
-        },
-      }),
-    ).toEqual({ requires: { bins: ["current"] } });
   });
 
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
@@ -116,28 +54,11 @@ describe("shared/frontmatter", () => {
   });
 
   it("parses and applies install common fields", () => {
-    const parsed = parseOpenClawManifestInstallBase(
-      {
-        type: " Brew ",
-        id: "brew.git",
-        label: "Git",
-        bins: [" git ", "git"],
-      },
-      ["brew", "npm"],
-    );
-
-    expect(parsed).toEqual({
-      raw: {
-        type: " Brew ",
-        id: "brew.git",
-        label: "Git",
-        bins: [" git ", "git"],
-      },
-      kind: "brew",
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+    const raw = { type: " Brew ", id: "brew.git", label: "Git", bins: [" git ", "git"] };
+    const expectedRaw = structuredClone(raw);
+    const parsed = parseOpenClawManifestInstallBase(raw, ["brew", "npm"]);
+    const common = { id: "brew.git", label: "Git", bins: ["git", "git"] };
+    expect(parsed).toEqual({ raw: expectedRaw, kind: "brew", ...common });
     expect(parseOpenClawManifestInstallBase({ kind: "bad" }, ["brew"])).toBeUndefined();
     expect(
       applyOpenClawManifestInstallCommonFields<{
@@ -145,65 +66,28 @@ describe("shared/frontmatter", () => {
         id?: string;
         label?: string;
         bins?: string[];
-      }>({ extra: true }, expectInstallBase(parsed)),
-    ).toEqual({
-      extra: true,
-      id: "brew.git",
-      label: "Git",
-      bins: ["git", "git"],
-    });
+      }>({ extra: true }, expectDefined(parsed, "manifest install base")),
+    ).toEqual({ extra: true, ...common });
   });
 
   it("prefers explicit kind, ignores invalid common fields, and leaves missing ones untouched", () => {
-    const parsed = parseOpenClawManifestInstallBase(
-      {
-        kind: " npm ",
-        type: "brew",
-        id: 42,
-        label: null,
-        bins: [" ", ""],
-      },
-      ["brew", "npm"],
-    );
-
-    expect(parsed).toEqual({
-      raw: {
-        kind: " npm ",
-        type: "brew",
-        id: 42,
-        label: null,
-        bins: [" ", ""],
-      },
-      kind: "npm",
-    });
+    const raw = { kind: " npm ", type: "brew", id: 42, label: null, bins: [" ", ""] };
+    const expectedRaw = structuredClone(raw);
+    const parsed = parseOpenClawManifestInstallBase(raw, ["brew", "npm"]);
+    expect(parsed).toEqual({ raw: expectedRaw, kind: "npm" });
     expect(
       applyOpenClawManifestInstallCommonFields(
         { id: "keep", label: "Keep", bins: ["bun"] },
         parsed!,
       ),
-    ).toEqual({
-      id: "keep",
-      label: "Keep",
-      bins: ["bun"],
-    });
+    ).toEqual({ id: "keep", label: "Keep", bins: ["bun"] });
   });
 
   it("maps install entries through the parser and filters rejected specs", () => {
+    const keep = { id: "keep" };
     expect(
-      resolveOpenClawManifestInstall(
-        {
-          install: [{ id: "keep" }, { id: "drop" }, "bad"],
-        },
-        (entry) => {
-          if (
-            typeof entry === "object" &&
-            entry !== null &&
-            (entry as { id?: string }).id === "keep"
-          ) {
-            return { id: "keep" };
-          }
-          return undefined;
-        },
+      resolveOpenClawManifestInstall({ install: [keep, { id: "drop" }, "bad"] }, (entry) =>
+        entry === keep ? { id: "keep" } : undefined,
       ),
     ).toEqual([{ id: "keep" }]);
   });

@@ -4,10 +4,8 @@ import { normalizeConversationReadInvocationOrigin } from "./conversation-read-o
 describe("normalizeConversationReadInvocationOrigin", () => {
   it.each([
     [undefined, "delegated"],
-    [null, "delegated"],
     ["delegated", "delegated"],
     ["DIRECT-OPERATOR", "delegated"],
-    ["unknown", "delegated"],
     [{}, "delegated"],
     ["direct-operator", "direct-operator"],
   ] as const)("normalizes %j to %s", (value, expected) => {

@@ -1,163 +1,243 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import nativeFs from "node:fs";
 import fs from "node:fs/promises";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as observation from "openclaw/plugin-sdk/file-access-runtime";
+import type { WatchSubscription } from "openclaw/plugin-sdk/file-access-runtime";
+import {
+  resolveMemorySearchConfig,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { MEMORY_INDEX_CHUNKS_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import { MemoryFileWatcher } from "./file-watcher.js";
 import { MemoryIndexManager } from "./manager.js";
 
-function activeFilesystemWatchers() {
-  return process.getActiveResourcesInfo().filter((resource) => resource === "FSEventWrap").length;
+// Keep owner fault injection in this process; real worker transport has separate coverage.
+vi.mock("./local-file-watcher.js", async (original) => {
+  const watcher = await import("./file-watcher.js");
+  return {
+    ...(await original<typeof import("./local-file-watcher.js")>()),
+    LocalMemoryFileWatcher: watcher.MemoryFileWatcher,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/file-access-runtime", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/file-access-runtime")>()),
+}));
+vi.mock("openclaw/plugin-sdk/runtime-env", async (original) => ({
+  ...(await original<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  sleepWithAbort: async (_ms: number, signal?: AbortSignal) => signal?.throwIfAborted(),
+}));
+
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+let owner: MemoryIndexManager | MemoryFileWatcher | null;
+let index: DatabaseSync | undefined;
+let subscriptions: WatchSubscription[];
+beforeEach(async () => {
+  state = await createOpenClawTestState({ label: "memory-watch-filesystem" });
+  owner = null;
+  index = undefined;
+  subscriptions = [];
+});
+afterEach(async () => {
+  await owner?.close();
+  index?.close();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+  resetMemoryCoreDreamingStateForTests();
+  await state.cleanup();
+});
+const expectClosed = () =>
+  expect(subscriptions.every((entry) => entry.health().state === "closed")).toBe(true);
+async function seedFiles(files: Record<string, string>) {
+  for (const [file, text] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, text);
+  }
 }
 
-describe("memory watchers on the real filesystem", () => {
-  it.each(["replacement", "removal"] as const)(
-    "keeps search fresh after root %s and releases watchers on close",
-    async (operation) => {
-      const state = await createOpenClawTestState({ label: "memory-watch-filesystem" });
-      const initialWatchers = activeFilesystemWatchers();
-      const openWatchers = new Set<nativeFs.FSWatcher>();
-      const turnContext = new AsyncLocalStorage<string>();
-      const pendingInputContext = new AsyncLocalStorage<string>();
-      const watcherContexts: Array<{ turn?: string; pendingInput?: string }> = [];
-      const timerContexts: typeof watcherContexts = [];
-      const originalWatch = nativeFs.watch;
-      const watchObserver = vi.spyOn(nativeFs, "watch").mockImplementation((...args) => {
-        watcherContexts.push({
-          turn: turnContext.getStore(),
-          pendingInput: pendingInputContext.getStore(),
-        });
-        const watcher = originalWatch(...args);
-        openWatchers.add(watcher);
-        watcher.once("close", () => openWatchers.delete(watcher));
-        return watcher;
-      });
-      syncBuiltinESMExports();
-      const originalSetTimeout = globalThis.setTimeout;
-      const timerObserver = vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-        // Observe the real startup pressure check and filesystem debounce timers.
-        if (args[1] === 10_000 || args[1] === 1500) {
-          timerContexts.push({
-            turn: turnContext.getStore(),
-            pendingInput: pendingInputContext.getStore(),
-          });
+it("indexes real edits, deletion and root replacement, then joins every subscription", async () => {
+  const turn = new AsyncLocalStorage<string>();
+  const contexts: Array<string | undefined> = [];
+  const visited = new Set<string>();
+  const bootstrap = createDeferred<void>();
+  const originalWatch = observation.watch;
+  // Drive guarded scans explicitly so native hints cannot race the frozen settling clock.
+  vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+    contexts.push(turn.getStore());
+    const subscription = originalWatch(authority, {
+      ...options,
+      mode: "poll",
+      pollIntervalMs: 2_147_483_647,
+      exclude(entry) {
+        visited.add(path.resolve(authority.rootDir, entry.path));
+        return options.exclude?.(entry) ?? false;
+      },
+      onInvalidate(invalidation) {
+        options.onInvalidate(invalidation);
+        if (invalidation.reason === "reconcile" && !invalidation.changes) {
+          bootstrap.resolve();
         }
-        return originalSetTimeout(...args);
-      });
-      let manager: MemoryIndexManager | null = null;
-      let index: DatabaseSync | undefined;
-      try {
-        await configureMemoryCoreDreamingStateForTests(state.env);
-        const memoryDir = path.join(state.workspaceDir, "memory");
-        await fs.mkdir(memoryDir);
-        // Preserve an indexed file while the watched root is absent.
-        await fs.writeFile(path.join(state.workspaceDir, "MEMORY.md"), "Evergreen sentinel.");
-        await fs.writeFile(path.join(memoryDir, "old.md"), "Amethyst sentinel.");
-        const cfg: OpenClawConfig = {
-          plugins: { enabled: false },
-          agents: { defaults: { workspace: state.workspaceDir }, list: [{ id: "main" }] },
-          memory: {
-            search: {
-              provider: "none",
-              sources: ["memory"],
-              store: { vector: { enabled: false } },
-              query: { minScore: 0 },
-            },
-          },
-        };
-        manager = await turnContext.run("opening turn", () =>
-          pendingInputContext.run("accepted input", async () => {
-            const opened = await MemoryIndexManager.get({ cfg, agentId: "main" });
-            expect(turnContext.getStore()).toBe("opening turn");
-            expect(pendingInputContext.getStore()).toBe("accepted input");
-            return opened;
-          }),
-        );
-        if (!manager) {
-          throw new Error("memory manager unavailable");
-        }
-        const activeManager = manager;
-        await activeManager.sync({ reason: "test-initial-index" });
-        expect(activeManager.status().fts?.available).toBe(true);
-        expect(openWatchers.size).toBeGreaterThan(0);
-        // Bun emits watcher close events but does not expose Node's FSEventWrap census.
-        if (!process.versions.bun) {
-          expect(activeFilesystemWatchers()).toBeGreaterThan(initialWatchers);
-        }
-        const indexPath = activeManager.status().dbPath;
-        if (!indexPath) {
-          throw new Error("memory index path unavailable");
-        }
-        index = new DatabaseSync(indexPath, { readOnly: true });
-        const indexedRows = index.prepare(
-          `SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`,
-        );
-        // Observe committed data without searching: search can synchronize dirty
-        // or empty indexes itself and would conceal broken filesystem watchers.
-        const expectIndexed = async (files: Array<{ path: string; text: string }>) => {
-          await expect
-            .poll(() => indexedRows.all(), { timeout: 15_000 })
-            .toEqual([{ path: "MEMORY.md", text: "Evergreen sentinel." }, ...files]);
-        };
-        await expectIndexed([{ path: "memory/old.md", text: "Amethyst sentinel." }]);
+      },
+    });
+    subscriptions.push(subscription);
+    return subscription;
+  });
+  await configureMemoryCoreDreamingStateForTests(state.env);
+  const memory = path.join(state.workspaceDir, "memory");
+  const note = path.join(memory, "note.md");
+  const unrelated = path.join(state.workspaceDir, "unrelated", "nested");
+  const imports = path.join(state.workspaceDir, "imports");
+  await seedFiles({
+    [path.join(unrelated, "unwatched.md")]: "Outside memory selections.",
+    [path.join(imports, "keep.md")]: "Imported sentinel.",
+    [path.join(imports, "skip.md")]: "Excluded by configured pattern.",
+    [state.path("linked-source", "note.md")]: "Excluded symbolic source.",
+    [path.join(state.workspaceDir, "MEMORY.md")]: "Evergreen sentinel.",
+    [path.join(state.workspaceDir, "USER.md")]: "User sentinel.",
+    [note]: "Amethyst sentinel.",
+  });
+  await fs.symlink(state.path("linked-source"), path.join(memory, "linked"), "junction");
+  const cfg: OpenClawConfig = {
+    plugins: { enabled: false },
+    agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
+    memory: {
+      search: {
+        provider: "none",
+        sources: ["memory"],
+        extraPaths: [{ path: imports, pattern: "keep.md" }],
+        store: { vector: { enabled: false } },
+      },
+    },
+  };
+  const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const manager = await turn.run("opening turn", () =>
+    MemoryIndexManager.get({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    }),
+  );
+  owner = manager;
+  if (!manager) {
+    throw new Error("memory manager unavailable");
+  }
+  expect(subscriptions.length).toBeGreaterThan(0);
+  expect(subscriptions.every((subscription) => subscription.health().state === "ready")).toBe(true);
+  await manager.sync({ reason: "initial" });
+  const indexPath = manager.status().dbPath;
+  if (!indexPath) {
+    throw new Error("memory index path unavailable");
+  }
+  index = new DatabaseSync(indexPath, { readOnly: true });
+  const rows = index.prepare(
+    `SELECT path, text FROM ${MEMORY_INDEX_CHUNKS_TABLE} ORDER BY path, start_line`,
+  );
+  const expected = (files: Array<{ path: string; text: string }>) => [
+    { path: "MEMORY.md", text: "Evergreen sentinel." },
+    { path: "USER.md", text: "User sentinel." },
+    { path: "imports/keep.md", text: "Imported sentinel." },
+    ...files,
+  ];
+  expect(rows.all()).toEqual(expected([{ path: "memory/note.md", text: "Amethyst sentinel." }]));
+  const idle = () =>
+    (manager as unknown as { awaitManagerIdle(): Promise<void> }).awaitManagerIdle();
+  const flush = async (files: Array<{ path: string; text: string }>) => {
+    await Promise.all(
+      subscriptions
+        .filter((entry) => entry.health().state !== "closed")
+        .map((entry) => entry.reconcile()),
+    );
+    await vi.advanceTimersByTimeAsync(debounceMs);
+    // Read published rows directly: search could repair a broken watcher itself.
+    await vi.waitFor(() => expect(rows.all()).toEqual(expected(files)));
+    await idle();
+  };
+  // Join the actual bootstrap invalidation; an unchanged reconcile emits no callback.
+  await bootstrap.promise;
+  await vi.advanceTimersByTimeAsync(debounceMs);
+  await idle();
+  expect(rows.all()).toEqual(expected([{ path: "memory/note.md", text: "Amethyst sentinel." }]));
+  await fs.writeFile(note, "Cobalt sentinel after edit.");
+  await flush([{ path: "memory/note.md", text: "Cobalt sentinel after edit." }]);
+  await fs.rm(note);
+  await flush([]);
+  await fs.rename(memory, state.path("previous-memory"));
+  await fs.mkdir(memory);
+  await fs.writeFile(path.join(memory, "replacement.md"), "Heliotrope replacement.");
+  await flush([{ path: "memory/replacement.md", text: "Heliotrope replacement." }]);
+  expect(visited.has(path.join(imports, "keep.md"))).toBe(true);
+  expect(visited.has(note)).toBe(true);
+  expect([...visited].some((file) => file.startsWith(unrelated + path.sep))).toBe(false);
+  expect(visited.has(path.join(state.path("linked-source"), "note.md"))).toBe(false);
+  expect(contexts.every((context) => context === undefined)).toBe(true);
+  await manager.close();
+  expectClosed();
+});
 
-        await fs.rename(memoryDir, state.path("previous-memory"));
-        if (operation === "removal") {
-          // Observe deletion before recreation; the parent must retain coverage
-          // even after the dead root's native watchers have been closed.
-          await expectIndexed([]);
-        }
-        await fs.mkdir(memoryDir);
-        const fresh = { path: "memory/fresh.md", text: "Heliotrope sentinel." };
-        await fs.writeFile(path.join(memoryDir, "fresh.md"), fresh.text);
-        await expectIndexed([fresh]);
-
-        const nestedDir = path.join(memoryDir, "nested");
-        await fs.mkdir(nestedDir);
-        const nested = { path: "memory/nested/note.md", text: "Juniper sentinel." };
-        await fs.writeFile(path.join(nestedDir, "note.md"), nested.text);
-        await expectIndexed([fresh, nested]);
-        nested.text = "Cobalt sentinel.";
-        await fs.writeFile(path.join(nestedDir, "note.md"), nested.text);
-        await expectIndexed([fresh, nested]);
-        await fs.rm(nestedDir, { recursive: true });
-        await expectIndexed([fresh]);
-        expect((await activeManager.search("Heliotrope")).map((result) => result.path)).toEqual([
-          fresh.path,
-        ]);
-        expect(await activeManager.search("Amethyst")).toEqual([]);
-        expect(await activeManager.search("Cobalt")).toEqual([]);
-        expect(watcherContexts.length).toBeGreaterThan(0);
-        expect(timerContexts.length).toBeGreaterThan(0);
-        for (const context of [...watcherContexts, ...timerContexts]) {
-          expect(context).toEqual({ turn: undefined, pendingInput: undefined });
-        }
-
-        index.close();
-        index = undefined;
-        await activeManager.close();
-        await expect.poll(() => openWatchers.size).toBe(0);
-        if (!process.versions.bun) {
-          await expect.poll(activeFilesystemWatchers).toBe(initialWatchers);
-        }
-      } finally {
-        index?.close();
-        await manager?.close();
-        timerObserver.mockRestore();
-        watchObserver.mockRestore();
-        syncBuiltinESMExports();
-        resetMemoryCoreDreamingStateForTests();
-        await state.cleanup();
+it("observes later edits beyond the default directory scan budget", async () => {
+  const memory = path.join(state.workspaceDir, "memory");
+  const note = path.join(memory, "4096", "note.md");
+  const initial = createDeferred<void>();
+  const edited = createDeferred<void>();
+  const originalWatch = observation.watch;
+  vi.spyOn(observation, "watch").mockImplementation((authority, options) => {
+    const subscription = originalWatch(authority, options);
+    subscriptions.push(subscription);
+    return subscription;
+  });
+  const onUnavailable = vi.fn();
+  vi.stubEnv("CHOKIDAR_USEPOLLING", "true");
+  vi.stubEnv("CHOKIDAR_INTERVAL", "30000");
+  await fs.mkdir(memory);
+  for (let offset = 0; offset < 4097; offset += 64) {
+    await Promise.all(
+      Array.from({ length: Math.min(64, 4097 - offset) }, (_, entry) =>
+        fs.mkdir(path.join(memory, String(offset + entry))),
+      ),
+    );
+  }
+  await fs.writeFile(note, "Initial memory.");
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const watcher = new MemoryFileWatcher({
+    runInBackgroundContext: AsyncLocalStorage.snapshot(),
+    workspaceDir: state.workspaceDir,
+    agentId: "main",
+    settings: {
+      extraPaths: [],
+      multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+      sync: { watchDebounceMs: 0 },
+    },
+    onUnavailable,
+    onChange: async () => {
+      const text = await fs.readFile(note, "utf8");
+      if (text === "Initial memory.") {
+        initial.resolve();
+      } else if (text === "Memory after the edit.") {
+        edited.resolve();
       }
     },
-    60_000,
-  );
+  });
+  owner = watcher;
+  await watcher.start();
+  expect(subscriptions.some((subscription) => subscription.health().directories > 4096)).toBe(true);
+  await vi.advanceTimersByTimeAsync(0);
+  await initial.promise;
+  await fs.writeFile(note, "Memory after the edit.");
+  await Promise.all(subscriptions.map((subscription) => subscription.reconcile()));
+  await vi.advanceTimersByTimeAsync(0);
+  await edited.promise;
+  expect(onUnavailable).not.toHaveBeenCalled();
+  await watcher.close();
+  expectClosed();
 });

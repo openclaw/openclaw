@@ -1,0 +1,235 @@
+import { packNodeTestGroups, type NodeTestShard } from "./ci-node-test-plan.mts";
+import { isCiProofTestFile } from "./ci-proof-test-inventory.mts";
+import { readCompactGroupTimings } from "./ci-test-timings.mts";
+import {
+  canOverlapTelegramSingletonProcesses,
+  createExtensionTestTimingKey,
+  DATABASE_WORKER_CONFIG,
+  DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
+  estimateExtensionTestCost,
+  listExtensionTestFilesForRoots,
+  resolveExtensionTestConfig,
+  splitExtensionTestJobTargets,
+} from "./extension-test-plan.mts";
+import {
+  mergeVitestPretestBuildModes,
+  resolveVitestPretestBuildMode,
+  type VitestPretestBuildMode,
+} from "./vitest-build-prerequisites.mts";
+import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
+
+type ChangedExtensionConfigShard = NodeTestShard & {
+  predictedSeconds: number;
+  predictedTestSeconds: number;
+};
+// Share runner setup while retaining each envelope's process and memory bounds.
+const CHANGED_EXTENSION_JOB_SECONDS = 300;
+const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
+
+export function resolveChangedExtensionRoots(changedPaths: string[]) {
+  return [
+    ...new Set(
+      changedPaths.flatMap((changedPath) => {
+        const [, extensionId] = changedPath.split("/");
+        return extensionId ? [`extensions/${extensionId}`] : [];
+      }),
+    ),
+  ];
+}
+
+export function createChangedExtensionConfigShards(
+  extensionRoots: string[],
+  options: { cwd?: string; targets: ReadonlySet<string> },
+): ChangedExtensionConfigShard[] {
+  const selectedRoots = new Set(extensionRoots);
+  const rootsByConfig = new Map<string, string[]>();
+  for (const root of extensionRoots) {
+    const config = resolveExtensionTestConfig(root);
+    rootsByConfig.set(config, [...(rootsByConfig.get(config) ?? []), root]);
+  }
+  const filesByConfig = new Map<string, string[]>();
+  for (const file of rootsByConfig.size > 0
+    ? listExtensionTestFilesForRoots(["extensions"], options.cwd)
+    : []) {
+    const config = resolveExtensionTestConfig(file);
+    filesByConfig.set(config, [...(filesByConfig.get(config) ?? []), file]);
+    const root = file.split("/").slice(0, 2).join("/");
+    if (selectedRoots.has(root)) {
+      const roots = rootsByConfig.get(config) ?? [];
+      if (!roots.includes(root)) {
+        rootsByConfig.set(config, [...roots, root]);
+      }
+    }
+  }
+  const plans: Array<{
+    config: string;
+    env?: Record<string, string>;
+    includePatterns: string[];
+    pretestBuildMode?: VitestPretestBuildMode;
+    predictedSeconds: number;
+  }> = [...rootsByConfig].flatMap(([config, roots]) => {
+    const configFiles = filesByConfig.get(config) ?? [];
+    const testFiles = configFiles.filter(
+      (file) =>
+        !isCiProofTestFile(file) &&
+        options.targets.has(file) &&
+        roots.some((root) => file.startsWith(`${root}/`)),
+    );
+    if (testFiles.length === 0) {
+      return [];
+    }
+    const buildModes = new Map(
+      testFiles.map((file) => [file, resolveVitestPretestBuildMode([{ includePatterns: [file] }])]),
+    );
+    let chunks = splitExtensionTestJobTargets(config, testFiles);
+    if (chunks.filter((files) => files.some((file) => buildModes.get(file))).length > 1) {
+      // Explicit scopes follow the prerequisite owner even after files migrate configs.
+      // Keep build consumers together before reapplying every job/process file bound.
+      const runtimeFiles: string[] = [];
+      const otherFiles: string[] = [];
+      for (const file of testFiles) {
+        const target = buildModes.get(file) ? runtimeFiles : otherFiles;
+        target.push(file);
+      }
+      chunks = [runtimeFiles, otherFiles]
+        .filter((files) => files.length > 0)
+        .flatMap((files) => splitExtensionTestJobTargets(config, files));
+    }
+    if (config === DATABASE_WORKER_CONFIG) {
+      const timings = readCompactGroupTimings("blacksmith");
+      const sharedFileBudget = Math.floor(DATABASE_WORKER_TEST_JOB_FILE_LIMIT / 2);
+      chunks = chunks.flatMap((files) => {
+        if (files.length <= sharedFileBudget || files.some((file) => buildModes.get(file))) {
+          return [files];
+        }
+        const timingKey = createExtensionTestTimingKey(config, files);
+        if (!timingKey || timings[timingKey] !== undefined) {
+          return [files];
+        }
+        // Two unmeasured envelopes can share the file budget; measured walls keep their exact scope.
+        const midpoint = Math.ceil(files.length / 2);
+        return [files.slice(0, midpoint), files.slice(midpoint)];
+      });
+    }
+    return chunks.map((includePatterns) => {
+      const env = canOverlapTelegramSingletonProcesses(config, includePatterns)
+        ? { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" }
+        : undefined;
+      return {
+        config,
+        includePatterns,
+        env,
+        pretestBuildMode: mergeVitestPretestBuildModes(
+          includePatterns.map((file) => buildModes.get(file)),
+        ),
+        predictedSeconds: estimateExtensionTestCost(
+          config,
+          includePatterns.length,
+          includePatterns,
+          env,
+        ),
+      };
+    });
+  });
+  return plans.map(
+    ({ config, env, includePatterns, pretestBuildMode, predictedSeconds }, index) => {
+      const suffix = plans.length === 1 ? "" : `-${index + 1}`;
+      const shard: ChangedExtensionConfigShard = {
+        checkName: `checks-node-changed-extensions-config${suffix}`,
+        configs: [config],
+        // No plans overlap in this row, so CI can scale the single process's worker budget.
+        planConcurrency: 1,
+        predictedSeconds,
+        predictedTestSeconds: predictedSeconds,
+        requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
+        shardName: `changed-extensions-config${suffix}`,
+      };
+      if (pretestBuildMode) {
+        shard.pretestBuildMode = pretestBuildMode;
+        shard.predictedSeconds = predictedSeconds + VITEST_PRETEST_BUILD_SECONDS[pretestBuildMode];
+      }
+      shard.includePatterns = includePatterns;
+      if (env) {
+        shard.env = env;
+      }
+      return shard;
+    },
+  );
+}
+
+export function packChangedExtensionConfigShards(
+  shards: ChangedExtensionConfigShard[],
+): NodeTestShard[] {
+  const predictedSeconds = ([first, ...rest]: readonly [
+    ChangedExtensionConfigShard,
+    ...ChangedExtensionConfigShard[],
+  ]) => {
+    const preparation = first.pretestBuildMode
+      ? VITEST_PRETEST_BUILD_SECONDS[first.pretestBuildMode]
+      : 0;
+    return rest.reduce(
+      (seconds, shard) => seconds + shard.predictedSeconds - preparation,
+      first.predictedSeconds,
+    );
+  };
+  const workerFileCounts = new Map(
+    shards.map((shard) => [
+      shard,
+      shard.configs.includes(DATABASE_WORKER_CONFIG) ? (shard.includePatterns?.length ?? 0) : 0,
+    ]),
+  );
+  const bins = packNodeTestGroups(
+    shards.toSorted(
+      (a, b) => b.predictedSeconds - a.predictedSeconds || a.shardName.localeCompare(b.shardName),
+    ),
+    // Each envelope retains its child process. Identical prerequisites share
+    // one preparation before all readers; other preparation modes stay separate.
+    (bin, shard) =>
+      // Count the effective config, including files migrated from other plugins.
+      bin.reduce(
+        (count, entry) => count + (workerFileCounts.get(entry) ?? 0),
+        workerFileCounts.get(shard) ?? 0,
+      ) <= DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
+      bin.every(
+        (entry) =>
+          entry.pretestBuildMode === shard.pretestBuildMode &&
+          entry.runner === shard.runner &&
+          entry.requiresDist === shard.requiresDist,
+      ) &&
+      predictedSeconds([...bin, shard]) <= CHANGED_EXTENSION_JOB_SECONDS,
+    true,
+  );
+  // Singleton objects keep their full metadata and original relative order.
+  return bins
+    .toSorted((a, b) => shards.indexOf(a[0]) - shards.indexOf(b[0]))
+    .map((bin, index) =>
+      bin.length === 1
+        ? bin[0]
+        : Object.assign(
+            {
+              checkName: `checks-node-changed-extensions-bundle-${index + 1}`,
+              configs: [],
+              groups: bin.map((shard) => ({
+                configs: shard.configs,
+                ...(shard.env ? { env: shard.env } : {}),
+                ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
+                ...(shard.pretestBuildMode ? { pretestBuildMode: shard.pretestBuildMode } : {}),
+                requiresDist: shard.requiresDist,
+                runner: shard.runner,
+                shard_name: shard.shardName,
+              })),
+              planConcurrency: 1,
+              predictedSeconds: predictedSeconds(bin),
+              predictedTestSeconds: bin.reduce(
+                (seconds, shard) => seconds + shard.predictedTestSeconds,
+                0,
+              ),
+              requiresDist: bin[0].requiresDist,
+              runner: bin[0].runner,
+              shardName: `changed-extensions-bundle-${index + 1}`,
+            },
+            bin[0].pretestBuildMode ? { pretestBuildMode: bin[0].pretestBuildMode } : {},
+          ),
+    );
+}

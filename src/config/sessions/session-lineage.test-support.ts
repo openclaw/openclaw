@@ -1,0 +1,87 @@
+export const FAST_RESET_LINEAGE_FIXTURE = {
+  spawnedBy: "agent:main:main",
+  parentSessionKey: "agent:main:dashboard:parent",
+  parentSessionId: "parent-session",
+  spawnedBySessionId: "parent-session",
+  parentSessionLifecycleRevision: "parent-generation",
+  spawnedBySenderIsOwner: true,
+  spawnedWorkspaceDir: "/tmp/workspace",
+  spawnedCwd: "/tmp/repo",
+  forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
+  createdVia: "spawn" as const,
+  createdActor: { type: "agent" as const, id: "agent:main:main" },
+  createdAt: 1_234,
+  spawnDepth: 2,
+  subagentRole: "orchestrator" as const,
+  subagentControlScope: "children" as const,
+};
+
+export const RESET_PARENT_GRANT_FIXTURE = {
+  spawnedBy: "agent:main:parent",
+  parentSessionKey: "agent:main:parent",
+  parentSessionId: "parent-id",
+  spawnedBySessionId: "parent-id",
+  parentSessionLifecycleRevision: "parent-generation",
+  spawnedBySenderIsOwner: true,
+};
+
+export const SESSION_ROLLOVER_LINEAGE_CASES = [
+  {
+    name: "ordinary top-level session",
+    sessionKey: "agent:main:main",
+    spawnedBy: "agent:main:subagent:stale-parent",
+    createdVia: "run" as const,
+    subagentRole: "leaf" as const,
+    subagentControlScope: "none" as const,
+    preservesSpawnLineage: false,
+  },
+  {
+    name: "ordinary ACP session with stale lineage",
+    sessionKey: "agent:main:acp:ordinary-stale-role",
+    spawnedBy: "agent:main:main",
+    createdVia: "run" as const,
+    subagentRole: "leaf" as const,
+    subagentControlScope: "none" as const,
+    preservesSpawnLineage: true,
+  },
+  {
+    name: "visible child",
+    sessionKey: "agent:main:dashboard:daily-rollover-lineage",
+    spawnedBy: "agent:main:main",
+    createdVia: "spawn" as const,
+    subagentRole: "leaf" as const,
+    subagentControlScope: "none" as const,
+    preservesSpawnLineage: true,
+  },
+  {
+    name: "real subagent",
+    sessionKey: "agent:main:subagent:daily-rollover-lineage",
+    spawnedBy: "agent:main:main",
+    createdVia: "spawn" as const,
+    subagentRole: "leaf" as const,
+    subagentControlScope: "none" as const,
+    preservesSpawnLineage: true,
+  },
+];
+
+export function createSessionRolloverSpawnLineage(
+  testCase: (typeof SESSION_ROLLOVER_LINEAGE_CASES)[number],
+) {
+  return {
+    spawnedBy: testCase.spawnedBy,
+    spawnedBySenderIsOwner: true,
+    spawnedBySessionId: "parent-session",
+    spawnedWorkspaceDir: "/tmp/child-workspace",
+    spawnedCwd: "/tmp/task-repo",
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1 as const,
+    inheritedToolPolicySource: "sender" as const,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+    sessionRoot: "/tmp/child-workspace/scoped",
+    ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
+    ...(testCase.subagentControlScope
+      ? { subagentControlScope: testCase.subagentControlScope }
+      : {}),
+  };
+}

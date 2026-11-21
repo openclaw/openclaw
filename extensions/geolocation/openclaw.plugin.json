@@ -25,6 +25,20 @@
       "help": "How old the cached database may get before it is downloaded again. Defaults to 30."
     }
   },
+  "configGroups": [
+    {
+      "id": "location-database",
+      "title": "Location database",
+      "order": 10,
+      "properties": ["databaseUrl", "refreshDays"]
+    },
+    {
+      "id": "attribution",
+      "title": "Attribution",
+      "order": 20,
+      "properties": ["attributionText", "attributionUrl"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,21 +1,4 @@
-export type FormatConstruct =
-  | "bold"
-  | "italic"
-  | "underline"
-  | "strikethrough"
-  | "spoiler"
-  | "codeInline"
-  | "codeBlock"
-  | "codeLanguage"
-  | "linkLabel"
-  | "heading"
-  | "bulletList"
-  | "orderedList"
-  | "taskList"
-  | "table"
-  | "blockquote"
-  | "image"
-  | "mention";
+export type FormatConstruct = keyof typeof NATIVE_FORMAT_CONSTRUCTS;
 
 export type ConstructSupport = "native" | "fallback" | "strip";
 
@@ -48,7 +31,7 @@ const NATIVE_FORMAT_CONSTRUCTS = {
   blockquote: "native",
   image: "native",
   mention: "native",
-} as const satisfies FormatCapabilityProfile["constructs"];
+} as const;
 
 type DefinedConstructs<Overrides extends Partial<FormatCapabilityProfile["constructs"]>> = {
   [Construct in FormatConstruct]: Construct extends keyof Overrides
@@ -64,7 +47,7 @@ type DefinedChunk<Chunk extends FormatCapabilityProfile["chunk"]> = Omit<
 /** Defines a channel profile with native support as the default for each construct. */
 function defineFormatProfile<
   const Mechanism extends FormatCapabilityProfile["mechanism"],
-  const Overrides extends Partial<FormatCapabilityProfile["constructs"]> = Record<never, never>,
+  const Overrides extends Partial<FormatCapabilityProfile["constructs"]> = object,
   const Chunk extends FormatCapabilityProfile["chunk"] = FormatCapabilityProfile["chunk"],
 >(profile: {
   mechanism: Mechanism;

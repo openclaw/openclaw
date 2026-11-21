@@ -1,0 +1,32 @@
+{
+  "name": "@openclaw/worker-runtime",
+  "version": "0.0.0-private",
+  "private": true,
+  "type": "module",
+  "files": ["dist"],
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./worker": {
+      "types": "./dist/worker.d.mts",
+      "import": "./dist/worker.mjs",
+      "default": "./dist/worker.mjs"
+    },
+    "./lifecycle": {
+      "types": "./dist/lifecycle.d.mts",
+      "import": "./dist/lifecycle.mjs",
+      "default": "./dist/lifecycle.mjs"
+    }
+  },
+  "dependencies": {
+    "@openclaw/normalization-core": "workspace:*"
+  },
+  "scripts": {
+    "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-workspace-package.mts worker-runtime"
+  }
+}

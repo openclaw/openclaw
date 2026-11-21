@@ -74,7 +74,7 @@ function one(values, label) {
   return values[0];
 }
 
-export function validateRecoveryRun(run, expected) {
+function validateRecoveryRun(run, expected) {
   for (const [key, value] of Object.entries({
     id: Number(id(expected.id)),
     run_attempt: Number(id(expected.attempt)),
@@ -95,7 +95,18 @@ export function validateRecoveryRun(run, expected) {
   return run;
 }
 
-export function requireRecoveryJob(jobs, run, name) {
+function readSuccessfulRecoveryRun(runId, workflow, expectedSha) {
+  const latest = api(`actions/runs/${runId}`);
+  return validateRecoveryRun(api(`actions/runs/${runId}/attempts/${id(latest.run_attempt)}`), {
+    id: runId,
+    attempt: latest.run_attempt,
+    sha: expectedSha ?? latest.head_sha,
+    workflow,
+    conclusion: "success",
+  });
+}
+
+function requireRecoveryJob(jobs, run, name) {
   const job = one(
     jobs.filter((entry) => entry.name === name),
     name,
@@ -204,7 +215,7 @@ function historicalPublishStepLog(logs, job, step) {
 
 // The exact attempt archive owns step names/numbers. Only the first runner
 // input group of that successful step is evidence; its stdout is not.
-export function readRecoveryStepInputs(log, job, stepName) {
+function readRecoveryStepInputs(log, job, stepName) {
   const step = one(
     job.steps.filter((entry) => entry.name === stepName),
     stepName,
@@ -358,7 +369,7 @@ async function registryBytes(url, maxBytes) {
   }
   return Buffer.concat(chunks);
 }
-export function validateRecoveryProvenance(results, expected) {
+function validateRecoveryProvenance(results, expected) {
   const statements = results
     .map((result) => result.verificationResult?.statement)
     .filter((statement) => statement?.predicateType === "https://slsa.dev/provenance/v1");
@@ -566,17 +577,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     ).id === npmId,
     "npm evidence run mismatch.",
   );
-  const npmLatest = api(`actions/runs/${npmId}`);
-  const npm = validateRecoveryRun(
-    api(`actions/runs/${npmId}/attempts/${id(npmLatest.run_attempt)}`),
-    {
-      id: npmId,
-      attempt: npmLatest.run_attempt,
-      sha: npmLatest.head_sha,
-      workflow: NPM_WORKFLOW,
-      conclusion: "success",
-    },
-  );
+  const npm = readSuccessfulRecoveryRun(npmId, NPM_WORKFLOW);
   const npmJob = requireRecoveryJob(
     inventory(`actions/runs/${npmId}/attempts/${npm.run_attempt}/jobs`, "jobs"),
     npm,
@@ -611,17 +612,7 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     readRecoveryStepInputs(npmLog, npmJob, "Verify full release validation evidence"),
     validationInputs,
   );
-  const dockerLatest = api(`actions/runs/${dockerId}`);
-  const docker = validateRecoveryRun(
-    api(`actions/runs/${dockerId}/attempts/${id(dockerLatest.run_attempt)}`),
-    {
-      id: dockerId,
-      attempt: dockerLatest.run_attempt,
-      sha: npm.head_sha,
-      workflow: PUBLISH_WORKFLOW,
-      conclusion: "success",
-    },
-  );
+  const docker = readSuccessfulRecoveryRun(dockerId, PUBLISH_WORKFLOW, npm.head_sha);
   const dockerDispatch = dispatch(docker, sourceSha);
   requireValue(
     dockerDispatch.value.toolingFullRef === originalDispatch.value.toolingFullRef,
@@ -676,7 +667,11 @@ export async function verifyStablePublishRecovery({ evidence, manifest, sourceSh
     runAttempt: prepared.preparedRunAttempt,
     artifactName: prepared.preparedArtifactName,
   });
-  verifyDockerReleaseProducer(dockerArtifact.value, { publisherSha: docker.head_sha });
+  await verifyDockerReleaseProducer(dockerArtifact.value, {
+    publisherSha: docker.head_sha,
+    publisherFullRef: dockerDispatch.value.toolingFullRef,
+    fullReleaseManifest: manifest,
+  });
   const directory = mkdtempSync(join(tmpdir(), "openclaw-stable-recovery-"));
   try {
     const npmPackages = await verifyNpm(

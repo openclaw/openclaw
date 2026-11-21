@@ -1,0 +1,29 @@
+title: Visible child waited-send reply
+
+scenario:
+  id: sessions-send-visible-child
+  surface: subagents
+  coverage:
+    primary:
+      - channels.subagent-final-reply
+    secondary:
+      - agent-runtime.subagent-turns-delivery
+      - agent-runtime.subagent-turns-qa-channel
+  objective: Verify a parent can send a waited message to its visible child and consume the inline reply without duplicate child, reply-step, or announcement work.
+  successCriteria:
+    - A QA channel parent spawns one visible child with durable parent lineage.
+    - A waited sessions_send returns the child's exact reply inline with delivery skipped.
+    - The child runs exactly once for the spawn and once for the waited send.
+    - No reply-step or announcement model run re-enters either session after the inline result.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/concepts/session-tool.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - src/agents/tools/sessions-send-tool.ts
+    - src/agents/tools/sessions-send-tool.a2a.ts
+    - test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/sessions-send-visible-child.product-proof.e2e.test.ts
+    summary: Start an isolated Gateway, QA channel, and mock provider; spawn one visible child and prove its waited reply returns inline without duplicate follow-up work.

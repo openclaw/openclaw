@@ -82,6 +82,23 @@ export function createGetReplySessionState(overrides: Record<string, unknown> = 
   };
 }
 
+export function createLockedReplyPreprocessingState(params: {
+  sessionKey: string;
+  sessionId: string;
+  agentHarnessId: string;
+}) {
+  return {
+    sessionKey: params.sessionKey,
+    storePath: "/tmp/sessions.json",
+    sessionEntry: {
+      sessionId: params.sessionId,
+      updatedAt: 1,
+      agentHarnessId: params.agentHarnessId,
+      modelSelectionLocked: true,
+    },
+  };
+}
+
 export function registerGetReplyBaselineBypass(): void {
   vi.doMock("../../sessions/session-diff-baseline.js", async (importOriginal) => {
     const actual = await importOriginal<typeof import("../../sessions/session-diff-baseline.js")>();

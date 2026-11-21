@@ -3,22 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { installPluginFromNpmSpec } from "./install.js";
 
 const installedPackageTreePolicySource = `
 let input = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
-  const request = JSON.parse(input);
-  if (request.sourcePathKind === "directory") {
-    process.stdout.write(JSON.stringify({
-      protocolVersion: 1,
-      decision: "block",
-      reason: "blocked installed package tree",
-    }));
-    return;
-  }
-  process.stdout.write(JSON.stringify({ protocolVersion: 1, decision: "allow" }));
+  const blocked = JSON.parse(input).sourcePathKind === "directory";
+  process.stdout.write(JSON.stringify({
+    protocolVersion: 1, decision: blocked ? "block" : "allow",
+    ...(blocked ? { reason: "blocked installed package tree" } : {}),
+  }));
 });
 `;
 
@@ -76,4 +72,20 @@ export async function installProjectDependencies(
     ],
     { cwd: projectRoot },
   );
+}
+
+export async function installNpmPlugin(params: {
+  config?: OpenClawConfig;
+  expectedIntegrity?: string;
+  npmRoot: string;
+  spec: string;
+}) {
+  return await installPluginFromNpmSpec({
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+    spec: params.spec,
+    npmDir: params.npmRoot,
+    logger: { info: () => {}, warn: () => {} },
+    timeoutMs: 120_000,
+  });
 }

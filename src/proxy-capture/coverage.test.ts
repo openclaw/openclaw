@@ -1,4 +1,6 @@
 // Proxy capture coverage tests cover capture coverage accounting and summaries.
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildDebugProxyCoverageReport, maybeWarnAboutDebugProxyCoverage } from "./coverage.js";
 
@@ -12,6 +14,13 @@ describe("debug proxy coverage report", () => {
     const entryIds = new Set(report.entries.map((entry) => entry.id));
     expect(entryIds.has("provider-transport-fetch")).toBe(true);
     expect(entryIds.has("feishu-client-http")).toBe(true);
+  });
+
+  it("reports existing source modules for every transport seam", () => {
+    for (const { id, modulePath } of buildDebugProxyCoverageReport().entries) {
+      const sourcePath = fileURLToPath(new URL(`../../${modulePath}`, import.meta.url));
+      expect(existsSync(sourcePath), `${id}: ${modulePath}`).toBe(true);
+    }
   });
 
   it("warns about required capture gaps", () => {

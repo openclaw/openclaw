@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { runTsxCliShim } from "./lib/tsx-cli-shim.mjs";
+import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs";
 
-await runTsxCliShim(import.meta.url, {
+await runNodeCliShim(import.meta.url, {
   implementation: "./full-release-validation-at-sha.mts",
 });

@@ -10,15 +10,11 @@ const TWILIO_API_HOSTNAME_BY_REGION = {
 
 const TWILIO_API_HOSTNAMES = new Set(Object.values(TWILIO_API_HOSTNAME_BY_REGION));
 
-function resolveTwilioApiHostname(region?: TwilioRegion): string {
-  return TWILIO_API_HOSTNAME_BY_REGION[region ?? "us1"];
-}
-
 export function resolveTwilioApiBaseUrl(params: {
   accountSid: string;
   region?: TwilioRegion;
 }): string {
-  const hostname = resolveTwilioApiHostname(params.region);
+  const hostname = TWILIO_API_HOSTNAME_BY_REGION[params.region ?? "us1"];
   return `https://${hostname}/2010-04-01/Accounts/${params.accountSid}`;
 }
 

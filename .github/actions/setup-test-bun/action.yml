@@ -1,0 +1,68 @@
+name: Setup test Bun
+description: Install the shared checksum-pinned Linux x64 Bun fork used by test lanes.
+inputs:
+  cache-mode:
+    description: off, restore, or read-write (protected-main warmer only).
+    default: restore
+runs:
+  using: composite
+  steps:
+    - name: Resolve pinned Bun cache identity
+      id: identity
+      shell: bash
+      env:
+        CACHE_MODE: ${{ inputs.cache-mode }}
+      run: |
+        set -euo pipefail
+        case "$CACHE_MODE" in
+          off|restore|read-write) ;;
+          *) echo "::error::Invalid Bun cache mode: $CACHE_MODE"; exit 2 ;;
+        esac
+        if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
+          echo "::error::The pinned Bun test runtime requires Linux/X64."
+          exit 1
+        fi
+        root="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        pin="$root/scripts/lib/openclaw-bun.json"
+        digest="$(sha256sum "$pin" | cut -d ' ' -f 1)"
+        tag="$(node -p 'require(process.argv[1]).tag' "$pin")"
+        echo "key=$RUNNER_OS-$RUNNER_ARCH-openclaw-test-bun-v1-$digest" >> "$GITHUB_OUTPUT"
+        echo "path=~/.cache/openclaw-bun/$tag" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pinned Bun release assets
+      id: cache
+      if: inputs.cache-mode != 'off'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.identity.outputs.path }}
+        key: ${{ steps.identity.outputs.key }}
+
+    - name: Install pinned Bun test runtime
+      shell: bash
+      env:
+        OPENCLAW_BUN_ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
+          echo "::error::The pinned Bun test runtime requires Linux/X64."
+          exit 1
+        fi
+        bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
+        # Resolve from the action: frozen CI/release harnesses own their own pin.
+        # One external cache path avoids both Actions version drift between
+        # harness roots and unrelated files entering compiler input snapshots.
+        OPENCLAW_BUN_CACHE_ROOT="$HOME/.cache/openclaw-bun" \
+          /bin/bash "$OPENCLAW_BUN_ACTION_PATH/../../../scripts/stage-openclaw-bun.sh" "$bun_dir" linux x64
+        "$bun_dir/bin/bun" --version
+        "$bun_dir/bin/bun" --revision
+        echo "$bun_dir/bin" >> "$GITHUB_PATH"
+        # Parity checks clear CI and resolve this explicit, already-verified runtime.
+        echo "OPENCLAW_BUN_PATH=$bun_dir/bin/bun" >> "$GITHUB_ENV"
+
+    - name: Save pinned Bun release assets
+      if: ${{ success() && inputs.cache-mode == 'read-write' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.workflow == 'Vitest Cache Warm' && steps.cache.outputs.cache-hit != 'true' }}
+      continue-on-error: true
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.identity.outputs.path }}
+        key: ${{ steps.identity.outputs.key }}

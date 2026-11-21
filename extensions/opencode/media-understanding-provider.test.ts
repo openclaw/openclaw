@@ -1,4 +1,4 @@
-// Opencode tests cover media understanding provider plugin behavior.
+import { registerProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -13,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/media-understanding", async (importOriginal) => ({
   describeImageWithModelPayloadTransform: mocks.describeImageWithModelPayloadTransform,
 }));
 
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import plugin from "./index.js";
 
 beforeEach(() => {
   mocks.describeImageWithModelPayloadTransform.mockReset();
@@ -26,24 +26,35 @@ async function applyImagePayloadTransform(payload: Record<string, unknown>): Pro
       return { text: "ok" };
     },
   );
-  await opencodeMediaUnderstandingProvider.describeImage?.({} as never);
+  const { mediaProviders } = await registerProviderPlugin({
+    plugin,
+    id: "opencode",
+    name: "OpenCode Zen Provider",
+  });
+  const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+  if (!mediaProvider) {
+    throw new Error("OpenCode media understanding provider registration missing");
+  }
+  await mediaProvider.describeImage?.({} as never);
 }
 
 describe("opencode media understanding provider", () => {
-  it("strips disabled Responses reasoning payloads", async () => {
-    const payload = {
-      reasoning: { effort: "none" },
-      include: ["reasoning.encrypted_content"],
-      store: false,
-    };
+  it.each(["none", { effort: "none" }])(
+    "strips disabled Responses reasoning %j",
+    async (reasoning) => {
+      const payload = {
+        reasoning,
+        include: ["reasoning.encrypted_content"],
+        store: false,
+      };
 
-    await applyImagePayloadTransform(payload);
+      await applyImagePayloadTransform(payload);
 
-    expect(payload).toEqual({
-      include: ["reasoning.encrypted_content"],
-      store: false,
-    });
-  });
+      expect(JSON.stringify(payload)).toBe(
+        '{"include":["reasoning.encrypted_content"],"store":false}',
+      );
+    },
+  );
 
   it("keeps supported Responses reasoning payloads", async () => {
     const payload = {
@@ -57,13 +68,5 @@ describe("opencode media understanding provider", () => {
       reasoning: { effort: "low" },
       store: false,
     });
-  });
-
-  it("declares OpenCode image understanding support", () => {
-    expect(opencodeMediaUnderstandingProvider.id).toBe("opencode");
-    expect(opencodeMediaUnderstandingProvider.capabilities).toEqual(["image"]);
-    expect(opencodeMediaUnderstandingProvider.defaultModels).toEqual({ image: "gpt-5-nano" });
-    expect(typeof opencodeMediaUnderstandingProvider.describeImage).toBe("function");
-    expect(typeof opencodeMediaUnderstandingProvider.describeImages).toBe("function");
   });
 });

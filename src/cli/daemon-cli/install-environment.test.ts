@@ -1,90 +1,86 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { buildServiceEnvironment } from "../../daemon/service-env.js";
+import { createSecretEgressProxyEnvironment } from "../../secrets/egress-proxy/environment.js";
 import { mergeInstallInvocationEnv } from "./install.js";
 
 describe("mergeInstallInvocationEnv", () => {
+  it.each(["forged receipt", "operator override"])("preserves operator CA with %s", (scenario) => {
+    const operator = {
+      NODE_EXTRA_CA_CERTS: "/state/secret-egress-proxy/operator-ca.pem",
+      CUSTOM_SETTING: "keep",
+    };
+    const proxy =
+      scenario === "forged receipt"
+        ? { OPENCLAW_SECRET_EGRESS_PROXY_ENV: JSON.stringify(operator) }
+        : createSecretEgressProxyEnvironment(
+            "http://openclaw:test-token@127.0.0.1:9000",
+            "/state/secret-egress-proxy/gateway-test/trust-bundle.pem",
+          );
+    const env = mergeInstallInvocationEnv({
+      env: { ...proxy, ...operator },
+    });
+    expect(env).toMatchObject(operator);
+    expect(
+      buildServiceEnvironment({ env, platform: "linux", port: 18789 }).NODE_EXTRA_CA_CERTS,
+    ).toBe(operator.NODE_EXTRA_CA_CERTS);
+  });
+
+  it("drops an expired Gateway proxy CA while preserving the installed corporate CA", () => {
+    const env = mergeInstallInvocationEnv({
+      env: { NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem" },
+      existingServiceEnv: { NODE_EXTRA_CA_CERTS: "/opt/corporate-ca.pem" },
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/corporate-ca.pem");
+  });
+
   it("uses only the current shell's HOMEBREW_PREFIX", () => {
     const existingServiceEnv = { HOMEBREW_PREFIX: "/opt/homebrew" };
-    const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv, platform: "darwin" });
+    const env = mergeInstallInvocationEnv({ env: {}, existingServiceEnv });
     expect(env.HOMEBREW_PREFIX).toBeUndefined();
     const current = mergeInstallInvocationEnv({
       env: { HOMEBREW_PREFIX: "/usr/local" },
       existingServiceEnv,
-      platform: "darwin",
     });
     expect(current.HOMEBREW_PREFIX).toBe("/usr/local");
   });
 
-  it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
-    const env = mergeInstallInvocationEnv({
-      env: {
-        Path: "C:\\Windows\\System32",
-        openai_api_key: "service-openai-key",
-        NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
-      },
-      platform: "win32",
-    });
-
-    expect(env).toMatchObject({
-      PATH: "C:\\Windows\\System32",
-      OPENAI_API_KEY: "service-openai-key",
-    });
-    expect(env.Path).toBeUndefined();
-    expect(env.openai_api_key).toBeUndefined();
-    expect(env.NODE_OPTIONS).toBeUndefined();
-  });
-
   it.each([
-    { platform: "darwin" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "linux" as const, caKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, caKey: "node_extra_ca_certs" },
-  ])(
-    "preserves installed additive Node CA trust without unsafe overrides on $platform",
-    ({ platform, caKey }) => {
+    ["linux", false, true],
+    ["win32", false, true],
+    ["darwin", true, true],
+    ["win32", true, true],
+    ["win32", false, false],
+  ] as const)(
+    "filters %s install env (shell CA=%s, installed env=%s)",
+    (platform, override, installed) => {
+      vi.stubGlobal("process", { ...process, platform });
+      const caKey = platform === "win32" ? "node_extra_ca_certs" : "NODE_EXTRA_CA_CERTS";
+      const ca = "/opt/openclaw/corporate-ca.pem";
+      const currentCa = "/opt/openclaw/current-shell-ca.pem";
       const env = mergeInstallInvocationEnv({
-        env: { PATH: "/usr/bin" },
-        existingServiceEnv: {
-          [caKey]: " /opt/openclaw/corporate-ca.pem ",
-          NODE_TLS_REJECT_UNAUTHORIZED: "0",
-          HTTPS_PROXY: "https://attacker.invalid",
+        env: {
+          [platform === "win32" ? "Path" : "PATH"]: "/usr/bin",
           NODE_OPTIONS: "--require /tmp/untrusted.js",
-          BASH_ENV: "/tmp/untrusted.sh",
-          LD_PRELOAD: "/tmp/untrusted.so",
-          OPENAI_API_KEY: "existing-service-key",
+          ...(!installed ? { openai_api_key: "shell-key" } : {}),
+          ...(override ? { [caKey]: currentCa } : {}),
         },
-        platform,
+        existingServiceEnv: installed
+          ? {
+              [caKey]: ` ${ca} `,
+              NODE_TLS_REJECT_UNAUTHORIZED: "0",
+              HTTPS_PROXY: "https://attacker.invalid",
+              NODE_OPTIONS: "--require /tmp/untrusted.js",
+              BASH_ENV: "/tmp/untrusted.sh",
+              LD_PRELOAD: "/tmp/untrusted.so",
+              OPENAI_API_KEY: "existing-service-key",
+            }
+          : undefined,
       });
-
-      expect(env).toMatchObject({
-        NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
-        OPENAI_API_KEY: "existing-service-key",
+      expect(env).toEqual({
+        ...(installed ? { NODE_EXTRA_CA_CERTS: override ? currentCa : ca } : {}),
+        OPENAI_API_KEY: installed ? "existing-service-key" : "shell-key",
         PATH: "/usr/bin",
       });
-      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-      expect(env.HTTPS_PROXY).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.BASH_ENV).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-      if (platform === "win32") {
-        expect(env.node_extra_ca_certs).toBeUndefined();
-      }
-    },
-  );
-
-  it.each([
-    { platform: "darwin" as const, shellKey: "NODE_EXTRA_CA_CERTS" },
-    { platform: "win32" as const, shellKey: "node_extra_ca_certs" },
-  ])(
-    "lets the current shell override installed Node CA trust on $platform",
-    ({ platform, shellKey }) => {
-      const env = mergeInstallInvocationEnv({
-        env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
-        existingServiceEnv: {
-          NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
-        },
-        platform,
-      });
-
-      expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");
     },
   );
 });

@@ -1,32 +1,23 @@
-// Matrix plugin module implements logging behavior.
-import { logger as matrixJsSdkRootLogger } from "matrix-js-sdk/lib/logger.js";
-import { ConsoleLogger, LogService, setMatrixConsoleLogging } from "../sdk/logger.js";
+import {
+  logger as matrixJsSdkRootLogger,
+  type Logger as MatrixJsSdkLogger,
+} from "matrix-js-sdk/lib/logger.js";
+import { emitMatrixLog, setMatrixLogServiceQuiet } from "../sdk/logger.js";
 
 let matrixSdkLoggingConfigured = false;
 let matrixSdkLogMode: "default" | "quiet" = "default";
-const matrixSdkBaseLogger = new ConsoleLogger();
-let matrixJsSdkRootLoggerSnapshot: MatrixJsSdkRootLoggerSnapshot | null = null;
-
-type MatrixJsSdkLogger = {
-  trace: (...messageOrObject: unknown[]) => void;
-  debug: (...messageOrObject: unknown[]) => void;
-  info: (...messageOrObject: unknown[]) => void;
-  warn: (...messageOrObject: unknown[]) => void;
-  error: (...messageOrObject: unknown[]) => void;
-  getChild: (namespace: string) => MatrixJsSdkLogger;
-};
-
-type MatrixJsSdkLoglevelLogger = {
-  getLevel?: () => number | string;
-  methodFactory?: unknown;
-  rebuild?: () => void;
-  setLevel?: (level: number | string, persist?: boolean) => void;
-};
-
-type MatrixJsSdkRootLoggerSnapshot = {
+let matrixJsSdkRootLoggerSnapshot: {
   level?: number | string;
-  methodFactory?: unknown;
-};
+  methodFactory: MatrixJsSdkLogMethodFactory;
+} | null = null;
+
+type MatrixJsSdkLogMethod = (this: unknown, ...args: unknown[]) => void;
+type MatrixJsSdkLogMethodFactory = (
+  this: unknown,
+  methodName: string,
+  level: number,
+  loggerName: string | symbol,
+) => MatrixJsSdkLogMethod;
 
 function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unknown[]): boolean {
   if (!module.includes("MatrixHttpClient")) {
@@ -41,9 +32,7 @@ function shouldSuppressMatrixHttpNotFound(module: string, messageOrObject: unkno
 }
 
 export function ensureMatrixSdkLoggingConfigured(): void {
-  if (!matrixSdkLoggingConfigured) {
-    matrixSdkLoggingConfigured = true;
-  }
+  matrixSdkLoggingConfigured = true;
   applyMatrixSdkLogger();
 }
 
@@ -55,53 +44,50 @@ export function setMatrixSdkLogMode(mode: "default" | "quiet"): void {
   applyMatrixSdkLogger();
 }
 
-export function setMatrixSdkConsoleLogging(enabled: boolean): void {
-  setMatrixConsoleLogging(enabled);
-}
-
-export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLogger {
-  return createMatrixJsSdkLoggerInstance(prefix);
-}
-
 function applyMatrixSdkLogger(): void {
-  if (matrixSdkLogMode === "quiet") {
-    setMatrixJsSdkRootLoggerLevel("silent");
-    LogService.setLogger({
-      trace: () => {},
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-    });
-    return;
-  }
-
-  setMatrixJsSdkRootLoggerLevel("debug");
-  LogService.setLogger({
-    trace: (module, ...messageOrObject) => matrixSdkBaseLogger.trace(module, ...messageOrObject),
-    debug: (module, ...messageOrObject) => matrixSdkBaseLogger.debug(module, ...messageOrObject),
-    info: (module, ...messageOrObject) => matrixSdkBaseLogger.info(module, ...messageOrObject),
-    warn: (module, ...messageOrObject) => matrixSdkBaseLogger.warn(module, ...messageOrObject),
-    error: (module, ...messageOrObject) => {
-      if (shouldSuppressMatrixHttpNotFound(module, messageOrObject)) {
-        return;
-      }
-      matrixSdkBaseLogger.error(module, ...messageOrObject);
-    },
-  });
+  configureMatrixJsSdkRootLogger();
+  setMatrixLogServiceQuiet(matrixSdkLogMode === "quiet");
 }
 
-function setMatrixJsSdkRootLoggerLevel(level: "debug" | "silent"): void {
-  const logger = matrixJsSdkRootLogger as unknown as MatrixJsSdkLoglevelLogger;
-  matrixJsSdkRootLoggerSnapshot ??= {
-    level: logger.getLevel?.(),
-    methodFactory: logger.methodFactory,
+function configureMatrixJsSdkRootLogger(): void {
+  const logger = matrixJsSdkRootLogger as unknown as {
+    getLevel?: () => number | string;
+    methodFactory: MatrixJsSdkLogMethodFactory;
+    rebuild?: () => void;
+    setLevel?: (level: number | string, persist?: boolean) => void;
   };
-  if (level === "silent") {
-    logger.methodFactory = () => () => undefined;
-    logger.setLevel?.("silent", false);
-    logger.rebuild?.();
-    return;
+  if (!matrixJsSdkRootLoggerSnapshot) {
+    const methodFactory = logger.methodFactory;
+    matrixJsSdkRootLoggerSnapshot = {
+      level: logger.getLevel?.(),
+      methodFactory(methodName, logLevel, loggerName) {
+        const log = methodFactory.call(this, methodName, logLevel, loggerName);
+        return function (this: unknown, ...args: unknown[]) {
+          // SDK children copy this factory, so quiet must be checked at emission.
+          if (matrixSdkLogMode === "quiet") {
+            return;
+          }
+          const label = args[0];
+          // These matrix-js-sdk 43 global producers include profile/event content.
+          if (
+            methodName === "info" &&
+            typeof label === "string" &&
+            label.startsWith("Storing user profile ")
+          ) {
+            return;
+          }
+          if (
+            methodName === "trace" &&
+            (label === "membership event with membership undefined (forwardLooking: true)!" ||
+              label === "membership event with membership undefined (forwardLooking: false)!")
+          ) {
+            log.call(this, "membership event with membership undefined");
+          } else {
+            log.apply(this, args);
+          }
+        };
+      },
+    };
   }
   logger.methodFactory = matrixJsSdkRootLoggerSnapshot.methodFactory;
   const previousLevel = matrixJsSdkRootLoggerSnapshot.level;
@@ -111,19 +97,26 @@ function setMatrixJsSdkRootLoggerLevel(level: "debug" | "silent"): void {
   logger.rebuild?.();
 }
 
-function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {
-  const log = (method: keyof ConsoleLogger, ...messageOrObject: unknown[]): void => {
+export function createMatrixJsSdkClientLogger(prefix = "matrix"): MatrixJsSdkLogger {
+  const log = (
+    method: Parameters<typeof emitMatrixLog>[0],
+    ...messageOrObject: unknown[]
+  ): void => {
     if (matrixSdkLogMode === "quiet") {
       return;
     }
-    (matrixSdkBaseLogger[method] as (module: string, ...args: unknown[]) => void)(
+    // matrix-js-sdk 43 includes caller-supplied reason/code in this lifecycle log.
+    emitMatrixLog(
+      method,
       prefix,
-      ...messageOrObject,
+      messageOrObject[0] === "Cancelling verification request with params:"
+        ? ["Cancelling verification request"]
+        : messageOrObject,
     );
   };
 
   return {
-    trace: (...messageOrObject) => log("trace", ...messageOrObject),
+    trace: (...messageOrObject) => log("debug", ...messageOrObject),
     debug: (...messageOrObject) => log("debug", ...messageOrObject),
     info: (...messageOrObject) => log("info", ...messageOrObject),
     warn: (...messageOrObject) => log("warn", ...messageOrObject),
@@ -135,7 +128,7 @@ function createMatrixJsSdkLoggerInstance(prefix: string): MatrixJsSdkLogger {
     },
     getChild: (namespace: string) => {
       const nextNamespace = namespace.trim();
-      return createMatrixJsSdkLoggerInstance(nextNamespace ? `${prefix}.${nextNamespace}` : prefix);
+      return createMatrixJsSdkClientLogger(nextNamespace ? `${prefix}.${nextNamespace}` : prefix);
     },
   };
 }

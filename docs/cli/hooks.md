@@ -43,6 +43,10 @@ supported on install/update. See
 [Local, remote, and agent scope](/automation/hooks#local-remote-and-agent-scope)
 for the distinction between workspace inventory and Gateway loading.
 
+Invalid `--agent` usage prints its specific reason on stderr and exits with
+status `1`, including when the flag precedes the subcommand. The JSON error
+envelope is unchanged.
+
 ## List hooks
 
 ```bash
@@ -64,6 +68,10 @@ directories, and the selected workspace. Hook-name collisions follow the
 Human output is a table with Status, Hook, Description, and Source columns,
 preceded by `Hooks (<ready>/<total> ready)`. Plugin-managed sources appear as
 `plugin:<id>`.
+
+Human-readable `list`, `info`, and `check` output neutralizes terminal control
+sequences in hook metadata before styling. JSON output retains the original
+descriptor values.
 
 <Note>
 `ready`, `eligible`, and `loadable` are inventory results, not a live handler
@@ -134,6 +142,10 @@ Discovers the hook locally, then writes
 `hooks.internal.enabled = true` in local config. Other fields in that entry are
 preserved. Exact hook names take precedence over matching keys. Ambiguous key
 matches fail without writing.
+
+Enable and disable confirmations neutralize terminal controls in hook names and
+custom emoji. Embedded line breaks and tabs appear as visible escapes; stored
+hook keys and metadata retain their original values.
 
 Enable fails for a missing hook, a plugin-managed hook, or unmet runtime
 requirements. It can enable a currently disabled workspace hook. This does not

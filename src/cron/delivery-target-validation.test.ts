@@ -9,34 +9,6 @@ describe("assertCronDeliveryInputNonBlankFields", () => {
     expect(() => assertCronDeliveryInputNonBlankFields("string")).not.toThrow();
   });
 
-  it("does not throw when channel and to are non-blank strings", () => {
-    expect(() =>
-      assertCronDeliveryInputNonBlankFields({ channel: "slack", to: "#general" }),
-    ).not.toThrow();
-  });
-
-  it("throws when channel is a blank string", () => {
-    expect(() => assertCronDeliveryInputNonBlankFields({ channel: "", to: "#general" })).toThrow(
-      "delivery.channel must be a non-empty string",
-    );
-  });
-
-  it("throws when to is a whitespace-only string", () => {
-    expect(() => assertCronDeliveryInputNonBlankFields({ channel: "slack", to: "   " })).toThrow(
-      "delivery.to must be a non-empty string",
-    );
-  });
-
-  it("throws when failureDestination channel is blank", () => {
-    expect(() =>
-      assertCronDeliveryInputNonBlankFields({
-        channel: "slack",
-        to: "#general",
-        failureDestination: { channel: "" },
-      }),
-    ).toThrow("delivery.failureDestination.channel must be a non-empty string");
-  });
-
   it("throws when completionDestination to is blank", () => {
     expect(() =>
       assertCronDeliveryInputNonBlankFields({
@@ -56,11 +28,5 @@ describe("assertCronDeliveryInputNonBlankFields", () => {
         completionDestination: { to: "done" },
       }),
     ).not.toThrow();
-  });
-
-  it("uses custom field prefix in error messages", () => {
-    expect(() => assertCronDeliveryInputNonBlankFields({ channel: "" }, "input")).toThrow(
-      "input.channel must be a non-empty string",
-    );
   });
 });

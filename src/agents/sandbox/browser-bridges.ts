@@ -5,7 +5,7 @@
  */
 import { type BrowserBridge, stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 
-type CachedBrowserBridge = {
+export type CachedBrowserBridge = {
   bridge: BrowserBridge;
   containerName: string;
   authToken?: string;
@@ -18,23 +18,29 @@ export const BROWSER_BRIDGES = new Map<string, CachedBrowserBridge>();
 export async function stopCachedBrowserBridge(
   sessionKey: string,
   expected: CachedBrowserBridge,
+  assertCurrent?: () => void,
 ): Promise<void> {
+  assertCurrent?.();
   if (BROWSER_BRIDGES.get(sessionKey) !== expected) {
     return;
   }
   await stopBrowserBridgeServer(expected.bridge.server);
+  assertCurrent?.();
   if (BROWSER_BRIDGES.get(sessionKey) === expected) {
     BROWSER_BRIDGES.delete(sessionKey);
   }
 }
 
 /** Drain every cached bridge that still owns one sandbox container. */
-export async function stopCachedBrowserBridgesForContainer(containerName: string): Promise<void> {
+export async function stopCachedBrowserBridgesForContainer(
+  containerName: string,
+  assertCurrent?: () => void,
+): Promise<void> {
   for (;;) {
     const match = [...BROWSER_BRIDGES].find(([, cached]) => cached.containerName === containerName);
     if (!match) {
       return;
     }
-    await stopCachedBrowserBridge(match[0], match[1]);
+    await stopCachedBrowserBridge(match[0], match[1], assertCurrent);
   }
 }

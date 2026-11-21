@@ -26,7 +26,7 @@ that already support native vision. If the call fails, OpenClaw can continue
 through `agents.defaults.imageModel.fallbacks`; file/URL preparation errors
 fail before fallback is attempted. Use `infer image describe` for OpenClaw's
 image-understanding flow and configured `imageModel`; use `infer model run
---file` for a raw multimodal probe with a custom prompt.
+--file` for a raw multimodal check with a custom prompt.
 
 To make Ollama the default image-understanding provider for inbound media:
 

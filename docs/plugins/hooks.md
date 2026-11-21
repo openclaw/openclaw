@@ -122,18 +122,35 @@ loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
 apply. Run `openclaw plugins reload <id>` after changing plugin code. With the default hybrid
 reload mode, hook policy changes hot-reload the existing plugin runtime.
 
-- Non-bundled plugins need explicit
-  `plugins.entries.<id>.hooks.allowConversationAccess: true` for
-  `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`,
+- Non-bundled plugins need conversation access for
+  `before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_model_request`,
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
-  `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
-  option is explicitly `false`.
-- `allowPromptInjection: false` blocks `agent_turn_prepare`,
-  `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
-  injections. It defaults to allowed, but does not grant conversation access.
-  The first two hooks therefore need both permissions.
+  `agent_end`, `before_agent_run`, and `before_channel_ingress`: either an
+  installed plugin declares [`contracts.conversationAccess: ["read"]`](/plugins/manifest/capabilities)
+  and you approve its capabilities, or you set
+  `plugins.entries.<id>.hooks.allowConversationAccess: true`. Bundled plugins
+  are allowed unless this option is explicitly `false`.
+- `session_end` remains available as a metadata-only lifecycle hook without
+  that grant. Its bounded `ctx.endedTranscript` reader is available only when
+  the effective conversation-access policy allows it; see the
+  [session lifecycle contract](/plugins/hooks/reference#hook-catalog).
+- `allowPromptModification: false` blocks `agent_turn_prepare`,
+  `before_prompt_build`, `before_model_request`, `heartbeat_prompt_contribution`,
+  and durable next-turn injections. It defaults to allowed, but does not grant
+  conversation access. The first three hooks therefore need both permissions.
+- `before_model_request` is off by default for every plugin, bundled ones
+  included. It also needs `plugins.entries.<id>.hooks.allowModelRequest: true`;
+  without it the registration is ignored and the plugin reports a warning
+  naming that key.
 - These are specific registration gates, not a sandbox or a universal filter
   for every hook that can see message data. Install only plugins you trust.
+
+Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
+Their `agent_end` hooks still receive run identity, success, and duration for
+cleanup and settlement, but receive empty `messages`, no `error` text and no
+`skillsUsed` or `modelIterations`.
+Policy, provider, approval, and explicitly invoked tool hooks remain active.
+This boundary does not sandbox plugins or disable native harness telemetry.
 
 A typed handler receives `(event, ctx)`. The event describes the operation;
 the second argument carries hook-specific context. Fields such as
@@ -153,8 +170,10 @@ plugin instance and reruns registration with the new settings.
 | Task                                               | Hook                                                                        |
 | -------------------------------------------------- | --------------------------------------------------------------------------- |
 | Reply without a model call                         | `before_agent_reply` → `{ handled: true, reply }`; omit `reply` for silence |
+| Sanitize a channel event before durable ingress    | `before_channel_ingress` → `{ event }`                                      |
 | Add context or narrow tools for a turn             | `before_prompt_build`                                                       |
 | Gate model input on a supported runner             | `before_agent_run` → `{ outcome: "block", reason, message? }`               |
+| Rewrite or withhold the final provider request     | `before_model_request` → `{ payload }`                                      |
 | Block a tool or request approval                   | `before_tool_call`                                                          |
 | Rewrite the full outgoing reply, including media   | `reply_payload_sending`                                                     |
 | Rewrite outgoing text or cancel a send             | `message_sending`                                                           |
@@ -163,17 +182,67 @@ plugin instance and reruns registration with the new settings.
 
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
-CLI runners; do not rely on it as a Codex or Copilot input gate. Native tool,
+CLI runners and by Gateway admission for OpenClaw worker turns. Workers with the
+`worker-turn-admission-v1` capability report their final system prompt after
+completing host runtime facts and skill references. The Gateway supplies its
+authoritative prepared triggering prompt, history, channel, account, sender, and
+run identity to the plugin gate; worker-provided prompt and history are ignored.
+Approval is bound to the active turn claim and is required for persistence,
+Gateway-proxied inference, Gateway tools, and content-bearing live events. The
+worker also waits for approval before worker-local inference. Blocks and hook
+failures persist only the redacted block message; terminal cleanup receipts omit
+worker-provided content before approval.
+
+The Gateway cannot verify host-local system prompt bytes: a buggy or compromised
+worker can misreport `systemPrompt`. Plugins must not treat that field as a trust
+boundary or use it as proof of worker behavior.
+
+Older workers retain Gateway admission before the user message is persisted or
+the worker launches. That path omits `systemPrompt` because the worker completes
+it afterward. Policies that require final system context must reject an absent
+`systemPrompt` or use an updated worker or a supported local runner.
+Do not rely on this hook as a Codex or Copilot input gate. Native tool,
 transcript, and compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).
+
+### Before durable channel ingress
+
+Check `api.runtime.capabilities?.includes("channel-ingress-transform-v1")`
+before registering `before_channel_ingress`. A plugin that requires pre-storage
+privacy must refuse unsupported hosts and verify that its handler is registered;
+an absent or permission-blocked handler does not protect intake. Existing
+`openclaw plugins inspect <id> --runtime --json` reports registered `typedHooks`.
+
+The handler receives `{ event }` and `{ channelId, accountId, signal }`. `event`
+is the provider's raw transport value, not a normalized chat message. Validate
+its shape in the policy plugin, read current settings through
+`api.runtime.config.current()`, and return `{ event: replacement }`; `void` or an
+omitted `event` keeps the preceding value. Higher-priority handlers run first,
+and each handler receives an isolated copy of the latest replacement. Do not
+mutate retained values after returning them.
+
+Discord emits this hook inside ordered admission before serializing or writing
+its durable queue. Other channel plugins can opt in through the
+[ingress monitor preparation contract](/plugins/sdk-channel-outbound#durable-ingress-monitors).
+The channel revalidates provider identity and lane after transformation. Errors,
+timeouts (15 seconds by default), cancellation, and retired plugin authority
+refuse intake; they never fall back to storing the original event. Error
+diagnostics omit policy exception contents because they may contain private
+payloads. Pass `signal` into policy I/O and bound plugin-owned work.
+
+The hook does not rewrite existing queue rows or run again when an already
+sanitized row is claimed. Direct queue callers retain their own preparation
+contract. It runs before `inbound_claim`, `message_received`, and transcript
+hooks, which cannot protect the raw durable ingress payload.
 
 ## Troubleshooting
 
 | Symptom                                    | Check                                                                                                                                                                                                                                                          |
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; use `openclaw plugins reload <id>` after code changes. |
-| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                           |
+| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptModification` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                        |
+| `before_model_request` never runs          | Set `plugins.entries.<id>.hooks.allowModelRequest: true` in addition to the conversation and prompt permissions. The hook is off by default.                                                                                                                   |
 | Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
 | Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
 | A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |
@@ -216,7 +285,7 @@ resolve here.
 
 - <a id="registration-and-execution"></a>[Registration and execution](/plugins/hooks/reference#registration-and-execution)
 - <a id="hook-catalog"></a>[Hook catalog](/plugins/hooks/reference#hook-catalog)
-- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle and evaluation](/plugins/hooks/reference#skill-lifecycle-and-evaluation)
+- <a id="skill-lifecycle-and-evaluation"></a>[Skill lifecycle](/plugins/hooks/reference#skill-lifecycle)
 - <a id="channel-pairing-requests"></a>[Channel pairing requests](/plugins/hooks/reference#channel-pairing-requests)
 
 ### Tool call policy hooks
@@ -235,6 +304,7 @@ resolve here.
 - <a id="debug-runtime-hooks"></a>[Debug runtime hooks](/plugins/hooks/prompt-and-session#debug-runtime-hooks)
 - <a id="prompt-and-model-hooks"></a>[Prompt and model hooks](/plugins/hooks/prompt-and-session#prompt-and-model-hooks)
 - <a id="authorized-prompt-enrichment"></a>[Authorized prompt enrichment](/plugins/hooks/prompt-and-session#authorized-prompt-enrichment)
+- <a id="final-model-request-policy"></a>[Final model request policy](/plugins/hooks/prompt-and-session#final-model-request-policy)
 - <a id="session-extensions-and-next-turn-injections"></a>[Session extensions and next-turn injections](/plugins/hooks/prompt-and-session#session-extensions-and-next-turn-injections)
 
 ### Message and delivery hooks

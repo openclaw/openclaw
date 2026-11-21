@@ -41,10 +41,10 @@ Matrix can act as a native approval client. Configure under `channels.matrix.exe
 
 Authorization differs slightly between approval kinds:
 
-- **Exec approvals** use `execApprovals.approvers`, falling back to `dm.allowFrom`.
+- **Exec and system-agent approvals** use `execApprovals.approvers`, falling back to `dm.allowFrom`.
 - **Plugin approvals** authorize through `dm.allowFrom` only.
 
-Both kinds share Matrix reaction shortcuts and message updates. Approvers see reaction shortcuts on the primary approval message:
+All three kinds share Matrix reaction shortcuts and message updates, including reaction targets recovered from persisted state. Approvers see reaction shortcuts on the primary approval message:
 
 - ✅ allow once
 - ❌ deny

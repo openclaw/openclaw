@@ -2,6 +2,11 @@ import { isUtf8 } from "node:buffer";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  asPositiveFiniteNumber,
+  resolveIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
+import { copyOwnedBuffer, encodeOwnedBuffer } from "../shared/owned-buffer.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 
 export type CommandOutputCaptureMode = "head" | "tail" | "discard";
@@ -38,18 +43,15 @@ export function createCapturedOutputBuffers(): CapturedOutputBuffers {
   };
 }
 
-function normalizeMaxOutputBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_COMMAND_OUTPUT_MAX_BYTES;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
 export function resolveMaxOutputBytes(
   value: number | { stdout?: number; stderr?: number } | undefined,
   stream: CommandOutputStream,
 ): number {
-  return normalizeMaxOutputBytes(typeof value === "number" ? value : value?.[stream]);
+  return resolveIntegerOption(
+    asPositiveFiniteNumber(typeof value === "number" ? value : value?.[stream]),
+    DEFAULT_COMMAND_OUTPUT_MAX_BYTES,
+    { min: 1 },
+  );
 }
 
 export function resolveOutputCapture(
@@ -59,18 +61,11 @@ export function resolveOutputCapture(
   return (typeof value === "string" ? value : value?.[stream]) ?? "tail";
 }
 
-export function shouldTerminateOnOutputLimit(
+export function shouldTerminateOnOutput(
   value: CommandOutputLimitOption | undefined,
   limit: CommandOutputStream | "combined",
 ): boolean {
   return typeof value === "boolean" ? value : value?.[limit] === true;
-}
-
-export function shouldTerminateOnOutputError(
-  value: CommandOutputErrorOption | undefined,
-  stream: CommandOutputStream,
-): boolean {
-  return typeof value === "boolean" ? value : value?.[stream] === true;
 }
 
 export function appendCapturedOutput(
@@ -79,24 +74,24 @@ export function appendCapturedOutput(
   maxBytes: number,
   mode: CommandOutputCaptureMode,
 ): void {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
   if (mode === "discard") {
-    capture.truncatedBytes += buffer.byteLength;
+    capture.truncatedBytes += Buffer.byteLength(chunk);
     return;
   }
+  const buffer = Buffer.isBuffer(chunk) ? chunk : encodeOwnedBuffer(chunk);
   if (mode === "head") {
     const remaining = Math.max(0, maxBytes - capture.bytes);
     if (remaining > 0) {
       const kept = buffer.subarray(0, remaining);
       // A clipped prefix must not retain the discarded backing bytes.
-      capture.chunks.push(kept.byteLength < buffer.byteLength ? Buffer.from(kept) : kept);
+      capture.chunks.push(kept.byteLength < buffer.byteLength ? copyOwnedBuffer(kept) : kept);
       capture.bytes += kept.byteLength;
     }
     capture.truncatedBytes += Math.max(0, buffer.byteLength - remaining);
     return;
   }
   if (buffer.byteLength >= maxBytes) {
-    capture.chunks = [Buffer.from(buffer.subarray(buffer.byteLength - maxBytes))];
+    capture.chunks = [copyOwnedBuffer(buffer.subarray(buffer.byteLength - maxBytes))];
     capture.truncatedBytes += capture.bytes + buffer.byteLength - maxBytes;
     capture.bytes = maxBytes;
     return;
@@ -112,7 +107,7 @@ export function appendCapturedOutput(
       capture.bytes -= first.byteLength;
       capture.truncatedBytes += first.byteLength;
     } else {
-      capture.chunks[0] = Buffer.from(first.subarray(overflow));
+      capture.chunks[0] = copyOwnedBuffer(first.subarray(overflow));
       capture.bytes -= overflow;
       capture.truncatedBytes += overflow;
     }

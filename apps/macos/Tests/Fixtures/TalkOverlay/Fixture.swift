@@ -46,6 +46,52 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
                     if !hidden { failures += 1 }
                     panel.orderOut(nil)
                 }
+                for delay in [0, 40, 120] {
+                    let existing = Set(NSApplication.shared.windows.map(ObjectIdentifier.init))
+                    let controller = NotifyOverlayController()
+                    controller.present(
+                        title: "First notification",
+                        body: "Synthetic overlay proof",
+                        autoDismissAfter: 0)
+                    guard let panel = NSApplication.shared.windows.first(where: {
+                        $0 is NSPanel && !existing.contains(ObjectIdentifier($0))
+                    }) else {
+                        print("FAIL missing notification panel")
+                        exit(2)
+                    }
+                    try await Task.sleep(for: .milliseconds(240))
+                    if delay == 0,
+                       let output = ProcessInfo.processInfo.environment["OPENCLAW_OVERLAY_CAPTURE_DIR"],
+                       let content = panel.contentView,
+                       let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds)
+                    {
+                        content.cacheDisplay(in: content.bounds, to: bitmap)
+                        let directory = URL(fileURLWithPath: output, isDirectory: true)
+                        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                        try bitmap.representation(using: .png, properties: [:])?
+                            .write(to: directory.appendingPathComponent("notification-overlay.png"))
+                    }
+                    controller.dismiss()
+                    if delay > 0 { try await Task.sleep(for: .milliseconds(delay)) }
+                    controller.present(title: "Replacement notification", body: "Still visible", autoDismissAfter: 0)
+                    try await Task.sleep(for: .milliseconds(450))
+                    let shown = controller.model.isVisible && panel.isVisible && panel.alphaValue == 1
+                    print("notify reopen delay_ms=\(delay) model=\(controller.model.isVisible) " +
+                        "panel=\(panel.isVisible) alpha=\(panel.alphaValue) pass=\(shown)")
+                    if !shown { failures += 1 }
+
+                    controller.dismiss()
+                    let dismissing = controller.model.isVisible && panel.isVisible
+                    print("notify dismissing model=\(controller.model.isVisible) " +
+                        "panel=\(panel.isVisible) pass=\(dismissing)")
+                    if !dismissing { failures += 1 }
+                    try await Task.sleep(for: .milliseconds(250))
+                    let hidden = !controller.model.isVisible && !panel.isVisible
+                    print("notify dismiss model=\(controller.model.isVisible) " +
+                        "panel=\(panel.isVisible) pass=\(hidden)")
+                    if !hidden { failures += 1 }
+                    panel.orderOut(nil)
+                }
                 print("RESULT failures=\(failures)")
                 fflush(stdout)
                 exit(failures == 0 ? 0 : 1)

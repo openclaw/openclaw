@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { validateTelegramMiniAppInitData } from "./init-data.js";
 
 const BOT_TOKEN = "fixture";
@@ -8,11 +8,11 @@ const INIT_DATA = signedInitData({});
 
 describe("validateTelegramMiniAppInitData", () => {
   it("accepts a signed Telegram init-data fixture", () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(AUTH_DATE * 1000 + 10_000);
     expect(
       validateTelegramMiniAppInitData({
         initData: INIT_DATA,
         botToken: BOT_TOKEN,
-        nowMs: AUTH_DATE * 1000 + 10_000,
       }),
     ).toEqual({
       hash: fixtureHash(INIT_DATA),
@@ -22,32 +22,31 @@ describe("validateTelegramMiniAppInitData", () => {
   });
 
   it("rejects tampered, expired, and missing-user init data", () => {
+    using clock = vi.spyOn(Date, "now").mockReturnValue(AUTH_DATE * 1000 + 10_000);
     expect(
       validateTelegramMiniAppInitData({
         initData: INIT_DATA.replace(/hash=[^&]+/, "hash=short"),
         botToken: BOT_TOKEN,
-        nowMs: AUTH_DATE * 1000 + 10_000,
       }),
     ).toBeNull();
     expect(
       validateTelegramMiniAppInitData({
         initData: INIT_DATA.replace("Ayaan", "Mallory"),
         botToken: BOT_TOKEN,
-        nowMs: AUTH_DATE * 1000 + 10_000,
       }),
     ).toBeNull();
+    clock.mockReturnValue(AUTH_DATE * 1000 + 301_000);
     expect(
       validateTelegramMiniAppInitData({
         initData: INIT_DATA,
         botToken: BOT_TOKEN,
-        nowMs: AUTH_DATE * 1000 + 301_000,
       }),
     ).toBeNull();
+    clock.mockReturnValue(AUTH_DATE * 1000);
     expect(
       validateTelegramMiniAppInitData({
         initData: signedInitData({ user: "" }),
         botToken: BOT_TOKEN,
-        nowMs: AUTH_DATE * 1000,
       }),
     ).toBeNull();
   });

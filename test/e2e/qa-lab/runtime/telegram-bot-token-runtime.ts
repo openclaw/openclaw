@@ -2,8 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "../../../../extensions/qa-lab/src/live-transports/shared/credential-lease.runtime.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
-import { loadQaRuntimeModule } from "../../../../src/plugin-sdk/qa-runtime.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -55,7 +58,7 @@ type TelegramCredentialLeaseHeartbeat = {
 const defaultDependencies: TelegramRuntimeDependencies = {
   acquireCredential: async (env) => {
     const directCredential = resolveLeasedToken(env);
-    return await loadQaRuntimeModule().acquireQaCredentialLease({
+    return await acquireQaCredentialLease({
       env,
       kind: "telegram",
       source: directCredential ? "env" : env.OPENCLAW_QA_CREDENTIAL_SOURCE,
@@ -69,7 +72,7 @@ const defaultDependencies: TelegramRuntimeDependencies = {
     });
   },
   createInstance: createOpenClawTestInstance,
-  startCredentialHeartbeat: (lease) => loadQaRuntimeModule().startQaCredentialLeaseHeartbeat(lease),
+  startCredentialHeartbeat: (lease) => startQaCredentialLeaseHeartbeat(lease),
 };
 
 const wait = (durationMs: number) =>
@@ -241,7 +244,10 @@ export async function runTelegramBotTokenRuntime(
         OPENCLAW_SKIP_CHANNELS: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        TELEGRAM_BOT_TOKEN: "qa-invalid-precedence-decoy",
+        // Keep the isolated named account authoritative. A generic token would
+        // also activate the implicit default account and make Gateway readiness
+        // depend on an unrelated getMe probe.
+        TELEGRAM_BOT_TOKEN: undefined,
       },
       startTimeoutMs: options.startupTimeoutMs,
     });
@@ -286,10 +292,7 @@ export async function runTelegramBotTokenRuntime(
 }
 
 export const testing = {
-  parseOptions,
-  parseTelegramCredentialPayload,
   resolveLeasedToken,
-  sanitizeRuntimeLogs,
   waitForProductStartup,
 };
 

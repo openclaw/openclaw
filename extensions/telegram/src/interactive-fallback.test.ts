@@ -1,9 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
-import { handleTelegramQuestionCallback } from "./bot-handlers.callback-actions.js";
+import { describe, expect, it } from "vitest";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
 describe("canonicalizeTelegramPresentationPayload", () => {
+  it("keeps agent ownership for sends queued by v2026.11.5", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Pick one",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "A", action: { type: "callback", value: "pick:a" } }],
+          },
+        ],
+      },
+      channelData: { telegram: { typedCallbackOwner: "agent" } },
+    });
+
+    const telegram = result.channelData?.telegram as { buttons?: unknown } | undefined;
+    expect(telegram?.buttons).toEqual([[{ text: "A", callback_data: "::pick:a" }]]);
+  });
+
   it("preserves mixed presentation order while moving controls to Telegram buttons", () => {
     const result = canonicalizeTelegramPresentationPayload({
       text: "Top-level summary",
@@ -112,18 +129,6 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     },
   );
 
-  it("keeps native Telegram button-only payloads deliverable", () => {
-    const buttons = [[{ text: "Retry", callback_data: "retry" }]];
-    const result = canonicalizeTelegramPresentationPayload({
-      channelData: { telegram: { buttons } },
-    });
-
-    expect(result).toEqual({
-      text: "Choose an option.",
-      channelData: { telegram: { buttons } },
-    });
-  });
-
   it("preserves select prompts and maps option labels only to native buttons", () => {
     const result = canonicalizeTelegramPresentationPayload({
       presentation: {
@@ -154,7 +159,12 @@ describe("canonicalizeTelegramPresentationPayload", () => {
 
   it("preserves the fourth question option after Telegram splits its button rows", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
-    const optionValues = ["Staging", "Déployer", "東京", "Production 🚀"];
+    const optionValues = [
+      "Use the safe deployment target",
+      "Deploy directly to production",
+      "東京",
+      "Production 🚀",
+    ];
     const result = canonicalizeTelegramPresentationPayload({
       channelData: { askUser: { questionId, optionValues } },
       presentation: {
@@ -170,14 +180,22 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       },
     });
     const telegram = result.channelData?.telegram as
-      | { buttons?: ReadonlyArray<ReadonlyArray<{ callback_data?: string }>> }
+      | { buttons?: ReadonlyArray<ReadonlyArray<{ text: string; callback_data?: string }>> }
       | undefined;
     const rows = telegram?.buttons;
 
-    expect(rows?.map((row) => row.length)).toEqual([1, 1, 1, 1]);
-    expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual(
-      optionValues.map((_, optionIndex) => `tgq1:${questionId}:${optionIndex}`),
-    );
+    expect(rows?.map((row) => row.map((button) => button.text))).toEqual([
+      ["Use the safe deployment target"],
+      ["Deploy directly to production"],
+      ["東京"],
+      ["Production 🚀"],
+    ]);
+    expect(rows?.flatMap((row) => row.map((button) => button.callback_data))).toEqual([
+      `tgq1:${questionId}:0`,
+      `tgq1:${questionId}:1`,
+      `tgq1:${questionId}:2`,
+      `tgq1:${questionId}:3`,
+    ]);
     expect(parseTelegramQuestionCallbackData(rows?.[3]?.[0]?.callback_data)).toEqual({
       questionId,
       intent: "select",
@@ -185,7 +203,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     });
   });
 
-  it("resolves canonical option C when rendered option A repeats across blocks", async () => {
+  it("resolves canonical option C when rendered option A repeats across blocks", () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
     const canonicalOptionValues = ["A", "B", "C"];
     const questionButton = (optionValue: string) => ({
@@ -219,33 +237,47 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       intent: "select",
       optionIndex: 2,
     });
-    if (!callback) {
-      throw new Error("expected canonical Telegram option C callback data");
-    }
-    const resolveQuestion = vi.fn(async (params: { optionIndex?: number }) => ({
-      status: "answered" as const,
-      questionId: "destination",
-      optionValue: canonicalOptionValues[params.optionIndex ?? -1] ?? "",
-    }));
-    const feedback = vi.fn(async () => undefined);
+  });
 
-    await handleTelegramQuestionCallback({
-      callback,
-      cfg: {},
-      senderId: "42",
-      feedback,
-      resolveQuestion,
+  it("keeps a valid choice and custom input after an invalid question action", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const result = canonicalizeTelegramPresentationPayload({
+      channelData: { askUser: { questionId, optionValues: ["Valid", "Other"] } },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Invalid",
+                action: {
+                  type: "question",
+                  questionId: "not-a-gateway-question",
+                  optionValue: "Invalid",
+                },
+              },
+              {
+                label: "Valid",
+                action: { type: "question", questionId, optionValue: "Valid" },
+              },
+              {
+                label: "Other…",
+                action: { type: "question", questionId, intent: "custom-input" },
+              },
+            ],
+          },
+        ],
+      },
     });
+    const telegram = result.channelData?.telegram as
+      | { buttons?: ReadonlyArray<ReadonlyArray<{ text: string; callback_data?: string }>> }
+      | undefined;
 
-    expect(resolveQuestion).toHaveBeenCalledWith(
-      expect.objectContaining({ questionId, optionIndex: 2 }),
-    );
-    await expect(resolveQuestion.mock.results[0]?.value).resolves.toMatchObject({
-      status: "answered",
-      questionId: "destination",
-      optionValue: "C",
-    });
-    expect(feedback).toHaveBeenCalledWith("Answer submitted.", "terminal");
+    expect(result.text).toContain("Invalid");
+    expect(telegram?.buttons).toMatchObject([
+      [{ text: "Valid", callback_data: `tgq1:${questionId}:0` }],
+      [{ text: "Other…", callback_data: `tgqo1:${questionId}` }],
+    ]);
   });
 
   it.each([
@@ -264,8 +296,8 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     {
       label: "normalized and Unicode values",
       optionValues: [" Deploy ", "東京", "Production 🚀"],
-      renderedValues: ["production 🚀", "東京", "deploy"],
-      expectedIndices: [2, 1, 0],
+      renderedValues: ["production 🚀", "東京", "deploy", " Deploy "],
+      expectedIndices: [2, 1, 0, 0],
     },
   ])(
     "uses authoritative Gateway indices for $label",
@@ -302,13 +334,6 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       askUser: {
         questionId: "ask_fedcba9876543210fedcba9876543210",
         optionValues: ["A", "C"],
-      },
-    },
-    {
-      label: "ambiguous",
-      askUser: {
-        questionId: "ask_0123456789abcdef0123456789abcdef",
-        optionValues: [" A ", "a"],
       },
     },
     {
@@ -358,13 +383,18 @@ describe("canonicalizeTelegramPresentationPayload", () => {
             buttons: [
               { label: "Retry", value: "retry" },
               { label: "Copy manually", value: "x".repeat(65) },
+              {
+                label: "Hosted widget",
+                action: { type: "web-app", widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
+              },
             ],
           },
         ],
       },
     });
 
-    expect(result.text).toBe("- Copy manually");
+    expect(result.text).toContain("Copy manually");
+    expect(result.text).toContain("Hosted widget");
     expect(result.text).not.toContain("Retry");
     expect(result.channelData?.telegram).toEqual({
       buttons: [[{ text: "Retry", callback_data: "retry" }]],

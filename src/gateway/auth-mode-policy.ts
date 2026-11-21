@@ -1,5 +1,3 @@
-// Gateway auth mode policy rejects ambiguous token+password config before
-// credential resolution can choose the wrong side.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 
@@ -9,7 +7,6 @@ import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 const EXPLICIT_GATEWAY_AUTH_MODE_REQUIRED_ERROR =
   "Invalid config: gateway.auth.token and gateway.auth.password are both configured, but gateway.auth.mode is unset. Set gateway.auth.mode to token or password.";
 
-/** Returns true when local gateway auth config needs an explicit token/password mode. */
 export function hasAmbiguousGatewayAuthModeConfig(cfg: OpenClawConfig): boolean {
   const auth = cfg.gateway?.auth;
   if (!auth) {
@@ -24,7 +21,6 @@ export function hasAmbiguousGatewayAuthModeConfig(cfg: OpenClawConfig): boolean 
   return tokenConfigured && passwordConfigured;
 }
 
-/** Throws the public config error used by setup, doctor, and gateway startup validation. */
 export function assertExplicitGatewayAuthModeWhenBothConfigured(cfg: OpenClawConfig): void {
   if (!hasAmbiguousGatewayAuthModeConfig(cfg)) {
     return;

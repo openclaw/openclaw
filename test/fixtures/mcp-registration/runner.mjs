@@ -89,10 +89,13 @@ fs.writeFileSync(
 );
 fs.symlinkSync(path.join(repo, "node_modules"), path.join(root, "node_modules"), "dir");
 const bootstrap = path.join(root, "serve.mjs");
+const serverEntry = sdkHost
+  ? path.join(sdkHost, "dist/mcp/plugin-tools-serve.js")
+  : path.join(repo, "src/mcp/plugin-tools-serve.ts");
 const closeFault =
   mode === "close-failure"
     ? `
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 const close = StdioServerTransport.prototype.close;
 StdioServerTransport.prototype.close = async function() {
   await close.call(this);
@@ -103,7 +106,7 @@ StdioServerTransport.prototype.close = async function() {
 fs.writeFileSync(
   bootstrap,
   `${closeFault}
-import { servePluginToolsMcp } from ${JSON.stringify(pathToFileURL(path.join(repo, "src/mcp/plugin-tools-serve.ts")).href)};
+import { servePluginToolsMcp } from ${JSON.stringify(pathToFileURL(serverEntry).href)};
 try {
   await servePluginToolsMcp();
   process.stderr.write('MCP_OWNERSHIP_PROOF {"phase":"serve-returned"}\\n');

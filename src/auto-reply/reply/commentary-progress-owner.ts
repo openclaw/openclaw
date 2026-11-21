@@ -1,30 +1,44 @@
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 
-type CommentaryProgressOwnerOptions = Pick<
-  GetReplyOptions,
-  "onVerboseProgressVisibility" | "shouldDeliverCommentaryPayloads"
->;
-
 /** Freezes and registers one commentary owner for the current agent turn. */
-export function resolveTurnCommentaryProgressOwner(params: {
+export async function resolveTurnCommentaryProgressOwner(params: {
   commentaryPayloadsEnabled: boolean;
-  options?: CommentaryProgressOwnerOptions;
+  options?: Pick<
+    GetReplyOptions,
+    | "onVerboseProgressVisibility"
+    | "onVerboseProgressVisibilityAsync"
+    | "shouldDeliverCommentaryPayloads"
+  >;
   resolveVerboseProgressVisibility: () => boolean;
-}): {
+  resolveVerboseProgressVisibilityAsync: () => Promise<boolean>;
+}): Promise<{
   commentaryPayloadsEnabled: boolean;
   draftOwnsCommentaryProgress: boolean;
-} {
+}> {
   const shouldDeliverCommentaryPayloads = params.commentaryPayloadsEnabled
     ? params.options?.shouldDeliverCommentaryPayloads
     : undefined;
-  const frozenVerboseProgressVisibility = shouldDeliverCommentaryPayloads
-    ? params.resolveVerboseProgressVisibility()
-    : undefined;
-  params.options?.onVerboseProgressVisibility?.(
-    frozenVerboseProgressVisibility === undefined
-      ? params.resolveVerboseProgressVisibility
-      : () => frozenVerboseProgressVisibility,
-  );
+  if (params.options?.onVerboseProgressVisibilityAsync) {
+    const frozen = shouldDeliverCommentaryPayloads
+      ? await params.resolveVerboseProgressVisibilityAsync()
+      : undefined;
+    await params.options.onVerboseProgressVisibilityAsync(
+      frozen === undefined ? params.resolveVerboseProgressVisibilityAsync : async () => frozen,
+    );
+  } else if (params.options?.onVerboseProgressVisibility) {
+    warnPluginSdkDeprecation({
+      family: "reply-visibility",
+      method: "onVerboseProgressVisibility",
+      replacement: "onVerboseProgressVisibilityAsync with awaited visibility predicates",
+    });
+    const frozen = shouldDeliverCommentaryPayloads
+      ? params.resolveVerboseProgressVisibility()
+      : undefined;
+    params.options.onVerboseProgressVisibility(
+      frozen === undefined ? params.resolveVerboseProgressVisibility : () => frozen,
+    );
+  }
   const commentaryPayloadsEnabled =
     params.commentaryPayloadsEnabled && (shouldDeliverCommentaryPayloads?.() ?? true);
   return {

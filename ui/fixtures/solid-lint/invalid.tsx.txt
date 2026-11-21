@@ -1,0 +1,38 @@
+import { dynamic, type JSX } from "@solidjs/web";
+import { createEffect, createSignal } from "solid-js";
+
+export function Broken(props: { name: string }) {
+  const { name } = props;
+  return <p>{name}</p>;
+}
+
+export function BrokenParameter({ name }: { name: string }) {
+  return <p>{name}</p>;
+}
+
+export function BrokenOldNamespaces(props: { handler: (event: Event) => void }) {
+  return <div on:foo={props.handler} classList={{ old: true }} />;
+}
+
+export function BrokenEffect() {
+  const [count, setCount] = createSignal(0);
+  createEffect(() => {
+    document.title = String(count());
+  });
+  return <button onClick={() => setCount((value) => value + 1)}>{count()}</button>;
+}
+
+export function BrokenEagerDynamic(props: { component: () => JSX.Element }) {
+  const selected = props.component;
+  const Component = dynamic(() => selected);
+  return <Component />;
+}
+
+function selectComponent(read: () => () => JSX.Element) {
+  return read();
+}
+
+export function BrokenUntrackedSelector(props: { component: () => JSX.Element }) {
+  const Component = selectComponent(() => props.component);
+  return <Component />;
+}

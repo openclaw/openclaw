@@ -20,7 +20,7 @@ describe("configured app-server managed requirements", () => {
         restrictedToolSurface: true,
         allowConfiguredManagedHooks: true,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ enableManagedHooks: true });
   });
 
   it("admits the exact managed requirements captured for a scheduled restricted turn", async () => {
@@ -34,7 +34,7 @@ describe("configured app-server managed requirements", () => {
         restrictedToolSurface: true,
         allowedManagedRequirementsFingerprint: managedRequirementsFingerprint,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ enableManagedHooks: true });
   });
 
   it("fails closed when managed requirements change after scheduled authorization", async () => {
@@ -49,5 +49,18 @@ describe("configured app-server managed requirements", () => {
         allowedManagedRequirementsFingerprint,
       }),
     ).rejects.toThrow("managed requirements changed");
+  });
+
+  it("keeps an explicit managed disable above the attested hook inventory", async () => {
+    const request = vi.fn(async () => ({
+      requirements: { ...managedRequirements, featureRequirements: { hooks: false } },
+    }));
+    await expect(
+      assertCodexManagedRequirementsDoNotOverrideToolPolicy({ request } as never, {
+        restrictedToolSurface: true,
+        allowConfiguredManagedHooks: true,
+        privateManagedHooksPresent: true,
+      }),
+    ).resolves.toEqual({ enableManagedHooks: false });
   });
 });

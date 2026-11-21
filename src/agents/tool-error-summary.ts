@@ -19,7 +19,11 @@ export type ProcessTerminalDiagnostic = {
 
 export type ToolErrorSummary = {
   toolName: string;
+  /** The catalog tool a Tool Search dispatcher called; warnings name it instead of the dispatcher. */
+  dispatchedToolName?: string;
   executionStarted?: boolean;
+  /** The call named no tool this run has, so no later call can share its tool identity. */
+  unknownTool?: true;
   meta?: string;
   errorCode?: string;
   error?: string;
@@ -42,13 +46,7 @@ export function isExecLikeToolName(toolName: string): boolean {
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
 export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
+  return /\p{Cc}/u.test(value);
 }
 
 /** Accepts only the compact single-line diagnostic produced below. */

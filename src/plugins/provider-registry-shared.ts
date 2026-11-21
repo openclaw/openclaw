@@ -1,12 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import type { ProviderPlugin } from "./provider-plugin.types.js";
 
 /** A full snapshot retains shared-root scope; narrowed views may still use the ambient workspace. */
 export function resolveProviderRuntimeWorkspaceDir(
@@ -21,7 +17,6 @@ export function resolveProviderRuntimeWorkspaceDir(
   );
 }
 
-/** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
   const normalized = normalizeOptionalLowercaseString(providerId);
   return normalized && !isBlockedObjectKey(normalized) ? normalized : undefined;
@@ -67,22 +62,6 @@ export function matchesProviderPluginRef(
   );
 }
 
-/** Explicit API owners keep foreign aliases from taking over a configured provider route. */
-export function matchesProviderRuntimePlugin(
-  plugin: ProviderPlugin,
-  provider: string,
-  ownerRefs: readonly string[],
-): boolean {
-  if (ownerRefs.length === 0) {
-    return matchesProviderPluginRef(plugin, provider);
-  }
-  const literalId = normalizeLowercaseStringOrEmpty(provider);
-  return (
-    (Boolean(literalId) && normalizeLowercaseStringOrEmpty(plugin.id) === literalId) ||
-    ownerRefs.some((ownerRef) => matchesProviderPluginRef(plugin, ownerRef))
-  );
-}
-
 /** Preserves ordered alias overrides, including aliases of replaced canonical entries. */
 export function buildCapabilityProviderIndex<T extends { id: string; aliases?: readonly string[] }>(
   providers: readonly T[],
@@ -108,4 +87,19 @@ export function buildCapabilityProviderIndex<T extends { id: string; aliases?: r
   }
 
   return index;
+}
+
+/** Keeps provider lookups within one already-acquired operation scope. */
+export function createCapabilityProviderLookup<
+  T extends { id: string; aliases?: readonly string[] },
+>(providers: readonly T[]) {
+  const canonical = buildCapabilityProviderIndex(providers, "canonical");
+  const aliases = buildCapabilityProviderIndex(providers, "aliases");
+  return {
+    getProvider: (id: string | undefined) => {
+      const normalized = normalizeCapabilityProviderId(id);
+      return normalized ? aliases.get(normalized) : undefined;
+    },
+    listProviders: () => [...canonical.values()],
+  };
 }

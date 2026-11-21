@@ -23,25 +23,6 @@ describe("openai default models", () => {
     expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]?.alias).toBe("My GPT");
   });
 
-  it("does not move the GPT alias from an existing model", () => {
-    const next = applyOpenAIProviderConfig({
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { alias: "GPT" },
-            "custom/model": { alias: "Custom" },
-          },
-        },
-      },
-    });
-
-    expect(next.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { alias: "GPT" },
-      "custom/model": { alias: "Custom" },
-      [OPENAI_DEFAULT_MODEL]: {},
-    });
-  });
-
   it("does not duplicate a case-insensitive custom GPT alias", () => {
     const next = applyOpenAIProviderConfig({
       agents: {

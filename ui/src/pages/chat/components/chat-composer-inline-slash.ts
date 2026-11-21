@@ -3,11 +3,8 @@ import {
   type InlineSlashCompletion,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
-
-type InlineSlashState = {
-  slashMenuCompletion: InlineSlashCompletion | null;
-};
 
 type InlineSlashHost = {
   getDraft: () => string;
@@ -32,32 +29,27 @@ function commitDraftWithCaret(host: InlineSlashHost, next: string, caret: number
     if (!textarea) {
       return;
     }
-    textarea.focus({ preventScroll: true });
-    textarea.selectionStart = caret;
-    textarea.selectionEnd = caret;
+    focusComposerInput(textarea, { preventScroll: true });
+    selectComposerInput(textarea, caret, caret);
   });
 }
 
-export function commitInlineSlashSelection(
+/** Replaces only the completed slash token; surrounding draft text stays in place. */
+export function replaceSlashToken(
   replacement: string,
-  state: InlineSlashState,
+  completion: InlineSlashCompletion,
   host: InlineSlashHost,
-): boolean {
-  const completion = state.slashMenuCompletion;
-  if (!completion?.inline) {
-    return false;
-  }
+): void {
   const current = host.getTextarea()?.value ?? host.getDraft();
   const after = current.slice(completion.end);
   const separator = after.length === 0 || !/^\s/u.test(after) ? " " : "";
   const next = `${current.slice(0, completion.start)}${replacement}${separator}${after}`;
   commitDraftWithCaret(host, next, completion.start + replacement.length + separator.length);
-  return true;
 }
 
 export function beginInlineFreeformSlashArguments(
   commandName: string,
-  state: InlineSlashState,
+  state: { slashMenuCompletion: InlineSlashCompletion | null },
   host: InlineSlashHost,
 ): boolean {
   const completion = state.slashMenuCompletion;
@@ -68,7 +60,6 @@ export function beginInlineFreeformSlashArguments(
   const replacement = `/${commandName} `;
   const next = `${current.slice(0, completion.start)}${replacement}${current.slice(completion.end)}`;
   const caret = completion.start + replacement.length;
-  commitDraftWithCaret(host, next, caret);
   state.slashMenuCompletion = {
     query: commandName,
     start: completion.start,
@@ -76,23 +67,21 @@ export function beginInlineFreeformSlashArguments(
     inline: true,
     argumentStart: caret,
   };
+  commitDraftWithCaret(host, next, caret);
   return true;
 }
 
 export function removeInlineSlashSelection(
-  state: InlineSlashState,
+  completion: InlineSlashCompletion | null,
   host: InlineSlashHost,
 ): boolean {
-  const completion = state.slashMenuCompletion;
   if (!completion?.inline) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
   const before = current.slice(0, completion.start);
   let after = current.slice(completion.end);
-  if (/\s$/u.test(before) && /^\s/u.test(after)) {
-    after = after.slice(1);
-  } else if (before.length === 0 && /^\s/u.test(after)) {
+  if ((before.length === 0 || /\s$/u.test(before)) && /^\s/u.test(after)) {
     after = after.slice(1);
   }
   commitDraftWithCaret(host, `${before}${after}`, before.length);
@@ -117,7 +106,7 @@ export function hasActiveInlineSlashArgumentPrefix(
 
 export function findDirectInlineSlashArgumentInvocation(
   text: string,
-  caret = text.length,
+  caret: number,
 ): InlineSlashArgumentInvocation | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);
@@ -125,12 +114,8 @@ export function findDirectInlineSlashArgumentInvocation(
   let invocation: InlineSlashArgumentInvocation | null = null;
 
   for (const match of prefix.matchAll(commandPattern)) {
-    const typedName = match[1]?.toLowerCase();
-    if (!typedName || match.index === undefined) {
-      continue;
-    }
+    const typedName = match[1]!.toLowerCase();
     const command = getSlashCommandCompletions(typedName, {
-      showAll: true,
       inlineOnly: true,
     }).find(
       (entry) =>
@@ -151,8 +136,7 @@ export function findDirectInlineSlashArgumentInvocation(
         query: typedName,
         start,
         end: boundedCaret,
-        inline:
-          text.slice(0, start).trim().length > 0 || text.slice(boundedCaret).trim().length > 0,
+        inline: text.slice(0, start).trim().length > 0,
         argumentStart: match.index + match[0].length,
       },
     };

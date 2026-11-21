@@ -1,5 +1,6 @@
 package ai.openclaw.wear
 
+import ai.openclaw.wear.shared.wearSha256Hex
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationChannel
@@ -20,7 +21,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import java.security.MessageDigest
 
 internal class WearReplyNotifier(
   private val context: Context,
@@ -31,9 +31,6 @@ internal class WearReplyNotifier(
     val message = event.message ?: return
     if (message.role != "assistant") return
     val sessionKey = event.sessionKey ?: return
-    if (!notificationsAllowed()) return
-
-    createChannel()
     val fallbackIdentity =
       event.runId
         ?: listOf(
@@ -42,19 +39,10 @@ internal class WearReplyNotifier(
           "sequence:${inbound.sequence}",
         ).joinToString("\u0000")
     val notificationTag = replyNotificationTag(sessionKey, message, fallbackIdentity)
-    val requestCode = NOTIFICATION_ID
-    val replyAction = createReplyAction(sessionKey, notificationTag, inbound.sourceNodeId)
-    val openPendingIntent = createOpenAppIntent(requestCode)
-    val agent = Person.Builder().setName("OpenClaw").build()
-    val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_title))
-        .setContentText(message.text)
-        .setContentIntent(openPendingIntent)
-        .setAutoCancel(true)
-        .setLocalOnly(true)
+    notify(notificationTag) {
+      val replyAction = createReplyAction(sessionKey, notificationTag, inbound.sourceNodeId)
+      val agent = Person.Builder().setName("OpenClaw").build()
+      replyNotification(context.getString(R.string.notification_title), message.text)
         .setOnlyAlertOnce(true)
         .setStyle(
           NotificationCompat
@@ -62,7 +50,7 @@ internal class WearReplyNotifier(
             .addMessage(message.text, message.timestamp ?: System.currentTimeMillis(), agent),
         ).addAction(replyAction)
         .build()
-    notify(notificationTag, notification)
+    }
   }
 
   fun showReplyFailure(
@@ -70,44 +58,42 @@ internal class WearReplyNotifier(
     notificationTag: String,
     phoneNodeId: String,
   ) {
-    if (!notificationsAllowed()) return
-    createChannel()
-    val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_reply_failed_title))
-        .setContentText(context.getString(R.string.notification_reply_failed_text))
-        .setAutoCancel(true)
-        .setLocalOnly(true)
-        .addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
+    notify(notificationTag) {
+      replyNotification(
+        context.getString(R.string.notification_reply_failed_title),
+        context.getString(R.string.notification_reply_failed_text),
+      ).addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))
         .build()
-    notify(notificationTag, notification)
+    }
   }
 
   fun showPreferredPhoneChanged(notificationTag: String) {
-    if (!notificationsAllowed()) return
-    createChannel()
-    val notification =
-      NotificationCompat
-        .Builder(context, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle(context.getString(R.string.notification_phone_changed_title))
-        .setContentText(context.getString(R.string.notification_phone_changed_text))
-        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
-        .setAutoCancel(true)
-        .setLocalOnly(true)
-        .build()
-    notify(notificationTag, notification)
+    notify(notificationTag) {
+      replyNotification(
+        context.getString(R.string.notification_phone_changed_title),
+        context.getString(R.string.notification_phone_changed_text),
+      ).build()
+    }
   }
 
-  private fun createOpenAppIntent(requestCode: Int): PendingIntent =
-    PendingIntent.getActivity(
-      context,
-      requestCode,
-      Intent(context, MainActivity::class.java),
-      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
+  private fun replyNotification(
+    title: String,
+    text: String,
+  ): NotificationCompat.Builder =
+    NotificationCompat
+      .Builder(context, CHANNEL_ID)
+      .setSmallIcon(R.drawable.ic_notification)
+      .setContentTitle(title)
+      .setContentText(text)
+      .setContentIntent(
+        PendingIntent.getActivity(
+          context,
+          NOTIFICATION_ID,
+          Intent(context, MainActivity::class.java),
+          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        ),
+      ).setAutoCancel(true)
+      .setLocalOnly(true)
 
   private fun createReplyAction(
     sessionKey: String,
@@ -143,27 +129,27 @@ internal class WearReplyNotifier(
       .build()
   }
 
-  private fun createChannel() {
-    val manager = context.getSystemService(NotificationManager::class.java)
-    if (manager.getNotificationChannel(CHANNEL_ID) != null) return
-    manager.createNotificationChannel(
-      NotificationChannel(
-        CHANNEL_ID,
-        context.getString(R.string.notification_channel_name),
-        NotificationManager.IMPORTANCE_DEFAULT,
-      ),
-    )
-  }
-
   private fun notificationsAllowed(): Boolean =
     Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
       ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
   @SuppressLint("MissingPermission")
-  private fun notify(
+  private inline fun notify(
     notificationTag: String,
-    notification: android.app.Notification,
+    build: () -> android.app.Notification,
   ) {
+    if (!notificationsAllowed()) return
+    val manager = context.getSystemService(NotificationManager::class.java)
+    if (manager.getNotificationChannel(CHANNEL_ID) == null) {
+      manager.createNotificationChannel(
+        NotificationChannel(
+          CHANNEL_ID,
+          context.getString(R.string.notification_channel_name),
+          NotificationManager.IMPORTANCE_DEFAULT,
+        ),
+      )
+    }
+    val notification = build()
     if (!notificationsAllowed()) return
     try {
       NotificationManagerCompat.from(context).notify(notificationTag, NOTIFICATION_ID, notification)
@@ -211,26 +197,17 @@ class WearReplyReceiver : BroadcastReceiver() {
               idempotencyKey = notificationReplyIdempotencyKey(sessionKey, notificationTag, reply),
               phoneNodeId = phoneNodeId,
             ),
-            requirePreferredPhone = true,
           )
         }
         NotificationManagerCompat.from(context).cancel(notificationTag, NOTIFICATION_ID)
-      } catch (err: TimeoutCancellationException) {
-        Log.w(LOG_TAG, "Wear notification reply timed out", err)
-        WearReplyNotifier(context.applicationContext).showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-      } catch (err: CancellationException) {
-        throw err
       } catch (err: Throwable) {
-        Log.w(LOG_TAG, "Wear notification reply failed", err)
+        if (err is CancellationException && err !is TimeoutCancellationException) throw err
+        val message = if (err is TimeoutCancellationException) "Wear notification reply timed out" else "Wear notification reply failed"
+        Log.w(LOG_TAG, message, err)
         val notifier = WearReplyNotifier(context.applicationContext)
         when (notificationReplyFailureAction(err)) {
-          NotificationReplyFailureAction.RetrySamePhone -> {
-            notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
-          }
-
-          NotificationReplyFailureAction.OpenApp -> {
-            notifier.showPreferredPhoneChanged(notificationTag)
-          }
+          NotificationReplyFailureAction.RetrySamePhone -> notifier.showReplyFailure(sessionKey, notificationTag, phoneNodeId)
+          NotificationReplyFailureAction.OpenApp -> notifier.showPreferredPhoneChanged(notificationTag)
         }
       } finally {
         pendingResult.finish()
@@ -254,19 +231,19 @@ internal fun replyNotificationTag(
       message.timestamp != null -> "timestamp:${message.timestamp}\u0000${message.role}\u0000${message.text}"
       else -> "fallback:$fallbackIdentity"
     }
-  return "ai.openclaw.wear.NOTIFICATION.${sha256("$sessionKey\u0000$messageIdentity")}"
+  return "ai.openclaw.wear.NOTIFICATION.${wearSha256Hex("$sessionKey\u0000$messageIdentity")}"
 }
 
 internal fun replyPendingIntentAction(
   sessionKey: String,
   notificationTag: String,
-): String = "ai.openclaw.wear.REPLY.${sha256("$sessionKey\u0000$notificationTag")}"
+): String = "ai.openclaw.wear.REPLY.${wearSha256Hex("$sessionKey\u0000$notificationTag")}"
 
 internal fun notificationReplyIdempotencyKey(
   sessionKey: String,
   notificationTag: String,
   reply: String,
-): String = "wear-notification-${sha256("$sessionKey\u0000$notificationTag\u0000$reply")}"
+): String = "wear-notification-${wearSha256Hex("$sessionKey\u0000$notificationTag\u0000$reply")}"
 
 internal enum class NotificationReplyFailureAction {
   RetrySamePhone,
@@ -279,11 +256,6 @@ internal fun notificationReplyFailureAction(error: Throwable): NotificationReply
   } else {
     NotificationReplyFailureAction.RetrySamePhone
   }
-
-private fun sha256(value: String): String {
-  val digest = MessageDigest.getInstance("SHA-256").digest(value.encodeToByteArray())
-  return digest.joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
-}
 
 private const val LOG_TAG = "OpenClawWear"
 private const val NOTIFICATION_ID = 7301

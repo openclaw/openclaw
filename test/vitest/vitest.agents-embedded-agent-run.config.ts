@@ -1,4 +1,4 @@
-// Vitest embedded agent run config keeps the run subtree in a bounded serial shard.
+// Vitest embedded agent run config owns the attempt-runner subtree.
 import { agentVitestProjectOwners } from "./vitest.agents-paths.mjs";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
@@ -7,7 +7,7 @@ export function createAgentsEmbeddedRunVitestConfig(env?: Record<string, string 
   return createScopedVitestConfig(owner.include, {
     dir: owner.dir,
     env,
-    fileParallelism: false,
+    exclude: owner.exclude,
     name: owner.name,
   });
 }

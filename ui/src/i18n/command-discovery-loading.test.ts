@@ -1,0 +1,78 @@
+/* @vitest-environment jsdom */
+import { describe, expect, it } from "vitest";
+import { flattenTranslations } from "../../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
+
+const loadI18n = useLazyEnglishTest();
+
+describe("command discovery English loading", () => {
+  it("loads slash-command titles without session-management copy", async () => {
+    const { manager } = await loadI18n();
+    const { getSlashCommandTitle } = await import("../lib/chat/commands.ts");
+    for (const [key, title] of [
+      ["name", "Rename session"],
+      ["verbose", "Verbose"],
+      ["reasoning", "Reasoning"],
+    ] as const) {
+      expect(getSlashCommandTitle({ key, name: key, description: "" })).toBe(title);
+    }
+    expect(manager.t("sessionsView.personalGroupScopeMine")).toBe(
+      "sessionsView.personalGroupScopeMine",
+    );
+  });
+
+  it.each([
+    {
+      surface: "palette search",
+      load: () => import("../components/command-palette-catalog-search.ts"),
+    },
+    { surface: "shortcut help", load: () => import("../components/keyboard-shortcuts-dialog.tsx") },
+  ])("registers fallback copy before $surface reads it", async ({ load }) => {
+    const { manager } = await loadI18n();
+    expect(manager.t("palette.placeholder")).toBe("Search or start a task…");
+    expect(manager.t("palette.categories.navigation")).toBe("Navigation");
+    expect(manager.t("shortcutsOverlay.title")).toBe("Keyboard shortcuts");
+    expect(manager.t("commandPalette.newSessionSettings")).toBe(
+      "commandPalette.newSessionSettings",
+    );
+    await manager.setLocale("de");
+    await load();
+    const { registerCommandPaletteEnglish } = await import("./locales/en-command-palette.ts");
+    for (const [key, value] of flattenTranslations(registerCommandPaletteEnglish.catalog)) {
+      expect(manager.t(key)).toBe(value);
+    }
+    expect(manager.t("common.health")).toBe("Gesundheit");
+    expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+    expect(manager.t("chat.commands.menu")).toBe("Slash commands");
+  });
+
+  it.each<[key: string, expected: string, load: () => Promise<unknown>]>([
+    [
+      "sessionsView.transcriptSearchTitle",
+      "Search chats",
+      () => import("../pages/sessions/view.tsx"),
+    ],
+    ["chat.commands.menu", "Slash commands", () => import("../lib/chat/commands.ts")],
+    [
+      "chat.welcome.recentSessions",
+      "Recent sessions",
+      () => import("../pages/chat/components/chat-welcome.tsx"),
+    ],
+  ])("loads only %s copy before discovery opens", async (key, expected, load) => {
+    const { manager } = await loadI18n();
+    await manager.setLocale("de");
+    await load();
+    expect(manager.t(key)).toBe(expected);
+    expect(manager.t("commandPalette.newSessionSettings")).toBe(
+      "commandPalette.newSessionSettings",
+    );
+    expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe(
+      "shortcutsOverlay.labels.sendMessage",
+    );
+    expect(manager.t("common.health")).toBe("Gesundheit");
+    const { registerCommandPaletteEnglish } = await import("./locales/en-command-palette.ts");
+    registerCommandPaletteEnglish();
+    expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
+    expect(manager.t("shortcutsOverlay.labels.sendMessage")).toBe("Send message");
+  });
+});

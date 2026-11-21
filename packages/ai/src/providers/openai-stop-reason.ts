@@ -9,15 +9,14 @@ export function mapOpenAIStopReason(
   reason: string | null,
   options?: { allowSingularToolCall?: boolean },
 ): OpenAIStopReasonResult {
-  if (reason === null) {
-    return { stopReason: "stop" };
-  }
-
   switch (reason) {
+    case null:
     case "stop":
+    case "STOP":
     case "end":
       return { stopReason: "stop" };
     case "length":
+    case "MAX_TOKENS":
       return { stopReason: "length" };
     case "function_call":
     case "tool_calls":
@@ -27,10 +26,6 @@ export function mapOpenAIStopReason(
         return { stopReason: "toolUse" };
       }
       break;
-    case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
-    case "network_error":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
   }
 
   return {

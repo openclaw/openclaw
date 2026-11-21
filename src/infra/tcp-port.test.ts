@@ -5,6 +5,9 @@ import { parseTcpPort, parseTcpPortFromArgs } from "./tcp-port.js";
 describe("parseTcpPort", () => {
   it("accepts valid TCP port values", () => {
     expect(parseTcpPort(1)).toBe(1);
+    expect(parseTcpPort(8080)).toBe(8080);
+    expect(parseTcpPort("3000")).toBe(3000);
+    expect(parseTcpPort(65_535)).toBe(65_535);
     expect(parseTcpPort("8080")).toBe(8080);
     expect(parseTcpPort(" 65535 ")).toBe(65_535);
   });
@@ -13,11 +16,20 @@ describe("parseTcpPort", () => {
     expect(parseTcpPort(undefined)).toBeNull();
     expect(parseTcpPort(null)).toBeNull();
     expect(parseTcpPort(0)).toBeNull();
+    expect(parseTcpPort("0")).toBeNull();
     expect(parseTcpPort(-1)).toBeNull();
     expect(parseTcpPort(65_536)).toBeNull();
+    expect(parseTcpPort(99999)).toBeNull();
+    expect(parseTcpPort(Number.MAX_SAFE_INTEGER + 1)).toBeNull();
     expect(parseTcpPort("100000")).toBeNull();
     expect(parseTcpPort("8080ms")).toBeNull();
     expect(parseTcpPort("1.5")).toBeNull();
+    expect(parseTcpPort(1.5)).toBeNull();
+    expect(parseTcpPort(Number.NaN)).toBeNull();
+    expect(parseTcpPort(Number.POSITIVE_INFINITY)).toBeNull();
+    expect(parseTcpPort("abc")).toBeNull();
+    expect(parseTcpPort("0x10")).toBeNull();
+    expect(parseTcpPort("1e3")).toBeNull();
   });
 });
 

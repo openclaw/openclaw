@@ -1,6 +1,6 @@
+import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 // Msteams tests cover http error plugin behavior.
 import { describe, expect, it } from "vitest";
-import { createMSTeamsHttpError } from "./http-error.js";
 
 function bodyOnlyErrorResponse(body: string, status = 429): Response {
   return {
@@ -13,7 +13,7 @@ function bodyOnlyErrorResponse(body: string, status = 429): Response {
 
 describe("msteams http errors", () => {
   it("creates bounded provider errors without relying on response.text()", async () => {
-    const error = await createMSTeamsHttpError(
+    const error = await createProviderHttpError(
       bodyOnlyErrorResponse(`${"x".repeat(24 * 1024)}tail-marker`),
       "Teams request failed",
     );

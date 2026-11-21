@@ -1,4 +1,5 @@
 import "./mutation-lineage.js";
+import type { AuthProfileStore } from "./types.js";
 
 type RuntimeSnapshotsTestApi = {
   MAX_PERSISTED_MUTATION_OWNERS: number;
@@ -23,3 +24,27 @@ export const testing: RuntimeSnapshotsTestApi = {
   getPersistedMutationRecordCounts: () => getTestApi().getPersistedMutationRecordCounts(),
   resetPersistedMutationLineage: () => getTestApi().resetPersistedMutationLineage(),
 };
+
+export function createSnapshotStore(access: string): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "oauth",
+        provider: "openai",
+        access,
+        refresh: `refresh-${access}`,
+        expires: Date.now() + 60_000,
+        accountId: "acct-1",
+      },
+    },
+    order: {
+      openai: ["openai:default"],
+    },
+    usageStats: {
+      "openai:default": {
+        lastUsed: 1,
+      },
+    },
+  };
+}

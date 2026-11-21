@@ -1,31 +1,19 @@
 import crypto from "node:crypto";
+import {
+  canonicalRelayAuthProofBytes,
+  type RelayAuthProofFields as BrowserRelayProofFields,
+} from "../../../chrome-extension/modules/relay-auth-v2-crypto.js";
 
-export const BROWSER_RELAY_AUTH_LABEL = "openclaw.browser-relay.auth" as const;
-export const BROWSER_RELAY_AUTH_VERSION = 2 as const;
+export {
+  RELAY_AUTH_LABEL as BROWSER_RELAY_AUTH_LABEL,
+  RELAY_AUTH_VERSION as BROWSER_RELAY_AUTH_VERSION,
+  type RelayAuthProofFields as BrowserRelayProofFields,
+} from "../../../chrome-extension/modules/relay-auth-v2-crypto.js";
 
 const KEY_HEX_PATTERN = /^[0-9a-f]{64}$/u;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 
 type BrowserRelayProofKind = "server" | "client" | "accept";
-type BrowserRelayRole = "extension" | "cdp";
-type BrowserRelayTransport = "websocket" | "connection";
-type BrowserRelayMethod = "GET" | "SEQUENCE";
-type BrowserRelayFlow = "extension" | "cdp" | "json-list" | "owner";
-
-export type BrowserRelayProofFields = {
-  keyId: string;
-  instanceId: string;
-  sessionId: string;
-  clientNonce: string;
-  serverNonce: string;
-  issuedAtMs: number;
-  expiresAtMs: number;
-  role: BrowserRelayRole;
-  transport: BrowserRelayTransport;
-  method: BrowserRelayMethod;
-  resource: string;
-  flow: BrowserRelayFlow;
-};
 
 export type BrowserRelayAuthChallenge = BrowserRelayProofFields & {
   type: "auth.challenge";
@@ -79,46 +67,18 @@ export function randomRelayId(): string {
   return crypto.randomBytes(16).toString("base64url");
 }
 
-function canonicalRelayProofBytes(
-  proofKind: BrowserRelayProofKind,
-  fields: BrowserRelayProofFields,
-  clientProof?: string,
-): Buffer {
-  const values: unknown[] = [
-    BROWSER_RELAY_AUTH_LABEL,
-    BROWSER_RELAY_AUTH_VERSION,
-    proofKind,
-    fields.keyId,
-    fields.instanceId,
-    fields.sessionId,
-    fields.clientNonce,
-    fields.serverNonce,
-    fields.issuedAtMs,
-    fields.expiresAtMs,
-    fields.role,
-    fields.transport,
-    fields.method,
-    fields.resource,
-    fields.flow,
-  ];
-  if (proofKind === "accept") {
-    if (!isCanonicalBase64UrlBytes(clientProof, 32)) {
-      throw new Error("accept proof requires a 32-byte client proof");
-    }
-    values.push(clientProof);
-  }
-  return Buffer.from(JSON.stringify(values), "utf8");
-}
-
 export function createRelayProof(
   keyHex: string,
   proofKind: BrowserRelayProofKind,
   fields: BrowserRelayProofFields,
   clientProof?: string,
 ): string {
-  return crypto
-    .createHmac("sha256", decodeRelayKey(keyHex))
-    .update(canonicalRelayProofBytes(proofKind, fields, clientProof))
+  const hmac = crypto.createHmac("sha256", decodeRelayKey(keyHex));
+  if (proofKind === "accept" && !isCanonicalBase64UrlBytes(clientProof, 32)) {
+    throw new Error("accept proof requires a 32-byte client proof");
+  }
+  return hmac
+    .update(canonicalRelayAuthProofBytes(proofKind, fields, clientProof))
     .digest("base64url");
 }
 

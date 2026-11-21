@@ -40,7 +40,7 @@ Then give this compact orientation, using the actual worksheet contents:
   condition.
 - **How to leave feedback:** as they test, they should simply tell the agent
   their notes and name the surface (for example, `Models: switching persisted
-after restart`). The agent adds those notes to that surface's **Testing
+  after restart`). The agent adds those notes to that surface's **Testing
   notes** cell. They do not need to edit the file themselves.
 
 Finish with the exit instruction: **You can stop after any amount of testing;

@@ -21,6 +21,22 @@ Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `<state-dir>/workspace`. T
 
 An explicit `agents.defaults.workspace` value takes precedence over `OPENCLAW_WORKSPACE_DIR`. A sole agent uses this path directly. In a multi-agent fleet, agents without their own `workspace` use an agent-id subdirectory so no implicit owner claims the shared root.
 
+## `agents.defaults.workspaceFileMode`
+
+Optional octal string: `"0600"`, `"0620"`, `"0640"`, or `"0660"`. Per-agent override:
+`agents.entries.<agentId>.workspaceFileMode`.
+
+Controls newly created memory-core `DREAMS.md`, `MEMORY.md`, and
+`memory/dreaming/` reports. Existing file modes are preserved. Unset means exact
+mode `0600`; an explicit value is restricted by the writing host's umask
+(`"0660"` with umask `022` becomes `0640`), including remote execution hosts.
+Daily memory, the `memory/.dreams/` session corpus, credentials, configuration,
+logs, and other state remain private.
+
+Operators must provision directory traversal and default ACLs separately; this
+option does not repair directory access. See [Sharing generated memory
+files](/concepts/agent-workspace#sharing-generated-memory-files).
+
 ## `agents.defaults.cwd`
 
 Optional working directory for agent reply runs. Use it to run coding tools in an
@@ -80,7 +96,7 @@ Optional default skill allowlist for agents that do not set
 
 ## `agents.defaults.skipBootstrap`
 
-Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
+Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`), not injection of existing files. For the embedded runtime, use `contextInjection: "never"` to disable injection, unless overridden per agent.
 
 ```json5
 {
@@ -104,10 +120,11 @@ Skips creation of selected optional workspace files while still writing required
 
 ## `agents.defaults.contextInjection`
 
-Controls when workspace bootstrap files are injected into the system prompt. Default: `"always"`.
+Controls workspace bootstrap-file injection in the embedded runtime. Default: `"always"`. These modes do not control CLI-backed prompt preparation or prevent an agent from reading files with tools.
 
-- `"continuation-skip"`: safe continuation turns (after a completed assistant response) skip workspace bootstrap re-injection, reducing prompt size. Heartbeat runs and post-compaction retries still rebuild context.
-- `"never"`: disable workspace bootstrap and context-file injection on every turn. Use this only for agents that fully own their prompt lifecycle (custom context engines, native runtimes that build their own context, or specialized bootstrap-free workflows). Heartbeat and compaction-recovery turns also skip injection.
+- `"always"`: use normal workspace bootstrap injection, subject to the run's context mode and file filters.
+- `"continuation-skip"`: eligible continuation turns after a successful turn that delivered workspace context skip bootstrap re-injection, including workspaces whose setup is already complete. Failed, aborted, lightweight, cron, and heartbeat turns do not record completion; unreadable files are retried on the next turn. Pending full-bootstrap setup and post-compaction retries still use normal context resolution.
+- `"never"`: disable workspace bootstrap and context-file injection on every turn, including heartbeat and compaction-recovery turns. Use this for embedded agents with specialized bootstrap-free workflows.
 
 ```json5
 {

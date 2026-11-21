@@ -2,14 +2,12 @@ import { createServer } from "node:http";
 import type { messagingApi } from "@line/bot-sdk";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createActionCard, createImageCard } from "./flex-templates/basic-cards.js";
 import { renderLineCard } from "./rich-messages.js";
 import { pushMessagesLine, replyMessageLine } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
 
-vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
-  requireRuntimeConfig: (cfg: unknown) => cfg,
-}));
 vi.mock("./accounts.js", () => ({
   resolveLineAccount: () => ({ accountId: "default" }),
 }));
@@ -125,12 +123,7 @@ const cases: Array<{
   },
 ];
 
-for (const url of [
-  "http://example.com/cover.jpg",
-  "ftp://example.com/cover.jpg",
-  "cover.jpg",
-  "",
-]) {
+for (const url of ["http://example.com/cover.jpg", "cover.jpg"]) {
   cases.push({
     name: `omits an image-card hero with unsupported URL ${JSON.stringify(url)}`,
     message: () => ({
@@ -154,25 +147,11 @@ for (const url of [
 
 cases.push(
   {
-    name: "retains valid HTTPS image cards",
-    message: () => ({
-      type: "flex",
-      altText: "Product",
-      contents: createImageCard(imageUrl, "Product", "Caption"),
-    }),
-    verify: (message) =>
-      expect(message).toEqual({
-        type: "flex",
-        altText: "Product",
-        contents: createImageCard(imageUrl, "Product", "Caption"),
-      }),
-  },
-  {
     name: "keeps action-card controls when the image is unavailable",
     message: () => ({
       type: "flex",
       altText: "Menu",
-      contents: createActionCard("Menu", "Choose", [{ label: "Choose", action }], {
+      contents: createActionCard("Menu", "Choose", [action], {
         imageUrl: "http://example.com/cover.jpg",
       }),
     }),
@@ -335,7 +314,7 @@ cases.push(
   },
 );
 
-for (const thumbnailImageUrl of ["http://example.com/cover.jpg", "cover.jpg", imageUrl]) {
+for (const thumbnailImageUrl of ["http://example.com/cover.jpg", imageUrl]) {
   cases.push({
     name: `buttons-template thumbnail ${thumbnailImageUrl}`,
     message: () =>
@@ -364,7 +343,6 @@ for (const thumbnailImageUrl of ["http://example.com/cover.jpg", "cover.jpg", im
 for (const thumbnails of [
   [imageUrl, imageUrl],
   [undefined, imageUrl],
-  ["http://example.com/cover.jpg", "http://example.com/other.jpg"],
 ]) {
   cases.push({
     name: `carousel thumbnails ${JSON.stringify(thumbnails)}`,
@@ -477,8 +455,6 @@ for (const shape of ["bubble", "carousel"] as const) {
 }
 
 const unchangedMessages: messagingApi.Message[] = [
-  { type: "image", originalContentUrl: imageUrl, previewImageUrl: imageUrl },
-  { type: "video", originalContentUrl: videoUrl, previewImageUrl: imageUrl },
   { type: "audio", originalContentUrl: "https://example.com/audio.mp3", duration: 1000 },
   {
     type: "template",
@@ -516,16 +492,9 @@ describe("LINE card shape on the actual push and reply wire", () => {
   });
 
   beforeAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("No loopback TCP address");
-    }
+    const port = await listenOnLoopback(server);
     realFetch = globalThis.fetch;
-    localOrigin = `http://127.0.0.1:${address.port}`;
+    localOrigin = `http://127.0.0.1:${port}`;
   });
 
   beforeEach(() => {
@@ -555,7 +524,6 @@ describe("LINE card shape on the actual push and reply wire", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
     vi.doUnmock("./accounts.js");
     vi.doUnmock("./channel-access-token.js");
     vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");
@@ -563,7 +531,17 @@ describe("LINE card shape on the actual push and reply wire", () => {
   });
 
   for (const operation of ["push", "reply"] as const) {
-    it.each(cases)(`${operation}: $name`, async ({ message, verify }) => {
+    // Push owns the shared normalizer matrix; reply verifies its transport wiring.
+    const operationCases =
+      operation === "push"
+        ? cases
+        : cases.filter(
+            ({ name }) =>
+              name ===
+                "removes nested invalid images and baseline icons without losing their siblings" ||
+              name === "mixed carousel image URLs retain consistent image presence",
+          );
+    it.each(operationCases)(`${operation}: $name`, async ({ message, verify }) => {
       const original = message();
       const originalBytes = JSON.stringify(original);
       if (operation === "push") {

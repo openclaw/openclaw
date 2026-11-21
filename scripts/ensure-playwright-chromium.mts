@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -18,7 +17,7 @@ type SpawnSyncLike = (
   command: string,
   args: string[],
   options?: Record<string, unknown>,
-) => { status: number | null };
+) => { status: number | null; stderr?: unknown };
 type ChromiumInstallOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -44,9 +43,6 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
-/**
- * Checks whether a Chromium executable can start enough to print its version.
- */
 export function canRunChromiumExecutable(
   executablePath: string,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -57,9 +53,6 @@ export function canRunChromiumExecutable(
   return result.status === 0;
 }
 
-/**
- * Resolves the first runnable system Chromium executable path.
- */
 export function resolveSystemChromiumExecutablePath(
   existsSync: (path: string) => boolean = existsSyncImpl,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -71,9 +64,6 @@ export function resolveSystemChromiumExecutablePath(
   );
 }
 
-/**
- * Reports whether Linux system dependencies should be installed with Chromium.
- */
 export function shouldInstallPlaywrightSystemDependencies(
   options: Pick<ChromiumInstallOptions, "env" | "getuid" | "platform"> = {},
 ) {
@@ -157,9 +147,6 @@ export function installLinuxSystemChromiumPackage(options: ChromiumInstallOption
   return 1;
 }
 
-/**
- * Checks whether this module is the direct script entrypoint.
- */
 export function isDirectScriptExecution(
   argvEntry: string | undefined = process.argv[1],
   modulePath = fileURLToPath(import.meta.url),
@@ -175,9 +162,6 @@ export function isDirectScriptExecution(
   }
 }
 
-/**
- * Ensures a runnable Chromium exists for Playwright-based UI tests.
- */
 export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const env = options.env ?? process.env;
   const browserPath = env.PLAYWRIGHT_BROWSERS_PATH;
@@ -199,6 +183,27 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const existsSync = options.existsSync ?? existsSyncImpl;
   const log = options.log ?? console.error;
   const spawnSync = options.spawnSync ?? spawnSyncImpl;
+  // On Linux the dynamic loader names the missing shared library, which
+  // reinstalling the browser cannot supply.
+  const logLaunchFailure = (chromiumPath: string) => {
+    if (!existsSync(chromiumPath)) {
+      return;
+    }
+    const { stderr } = spawnSync(chromiumPath, ["--version"], {
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const reason = typeof stderr === "string" ? stderr.trim().split("\n")[0] : "";
+    if (!reason) {
+      return;
+    }
+    log(`[ui-e2e] Chromium launch failed: ${reason}`);
+    if (reason.includes("error while loading shared libraries")) {
+      log(
+        `[ui-e2e] Install Chromium's system libraries as root: pnpm --dir ui exec playwright install-deps chromium`,
+      );
+    }
+  };
   const runPlaywrightInstall = (targets: string[] = ["chromium"], withDeps = false) => {
     const result = spawnSync(
       process.execPath,
@@ -264,6 +269,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
     log(
       `[ui-e2e] ${executableOverrideEnvKey} points to ${executableOverride}, but that browser is not runnable.`,
     );
+    logLaunchFailure(executableOverride);
     return 1;
   }
 
@@ -309,6 +315,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
       log(
         `[ui-e2e] Playwright install completed but Chromium is still not runnable at ${executablePath}.`,
       );
+      logLaunchFailure(executablePath);
       return 1;
     }
     return status;
@@ -331,6 +338,7 @@ export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
     log(
       `[ui-e2e] Playwright install completed but Chromium is still not runnable at ${executablePath}.`,
     );
+    logLaunchFailure(executablePath);
     return 1;
   }
   return ensureFfmpeg();

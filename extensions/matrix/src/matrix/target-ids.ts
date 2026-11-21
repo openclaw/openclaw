@@ -1,4 +1,3 @@
-// Matrix plugin module implements target ids behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
@@ -58,6 +57,25 @@ export function isMatrixQualifiedUserId(raw: string): boolean {
 export function isMatrixRoomId(raw: string): boolean {
   const trimmed = raw.trim();
   return trimmed.startsWith("!") && trimmed.length > 1;
+}
+
+/**
+ * Whether `raw` is an invite auto-join target the room matcher can ever accept:
+ * the wildcard, a literal room ID, or a full `#alias:server` with both a local
+ * part and a server name. This is the shared contract for
+ * `channels.matrix.autoJoinAllowlist`; the setup wizard rejects other values and
+ * the invite handler reports them as inert.
+ */
+export function isMatrixInviteAutoJoinTarget(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed === "*" || isMatrixRoomId(trimmed)) {
+    return true;
+  }
+  if (!trimmed.startsWith("#")) {
+    return false;
+  }
+  const [localPart, serverName] = trimmed.slice(1).split(":", 2);
+  return Boolean(localPart) && Boolean(serverName);
 }
 
 export function normalizeMatrixResolvableTarget(raw: string): string {

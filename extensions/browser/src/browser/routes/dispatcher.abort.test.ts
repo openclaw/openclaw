@@ -1,6 +1,6 @@
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 // Browser tests cover dispatcher.abort plugin behavior.
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { toErrorObject } from "../../infra/errors.js";
 import type { BrowserRouteContext } from "../server-context.js";
 
 let createBrowserRouteDispatcher: typeof import("./dispatcher.js").createBrowserRouteDispatcher;

@@ -8,7 +8,6 @@ export function createAutoReplyReplyVitestConfig(env?: Record<string, string | u
     dir: "src/auto-reply",
     env,
     exclude: databaseWorkerCoreTestFiles,
-    fileParallelism: false,
     name: "auto-reply-reply",
   });
 }

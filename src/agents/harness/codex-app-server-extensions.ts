@@ -1,11 +1,4 @@
-/**
- * Codex app-server extension runner.
- *
- * Harness integration uses this to let registered extensions observe and adjust
- * tool results before they are returned to the agent runtime.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { listCodexAppServerExtensionFactories } from "../../plugins/codex-app-server-extension-factory.js";
 import type {
   CodexAppServerExtensionContext,
   CodexAppServerExtensionFactory,
@@ -19,10 +12,10 @@ const log = createSubsystemLogger("agents/harness");
 
 type CodexToolResultHandler = Parameters<CodexAppServerExtensionRuntime["on"]>[1];
 
-/** Creates a runner that applies registered Codex app-server tool-result extensions. */
+/** Retained for published Codex plugins; new transforms use runtime-neutral middleware. */
 export function createCodexAppServerToolResultExtensionRunner(
   ctx: CodexAppServerExtensionContext,
-  factories: CodexAppServerExtensionFactory[] = listCodexAppServerExtensionFactories(),
+  factories: CodexAppServerExtensionFactory[] = [],
 ) {
   const handlers: CodexToolResultHandler[] = [];
   const initPromise = (async () => {

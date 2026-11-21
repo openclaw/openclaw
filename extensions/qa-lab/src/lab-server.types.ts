@@ -1,5 +1,5 @@
-// Qa Lab type declarations define plugin contracts.
 import type { QaBusState } from "./bus-state.js";
+import type { QaReportCheck } from "./report.js";
 import type { QaSelfCheckResult } from "./self-check.js";
 
 export type QaLabLatestReport = {
@@ -10,18 +10,12 @@ export type QaLabLatestReport = {
 
 type QaLabRunStatus = "idle" | "running" | "completed";
 
-type QaLabScenarioStep = {
-  name: string;
-  status: "pass" | "fail" | "skip";
-  details?: string;
-};
-
 export type QaLabScenarioOutcome = {
   id: string;
   name: string;
   status: "pending" | "running" | "pass" | "fail" | "skip";
   details?: string;
-  steps?: QaLabScenarioStep[];
+  steps?: QaReportCheck[];
   startedAt?: string;
   finishedAt?: string;
 };

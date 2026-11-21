@@ -1,0 +1,268 @@
+// One lifecycle owner for interactive Markdown in transcripts and previews.
+import { t } from "../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../i18n/locales/en-code-blocks.ts";
+import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
+import { subscribeDocumentVisibility } from "../lib/reactive/platform.ts";
+import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
+import { measureCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
+import { MarkdownCodeHighlights } from "./markdown-code-highlight.ts";
+import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
+
+registerCodeBlocksEnglish();
+
+let codeBlockRegionSequence = 0;
+const blockSelector = ".code-block-wrapper, .markdown-mermaid";
+const fileLinkSelector = "a[data-file-path], span[data-file-path]";
+export class MarkdownBlocks {
+  #fileLinkScope: string | undefined;
+  #observing = false;
+  #scanPending = false;
+  #presented = false;
+  #active = false;
+  #disposed = false;
+  #codeHighlights: MarkdownCodeHighlights | undefined;
+
+  readonly #stopVisibility: () => void;
+
+  readonly #root: HTMLElement;
+  readonly #onFileLinks: ((links: HTMLElement[]) => void) | undefined;
+
+  /** `onFileLinks` receives rendered file links once their message has stopped streaming. */
+  constructor(root: HTMLElement, onFileLinks?: (links: HTMLElement[]) => void) {
+    this.#root = root;
+    this.#onFileLinks = onFileLinks;
+    // Solid refs can still belong to an inert template document before adoption.
+    // Observe the rendering document so replacement readers follow the real tab.
+    this.#stopVisibility = subscribeDocumentVisibility(document, () => {
+      this.update(this.#presented);
+    });
+  }
+
+  readonly #pendingBlocks = new Set<HTMLElement>();
+  readonly #pendingFileLinks = new Set<HTMLElement>();
+  readonly #observedNodes = new Set<HTMLElement>();
+  readonly #pendingWidths = new Set<HTMLElement>();
+  readonly #resizeObserver = new ResizeObserver((entries) => {
+    if (!this.#active || this.#disposed) {
+      return;
+    }
+    const wrappers = new Set(
+      entries.map(({ target }) => target.closest<HTMLElement>(".code-block-wrapper")),
+    );
+    for (const wrapper of wrappers) {
+      if (wrapper && !isMarkdownBlockParked(wrapper)) {
+        this.#pendingWidths.add(wrapper);
+      }
+    }
+    if (this.#pendingWidths.size) {
+      // Geometry reads can force WebKit to relayout during resize delivery too.
+      scheduleLayout(this.#pendingWidths, () => {
+        const updates = [...this.#pendingWidths].map((wrapper) =>
+          this.#root.contains(wrapper) && !isMarkdownBlockParked(wrapper)
+            ? measureCodeBlockWidthOverflow(wrapper)
+            : undefined,
+        );
+        this.#pendingWidths.clear();
+        return () => updates.forEach((update) => update?.());
+      });
+    }
+  });
+  readonly #mutationObserver = new MutationObserver((records) => {
+    this.#collectMutations(records);
+    if (this.#pendingBlocks.size || this.#pendingFileLinks.size) {
+      this.#scheduleScan();
+    }
+  });
+
+  #collectMutations(records: MutationRecord[]): void {
+    for (const record of records) {
+      const target = record.target instanceof Element ? record.target : record.target.parentElement;
+      const block = target?.closest<HTMLElement>(blockSelector);
+      if (block) {
+        this.#pendingBlocks.add(block);
+      }
+      if (record.type === "attributes" && target instanceof HTMLElement) {
+        this.#collectBlocks(target);
+        if (isMarkdownBlockParked(target)) {
+          for (const node of this.#observedNodes) {
+            if (target.contains(node)) {
+              this.#observedNodes.delete(node);
+              this.#resizeObserver.unobserve(node);
+            }
+          }
+        }
+      }
+      for (const node of record.addedNodes) {
+        if (node instanceof HTMLElement) {
+          this.#collectBlocks(node);
+        }
+      }
+      for (const node of record.removedNodes) {
+        if (!(node instanceof HTMLElement) || this.#root.contains(node)) {
+          continue;
+        }
+        const removed = [node, ...node.querySelectorAll<HTMLElement>(".code-block-viewport, code")];
+        for (const observed of removed) {
+          if (this.#observedNodes.delete(observed)) {
+            this.#resizeObserver.unobserve(observed);
+          }
+        }
+      }
+    }
+    this.#codeHighlights?.prune();
+  }
+
+  refreshFileLinks(scope: string | undefined): void {
+    if (this.#fileLinkScope === scope) {
+      return;
+    }
+    this.#fileLinkScope = scope;
+    // Only availability answers changed; settled code blocks keep their enhancements.
+    this.#collectBlocks(this.#root, fileLinkSelector);
+  }
+
+  update(presented: boolean): void {
+    // Every caller, including attachment previews, shares this gate. Keep pane
+    // intent separate so revealing the browser tab cannot reactivate a hidden pane.
+    this.#presented = presented;
+    this.#active = presented && document.visibilityState !== "hidden";
+    if (this.#active) {
+      this.#codeHighlights?.resume();
+      this.#scheduleScan();
+    } else {
+      this.#release();
+    }
+  }
+
+  dispose(): void {
+    this.#disposed = true;
+    this.#stopVisibility();
+    this.#release();
+    this.#codeHighlights?.dispose();
+  }
+
+  #release(): void {
+    // Hidden retained DOM keeps its controls, but must release foreground observers.
+    this.#mutationObserver.disconnect();
+    this.#observing = false;
+    this.#pendingBlocks.clear();
+    this.#pendingFileLinks.clear();
+    this.#resizeObserver.disconnect();
+    this.#observedNodes.clear();
+    cancelLayout(this.#pendingWidths);
+    this.#pendingWidths.clear();
+    this.#codeHighlights?.pause();
+    releaseMarkdownTables(this.#root);
+  }
+
+  #scheduleScan(): void {
+    if (this.#scanPending || !this.#active || this.#disposed) {
+      return;
+    }
+    this.#scanPending = true;
+    // Element refs can attach before their children commit. Coalesce after the commit,
+    // and fence queued scans when the host is removed before the microtask runs.
+    queueMicrotask(() => {
+      this.#scanPending = false;
+      if (this.#active && !this.#disposed && this.#root.isConnected) {
+        this.#scan(this.#root);
+      }
+    });
+  }
+
+  #scan(root: HTMLElement): void {
+    // Session retirement can independently release the table owner. Reacquire it
+    // after commit; an existing owner returns without walking retained history.
+    enhanceMarkdownTables(root);
+    if (!this.#observing) {
+      this.#collectBlocks(root);
+      this.#mutationObserver.observe(root, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["data-prepared-row", "data-preparing-row", "data-chat-streaming"],
+      });
+      this.#observing = true;
+    }
+    // A post-commit scan can precede observer delivery. Wire new controls
+    // from this commit's records before consumers observe the rendered result.
+    this.#collectMutations(this.#mutationObserver.takeRecords());
+    this.#flushFileLinks(root);
+    for (const wrapper of this.#pendingBlocks) {
+      this.#pendingBlocks.delete(wrapper);
+      if (!root.contains(wrapper) || isMarkdownBlockParked(wrapper)) {
+        continue;
+      }
+      if (wrapper.matches(".markdown-mermaid")) {
+        if (!wrapper.querySelector("openclaw-mermaid") && wrapper.querySelector("pre code")) {
+          const isCurrent = () =>
+            this.#active && !this.#disposed && root.isConnected && root.contains(wrapper);
+          void import("./markdown-mermaid.tsx").then(
+            ({ mountMermaidBlocks }) => {
+              if (isCurrent()) {
+                mountMermaidBlocks(wrapper);
+              }
+            },
+            () => {
+              if (!isCurrent() || !wrapper.matches(".markdown-mermaid")) {
+                return;
+              }
+              wrapper.classList.remove("markdown-mermaid");
+              wrapper.prepend(t("chat.mermaid.rendererError"));
+            },
+          );
+        }
+        continue;
+      }
+      const viewport = wrapper.querySelector<HTMLElement>(".code-block-viewport");
+      const code = viewport?.querySelector<HTMLElement>("code");
+      if (!viewport || !code) {
+        continue;
+      }
+      if (code.hasAttribute("data-code-highlight")) {
+        (this.#codeHighlights ??= new MarkdownCodeHighlights(root)).sync(wrapper, viewport, code);
+      }
+      // Short streaming fences gain an Expand control without replacing their
+      // wrapper. Bind the control when it appears, not only on the first scan.
+      const expandButton = wrapper.querySelector<HTMLButtonElement>(".code-block-expand");
+      if (expandButton) {
+        if (!viewport.id) {
+          viewport.id = `code-block-${++codeBlockRegionSequence}`;
+        }
+        if (expandButton.getAttribute("aria-controls") !== viewport.id) {
+          expandButton.setAttribute("aria-controls", viewport.id);
+        }
+      }
+      // Retained DOM keeps its controls but must reacquire observation after showing.
+      for (const node of [viewport, code]) {
+        if (!this.#observedNodes.has(node)) {
+          this.#observedNodes.add(node);
+          this.#resizeObserver.observe(node);
+        }
+      }
+    }
+  }
+
+  #collectBlocks(
+    root: HTMLElement,
+    selector = this.#onFileLinks ? `${blockSelector}, ${fileLinkSelector}` : blockSelector,
+  ): void {
+    for (const element of [root, ...root.querySelectorAll<HTMLElement>(selector)]) {
+      if (element.matches(blockSelector)) {
+        this.#pendingBlocks.add(element);
+      } else if (this.#onFileLinks && element.matches(fileLinkSelector)) {
+        this.#pendingFileLinks.add(element);
+      }
+    }
+  }
+
+  #flushFileLinks(root: HTMLElement): void {
+    const links = [...this.#pendingFileLinks].filter(
+      (link) => root.contains(link) && !link.closest('[data-chat-streaming="true"]'),
+    );
+    this.#pendingFileLinks.clear();
+    if (links.length) {
+      this.#onFileLinks?.(links);
+    }
+  }
+}

@@ -1,4 +1,4 @@
-import { escapeHtml } from "./shared.js";
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export function sparklineSvg(values: number[], label: string, large = false): string {
   if (values.length < 2) {

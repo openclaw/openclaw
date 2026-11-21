@@ -1,199 +1,294 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   recordAgentCleanupFailure,
   createAgentCleanupScope,
+  runAgentCleanupStep,
 } from "../agents/run-cleanup-timeout.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { agentExecCommand } from "./agent-exec.js";
+import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
+import {
+  deleteSessionEntryLifecycle,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import * as processSignalBridge from "../infra/process-signal-bridge.js";
+import { captureNativeSignalBridge } from "../infra/process-signal-bridge.test-support.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  withOpenClawAgentDatabaseAsync,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import { runAgentExecWithMock as runExec } from "./agent-exec.test-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function createRuntime() {
-  const error = vi.fn();
-  const runtime: RuntimeEnv = { log: vi.fn(), error, exit: vi.fn() };
-  return { runtime, error };
+const createSignalBridge = processSignalBridge.createProcessSignalBridge;
+const signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
+afterEach(() => {
+  try {
+    for (const signals of signalCaptures) {
+      signals.dispose();
+    }
+    signalCaptures.length = 0;
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+const success = () => ({ payloads: [{ text: "done", mediaUrl: null }], meta: { durationMs: 1 } });
+function stateFixture() {
+  return { stateDir: tempDirs.make("openclaw-agent-exec-lock-") };
+}
+/** The --state-dir owner is this process while it holds custody. */
+async function expectOwner(stateDir: string, held: boolean) {
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  const owner = await readActiveGatewayLockIdentity({ env, includeEmbedded: true });
+  expect(owner?.pid).toBe(held ? process.pid : undefined);
 }
 
-function successResult() {
-  return {
-    payloads: [{ text: "done" }],
-    meta: {
-      durationMs: 1,
-      agentMeta: { sessionId: "session-result", provider: "openai", model: "gpt-5.6-sol" },
-    },
-  };
-}
-
-function createGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    timeoutMs: 100,
-    ...overrides,
-  };
-}
-
-function createSignalProcess() {
-  type SignalName = "SIGINT" | "SIGTERM";
-  const listeners = new Map<SignalName, Set<() => void>>();
-  const processLike = {
-    on(signal: SignalName, handler: () => void) {
-      const current = listeners.get(signal) ?? new Set<() => void>();
-      current.add(handler);
-      listeners.set(signal, current);
-      return processLike;
-    },
-    off(signal: SignalName, handler: () => void) {
-      listeners.get(signal)?.delete(handler);
-      return processLike;
-    },
-  };
-  return {
-    processLike,
-    emit(signal: SignalName) {
-      for (const handler of listeners.get(signal) ?? []) {
-        handler();
-      }
-    },
-  };
-}
+it.each([false, true])(
+  "keeps local CLI custody only when automatic cleanup is uncertain (uncertain: %s)",
+  async (uncertain) => {
+    const { stateDir } = stateFixture();
+    const configPath = path.join(stateDir, "openclaw.json");
+    const { config } = createCanonicalAgentConfigFixture({
+      agents: { defaults: { workspace: path.join(stateDir, "workspace") } },
+    });
+    await fs.writeFile(configPath, JSON.stringify(config));
+    const { agentCommand } = await import("./agent.js");
+    const { agentCliCommand } = await import("./agent-via-gateway.js");
+    const command = vi.mocked(agentCommand);
+    const log = { warn: vi.fn() };
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    resetConfigRuntimeState();
+    try {
+      command.mockReset().mockImplementationOnce(async () => {
+        await expectOwner(stateDir, true);
+        await runAgentCleanupStep({
+          runId: "local-cleanup-proof",
+          sessionId: "local-cleanup-proof",
+          step: "owned-resource",
+          log,
+          cleanup: async () => {
+            if (uncertain) {
+              throw new Error("synthetic cleanup failure");
+            }
+          },
+        });
+        return success();
+      });
+      await expect(
+        agentCliCommand(
+          { local: true, sessionKey: "agent:main:cleanup-proof", message: "inspect" },
+          createTestRuntime(),
+        ),
+      ).resolves.toEqual(success());
+      expect(log.warn).toHaveBeenCalledTimes(uncertain ? 1 : 0);
+      await expectOwner(stateDir, uncertain);
+    } finally {
+      command.mockReset();
+      resetConfigRuntimeState();
+      vi.unstubAllEnvs();
+    }
+  },
+);
 
 describe("agent exec retained-state ownership", () => {
   it.each([false, true])(
-    "retains state after uncertain runtime cleanup (retained=%s)",
+    "preserves state after uncertain runtime cleanup (retained: %s)",
     async (retained) => {
-      const root = tempDirs.make("openclaw-agent-exec-uncertain-cleanup-");
-      const lockOptions = createGatewayLockOptions(root);
+      const fixture = retained ? stateFixture() : undefined;
       const previousStateDir = process.env.OPENCLAW_STATE_DIR;
       const cleanupScope = createAgentCleanupScope();
-      let runStateDir: string | undefined;
+      let stateDir = "";
       try {
         const result = await cleanupScope.run(() =>
-          agentExecCommand("inspect", retained ? { stateDir: root } : {}, createRuntime().runtime, {
-            gatewayLockOptions: lockOptions,
-            runAgent: async () => {
-              runStateDir = process.env.OPENCLAW_STATE_DIR;
-              if (!runStateDir) {
-                throw new Error("Expected the command's state directory");
-              }
-              await fs.writeFile(path.join(runStateDir, "owned-work"), "still owned");
+          runExec(
+            "inspect",
+            fixture ? { stateDir: fixture.stateDir } : {},
+            createTestRuntime(),
+            async () => {
+              stateDir = process.env.OPENCLAW_STATE_DIR!;
+              await fs.writeFile(path.join(stateDir, "owned-work"), "still owned");
               recordAgentCleanupFailure();
-              return successResult();
+              return success();
             },
-          }),
+          ),
         );
-        expect.soft(result.exitCode).toBe(1);
-        expect.soft(cleanupScope.outcome).toBe("uncertain");
-        expect.soft(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-        expect(runStateDir).toBeDefined();
-        await expect(fs.readFile(path.join(runStateDir!, "owned-work"), "utf8")).resolves.toBe(
+        expect(result.exitCode).toBe(1);
+        expect(result.envelope).toMatchObject({
+          ok: false,
+          status: "error",
+          final: "done",
+          payloads: [{ text: "done" }],
+          error: { kind: "cleanup" },
+        });
+        expect(cleanupScope.outcome).toBe("uncertain");
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+        if (fixture) {
+          await expectOwner(fixture.stateDir, true);
+        }
+        await expect(fs.readFile(path.join(stateDir, "owned-work"), "utf8")).resolves.toBe(
           "still owned",
         );
-        if (retained) {
-          const owner = JSON.parse(
-            await fs.readFile(path.join(lockOptions.lockDir!, "gateway.state.lock"), "utf8"),
-          );
-          expect(owner).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-        }
       } finally {
-        if (!retained && runStateDir) {
-          await fs.rm(runStateDir, { recursive: true, force: true });
+        if (stateDir) {
+          await fs.rm(stateDir, { recursive: true, force: true });
         }
       }
     },
   );
 
-  it("refuses a state directory owned by a live Gateway", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-gateway-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir, {
-      readProcessStartTime: () => 123_456,
+  it("holds and releases state ownership around the run", async () => {
+    const { stateDir } = stateFixture();
+    await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+    const result = await runExec("inspect", { stateDir }, createTestRuntime(), async () => {
+      await expectOwner(stateDir, true);
+      return success();
     });
-    const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-    expect(gatewayLock).not.toBeNull();
-    if (!gatewayLock) {
-      throw new Error("Expected live Gateway fixture lock");
-    }
-    const runAgent = vi.fn(async () => successResult());
-    const { runtime, error } = createRuntime();
-
-    try {
-      const result = await agentExecCommand("inspect", { stateDir }, runtime, {
-        gatewayLockOptions: lockOptions,
-        runAgent,
-      });
-      expect(result.exitCode).toBe(1);
-      expect(runAgent).not.toHaveBeenCalled();
-      expect(error).toHaveBeenCalledWith(
-        `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Omit --state-dir to use isolated temporary state, or stop the Gateway first (openclaw gateway stop).`,
-      );
-    } finally {
-      await gatewayLock.release();
-    }
+    expect(result.exitCode).toBe(0);
+    await expectOwner(stateDir, false);
+    await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
   });
 
-  it("holds and releases the embedded state lock around the run", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-lock-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir);
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-
-    await agentExecCommand("inspect", { stateDir }, createRuntime().runtime, {
-      gatewayLockOptions: lockOptions,
-      runAgent: vi.fn(async () => {
-        const payload = JSON.parse(await fs.readFile(stateLockPath, "utf8")) as {
-          pid?: number;
-          role?: string;
-        };
-        expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-        return successResult();
+  it.each([
+    { retained: false, signal: "SIGINT", exitCode: 130 },
+    { retained: false, signal: "SIGTERM", exitCode: 143 },
+    { retained: true, signal: "SIGINT", exitCode: 130 },
+    { retained: true, signal: "SIGTERM", exitCode: 143 },
+  ] as const)("settles state after $signal (retained: $retained)", async (testCase) => {
+    const fixture = testCase.retained ? stateFixture() : undefined;
+    const signals = captureNativeSignalBridge(createSignalBridge);
+    signalCaptures.push(signals);
+    const entered = createDeferred();
+    const runtime = createTestRuntime();
+    let stateDir = "";
+    vi.spyOn(processSignalBridge, "createProcessSignalBridge").mockImplementationOnce(
+      signals.create,
+    );
+    const run = runExec(
+      "inspect",
+      fixture ? { stateDir: fixture.stateDir } : {},
+      runtime,
+      async (opts) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+        const signal = opts.abortSignal as AbortSignal;
+        const pending = new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+        entered.resolve();
+        return pending;
+      },
+    );
+    await Promise.race([
+      entered.promise,
+      run.then(() => {
+        throw new Error("Run ended before signal admission");
       }),
-    });
-
-    await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const stateDir = tempDirs.make("openclaw-agent-exec-signal-owner-");
-    const lockOptions = createGatewayLockOptions(stateDir);
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-    const signals = createSignalProcess();
-    const { runtime } = createRuntime();
-    const runAgent = vi.fn(async (opts: Record<string, unknown>) => {
-      const signal = opts.abortSignal as AbortSignal;
-      return await new Promise<ReturnType<typeof successResult>>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            const error = new Error("agent exec aborted");
-            error.name = "AbortError";
-            reject(error);
-          },
-          { once: true },
-        );
-      });
-    });
-
-    const run = agentExecCommand("inspect", { stateDir }, runtime, {
-      gatewayLockOptions: lockOptions,
-      process: signals.processLike,
-      runAgent,
-    });
-    await vi.waitFor(() => expect(runAgent).toHaveBeenCalledOnce());
-    signals.emit("SIGTERM");
+    ]);
+    signals.emit(testCase.signal);
     await run;
-
-    await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
+    if (fixture) {
+      await expectOwner(fixture.stateDir, false);
+      await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    } else {
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(runtime.exit).toHaveBeenCalledWith(testCase.exitCode, { resetStream: process.stderr });
   });
+});
+
+it("closes temporary databases before removal and preserves independent handles", async () => {
+  const independentRoot = tempDirs.make("openclaw-agent-exec-independent-");
+  const independent = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: independentRoot },
+  });
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const runtime = createTestRuntime();
+  let runStateDir: string | undefined;
+  let agentPath: string | undefined;
+  let statePath: string | undefined;
+  const handles: EngineConnection[] = [];
+  const remove = fs.rm.bind(fs);
+  const removed = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+    if (pathname === runStateDir) {
+      // Refuse the destructive step if the command has not settled native ownership.
+      expect(handles).toHaveLength(2);
+      expect(handles.every((handle) => !handle.isOpen)).toBe(true);
+      expect(independent.db.isOpen).toBe(true);
+    }
+    await remove(pathname, options);
+  });
+  try {
+    const result = await runExec("inspect", { authEnvOnly: true }, runtime, async () => {
+      runStateDir = process.env.OPENCLAW_STATE_DIR;
+      const shared = openOpenClawStateDatabase();
+      handles.push(shared.db);
+      statePath = shared.path;
+      await withOpenClawAgentDatabaseAsync({ agentId: "main" }, (database) => {
+        handles.push(database.db);
+        agentPath = database.path;
+      });
+      const storePath = path.join(runStateDir!, "agents", "main", "sessions", "sessions.json");
+      const sessionKey = "agent:main:exec-cleanup";
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "exec-cleanup", updatedAt: 1 },
+      );
+      const deletion = await deleteSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        archiveTranscript: false,
+        deleteTranscriptWithoutArchive: true,
+      });
+      expect(deletion.deleted).toBe(true);
+      await createSqliteAuditRecordWriter({
+        scope: "agent-exec-cleanup",
+        maxEntries: 1,
+      }).register("completed", "synthetic", 1);
+      expect(
+        createSqliteAuditRecordStore({ scope: "agent-exec-cleanup", maxEntries: 1 }).entries(),
+      ).toEqual([{ key: "completed", value: "synthetic", createdAt: 1 }]);
+      return success();
+    });
+    expect(result.exitCode).toBe(0);
+    expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+    await expect(fs.stat(runStateDir!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(independent.db.prepare("SELECT 1 AS value").get()).toEqual({ value: 1 });
+  } finally {
+    removed.mockRestore();
+    if (agentPath) {
+      await closeOpenClawAgentDatabaseByPathAsync(agentPath);
+    }
+    if (statePath) {
+      await closeOpenClawStateDatabaseByPathAsync(statePath);
+    }
+    await closeOpenClawStateDatabaseByPathAsync(independent.path);
+    if (runStateDir) {
+      await remove(runStateDir, { recursive: true, force: true });
+    }
+  }
 });

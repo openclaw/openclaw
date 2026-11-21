@@ -1,14 +1,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { seedSkillLibrarySelection } from "../skills/library/selection.js";
-import type { TrustedSessionCreation } from "./server-methods/session-creation-provenance.js";
+import {
+  seedSkillLibrarySelection,
+  type PreparedSkillLibrarySession,
+} from "../skills/library/selection.js";
+import { currentOwnerDevicePrincipal } from "./openclaw-id/tunnel-principal.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 
 /** Selection is prepared from this request's real principal, never reconstructed from provenance. */
-export function prepareSkillLibrarySessionCreation(
+export async function prepareSkillLibrarySessionCreation(
   client: GatewayClient | null | undefined,
   cfg: OpenClawConfig | (() => OpenClawConfig),
   creation: TrustedSessionCreation,
-): TrustedSessionCreation {
+  prepared?: PreparedSkillLibrarySession,
+): Promise<TrustedSessionCreation> {
   if (
     !client?.authenticatedUserProfile ||
     client.internal?.syntheticClient ||
@@ -16,13 +21,23 @@ export function prepareSkillLibrarySessionCreation(
   ) {
     return creation;
   }
+  prepared?.assertCurrent();
+  // A linked owner device seeds with the owner's library permissions (OCF-510).
+  const ownerDevice = currentOwnerDevicePrincipal(client) !== undefined;
   return {
     ...creation,
-    skillLibrarySelections: seedSkillLibrarySelection({
-      profileId: client.authenticatedUserProfile.profileId,
-      scopes: client.connect.scopes ?? [],
-      getConfig: typeof cfg === "function" ? cfg : () => cfg,
-      assertCurrent: () => {},
-    }),
+    skillLibrarySelections:
+      prepared?.selections ??
+      (await seedSkillLibrarySelection({
+        profileId: client.authenticatedUserProfile.profileId,
+        scopes: client.connect.scopes ?? [],
+        ...(ownerDevice ? { ownerDevice } : {}),
+        getConfig: typeof cfg === "function" ? cfg : () => cfg,
+        assertCurrent: () => {
+          if (ownerDevice && currentOwnerDevicePrincipal(client) === undefined) {
+            throw new Error("OpenClaw ID owner authority changed");
+          }
+        },
+      })),
   };
 }

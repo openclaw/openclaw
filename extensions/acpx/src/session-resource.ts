@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { AcpRuntimeError } from "../runtime-api.js";
 
@@ -20,8 +20,6 @@ export function resolveAcpxSessionResource(target: {
   if (encodedOwner) {
     return sessionKey;
   }
-  const digest = createHash("sha256")
-    .update(JSON.stringify([agentId, sessionKey]))
-    .digest("hex");
+  const digest = sha256Hex(JSON.stringify([agentId, sessionKey]));
   return `openclaw-owner-v1-${digest}`;
 }

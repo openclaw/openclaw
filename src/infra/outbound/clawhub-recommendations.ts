@@ -11,17 +11,61 @@ import {
   CLAWHUB_RECOMMENDATION_LIMIT,
   type ClawHubRecommendation,
 } from "../../shared/clawhub-recommendations.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
-import { resolveClawHubBaseUrl, resolveClawHubImageUrl } from "../clawhub-client.js";
-import { fetchClawHubPluginCatalog } from "../clawhub-plugin-catalog.js";
+import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import {
+  ClawHubRequestError,
+  resolveClawHubBaseUrl,
+  resolveClawHubImageUrl,
+} from "../clawhub-client.js";
+import {
+  fetchClawHubPluginCatalog,
+  fetchClawHubPluginDetail,
+  type ClawHubPluginCatalogEntry,
+} from "../clawhub-plugin-catalog.js";
 import { searchClawHubSkills } from "../clawhub-skills.js";
 
-const requestSchema = z
-  .object({
-    query: z.string().trim().min(1).max(160),
-    kind: z.enum(["plugin", "skill"]).optional(),
-  })
-  .strict();
+const requestSchema = z.union(
+  [
+    z
+      .object({
+        query: z.string().trim().min(1).max(160),
+        kind: z.enum(["plugin", "skill"]).optional(),
+      })
+      .strict(),
+    // npm caps package names at 214 characters.
+    z.object({ plugin: z.string().trim().min(1).max(214) }).strict(),
+  ],
+  {
+    error:
+      "ClawHub cards take either query (with optional kind) to search, or plugin alone to name one exact plugin package.",
+  },
+);
+
+function pluginCards(
+  remote: readonly ClawHubPluginCatalogEntry[],
+  local: Awaited<ReturnType<typeof listManagedPlugins>>,
+  officialOnly: boolean,
+): ClawHubRecommendation[] {
+  registerClawHubCatalogIconUrls(remote.map((entry) => entry.iconUrl));
+  return joinClawHubPluginCatalog({ remote, local })
+    .filter((entry) => !officialOnly || entry.catalog.official)
+    .slice(0, CLAWHUB_RECOMMENDATION_LIMIT)
+    .map((entry) => ({
+      type: "clawhub",
+      kind: "plugin",
+      id: entry.id,
+      name: truncateUtf16Safe(entry.catalog.name, 120),
+      description: entry.catalog.summary
+        ? truncateUtf16Safe(entry.catalog.summary, 240)
+        : undefined,
+      iconUrl: entry.catalog.imageUrl
+        ? resolveClawHubCatalogIconUrl(entry.catalog.imageUrl)
+        : undefined,
+      installed: entry.local.installed,
+      official: entry.catalog.official,
+      pluginId: entry.local.pluginId,
+    }));
+}
 
 export async function resolveClawHubRecommendations(params: {
   request: unknown;
@@ -35,7 +79,23 @@ export async function resolveClawHubRecommendations(params: {
     text: "ClawHub recommendations are unavailable right now, so I could not verify a matching capability or its installation status. Please try again.",
   };
   let cards: ClawHubRecommendation[] = [];
-  if (request.kind !== "skill") {
+  if ("plugin" in request) {
+    // The plugin detail route answers 404 for unknown names and for packages that are not plugins.
+    const found = await Promise.all([
+      fetchClawHubPluginDetail({ packageName: request.plugin }),
+      listManagedPlugins({ config: params.config }),
+    ]).catch((error: unknown) =>
+      error instanceof ClawHubRequestError && error.status === 404
+        ? ("missing" as const)
+        : undefined,
+    );
+    if (!found) {
+      return unavailable;
+    }
+    if (found !== "missing") {
+      cards = pluginCards([found[0]], found[1], false);
+    }
+  } else if (request.kind !== "skill") {
     const found = await Promise.all([
       fetchClawHubPluginCatalog({
         query: request.query,
@@ -47,31 +107,9 @@ export async function resolveClawHubRecommendations(params: {
     if (!found) {
       return unavailable;
     }
-    const [remote, local] = found;
-    registerClawHubCatalogIconUrls(remote.items.map((entry) => entry.iconUrl));
-    cards = joinClawHubPluginCatalog({ remote: remote.items, local })
-      .filter((entry) => entry.catalog.official)
-      .slice(0, CLAWHUB_RECOMMENDATION_LIMIT)
-      .map((entry) => {
-        const iconUrl = entry.catalog.imageUrl
-          ? resolveClawHubCatalogIconUrl(entry.catalog.imageUrl)
-          : undefined;
-        return {
-          type: "clawhub",
-          kind: "plugin",
-          id: entry.id,
-          name: truncateUtf16Safe(entry.catalog.name, 120),
-          description: entry.catalog.summary
-            ? truncateUtf16Safe(entry.catalog.summary, 240)
-            : undefined,
-          iconUrl,
-          installed: entry.local.installed,
-          official: true,
-          pluginId: entry.local.pluginId,
-        };
-      });
+    cards = pluginCards(found[0].items, found[1], true);
   }
-  if (request.kind !== "plugin" && cards.length === 0) {
+  if (!("plugin" in request) && request.kind !== "plugin" && cards.length === 0) {
     const remote = await searchClawHubSkills({ query: request.query, limit: 20 }).catch(
       () => undefined,
     );
@@ -86,34 +124,33 @@ export async function resolveClawHubRecommendations(params: {
     }
     const local =
       params.workspaceDir && official.length > 0
-        ? buildWorkspaceSkillStatus(params.workspaceDir, {
-            config: params.config,
-            agentId: params.agentId,
-          }).skills
+        ? (
+            await prepareWorkspaceSkillStatus(params.workspaceDir, {
+              config: params.config,
+              agentId: params.agentId,
+            })
+          ).report.skills
         : [];
-    cards = official.map((entry) => {
-      const iconUrl = resolveClawHubImageUrl(entry.icon);
-      return {
-        type: "clawhub",
-        kind: "skill",
-        registry: resolveClawHubBaseUrl(),
-        id: entry.installRef,
-        skillRef: entry.installRef,
-        name: truncateUtf16Safe(entry.displayName, 120),
-        description: entry.summary ? truncateUtf16Safe(entry.summary, 240) : undefined,
-        iconUrl,
-        installed: local.some((skill) => {
-          const link = skill.clawhub;
-          return (
-            link?.valid === true &&
-            !link.requestedReference &&
-            link.registry === resolveClawHubBaseUrl() &&
-            `@${link.ownerHandle}/${link.slug}` === entry.installRef
-          );
-        }),
-        official: true,
-      };
-    });
+    cards = official.map((entry) => ({
+      type: "clawhub",
+      kind: "skill",
+      registry: resolveClawHubBaseUrl(),
+      id: entry.installRef,
+      skillRef: entry.installRef,
+      name: truncateUtf16Safe(entry.displayName, 120),
+      description: entry.summary ? truncateUtf16Safe(entry.summary, 240) : undefined,
+      iconUrl: resolveClawHubImageUrl(entry.icon),
+      installed: local.some((skill) => {
+        const link = skill.clawhub;
+        return (
+          link?.valid === true &&
+          !link.requestedReference &&
+          link.registry === resolveClawHubBaseUrl() &&
+          `@${link.ownerHandle}/${link.slug}` === entry.installRef
+        );
+      }),
+      official: true,
+    }));
     registerClawHubCatalogIconUrls(cards.map((card) => card.iconUrl));
   }
   return {
@@ -125,6 +162,8 @@ export async function resolveClawHubRecommendations(params: {
               (card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`,
             )
             .join("\n")
-        : `No official ClawHub ${request.kind ?? "plugin or skill"} match was returned for “${request.query}”. Try a more specific capability name.`,
+        : "plugin" in request
+          ? `No ClawHub plugin named “${request.plugin}” was found, so no card is shown. Check the exact package name, or search by capability instead.`
+          : `No official ClawHub ${request.kind ?? "plugin or skill"} match was returned for “${request.query}”. Try a more specific capability name.`,
   };
 }

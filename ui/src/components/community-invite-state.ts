@@ -1,7 +1,8 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
-export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite";
+// Keep existing browser-origin dismissals across invitation design changes.
+export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite:v2";
 
 // A failed save must still dismiss across sidebar remounts in this page.
 let unpersistedDismissal = false;

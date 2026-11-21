@@ -1,9 +1,18 @@
 /** Native service control/inspection only; payload launchers own their full environment. */
 import { extractErrorCode } from "../infra/errors.js";
-import { createSanitizedCommandError } from "../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  createSanitizedCommandError,
+  hasCommandProcessCleanupError,
+} from "../process/exec-result.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
-import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  getGatewayServiceUpdateNativeCommand,
+  GatewayServiceAuthorityError,
+} from "./service-update-authority.js";
 
 export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   code: number;
@@ -11,7 +20,6 @@ export type ExecResult = Pick<SpawnResult, "stdout" | "stderr"> & {
   errorCode?: string;
 };
 
-/** Runs a child process as UTF-8 and returns exit data instead of throwing on nonzero exit. */
 export async function execFileUtf8(
   command: string,
   args: string[],
@@ -20,22 +28,52 @@ export async function execFileUtf8(
     env?: NodeJS.ProcessEnv;
     timeout?: number;
     killSignal?: NodeJS.Signals | number;
-    windowsHide?: boolean;
+    /** Effect-specific admission; never used for post-effect authority checks. */
+    beforeEffect?: () => void;
   } = {},
 ): Promise<ExecResult> {
-  assertGatewayServiceUpdateCurrent();
+  const scopedNative = getGatewayServiceUpdateNativeCommand();
+  const scoped = scopedNative ? true : assertGatewayServiceUpdateCurrent();
+  let effectFailure: { error: unknown } | undefined;
+  const beforeEffect = options.beforeEffect
+    ? () => {
+        try {
+          options.beforeEffect?.();
+        } catch (error) {
+          effectFailure = { error };
+          throw error;
+        }
+      }
+    : undefined;
   try {
-    const { stdout, stderr, code, termination, signal } = await runCommandWithTimeout(
-      [command, ...args],
-      {
-        baseEnv: resolveServiceManagerEnv(options.env),
-        // sudo -u can inherit an operator directory the service account cannot enter.
-        cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
-        killSignal: options.killSignal,
-        maxOutputBytes: 1024 * 1024,
-        timeoutMs: options.timeout,
-      },
+    beforeEffect?.();
+    // Scoped dispatch serializes before its parent-currentness check. Ordinary
+    // calls retain the existing synchronous assertion and unbound runner.
+    const runNative = scopedNative ?? runCommandWithTimeout;
+    const { stdout, stderr, code, termination, signal, cleanup } = await withChildProcessOperation(
+      "service.manager",
+      () =>
+        runNative([command, ...args], {
+          baseEnv: resolveServiceManagerEnv(options.env),
+          // sudo -u can inherit an operator directory the service account cannot enter.
+          cwd: options.cwd ?? (process.platform === "win32" ? undefined : "/"),
+          killSignal: options.killSignal,
+          maxOutputBytes: 1024 * 1024,
+          timeoutMs: options.timeout,
+          // The retained root spawner withholds its gate input until this callback.
+          // Recheck after queueing and child custody, before native effects are released.
+          ...(scopedNative && beforeEffect ? { beforeInput: beforeEffect } : {}),
+        }),
     );
+    // Compensation cannot run while an earlier writer may still be active.
+    if (scoped && cleanup === "uncertain") {
+      throw new CommandProcessCleanupError();
+    }
+    // Bound dispatch revalidates before releasing its queue; another native
+    // child may suspend that parent before this continuation resumes.
+    if (!scopedNative) {
+      assertGatewayServiceUpdateCurrent();
+    }
     const diagnostic =
       termination === "exit"
         ? ""
@@ -52,6 +90,12 @@ export async function execFileUtf8(
       termination,
     };
   } catch (error) {
+    if (error instanceof GatewayServiceAuthorityError || hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    if (effectFailure) {
+      throw effectFailure.error;
+    }
     const message = error instanceof Error ? error.message : String(error);
     const errorCode = extractErrorCode(error);
     // Launch diagnostics omit argv; preserve errno separately so daemon owners

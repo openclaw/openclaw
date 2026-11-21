@@ -1,4 +1,3 @@
-// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -9,7 +8,6 @@ import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
-import type { ChannelOutboundContext } from "../channels/plugins/types.adapters.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -17,11 +15,10 @@ import { getSessionBindingService } from "../infra/outbound/session-binding-serv
 import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { getCurrentPluginConversationBinding } from "../plugins/conversation-binding.js";
 import { seedPluginConversationBindingApprovalForTest } from "../plugins/conversation-binding.test-fixtures.js";
-import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
+import { clearPluginLoaderCache, writePlugin } from "../plugins/loader.test-fixtures.js";
 import { listRegisteredPluginCommands } from "../plugins/plugin-command-registry.js";
 import { requireActivePluginRegistry, resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
-import { activateTestChannelRegistry, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { sleep } from "../utils.js";
 import type { GatewayClient } from "./client.js";
@@ -30,6 +27,8 @@ import {
   getCliBackendPortBlock,
 } from "./gateway-cli-backend.live-helpers.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
+// Codex bind live gateway tests verify bundled Codex plugin channel binding and outbound session routing.
+import { liveOpenAiApiKeyModels } from "./live-openai-models.test-support.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = isLiveTestEnabled();
@@ -61,12 +60,13 @@ function logCodexBindStep(message: string): void {
   console.info(`[live-codex-bind] ${message}`);
 }
 
-function createSlackCurrentConversationBindingRegistry(outboundReplies: CapturedOutboundReply[]) {
-  return createTestRegistry([
-    {
-      pluginId: "slack",
-      source: "test",
-      plugin: {
+async function writeSlackCurrentConversationBindingPlugin(dir: string, outboundEvent: string) {
+  const fixture = writePlugin({
+    id: "codex-bind-slack-fixture",
+    dir,
+    filename: "index.cjs",
+    registration: `
+      api.registerChannel({ plugin: {
         id: "slack",
         meta: {
           id: "slack",
@@ -86,14 +86,14 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
         },
         outbound: {
           deliveryMode: "direct",
-          sendText: async ({ accountId, text, threadId, to }: ChannelOutboundContext) => {
-            outboundReplies.push({
+          sendText: async ({ accountId, text, threadId, to }) => {
+            process.emit(${JSON.stringify(outboundEvent)}, {
               ...(accountId ? { accountId } : {}),
               text,
               ...(threadId != null ? { threadId } : {}),
               to,
             });
-            return { channel: "slack", messageId: `slack-${outboundReplies.length}` };
+            return { channel: "slack", messageId: "slack-" + require("node:crypto").randomUUID() };
           },
         },
         bindings: {
@@ -103,18 +103,34 @@ function createSlackCurrentConversationBindingRegistry(outboundReplies: Captured
             commandTo,
             originatingTo,
             fallbackTo,
-          }: {
-            commandTo?: string;
-            originatingTo?: string;
-            fallbackTo?: string;
           }) => {
             const conversationId = [commandTo, originatingTo, fallbackTo].find(Boolean)?.trim();
             return conversationId ? { conversationId } : null;
           },
         },
+      } });
+    `,
+  });
+  await fs.writeFile(
+    path.join(fixture.dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: fixture.id,
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+      channels: ["slack"],
+      channelConfigs: {
+        slack: { schema: { type: "object", additionalProperties: false, properties: {} } },
       },
-    },
-  ]);
+    }),
+  );
+  await fs.writeFile(
+    path.join(fixture.dir, "package.json"),
+    JSON.stringify({
+      name: "@test/codex-bind-slack",
+      version: "0.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    }),
+  );
+  return fixture;
 }
 
 function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
@@ -261,6 +277,7 @@ async function writeGatewayConfig(params: {
   port: number;
   token: string;
   workspace: string;
+  channelPlugin: { id: string; dir: string };
 }): Promise<void> {
   const modelProvider = params.modelProvider?.trim() || "codex";
   const usesApiKeyAuth =
@@ -272,8 +289,10 @@ async function writeGatewayConfig(params: {
       auth: { mode: "token", token: params.token },
     },
     plugins: {
-      allow: ["codex"],
+      allow: ["codex", params.channelPlugin.id],
+      load: { paths: [params.channelPlugin.dir] },
       entries: {
+        [params.channelPlugin.id]: { enabled: true },
         codex: {
           enabled: true,
           config: {
@@ -294,7 +313,6 @@ async function writeGatewayConfig(params: {
           [`${modelProvider}/${params.model}`]: { agentRuntime: { id: "codex" } },
         },
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         sandbox: { mode: "off" },
       },
     },
@@ -305,17 +323,7 @@ async function writeGatewayConfig(params: {
             order: { openai: ["openai:default"] },
           },
           secrets: { providers: { default: { source: "env" } } },
-          models: {
-            mode: "merge",
-            providers: {
-              openai: {
-                api: "openai-responses",
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-                baseUrl: "https://api.openai.com/v1",
-                models: [],
-              },
-            },
-          },
+          models: liveOpenAiApiKeyModels(),
         }
       : {}),
   };
@@ -350,6 +358,12 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         process.env.OPENCLAW_LIVE_CODEX_BIND_MODEL?.trim() || DEFAULT_CODEX_BIND_MODEL;
       const bindProvider = resolveCodexBindModelProvider();
       const outboundReplies: CapturedOutboundReply[] = [];
+      const outboundEvent = `codex-bind-outbound-${randomUUID()}`;
+      const recordOutboundReply = (reply: CapturedOutboundReply) => outboundReplies.push(reply);
+      const channelPlugin = await writeSlackCurrentConversationBindingPlugin(
+        path.join(tempRoot, "channel-plugin"),
+        outboundEvent,
+      );
 
       await fs.mkdir(workspace, { recursive: true });
       await fs.writeFile(
@@ -370,6 +384,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         port,
         token,
         workspace,
+        channelPlugin,
       });
 
       clearConfigCache();
@@ -420,15 +435,13 @@ describeLive("gateway live (native Codex conversation binding)", () => {
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
+        process.on(outboundEvent, recordOutboundReply);
         server = await startGatewayServer(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
         });
         await server.startupSettled;
-        await activateTestChannelRegistry(
-          createSlackCurrentConversationBindingRegistry(outboundReplies),
-        );
         client = await connectTestGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -438,7 +451,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         });
         const activeClient = client;
 
-        seedPluginConversationBindingApprovalForTest({
+        await seedPluginConversationBindingApprovalForTest({
           pluginRoot: resolveCodexPluginRoot(),
           pluginId: "codex",
           pluginName: "Codex",
@@ -537,7 +550,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
         expect(initializedBinding.matchedText).not.toContain("- Thread: unknown");
         await sendCodexCommand("/codex fast on", "Codex fast mode enabled.");
         await sendCodexCommand("/codex fast status", "Codex fast mode: on.");
-        await sendCodexCommand("/codex permissions default", "Codex permissions set to default.");
+        await sendCodexCommand("/codex permissions default", "Codex permissions set to guarded.");
         await sendCodexCommand("/codex permissions status", "Codex permissions: guarded.");
         await sendCodexCommand("/codex model", `Codex model: ${bindModel}`);
         await sendCodexCommand("/codex stop", "No active Codex run to stop.");
@@ -612,6 +625,7 @@ describeLive("gateway live (native Codex conversation binding)", () => {
             await server?.close();
           }
         } finally {
+          process.off(outboundEvent, recordOutboundReply);
           await fs.rm(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
           restoreLiveEnv(previous);
         }

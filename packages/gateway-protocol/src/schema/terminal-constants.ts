@@ -24,9 +24,6 @@ function base64Value(code: number): number {
 }
 
 export function terminalUploadDecodedSize(contentBase64: string): number {
-  if (contentBase64.length === 0) {
-    return 0;
-  }
   const padding = contentBase64.endsWith("==") ? 2 : contentBase64.endsWith("=") ? 1 : 0;
   return Math.floor(contentBase64.length / 4) * 3 - padding;
 }
@@ -47,15 +44,10 @@ export function isCanonicalTerminalUploadBase64(contentBase64: string): boolean 
       return false;
     }
   }
-  for (let index = dataEnd; index < contentBase64.length; index += 1) {
-    if (contentBase64.charCodeAt(index) !== 61) {
-      return false;
-    }
-  }
   if (padding > 0) {
     const finalValue = base64Value(contentBase64.charCodeAt(dataEnd - 1));
     const unusedBitsMask = padding === 2 ? 0b1111 : 0b11;
-    if (finalValue < 0 || (finalValue & unusedBitsMask) !== 0) {
+    if ((finalValue & unusedBitsMask) !== 0) {
       return false;
     }
   }

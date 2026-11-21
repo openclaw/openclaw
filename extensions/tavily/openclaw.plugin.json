@@ -40,6 +40,14 @@
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -57,5 +65,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Check whether Tavily search and extraction are ready.",
+    "Compare information across a few URLs with Tavily and cite relevant passages."
+  ]
 }

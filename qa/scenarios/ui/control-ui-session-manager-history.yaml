@@ -17,8 +17,8 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/session-manager-history.e2e.test.ts
-    - ui/src/pages/sessions/sessions-page.ts
-    - ui/src/pages/sessions/view.ts
+    - ui/src/pages/sessions/sessions-page.tsx
+    - ui/src/pages/sessions/view.tsx
   execution:
     kind: playwright
     path: ui/src/e2e/session-manager-history.e2e.test.ts

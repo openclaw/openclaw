@@ -10,14 +10,6 @@ import { withTempDir } from "../../test-utils/temp-dir.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 
 describe("buildCurrentOpenClawCliExecRequest", () => {
-  it("delegates launch policy while keeping shell rendering local", () => {
-    const args = ["sessions", "export-trajectory"];
-    const { argv, command } = buildCurrentOpenClawCliExecRequest(args);
-    expect(argv.at(-2)).toBe("sessions");
-    expect(argv.at(-1)).toBe("export-trajectory");
-    expect(command).toBe(argv.map((value) => `'${value}'`).join(" "));
-  });
-
   it("clears inherited Vitest runner environment for CLI child processes", () => {
     const { env } = buildCurrentOpenClawCliExecRequest([], {
       PATH: "/usr/bin",

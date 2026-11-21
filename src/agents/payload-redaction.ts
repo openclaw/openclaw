@@ -3,14 +3,10 @@
  * fields, masks embedded auth strings, and replaces media/base64 data with
  * size and digest metadata.
  */
-import crypto from "node:crypto";
 import { projectDiagnosticValue, type DiagnosticProjectionPolicy } from "@openclaw/ai/diagnostics";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 
 const REDACTED_MEDIA_DATA = "<redacted>";
-
-function mediaDigest(source: string | Uint8Array): string {
-  return crypto.createHash("sha256").update(source).digest("hex");
-}
 
 const CORE_DIAGNOSTIC_PROJECTION = {
   omitField: (key) => key === "providerReplay",
@@ -18,13 +14,11 @@ const CORE_DIAGNOSTIC_PROJECTION = {
   projectBinary: (binary) => ({
     redacted: REDACTED_MEDIA_DATA,
     bytes: binary.byteLength,
-    sha256: mediaDigest(binary),
+    sha256: sha256Hex(binary),
   }),
   projectMedia: (key, media) => ({
     [key]: REDACTED_MEDIA_DATA,
-    ...(media.source === undefined
-      ? {}
-      : { bytes: media.bytes, sha256: mediaDigest(media.source) }),
+    ...(media.source === undefined ? {} : { bytes: media.bytes, sha256: sha256Hex(media.source) }),
   }),
 } satisfies DiagnosticProjectionPolicy;
 

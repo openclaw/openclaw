@@ -120,19 +120,6 @@ export function resolveRuntimePackEnvironment(
   });
 }
 
-function runTar(args: string[]) {
-  const result = spawnSync("tar", args, {
-    env: process.env,
-    stdio: "inherit",
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error(`tar failed with status ${result.status ?? 1}`);
-  }
-}
-
 function runChecked(command: string, args: string[], options: SpawnSyncOptions = {}) {
   const result = runNpm(command, args, options);
   if (result.status !== 0) {
@@ -302,7 +289,7 @@ function patchPackageArchiveWorkspaceDependencies(
 ): string {
   const unpackDir = join(outputDir, `${outputStem}-archive`);
   mkdirSync(unpackDir);
-  runTar(["-xzf", archive, "-C", unpackDir]);
+  runChecked("tar", ["-xzf", archive, "-C", unpackDir], { stdio: "inherit" });
 
   const packageJsonPath = join(unpackDir, "package", "package.json");
   const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
@@ -313,21 +300,8 @@ function patchPackageArchiveWorkspaceDependencies(
 
   writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`);
   const patchedArchive = join(outputDir, `${outputStem}-patched.tgz`);
-  runTar(["-czf", patchedArchive, "-C", unpackDir, "package"]);
+  runChecked("tar", ["-czf", patchedArchive, "-C", unpackDir, "package"], { stdio: "inherit" });
   return patchedArchive;
-}
-
-function patchRootArchiveWorkspaceDependencies(
-  rootArchive: string,
-  workspacePackages: WorkspacePackage[],
-  outputDir: string,
-): string {
-  return patchPackageArchiveWorkspaceDependencies(
-    rootArchive,
-    workspacePackages,
-    outputDir,
-    "openclaw-root",
-  );
 }
 
 function main(): number {
@@ -364,10 +338,11 @@ function main(): number {
   const packDir = mkdtempSync(join(tmpdir(), "openclaw-ocm-workspace-deps-"));
   try {
     const workspacePackages = packWorkspaceDependencies(npm, workspaceDirs, packDir);
-    const rootArchive = patchRootArchiveWorkspaceDependencies(
+    const rootArchive = patchPackageArchiveWorkspaceDependencies(
       plan.rootArchive,
       workspacePackages,
       packDir,
+      "openclaw-root",
     );
     mkdirSync(plan.prefixDir, { recursive: true });
     writeFileSync(

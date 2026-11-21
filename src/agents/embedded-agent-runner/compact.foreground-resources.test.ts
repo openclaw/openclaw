@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
@@ -8,7 +7,7 @@ import {
   loadTranscriptEventsSync,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
 import { retireInspectionInstances } from "../../plugins/registry-inspection.test-support.js";
@@ -25,9 +24,29 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
+import { createCompactionResourceProvider } from "./compact.resources.test-support.js";
+
+const timeoutClock = vi.hoisted(() => ({ enabled: false }));
+
+vi.mock("./compaction-safety-timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./compaction-safety-timeout.js")>();
+  return {
+    ...actual,
+    compactContextEngineWithSafetyTimeout: (
+      ...args: Parameters<typeof actual.compactContextEngineWithSafetyTimeout>
+    ) => {
+      // Runtime startup needs real timers. Control only the timeout case once
+      // the watchdog starts, so cold writer reads cannot outrun backend entry.
+      if (timeoutClock.enabled) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      return actual.compactContextEngineWithSafetyTimeout(...args);
+    },
+  };
+});
 
 // Exercise the existing managed producer without enabling RUN resource disposal.
 vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
@@ -54,18 +73,16 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
-it.each([
+it.for([
   { mode: "timeout", factory: "none", deferred: false },
   { mode: "caller-abort", factory: "none", deferred: false },
   { mode: "success-tail", factory: "none", deferred: false },
-  { mode: "factory-service", factory: "service", deferred: false },
   { mode: "factory-signal", factory: "signal", deferred: false },
   { mode: "operation-signal", factory: "service", deferred: false },
-  { mode: "deferred-factory-service", factory: "service", deferred: true },
   { mode: "deferred-factory-signal", factory: "signal", deferred: true },
 ] as const)(
   "retains $mode resources through disposal without retaining write authority",
-  async ({ mode, factory, deferred }) => {
+  async ({ mode, factory, deferred }, { signal }) => {
     const state = await createOpenClawTestState({
       prefix: "openclaw-foreground-compaction-",
       layout: "split",
@@ -73,68 +90,17 @@ it.each([
     try {
       const pluginId = `foreground-${mode}-fixture`;
       const pluginRoot = state.path("plugin");
-      fs.mkdirSync(pluginRoot, { recursive: true });
-      fs.mkdirSync(state.workspaceDir, { recursive: true });
-      fs.mkdirSync(state.agentDir(), { recursive: true });
-      fs.writeFileSync(
-        path.join(pluginRoot, "package.json"),
-        JSON.stringify({
-          name: pluginId,
-          version: "1.0.0",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: pluginId,
-          providers: [pluginId],
-          configSchema: { type: "object" },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(pluginRoot, "index.cjs"),
-        `module.exports = {
-          id: '${pluginId}', register(api) {
-            api.registerProvider({ id: '${pluginId}', label: 'Foreground fixture', auth: [] });
-          }
-        };`,
-      );
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: state.workspaceDir,
-            model: { primary: `${pluginId}/model` },
-            compaction: { timeoutSeconds: 1 },
-          },
-        },
-        models: {
-          providers: {
-            [pluginId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-fixture",
-              baseUrl: "https://fixture.invalid/v1",
-              models: [
-                {
-                  id: "model",
-                  name: "Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-        plugins: {
-          allow: [pluginId],
-          load: { paths: [pluginRoot] },
-          slots: { memory: "none", contextEngine: pluginId },
-          entries: { [pluginId]: { enabled: true } },
-        },
-      };
+      for (const dir of [state.workspaceDir, state.agentDir()]) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      const { plugin, config } = createCompactionResourceProvider({
+        pluginRoot,
+        providerId: pluginId,
+        workspaceDir: state.workspaceDir,
+        contextWindow: 8192,
+        compaction: { timeoutSeconds: 1 },
+      });
+      Object.assign(config.plugins.slots, { contextEngine: pluginId });
       await state.writeConfig(config);
       const target = {
         agentId: "main",
@@ -156,6 +122,7 @@ it.each([
       const entryBefore = structuredClone(loadSessionEntryReadOnly(target));
       const transcriptBefore = loadTranscriptEventsSync(target);
       const entered = createDeferredCore();
+      const maintenanceFinished = createDeferredCore();
       const resume = createDeferredCore();
       const disposalEntered = createDeferredCore();
       const cleanupTailEntered = createDeferredCore();
@@ -170,6 +137,12 @@ it.each([
       let factoryCloseContextMatches = false;
       let factoryClosedAfterDisposalStarted = false;
       const work: Promise<unknown>[] = [];
+      const remember = <T>(pending: Promise<T>) => {
+        work.push(pending);
+        void pending.catch(() => {});
+        return pending;
+      };
+      const track = <T>(task: () => Promise<T>) => remember(trackAsyncWork(task));
       const values: unknown[] = [];
       let lateWriteBlocked = false;
       let disposalCalls = 0;
@@ -188,10 +161,7 @@ it.each([
       });
       const source = new PluginRegistryInspectionResources(retireInspectionInstances);
       source.attach(donor.registry);
-      const record = createPluginRecord({
-        id: pluginId,
-        source: path.join(pluginRoot, "index.cjs"),
-      });
+      const record = createPluginRecord({ id: pluginId, source: plugin.runtimeSource });
       donor.registry.plugins.push(record);
       const api = donor.createApi(record, { config, registrationMode: "full" });
       source.runRegistration(pluginId, () => {
@@ -217,12 +187,10 @@ it.each([
               },
               { once: true },
             );
-            const service = trackAsyncWork(async () => {
+            void track(async () => {
               await stopFactory.promise;
               values.push(db.prepare("SELECT value FROM answer").get()?.value);
             });
-            work.push(service);
-            void service.catch(() => {});
           }
           return {
             info: {
@@ -237,6 +205,8 @@ it.each([
               selectedRegistry = getPluginRuntimeGatewayRequestScope();
               entered.resolve();
               await resume.promise;
+              expect.soft(disposalCalls).toBe(0);
+              maintenanceFinished.resolve();
               return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
             },
             compact(params) {
@@ -268,9 +238,9 @@ it.each([
                 values.push(db.prepare("SELECT value FROM answer").get()?.value);
                 return { ok: true, compacted: false };
               };
-              const pending = mode === "success-tail" ? trackAsyncWork(compact) : compact();
-              work.push(pending);
-              void pending.catch(() => {});
+              const pending = remember(
+                mode === "success-tail" ? trackAsyncWork(compact) : compact(),
+              );
               return mode === "success-tail"
                 ? Promise.resolve({ ok: true, compacted: false })
                 : pending;
@@ -294,13 +264,11 @@ it.each([
               disposalContextMatches =
                 getPluginRuntimeGatewayRequestScope()?.pluginRegistry ===
                 selectedRegistry?.pluginRegistry;
-              const pending = trackAsyncWork(async () => {
+              void track(async () => {
                 cleanupTailEntered.resolve();
                 await finishDisposal.promise;
                 values.push(db.prepare("SELECT value FROM answer").get()?.value);
               });
-              work.push(pending);
-              void pending.catch(() => {});
             },
           };
         });
@@ -312,41 +280,56 @@ it.each([
       try {
         expect(getAsyncWorkSignal()).toBeUndefined();
         const start = () =>
-          compactEmbeddedAgentSession({
-            ...target,
-            sessionTarget: target,
-            sessionFile: target.sessionKey,
-            workspaceDir: state.workspaceDir,
-            agentDir: state.agentDir(),
-            config,
-            provider: pluginId,
-            model: "model",
-            trigger: deferred ? "budget" : "manual",
-            ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
-            abortSignal: caller.signal,
-            enqueue: async (task) => await task(),
-          });
+          compactEmbeddedAgentSession(
+            {
+              ...target,
+              sessionTarget: target,
+              sessionFile: target.sessionKey,
+              workspaceDir: state.workspaceDir,
+              agentDir: state.agentDir(),
+              config,
+              provider: pluginId,
+              model: "model",
+              trigger: deferred ? "budget" : "manual",
+              ...(deferred ? { deferOwningContextEngineCompaction: true } : {}),
+              abortSignal: caller.signal,
+              enqueue: async (task) => await task(),
+            },
+            { sourceAuthority: { assertActive: () => {}, operatorAuthority: undefined } },
+          );
+        timeoutClock.enabled = mode === "timeout";
         const completion = parent ? parent.run(start) : start();
         pending = completion;
         if (deferred) {
           await completion;
-          await withTestTimeout(
-            entered.promise,
-            5_000,
-            "Deferred factory never entered maintenance",
+          const maintenanceResult = await racePromiseWithAbortSignal(
+            Promise.race([
+              entered.promise.then(() => "started"),
+              waitForSessionMaintenance(target.sessionKey).then(() => "settled"),
+            ]),
+            signal,
           );
+          expect(maintenanceResult).toBe("started");
         } else {
           await Promise.race([
             entered.promise,
-            completion.then(() => {
-              throw new Error("Compaction ended before the backend entered");
+            completion.then((result) => {
+              throw new Error(
+                `Compaction ended before the backend entered: ${JSON.stringify(result)}`,
+              );
             }),
           ]);
         }
         if (mode === "caller-abort") {
           caller.abort(callerReason);
         }
+        if (mode === "timeout") {
+          await vi.advanceTimersByTimeAsync(1_000);
+        }
         const result = await completion;
+        if (mode === "timeout") {
+          vi.useRealTimers();
+        }
         expect(result).toMatchObject({
           ok: mode === "success-tail" || factory !== "none",
           compacted: false,
@@ -362,8 +345,7 @@ it.each([
         }
         if (mode === "timeout") {
           expect(result.reason).toContain("timed out");
-          expect(caller.signal.aborted).toBe(false);
-          expect(backendSignal?.aborted).toBe(true);
+          expect([caller.signal.aborted, backendSignal?.aborted]).toEqual([false, true]);
         }
         if (mode === "caller-abort") {
           expect(backendSignal?.reason === callerReason).toBe(true);
@@ -377,22 +359,22 @@ it.each([
           expect.soft(workSignal?.aborted ?? false).toBe(false);
         }
         resume.resolve();
+        if (deferred) {
+          // The admitted maintenance operation must finish before resource disposal.
+          await racePromiseWithAbortSignal(maintenanceFinished.promise, signal);
+        }
         if (factory === "none") {
           await Promise.allSettled(work.slice(0, 1));
         }
-        await withTestTimeout(
-          disposalEntered.promise,
-          1_000,
-          "Factory service prevented disposal from starting",
-        );
+        await racePromiseWithAbortSignal(disposalEntered.promise, signal);
         await withTestTimeout(
           cleanupTailEntered.promise,
           1_000,
           "Disposer remained blocked on a captured work signal",
         );
-        expect.soft(db.isOpen).toBe(true);
-        expect.soft(disposalContextMatches).toBe(true);
-        expect.soft(physicalDisposals).toBe(0);
+        expect
+          .soft({ open: db.isOpen, disposalContextMatches, physicalDisposals })
+          .toEqual({ open: true, disposalContextMatches: true, physicalDisposals: 0 });
         finishDisposal.resolve();
         const outcomes = await Promise.allSettled(work);
         expect.soft(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
@@ -407,9 +389,11 @@ it.each([
         }
         expect(loadTranscriptEventsSync(target)).toEqual(transcriptBefore);
         expect(loadSessionEntryReadOnly(target)).toEqual(entryBefore);
-        expect(disposalCalls).toBe(1);
-        expect(physicalDisposals).toBe(1);
-        expect(db.isOpen).toBe(false);
+        expect({ disposalCalls, physicalDisposals, open: db.isOpen }).toEqual({
+          disposalCalls: 1,
+          physicalDisposals: 1,
+          open: false,
+        });
         const reopened = new DatabaseSync(file, { readOnly: true });
         try {
           expect(reopened.prepare("SELECT value FROM answer").get()?.value).toBe(42);
@@ -417,12 +401,14 @@ it.each([
           reopened.close();
         }
       } finally {
+        timeoutClock.enabled = false;
+        vi.useRealTimers();
         resume.resolve();
         finishDisposal.resolve();
         stopFactory.resolve();
         forceDisposal.resolve();
         await Promise.allSettled([...(pending ? [pending] : []), ...work]);
-        await waitForDeferredTurnMaintenanceForSession(target.sessionKey);
+        await waitForSessionMaintenance(target.sessionKey);
         await parent?.drain();
         await closePreparedModelRuntimeSnapshots();
         await source.release();

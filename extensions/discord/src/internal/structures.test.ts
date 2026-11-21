@@ -5,9 +5,6 @@ import { channelFactory, type StructureClient } from "./structures.js";
 
 const client: StructureClient = {
   rest: {} as StructureClient["rest"],
-  async fetchUser() {
-    throw new Error("not used");
-  },
 };
 
 describe("channelFactory", () => {

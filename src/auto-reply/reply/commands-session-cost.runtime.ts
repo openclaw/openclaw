@@ -5,11 +5,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadCostUsageSummary, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
-import {
-  formatCostUsageCachePrefix,
-  formatTokenCount,
-  formatUsd,
-} from "../../utils/usage-format.js";
+import { formatTokenCount } from "../../utils/token-format.js";
+import { formatCostUsageCachePrefix, formatUsd } from "../../utils/usage-format.js";
 
 export async function formatSessionUsageCostSummary(params: {
   cfg: OpenClawConfig;
@@ -29,7 +26,6 @@ export async function formatSessionUsageCostSummary(params: {
   const agentId = sessionAgentId ?? DEFAULT_AGENT_ID;
   const sessionSummary = await loadSessionCostSummary({
     sessionId: params.sessionEntry?.sessionId,
-    sessionEntry: params.sessionEntry,
     ...(params.sessionEntry?.sessionId && params.sessionKey
       ? {
           sessionTarget: {
@@ -55,7 +51,12 @@ export async function formatSessionUsageCostSummary(params: {
   const sessionTokens = sessionSummary?.totalTokens
     ? formatTokenCount(sessionSummary.totalTokens)
     : undefined;
-  const sessionSuffix = (sessionSummary?.missingCostEntries ?? 0) > 0 ? " (partial)" : "";
+  const sessionSuffix =
+    sessionSummary?.staleSince !== undefined
+      ? " (stale)"
+      : (sessionSummary?.missingCostEntries ?? 0) > 0
+        ? " (partial)"
+        : "";
   const sessionLine =
     sessionCost || sessionTokens
       ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`

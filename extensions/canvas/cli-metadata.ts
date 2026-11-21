@@ -1,6 +1,3 @@
-/**
- * Canvas CLI metadata entrypoint used for lightweight command discovery.
- */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 export default definePluginEntry({

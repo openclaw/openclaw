@@ -5,6 +5,9 @@ const draftStream = vi.hoisted(() => ({
   flush: vi.fn(async () => {}),
   stop: vi.fn(async () => undefined),
   discardPending: vi.fn(async () => {}),
+  seal: vi.fn(async () => {}),
+  clear: vi.fn(async () => {}),
+  cleanupPending: vi.fn(async () => {}),
   deleteCurrentMessage: vi.fn(async () => {}),
   finalizeLive: vi.fn(async () => true),
   reset: vi.fn(),
@@ -48,6 +51,7 @@ describe("Matrix progress visibility", () => {
       logVerboseMessage: vi.fn(),
     });
     const options = controller.buildPreviewToolProgressReplyOptions();
+    expect(options.progressPreambleEnabled).toBe(true);
     const progress = { itemId: "item-1", progressText: "still working" };
 
     expect(await options.onItemEvent?.(progress)).toBe(false);

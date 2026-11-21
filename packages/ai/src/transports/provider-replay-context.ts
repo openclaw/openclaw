@@ -1,12 +1,25 @@
 import type { Model, ProviderReplayState } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { shortHash } from "../utils/hash.js";
 
-type ProviderReplayContext = Readonly<
-  Pick<
-    ProviderReplayState,
-    "provider" | "api" | "model" | "baseUrlHash" | "sessionHash" | "authProfileHash"
-  >
+export type ProviderReplayContext = Readonly<
+  Pick<ProviderReplayState, "provider" | "api" | "model" | "baseUrlHash" | "sessionHash">
 >;
+
+export function isProviderReplayContext(
+  value: unknown,
+): value is ProviderReplayContext & Record<string, unknown> {
+  return (
+    isRecord(value) &&
+    typeof value.provider === "string" &&
+    typeof value.api === "string" &&
+    typeof value.model === "string" &&
+    (value.baseUrlHash === undefined || typeof value.baseUrlHash === "string") &&
+    (value.sessionHash === undefined || typeof value.sessionHash === "string") &&
+    // Records written before the credential path left the fence may still carry it.
+    (value.authProfileHash === undefined || typeof value.authProfileHash === "string")
+  );
+}
 
 function hashReplayContextValue(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -15,7 +28,7 @@ function hashReplayContextValue(value: string | undefined): string | undefined {
 
 export function buildProviderReplayContext(
   model: Model,
-  options?: { authProfileId?: string; sessionId?: string },
+  options?: { sessionId?: string },
 ): ProviderReplayContext {
   return {
     provider: model.provider,
@@ -23,7 +36,6 @@ export function buildProviderReplayContext(
     model: model.id,
     baseUrlHash: hashReplayContextValue(model.baseUrl),
     sessionHash: hashReplayContextValue(options?.sessionId),
-    authProfileHash: hashReplayContextValue(options?.authProfileId),
   };
 }
 
@@ -31,13 +43,16 @@ export function providerReplayContextMatches(
   state: ProviderReplayContext,
   context: ProviderReplayContext,
 ): boolean {
-  // Replay state must stay fenced to its exact provider, model, endpoint, session, and auth identity.
+  // Replay state is fenced to its provider API, endpoint and session. Neither the
+  // credential path nor the model is part of the fence: sessions switch both
+  // routinely (fallbacks, config- versus profile-supplied keys), providers accept
+  // their own checkpoints across models, and fencing on either discarded a
+  // session's own checkpoints. The provider rejects items it cannot use
+  // (invalid_encrypted_content, item_conflict), and replay recovery handles that.
   return (
     state.provider === context.provider &&
     state.api === context.api &&
-    state.model === context.model &&
     state.baseUrlHash === context.baseUrlHash &&
-    state.sessionHash === context.sessionHash &&
-    state.authProfileHash === context.authProfileHash
+    state.sessionHash === context.sessionHash
   );
 }

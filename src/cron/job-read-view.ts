@@ -1,12 +1,54 @@
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { toPublicCronJob } from "./public-job.js";
-import type { CronJob } from "./types.js";
+import { cronJobNeedsCreatorReauthorization } from "./tools-allow.js";
+import type { CronDeliveryPreview, CronJob, CronToolsAllowProvenance } from "./types.js";
 
-export function cronJobReadView(job: CronJob) {
+// Migration provenance stays internal; the result schema exposes only public scratch fields.
+export function cronScratchReadView(
+  scratch: { content: string; revision: number; updatedAtMs: number } | undefined,
+) {
+  if (!scratch) {
+    return null;
+  }
+  return {
+    content: scratch.content,
+    revision: scratch.revision,
+    updatedAtMs: scratch.updatedAtMs,
+  };
+}
+
+export function cronAddResultReadView(params: {
+  result: CronJob | { created: boolean; updated?: boolean; job: CronJob };
+  deliveryPreview: CronDeliveryPreview;
+}) {
+  const job = "job" in params.result ? params.result.job : params.result;
+  if ("job" in params.result) {
+    return {
+      created: params.result.created,
+      ...(params.result.updated === undefined ? {} : { updated: params.result.updated }),
+      job: cronJobReadView(job),
+      deliveryPreview: params.deliveryPreview,
+    };
+  }
+  return {
+    ...cronJobReadView(job),
+    deliveryPreview: params.deliveryPreview,
+  };
+}
+
+/**
+ * `toolsAllowProvenance` is store-private and stripped by `toPublicCronJob`, so the
+ * reauthorization flag must be computed from the stored job (which carries it) before
+ * projection; callers pass the stored job even though the public view is returned.
+ */
+export function cronJobReadView(
+  job: CronJob & { toolsAllowProvenance?: CronToolsAllowProvenance },
+) {
   const publicJob = toPublicCronJob(job);
   return {
     ...publicJob,
     configRevision: resolveCronJobConfigRevision(job),
+    reauthorizationRequired: cronJobNeedsCreatorReauthorization({ job }),
     nextRunAtMs: job.state.nextRunAtMs,
     lastRunAtMs: job.state.lastRunAtMs,
     lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus,
@@ -29,6 +71,9 @@ export function cronJobDefinitionFromReadView(
   const {
     effectiveAgentId: _effectiveAgentId,
     configRevision: _configRevision,
+    reauthorizationRequired: _reauthorizationRequired,
+    streamExecutionHost: _streamExecutionHost,
+    payloadSource: _payloadSource,
     nextRunAtMs: _nextRunAtMs,
     lastRunAtMs: _lastRunAtMs,
     lastRunStatus: _lastRunStatus,

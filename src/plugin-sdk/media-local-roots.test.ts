@@ -14,22 +14,22 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type SandboxFixture = Awaited<ReturnType<typeof createSandboxFixture>>;
 
-async function createSandboxFixture() {
+async function createSandboxFixture(relativePath = "report.txt") {
   const baseDir = tempDirs.make("plugin-sdk-media-roots-");
   const stateDir = path.join(baseDir, "state");
   const agentWorkspaceDir = path.join(baseDir, "workspace-main");
   const sessionWorkspaceDir = path.join(stateDir, "sandboxes", "active");
   const siblingWorkspaceDir = path.join(stateDir, "sandboxes", "sibling");
-  const activeFile = path.join(sessionWorkspaceDir, "report.txt");
+  const activeFile = path.join(sessionWorkspaceDir, relativePath);
   const siblingFile = path.join(siblingWorkspaceDir, "secret.txt");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   await fs.mkdir(agentWorkspaceDir, { recursive: true });
-  await fs.mkdir(sessionWorkspaceDir, { recursive: true });
+  await fs.mkdir(path.dirname(activeFile), { recursive: true });
   await fs.mkdir(siblingWorkspaceDir, { recursive: true });
   await fs.writeFile(activeFile, "active-report");
   await fs.writeFile(siblingFile, "sibling-secret");
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", workspace: agentWorkspaceDir }] },
+    agents: { entries: { main: { workspace: agentWorkspaceDir } } },
     tools: { fs: { workspaceOnly: true } },
   };
   return { cfg, sessionWorkspaceDir, activeFile, siblingFile };
@@ -63,13 +63,15 @@ describe("plugin SDK media local roots", () => {
     await expectActiveAllowedAndSiblingDenied(fixture, localRoots);
   });
 
-  it("supports an upgraded positional-helper caller using trusted active-session context", async () => {
-    const fixture = await createSandboxFixture();
-    const localRoots = getAgentScopedMediaLocalRoots(
-      fixture.cfg,
-      "main",
-      fixture.sessionWorkspaceDir,
-    );
+  it("keeps trusted session-context callers sandbox-capable when root expansion is enabled", async () => {
+    const fixture = await createSandboxFixture("media/clip.txt");
+    delete fixture.cfg.tools;
+    const localRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg: fixture.cfg,
+      agentId: "main",
+      mediaSources: [fixture.activeFile, fixture.siblingFile],
+      sessionWorkspaceDir: fixture.sessionWorkspaceDir,
+    });
 
     await expectActiveAllowedAndSiblingDenied(fixture, localRoots);
   });

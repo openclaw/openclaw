@@ -1,4 +1,3 @@
-// Imessage API module exposes the plugin public contract.
 export { imessagePlugin } from "./src/channel.js";
 export { imessageSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -8,7 +7,10 @@ export {
   type ResolvedIMessageAccount,
   resolveIMessageAccount,
 } from "./src/accounts.js";
-export { createIMessageConversationBindingManager } from "./src/conversation-bindings.js";
+export {
+  createIMessageConversationBindingManager,
+  createIMessageConversationBindingManagerV2,
+} from "./src/conversation-bindings.js";
 export {
   matchIMessageAcpConversation,
   normalizeIMessageAcpConversationId,
@@ -21,12 +23,8 @@ export {
 } from "./src/group-policy.js";
 export { looksLikeIMessageTargetId, normalizeIMessageMessagingTarget } from "./src/normalize.js";
 export { IMESSAGE_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./src/outbound-send-deps.js";
-export {
-  DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
-  type IMessageProbe,
-  type IMessageProbeOptions,
-  probeIMessage,
-} from "./src/probe.js";
+export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./src/constants.js";
+export { type IMessageProbe, type IMessageProbeOptions, probeIMessage } from "./src/probe.js";
 export {
   type ChatSenderAllowParams,
   type ChatTargetPrefixesParams,

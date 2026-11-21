@@ -1,4 +1,3 @@
-// Slack plugin module implements channel type behavior.
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackMessageEvent } from "../types.js";
 
@@ -23,22 +22,29 @@ export function inferSlackChannelType(
   return undefined;
 }
 
-export function normalizeSlackChannelType(
+export function parseSlackChannelType(
   channelType?: string | null,
-  channelId?: string | null,
-): SlackMessageEvent["channel_type"] {
+): SlackMessageEvent["channel_type"] | undefined {
   const normalized = normalizeOptionalLowercaseString(channelType);
-  const inferred = inferSlackChannelType(channelId);
   if (
     normalized === "im" ||
     normalized === "mpim" ||
     normalized === "channel" ||
     normalized === "group"
   ) {
-    // D-prefix channel IDs are always DMs — override a contradicting channel_type.
-    if (inferred === "im" && normalized !== "im") {
-      return "im";
-    }
+    return normalized;
+  }
+  return undefined;
+}
+
+export function normalizeSlackChannelType(
+  channelType?: string | null,
+  channelId?: string | null,
+): SlackMessageEvent["channel_type"] {
+  const normalized = parseSlackChannelType(channelType);
+  const inferred = inferSlackChannelType(channelId);
+  // D-prefix channel IDs are always DMs — override a contradicting channel_type.
+  if (normalized && inferred !== "im") {
     return normalized;
   }
   return inferred ?? "channel";

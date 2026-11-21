@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { parseArgs } from "node:util";
+import { readJson } from "../fixtures/common.mjs";
 
 const WATCH_CLIENT = Object.freeze({
   id: "openclaw-watchos",
@@ -20,10 +21,6 @@ function requiredOption(values, name) {
   const value = values[name];
   assert(typeof value === "string" && value.length > 0, `--${name} is required`);
   return value;
-}
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function writeJson(file, value) {

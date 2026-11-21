@@ -116,6 +116,100 @@ struct WatchChatStatusLocalizationTests {
         #expect(status.command == .sendChat)
     }
 
+    @Test func `delivery statuses preserve caller labels and lazy localization`() {
+        let translations: [WatchStatusLocalizationKey: String] = [
+            .chat: "Localized chat",
+            .sendingFormat: "Sending %@",
+            .sentFormat: "%@: sent",
+            .queuedFormat: "%@: queued",
+            .failedFormat: "%@ failed: %@",
+            .unavailable: "Unavailable",
+            .refreshingFromIPhone: "Refreshing from iPhone",
+        ]
+        typealias DeliveryCase = (
+            state: (code: WatchDeliveryStatusCode, detail: String?),
+            command: (text: String, keys: [WatchStatusLocalizationKey]),
+            reply: (text: String, keys: [WatchStatusLocalizationKey]))
+        let cases: [DeliveryCase] = [
+            (
+                (.sending, nil),
+                ("Sending Localized chat", [.chat, .sendingFormat]),
+                ("Sending Reply %@", [.sendingFormat])),
+            (
+                (.sent, nil),
+                ("Localized chat: sent", [.chat, .sentFormat]),
+                ("Reply %@: sent", [.sentFormat])),
+            (
+                (.queued, nil),
+                ("Localized chat: queued", [.chat, .queuedFormat]),
+                ("Reply %@: queued", [.queuedFormat])),
+            (
+                (.failed, nil),
+                ("Localized chat failed: Unavailable", [.chat, .failedFormat, .unavailable]),
+                ("Reply %@ failed: Unavailable", [.failedFormat, .unavailable])),
+            (
+                (.failed, ""),
+                ("Localized chat failed: ", [.chat, .failedFormat]),
+                ("Reply %@ failed: ", [.failedFormat])),
+            (
+                (.failed, "Phone busy"),
+                ("Localized chat failed: Phone busy", [.chat, .failedFormat]),
+                ("Reply %@ failed: Phone busy", [.failedFormat])),
+            (
+                (.blocked, nil),
+                ("Refreshing from iPhone", [.chat, .refreshingFromIPhone]),
+                ("Refreshing from iPhone", [.refreshingFromIPhone])),
+            (
+                (.blocked, ""),
+                ("", [.chat]),
+                ("Refreshing from iPhone", [.refreshingFromIPhone])),
+            (
+                (.blocked, "Phone busy"),
+                ("Phone busy", [.chat]),
+                ("Refreshing from iPhone", [.refreshingFromIPhone])),
+        ]
+
+        for row in cases {
+            var commandKeys: [WatchStatusLocalizationKey] = []
+            let commandText = WatchAppCommandStatus(
+                command: .sendChat, code: row.state.code, detail: row.state.detail)
+                .localizedText { key in
+                    commandKeys.append(key)
+                    return translations[key] ?? "Unexpected localization"
+                }
+            var replyKeys: [WatchStatusLocalizationKey] = []
+            let replyText = WatchReplyStatus(
+                code: row.state.code, actionLabel: "Reply %@", detail: row.state.detail)
+                .localizedText { key in
+                    replyKeys.append(key)
+                    return translations[key] ?? "Unexpected localization"
+                }
+
+            #expect(commandText == row.command.text)
+            #expect(replyText == row.reply.text)
+            #expect(commandKeys == row.command.keys)
+            #expect(replyKeys == row.reply.keys)
+        }
+    }
+
+    @Test func `legacy delivery text bypasses all localization including empty text`() {
+        for text in ["", "Legacy delivery text"] {
+            var keys: [WatchStatusLocalizationKey] = []
+            let localize: (WatchStatusLocalizationKey) -> String = { key in
+                keys.append(key)
+                return "Unexpected localization"
+            }
+            let command = WatchAppCommandStatus(
+                command: .sendChat, code: .failed, detail: "Phone busy", legacyVerbatim: text)
+            let reply = WatchReplyStatus(
+                code: .blocked, actionLabel: "Reply %@", detail: "Phone busy", legacyVerbatim: text)
+
+            #expect(command.localizedText(localize: localize) == text)
+            #expect(reply.localizedText(localize: localize) == text)
+            #expect(keys.isEmpty)
+        }
+    }
+
     @Test func `legacy approval outcomes recover semantic localization`() throws {
         let allowed = try #require(
             WatchExecApprovalOutcome.decodeLegacyLocalizedText("Approval allowed once."))

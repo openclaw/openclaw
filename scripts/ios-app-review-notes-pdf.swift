@@ -238,7 +238,7 @@ func markdownToHTML(_ markdown: String) -> String {
 
 let arguments = CommandLine.arguments
 guard arguments.count == 3 else {
-  fail("Usage: scripts/ios-app-review-notes-pdf.swift <APP-REVIEW-NOTES.md> <output.pdf>")
+  fail("Usage: scripts/ios-app-review-notes-pdf.swift <APP-REVIEW-NOTES-APPLE.md> <output.pdf>")
 }
 
 let sourceURL = absoluteFileURL(arguments[1])

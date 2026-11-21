@@ -114,21 +114,29 @@ async function readCommandHistory(
                 .filter((part) => part.type === "toolCall" && part.name === "node_exec")
             : [],
         );
-        return (
-          calls.length > 0 &&
-          (expectedReply === undefined ||
-            (messages.some(
-              (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
-            ) &&
-              messages.some(
-                (message) =>
-                  message.role === "assistant" && textContent(message).trim() === expectedReply,
-              )))
-        );
+        return {
+          nodeExecCallPresent: calls.length > 0,
+          ...(expectedReply === undefined
+            ? {}
+            : {
+                matchingToolResultPresent: messages.some(
+                  (message) => message.role === "toolResult" && message.toolCallId === calls[0]?.id,
+                ),
+                exactAssistantReplyPresent: messages.some(
+                  (message) =>
+                    message.role === "assistant" && textContent(message).trim() === expectedReply,
+                ),
+              }),
+        };
       },
       { timeout: 30_000, interval: 100 },
     )
-    .toBe(true);
+    .toEqual({
+      nodeExecCallPresent: true,
+      ...(expectedReply === undefined
+        ? {}
+        : { matchingToolResultPresent: true, exactAssistantReplyPresent: true }),
+    });
   expect(calls).toHaveLength(1);
   const call = calls[0];
   if (!isRecord(call) || typeof call.id !== "string") {
@@ -311,7 +319,7 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
                 message: [
                   "Execute this synthetic command on the paired node exactly once using node_exec.",
                   `Use exactly these arguments: ${JSON.stringify(expectedArgs)}`,
-                  "Use tool discovery if needed. Do not change files, add timeout arguments, run other commands, retry the command, or run it in the background.",
+                  "Use tool discovery if needed. Pass only the listed arguments; do not add, drop, or change any of them. Do not change files, run other commands, retry the command, or run it in the background.",
                   testCase.name === "process-timeout"
                     ? `The command is expected to time out. After its tool result returns, reply exactly ${expectedReply}.`
                     : `Wait for the tool result. Only after it succeeds, reply exactly ${expectedReply}.`,
@@ -327,7 +335,40 @@ describe.skipIf(!LIVE_ENABLED)("Codex node_exec live timeout ownership", () => {
               (error: unknown) => ({ kind: "error" as const, error }),
             );
             const prefix = path.join(proofDir, marker);
-            const started = await waitForProof(`${prefix}.started.json`, START_TIMEOUT_MS);
+            const started = await waitForProof(`${prefix}.started.json`, START_TIMEOUT_MS).catch(
+              async (error: unknown) => {
+                // Distinguish a model that skipped node_exec, a stalled provider turn, and a
+                // failed dispatch without logging prompts or tool payloads.
+                const turn = await Promise.race([
+                  outcome,
+                  new Promise<{ kind: "pending" }>((resolve) => {
+                    setTimeout(() => resolve({ kind: "pending" }), 1_000);
+                  }),
+                ]);
+                const history = await liveGateway
+                  .call("chat.history", { sessionKey, limit: 100 })
+                  .catch(() => undefined);
+                const shape =
+                  isRecord(history) && Array.isArray(history.messages)
+                    ? history.messages.filter(isRecord).map((message) => ({
+                        role: message.role,
+                        isError: message.isError,
+                        tools: Array.isArray(message.content)
+                          ? message.content
+                              .filter(isRecord)
+                              .filter((part) => part.type === "toolCall")
+                              .map((part) => part.name)
+                          : [],
+                      }))
+                    : [];
+                const status =
+                  turn.kind === "result" && isRecord(turn.value) ? turn.value.status : turn.kind;
+                throw new Error(
+                  `${testCase.name} never started on the node: turn=${String(status)} history=${JSON.stringify(shape)}\n${liveGateway.logs()}`,
+                  { cause: error },
+                );
+              },
+            );
             expect(started).toMatchObject({ marker, home: nodeHome });
             expect(started.pid).not.toBe(node?.child.pid);
             console.info(`[node-exec-live] ${testCase.name} started on the paired node`);

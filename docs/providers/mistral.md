@@ -119,13 +119,17 @@ The media transcription path uses `/v1/audio/transcriptions`. The default audio 
 
 The `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT provider.
 
-| Setting      | Config path                                                            | Default                                 |
-| ------------ | ---------------------------------------------------------------------- | --------------------------------------- |
-| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`         |
-| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602` |
-| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                             |
-| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                  |
-| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                   |
+| Setting      | Config path                                                            | Default                                                              |
+| ------------ | ---------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| API key      | `plugins.entries.voice-call.config.streaming.providers.mistral.apiKey` | Falls back to `MISTRAL_API_KEY`, then a saved `mistral` auth profile |
+| Model        | `...mistral.model`                                                     | `voxtral-mini-transcribe-realtime-2602`                              |
+| Encoding     | `...mistral.encoding`                                                  | `pcm_mulaw`                                                          |
+| Sample rate  | `...mistral.sampleRate`                                                | `8000`                                                               |
+| Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                                                |
+
+The saved auth profile is used only when Mistral is the named provider, for example
+`streaming.provider: "mistral"`. Automatic selection counts only the config and
+environment keys.
 
 ```json5
 {
@@ -160,7 +164,7 @@ OpenClaw defaults Mistral realtime STT to `pcm_mulaw` at 8 kHz so Voice Call can
   <Accordion title="Adjustable reasoning">
     `mistral/mistral-small-latest`, `mistral/mistral-small-2603`, and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/studio-api/conversations/reasoning) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
-    OpenClaw maps the session **thinking** level to Mistral's API:
+    Thinking defaults to **off**. OpenClaw accepts these session thinking levels and maps them to Mistral's API:
 
     | OpenClaw thinking level                                              | Mistral `reasoning_effort` |
     | ----------------------------------------------------------------------- | --------------------------- |

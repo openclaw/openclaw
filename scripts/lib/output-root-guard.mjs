@@ -1,6 +1,15 @@
 // Fail-closed output-root guard shared by build and postbuild mutators.
 import fs from "node:fs";
 
+export const CONTROL_UI_BUILD_PREFIX = "control-ui.build-";
+
+export function controlUiBuildSiblingPid(name) {
+  const match =
+    name.startsWith(CONTROL_UI_BUILD_PREFIX) &&
+    /^([1-9]\d*)-[\w-]+(?:\.retired)?$/u.exec(name.slice(CONTROL_UI_BUILD_PREFIX.length));
+  return match ? Number(match[1]) : null;
+}
+
 /**
  * Throws when a generated output root is a symbolic link. readdir/rm through a
  * symlinked root rewrites the link target — observed deleting a live gateway

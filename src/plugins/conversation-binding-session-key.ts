@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
-export const PLUGIN_BINDING_SESSION_PREFIX = "plugin-binding";
-
 export function normalizeChannel(value: string): string {
   return normalizeOptionalLowercaseString(value) ?? "";
 }
@@ -25,5 +23,5 @@ export function buildPluginBindingSessionKey(params: {
     )
     .digest("hex")
     .slice(0, 24);
-  return `${PLUGIN_BINDING_SESSION_PREFIX}:${params.pluginId}:${hash}`;
+  return `plugin-binding:${params.pluginId}:${hash}`;
 }

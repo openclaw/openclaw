@@ -178,16 +178,6 @@ function urgentKeys(text) {
   return keys;
 }
 
-function selectTrackingIssue(issues) {
-  return issues
-    .filter(isTrustedTracker)
-    .toSorted(
-      (left, right) =>
-        Number(right.state === "open") - Number(left.state === "open") ||
-        right.number - left.number,
-    )[0];
-}
-
 async function ensureTrackerLabel({ github, owner, repo }) {
   try {
     await github.rest.issues.getLabel({ owner, repo, name: TRACKER_LABEL });
@@ -222,7 +212,10 @@ export async function runDatedTodoUpsert({
     per_page: 100,
   });
   const trackingIssues = labeledIssues.filter(isTrustedTracker);
-  const issue = selectTrackingIssue(trackingIssues);
+  const issue = trackingIssues.toSorted(
+    (left, right) =>
+      Number(right.state === "open") - Number(left.state === "open") || right.number - left.number,
+  )[0];
 
   // Search is diagnostics-only: its index is eventually consistent, so it
   // must never decide whether the canonical labeled tracker exists.

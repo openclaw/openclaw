@@ -20,6 +20,7 @@ permissions:
 jobs:
   prepare-mermaid:
     name: Prepare Mermaid assets
+    if: (github.event_name != 'schedule' || github.repository == 'openclaw/openclaw')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -58,7 +59,7 @@ jobs:
 
       - name: Upload Mermaid assets
         id: upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: codeql-macos-mermaid-${{ github.run_id }}-${{ github.run_attempt }}
           path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
@@ -68,6 +69,8 @@ jobs:
   macos:
     name: Critical Security (macOS)
     needs: prepare-mermaid
+    # Swift CodeQL tracing requires macOS/Xcode 26 until upstream adds macOS 27 support.
+    # https://github.com/github/codeql/issues/22742
     runs-on: macos-26-intel
     timeout-minutes: 90
     steps:
@@ -92,13 +95,31 @@ jobs:
           swift --version
 
       - name: Download Mermaid assets
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           artifact-ids: ${{ needs.prepare-mermaid.outputs.artifact-id }}
           path: apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid
 
+      - name: Setup Node environment for native protocol generation
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+          install-deps: "false"
+
+      - name: Install native protocol dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/gateway-protocol...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
+
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           languages: swift
           build-mode: manual
@@ -110,7 +131,7 @@ jobs:
 
       - name: Analyze
         id: analyze
-        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           output: sarif-results
           upload: failure-only
@@ -140,14 +161,17 @@ jobs:
             jq '
               def in_dependency_build:
                 ((.locations // []) | length > 0)
-                and all(.locations[]; (.physicalLocation.artifactLocation.uri? // "") | test("^apps/macos/\\.build/"));
+                and all(.locations[];
+                  (.physicalLocation.artifactLocation.uri? // "")
+                  | test("^apps/macos/\\.build/")
+                    and (endswith("/GenerateGatewayProtocol/GatewayModels.swift") | not));
 
               .runs |= map(.results = ((.results // []) | map(select(in_dependency_build | not))))
             ' "$file" > "sarif-results-filtered/$(basename "$file")"
           done
 
       - name: Upload filtered SARIF
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
         with:
           sarif_file: sarif-results-filtered
           category: "/codeql-critical-security/macos"

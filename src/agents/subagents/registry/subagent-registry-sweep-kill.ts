@@ -1,39 +1,46 @@
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import {
-  isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../../sessions/session-lifecycle-admission.js";
-import { SUBAGENT_KILL_TASK_ERROR } from "../../../tasks/detached-task-runtime-contract.js";
+  matchingEntries,
+  selectedOperations,
+  inputMatchesSessionId,
+} from "../../../sessions/session-controller.lifecycle-projections.js";
 import {
-  finalizeTaskRunByRunId,
-  findDetachedTaskRun,
-} from "../../../tasks/detached-task-runtime.js";
-import { isProvisionalSubagentKillTask } from "../../../tasks/task-cancellation-state.js";
-import type { TaskRecord } from "../../../tasks/task-registry.types.js";
-import { reconcileRetiredSubagentCancellation } from "../completion/subagent-completion-admission.store.js";
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  isSessionMutationActive,
+  runSessionMutation,
+  captureSessionTarget,
+  waitForSessionControllerSettlement,
+} from "../../../sessions/session-controller.lifecycle.js";
+import {
+  cancelCapturedSessionControllerSource,
+  captureSessionControllerStop,
+} from "../../../sessions/session-controller.stop.js";
+import {
+  matchesSubagentChildSessionOwner,
+  resolveSubagentChildAuthority,
+} from "./subagent-child-owner-match.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import { matchesSubagentKillIntent } from "./subagent-control-kill-intent.js";
+import {
+  prepareSubagentKillSession,
+  type SubagentKillSession,
+} from "./subagent-control-session.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { PROVISIONAL_KILL_RECONCILIATION_MS } from "./subagent-registry-helpers.js";
-import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import {
   resolveSubagentRunDeadlineMs,
   resolveSubagentRunEffectiveEndedAt,
 } from "./subagent-run-timeout.js";
-import {
-  loadSubagentSessionEntry,
-  resolveCompletionFromSessionEntry,
-} from "./subagent-session-reconciliation.js";
+import { resolveSubagentSessionCompletion } from "./subagent-session-reconciliation.js";
 
 function findNextSubagentRunCreatedAt(
   candidates: Iterable<SubagentRunRecord>,
@@ -43,7 +50,7 @@ function findNextSubagentRunCreatedAt(
   for (const candidate of candidates) {
     if (
       candidate.runId === entry.runId ||
-      candidate.childSessionKey !== entry.childSessionKey ||
+      !matchesSubagentChildSessionOwner(candidate, entry.childSessionKey, entry.childAgentId) ||
       compareSubagentRunGeneration(candidate, entry) <= 0
     ) {
       continue;
@@ -53,102 +60,35 @@ function findNextSubagentRunCreatedAt(
   return nextCreatedAt;
 }
 
-function resolveSubagentTaskForRunGeneration(
-  entry: SubagentRunRecord,
-  nextRunCreatedAt: number | undefined,
-) {
-  const generationStartedAt = entry.sessionStartedAt ?? entry.createdAt;
-  return findDetachedTaskRun({
-    runId: entry.taskRunId ?? entry.runId,
-    runtime: "subagent",
-    sessionKey: entry.childSessionKey,
-    createdAtOrAfter: generationStartedAt,
-    createdBefore: nextRunCreatedAt,
-    // Steer/wake replaces the registry run ID while retaining the original
-    // task row. Only those continuations may adopt a session-scoped task.
-    allowSessionFallback:
-      entry.taskRunId === undefined &&
-      typeof entry.sessionStartedAt === "number" &&
-      entry.sessionStartedAt < entry.createdAt,
-  });
-}
-
-function isStableCancellation(task: TaskRecord | undefined) {
-  return task?.status === "cancelled" && !isProvisionalSubagentKillTask(task);
-}
-
-function isUnstableTask(task: TaskRecord | undefined) {
-  return (
-    task !== undefined &&
-    (task.status === "queued" || task.status === "running" || isProvisionalSubagentKillTask(task))
-  );
-}
-
-export function resolveSubagentTaskForRun(
-  candidates: Iterable<SubagentRunRecord>,
-  entry: SubagentRunRecord,
-) {
-  return resolveSubagentTaskForRunGeneration(
-    entry,
-    findNextSubagentRunCreatedAt(candidates, entry),
-  );
-}
-
 export async function reconcileDurableSubagentKillIntent(params: {
   runId: string;
   entry: SubagentRunRecord;
   runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
-  loadKillRuntime: () => Promise<typeof import("./subagent-control.runtime.js")>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   completeSubagentRunWithRecovery: (
     completion: SubagentCompletionRequest,
     source: string,
   ) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
+  retireObligations: (entry: SubagentRunRecord) => Promise<void>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<boolean> {
   const killIntent = params.entry.killIntent;
-  if (!killIntent) {
+  const authority = resolveSubagentChildAuthority(params.entry);
+  if (!killIntent || authority.status === "mismatch") {
     return false;
   }
-  if (params.runs.get(params.runId) !== params.entry) {
+  if (!isSameSubagentRunOwner(params.runs.get(params.runId), params.entry)) {
     return false;
   }
-  const childRuns = () => params.getRunsForChildSession(params.entry.childSessionKey);
-  const latest = getLatestSubagentRunByChildSessionKeyFromRuns(
-    childRuns(),
-    params.entry.childSessionKey,
-  );
-  if (latest !== params.entry) {
+  const childRuns = () =>
+    params.getRunsForChildSession(params.entry.childSessionKey, params.entry.childAgentId);
+  const latest = getLatestSubagentRunForChild(childRuns(), params.entry);
+  if (!isSameSubagentRunOwner(latest, params.entry)) {
     try {
-      const taskResolution = resolveSubagentTaskForRun(childRuns(), params.entry);
-      const task = taskResolution.task;
-      if (taskResolution.lookup === "unavailable" || isUnstableTask(task)) {
-        const finalized = finalizeTaskRunByRunId({
-          runId: task?.runId ?? params.entry.taskRunId ?? params.runId,
-          runtime: "subagent",
-          sessionKey: task?.childSessionKey ?? params.entry.childSessionKey,
-          status: "cancelled",
-          endedAt: killIntent.requestedAt,
-          lastEventAt: killIntent.requestedAt,
-          error: "Superseded subagent cancellation finalized.",
-          suppressDelivery: true,
-        });
-        if (taskResolution.lookup === "available" && finalized.length === 0) {
-          params.warn("could not stabilize superseded durable kill task", {
-            runId: params.runId,
-            childSessionKey: params.entry.childSessionKey,
-          });
-          return false;
-        }
-      }
-      if (
-        params.runs.get(params.runId) !== params.entry ||
-        getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
-          params.entry
-      ) {
-        return false;
-      }
       await params.retireSupersededRun(params.runId, params.entry);
       return true;
     } catch (error) {
@@ -161,27 +101,30 @@ export async function reconcileDurableSubagentKillIntent(params: {
     }
   }
   const ownsCurrentGeneration = () =>
-    params.runs.get(params.runId) === params.entry &&
-    params.entry.killIntent === killIntent &&
+    isSameSubagentRunOwner(params.runs.get(params.runId), params.entry) &&
+    matchesSubagentKillIntent(params.runs.get(params.runId)?.killIntent, killIntent) &&
     killIntent.lifecycleGeneration !== undefined &&
     isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration) &&
-    getLatestSubagentRunByChildSessionKeyFromRuns(childRuns(), params.entry.childSessionKey) ===
-      params.entry;
+    isSameSubagentRunOwner(getLatestSubagentRunForChild(childRuns(), params.entry), params.entry);
   const cfg = getRuntimeConfig();
-  const storePath = resolveSessionStorePathCore(cfg.session?.store, {
-    agentId: resolveAgentIdFromSessionKey(params.entry.childSessionKey),
-  });
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params.entry, cfg);
+  let session: SubagentKillSession | undefined;
   const ownsSessionIncarnation = () => {
-    const current = loadSubagentSessionEntry({
-      childSessionKey: params.entry.childSessionKey,
-      cfg,
-    });
+    try {
+      session?.assertCurrent();
+    } catch (error) {
+      if (isSessionDeliveryGenerationRevokedError(error)) {
+        return false;
+      }
+      throw error;
+    }
+    const current = session?.entry;
     return (
       current?.sessionId === killIntent.sessionId &&
       current?.lifecycleRevision === killIntent.sessionLifecycleRevision
     );
   };
-  const completeRetiredKill = async () => {
+  const completeKill = async (retired: boolean) => {
     await params.completeSubagentRunWithRecovery(
       {
         runId: params.runId,
@@ -192,76 +135,121 @@ export async function reconcileDurableSubagentKillIntent(params: {
         sendFarewell: true,
         accountId: params.entry.requesterOrigin?.accountId,
         triggerCleanup: true,
-        suppressSessionEffects: true,
+        ...(retired ? { suppressSessionEffects: true } : {}),
       },
-      "sweeper-retired-kill-intent",
+      retired ? "sweeper-retired-kill-intent" : "sweeper-pending-kill-intent",
     );
+    const killed = params.runs.get(params.runId);
+    if (killed && isSameSubagentRunOwner(killed, params.entry)) {
+      await params.retireObligations(killed);
+    }
     return true;
   };
+  if (authority.status === "legacy-unverified") {
+    return await completeKill(true);
+  }
   if (
     killIntent.lifecycleGeneration === undefined ||
     !isAgentEventLifecycleGenerationCurrent(killIntent.lifecycleGeneration)
   ) {
-    return await completeRetiredKill();
+    return await completeKill(true);
   }
-  const identities = [params.entry.childSessionKey, killIntent.sessionId];
+  const target = captureSessionTarget({
+    storeScope: storePath,
+    sessionKey: params.entry.childSessionKey,
+    agentId,
+    incarnation: killIntent.sessionId,
+  });
+  const identities = target.aliases;
   // A live mutation owns this cancellation; reconcile other rows without waiting behind it.
-  if (isSessionLifecycleMutationActive(storePath, identities)) {
+  if (isSessionMutationActive(storePath, identities)) {
     return false;
   }
   try {
-    const runtime = await params.loadKillRuntime();
-    if (!ownsCurrentGeneration() || isSessionLifecycleMutationActive(storePath, identities)) {
+    session = await prepareSubagentKillSession(
+      cfg,
+      params.entry.childSessionKey,
+      () => {
+        if (!ownsCurrentGeneration()) {
+          throw new Error("Subagent session preparation lost its original kill intent.");
+        }
+      },
+      undefined,
+      params.entry.childAgentId,
+      params.entry.childSessionIdentity,
+    );
+    if (isSessionMutationActive(session.storePath, identities)) {
       return false;
     }
     if (!ownsSessionIncarnation()) {
-      return await completeRetiredKill();
+      return await completeKill(true);
     }
-    return await runExclusiveSessionLifecycleMutation({
-      scope: storePath,
-      identities,
+    return await runSessionMutation({
+      diagnosticLabel: "subagent-kill-sweep",
+      target,
+      requiredSessionId: killIntent.sessionId,
       run: async () => {
         if (!ownsCurrentGeneration()) {
           return false;
         }
         if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+          return await completeKill(true);
         }
+        const sessionId = killIntent.sessionId;
+        const capture = captureSessionControllerStop({
+          inputs: killIntent.sessionId
+            ? matchingEntries(target).flatMap(
+                (owner) =>
+                  owner.mailbox?.entries.filter((input) =>
+                    inputMatchesSessionId(input, killIntent.sessionId),
+                  ) ?? [],
+              )
+            : [],
+          operations: sessionId
+            ? [...selectedOperations([target])].filter((operation) =>
+                operation.hasOwnedSessionId(sessionId),
+              )
+            : [],
+        });
+        const assertCurrent = () => {
+          if (!ownsCurrentGeneration() || !ownsSessionIncarnation()) {
+            throw new Error("Durable kill ownership changed before cancellation");
+          }
+        };
         const hasLiveRunContext = Boolean(getAgentRunContext(params.runId));
-        const active = killIntent.sessionId
-          ? runtime.isEmbeddedAgentRunActive(killIntent.sessionId)
-          : false;
-        const aborted =
-          killIntent.sessionId && active
-            ? runtime.abortEmbeddedAgentRun(killIntent.sessionId)
-            : false;
-        if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+        const active = capture.operations.some((operation) => !operation.result);
+        const stopped = cancelCapturedSessionControllerSource(capture, { assertCurrent });
+        assertCurrent();
+        const aborted = stopped.activeCancelled > 0;
+        const queuedInputsSettled = await waitForSessionControllerSettlement(
+          Promise.all(capture.queuedInputs.map((input) => input.settlement.promise)).then(
+            () => undefined,
+          ),
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+        );
+        if (!queuedInputsSettled) {
+          throw new Error("Durable subagent kill queued input cleanup exceeded its drain deadline");
         }
-        runtime.clearSessionQueues([params.entry.childSessionKey, killIntent.sessionId]);
+        if (!ownsSessionIncarnation()) {
+          return await completeKill(true);
+        }
         if ((active || hasLiveRunContext) && !aborted) {
           return false;
+        }
+        const settled = await waitForSessionControllerSettlement(
+          capture.settled,
+          SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+        );
+        if (!settled) {
+          throw new Error("Durable subagent kill source settlement exceeded its drain deadline");
         }
         if (!ownsCurrentGeneration()) {
           return false;
         }
         if (!ownsSessionIncarnation()) {
-          return await completeRetiredKill();
+          return await completeKill(true);
         }
-        await params.completeSubagentRunWithRecovery(
-          {
-            runId: params.runId,
-            expectedEntry: params.entry,
-            endedAt: killIntent.requestedAt,
-            outcome: { status: "error", error: killIntent.reason },
-            reason: SUBAGENT_ENDED_REASON_KILLED,
-            sendFarewell: true,
-            accountId: params.entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-          },
-          "sweeper-pending-kill-intent",
-        );
-        return true;
+        return await completeKill(false);
       },
     });
   } catch (error) {
@@ -271,36 +259,12 @@ export async function reconcileDurableSubagentKillIntent(params: {
       childSessionKey: params.entry.childSessionKey,
     });
     return false;
+  } finally {
+    await session?.release();
   }
 }
 
-function resolveCompletionFromTerminalTask(task: TaskRecord | undefined, entry: SubagentRunRecord) {
-  if (
-    !task ||
-    typeof task.endedAt !== "number" ||
-    (task.status !== "succeeded" && task.status !== "failed" && task.status !== "timed_out")
-  ) {
-    return undefined;
-  }
-  const outcome: SubagentCompletionRequest["outcome"] =
-    task.status === "succeeded"
-      ? { status: "ok" }
-      : task.status === "timed_out"
-        ? { status: "timeout" }
-        : { status: "error", error: task.error };
-  return {
-    startedAt: entry.execution.startedAt ?? task.startedAt,
-    endedAt: task.endedAt,
-    outcome,
-    reason: task.status === "failed" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
-    completionSnapshot: {
-      resultText: task.progressSummary ?? task.terminalSummary ?? null,
-      capturedAt: task.endedAt,
-    },
-  };
-}
-
-export async function reconcileProvisionalSubagentKill(params: {
+type ProvisionalSubagentKillParams = {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
@@ -310,69 +274,117 @@ export async function reconcileProvisionalSubagentKill(params: {
     source: string,
   ) => Promise<void>;
   retireSupersededRun: (runId: string, entry: SubagentRunRecord) => Promise<void>;
-  startSubagentAnnounceCleanupFlow: (runId: string, entry: SubagentRunRecord) => boolean;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
+  retireObligations: (entry: SubagentRunRecord) => Promise<void>;
+  startSubagentAnnounceCleanupFlow: (entry: SubagentRunRecord) => boolean;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
   warn: (message: string, meta?: Record<string, unknown>) => void;
-}): Promise<boolean> {
+};
+
+// Runs with a kill confirmation in flight, and whether another confirmation arrived meanwhile.
+const confirmingKills = new Map<string, { requested: boolean }>();
+
+/**
+ * Confirms a provisional kill once its canonical outcome is final: after the killed run's
+ * controller operation settles, or when the sweeper ages out a kill no settlement reached.
+ * A canonical completion the cancellation did not supersede replaces it. Otherwise the kill
+ * stands: its obligations retire, which re-evaluates a yielded cohort, and announce cleanup
+ * resumes once no cohort holds it.
+ *
+ * One confirmation per run is in flight. Settlement, cohort release, and the sweeper can each
+ * ask for the same kill; a request that arrives meanwhile is answered by the in-flight one,
+ * which re-evaluates the run once more before it finishes.
+ */
+export async function reconcileProvisionalSubagentKill(
+  params: ProvisionalSubagentKillParams,
+): Promise<boolean> {
+  const inFlight = confirmingKills.get(params.runId);
+  if (inFlight) {
+    inFlight.requested = true;
+    return false;
+  }
+  const confirmation = { requested: false };
+  confirmingKills.set(params.runId, confirmation);
+  try {
+    let entry = params.entry;
+    for (;;) {
+      let pass: { confirmed: boolean } | { error: unknown };
+      try {
+        pass = { confirmed: await confirmProvisionalSubagentKill({ ...params, entry }) };
+      } catch (error) {
+        pass = { error };
+      }
+      // A request that arrived meanwhile may follow a change this pass already read past,
+      // such as its cohort's release, so it supersedes this pass's outcome. Re-evaluate the
+      // run's current kill, if one remains.
+      const current = params.runs.get(params.runId);
+      if (!confirmation.requested || !current?.killReconciliation) {
+        if ("error" in pass) {
+          throw pass.error;
+        }
+        return pass.confirmed;
+      }
+      confirmation.requested = false;
+      entry = current;
+    }
+  } finally {
+    confirmingKills.delete(params.runId);
+  }
+}
+
+// One confirmation pass over the kill `params.entry` records.
+async function confirmProvisionalSubagentKill(
+  params: ProvisionalSubagentKillParams,
+): Promise<boolean> {
   const { entry, now, runId, runs } = params;
   const killReconciliation = entry.killReconciliation;
-  if (!killReconciliation) {
+  const authority = resolveSubagentChildAuthority(entry);
+  if (!killReconciliation || authority.status === "mismatch") {
     return false;
   }
   // The child-session index stays current across awaits. Re-read it at each
   // decision boundary so a newly registered generation can supersede this run.
-  const resolveGeneration = () => {
-    const nextRunCreatedAt = findNextSubagentRunCreatedAt(
-      params.getRunsForChildSession(entry.childSessionKey),
+  const findNextRunCreatedAt = () =>
+    findNextSubagentRunCreatedAt(
+      params.getRunsForChildSession(entry.childSessionKey, entry.childAgentId),
       entry,
     );
-    return {
-      nextRunCreatedAt,
-      taskResolution: resolveSubagentTaskForRunGeneration(entry, nextRunCreatedAt),
-    };
-  };
-  const initialGeneration = resolveGeneration();
-  const taskResolution = initialGeneration.taskResolution;
-  const task = taskResolution.task;
-  const nextRunCreatedAt = initialGeneration.nextRunCreatedAt;
-  if (taskResolution.lookup === "available" && !task && nextRunCreatedAt === undefined) {
-    const retired = reconcileRetiredSubagentCancellation(entry, now);
-    if (retired !== undefined) {
-      return retired;
-    }
-  }
-  const hasStableTaskCancellation = isStableCancellation(task);
   const killedAt = killReconciliation.killedAt;
-  const isCurrentKill = () =>
-    runs.get(runId) === entry &&
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-    entry.killReconciliation === killReconciliation;
-  const taskCompletion =
-    nextRunCreatedAt === undefined ? resolveCompletionFromTerminalTask(task, entry) : undefined;
-  if (taskCompletion) {
-    // Replay the durable task projection before a provisional kill can age
-    // into a contradictory cancellation after an interrupted registry write.
-    await params.completeSubagentRunWithRecovery(
-      {
-        runId,
-        ...taskCompletion,
-        sendFarewell: true,
-        accountId: entry.requesterOrigin?.accountId,
-        triggerCleanup: true,
-      },
-      "sweeper-provisional-kill-task-completion",
+  const isCurrentKill = (current = runs.get(runId)) => {
+    const reconciliation = current?.killReconciliation;
+    return (
+      isSameSubagentRunOwner(current, entry) &&
+      current?.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+      reconciliation !== undefined &&
+      reconciliation.killedAt === killedAt &&
+      reconciliation.supersededAt === killReconciliation.supersededAt &&
+      Boolean(reconciliation.suppressTaskDelivery) ===
+        Boolean(killReconciliation.suppressTaskDelivery) &&
+      // Confirmation strengthens the same cancellation while completion capture awaits.
+      (killReconciliation.taskCancellationAccepted !== true ||
+        reconciliation.taskCancellationAccepted === true)
     );
+  };
+  const completion =
+    authority.status === "legacy-unverified"
+      ? undefined
+      : await resolveSubagentSessionCompletion({
+          childSessionKey: entry.childSessionKey,
+          childAgentId: entry.childAgentId,
+          fallbackEndedAt: now,
+          notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
+          assertCurrent: () => {
+            if (!isCurrentKill()) {
+              throw new Error("Subagent completion read lost its provisional kill owner.");
+            }
+          },
+        });
+  if (!isCurrentKill()) {
     return false;
   }
-  if (killedAt + PROVISIONAL_KILL_RECONCILIATION_MS > now) {
-    return false;
-  }
-  const sessionEntry = loadSubagentSessionEntry({
-    childSessionKey: entry.childSessionKey,
-  });
-  const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
-    notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
-  });
+  const nextRunCreatedAt = findNextRunCreatedAt();
   const completionEndedAt = completion
     ? resolveSubagentRunEffectiveEndedAt(entry, completion.endedAt, completion.startedAt)
     : undefined;
@@ -386,7 +398,8 @@ export async function reconcileProvisionalSubagentKill(params: {
       ? completionDeadline
       : undefined;
   const completionCanOverrideCancellation =
-    !hasStableTaskCancellation || (completionEndedAt ?? Number.POSITIVE_INFINITY) < killedAt;
+    runs.get(runId)?.killReconciliation?.taskCancellationAccepted !== true ||
+    (completionEndedAt ?? Number.POSITIVE_INFINITY) < killedAt;
   const completionBelongsToGeneration =
     nextRunCreatedAt === undefined || (completion != null && completion.endedAt < nextRunCreatedAt);
   if (
@@ -414,94 +427,75 @@ export async function reconcileProvisionalSubagentKill(params: {
         triggerCleanup: !hasNewerGeneration,
         suppressSessionEffects: hasNewerGeneration,
       },
-      "sweeper-provisional-kill-completion",
+      "provisional-kill-completion",
     );
     if (
       hasNewerGeneration &&
-      runs.get(runId) === entry &&
-      entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED
+      isSameSubagentRunOwner(runs.get(runId), entry) &&
+      runs.get(runId)?.endedReason !== SUBAGENT_ENDED_REASON_KILLED
     ) {
       await params.retireSupersededRun(runId, entry);
       return true;
     }
-    if (!isCurrentKill()) {
-      return false;
-    }
-    const taskAfterResolution = resolveGeneration().taskResolution;
-    const taskAfter = taskAfterResolution.task;
-    const stableCancellationWonDuringCompletion =
-      isStableCancellation(taskAfter) && completionEndedAt >= killedAt;
-    if (!stableCancellationWonDuringCompletion && taskAfterResolution.lookup !== "unavailable") {
+    if (
+      !isCurrentKill() ||
+      runs.get(runId)?.killReconciliation?.taskCancellationAccepted !== true ||
+      completionEndedAt < killedAt
+    ) {
       return false;
     }
   }
   if (!isCurrentKill()) {
     return false;
   }
-  const taskBeforeResolution = resolveGeneration().taskResolution;
-  const taskBefore = taskBeforeResolution.task;
-  const stableTaskCancellationAfterReconciliation = isStableCancellation(taskBefore);
-  const taskNeedsStabilization =
-    taskBeforeResolution.lookup === "unavailable" || isUnstableTask(taskBefore);
-  if (taskNeedsStabilization) {
-    const observedError =
-      entry.execution.outcome?.status === "error"
-        ? entry.execution.outcome.error?.trim()
-        : undefined;
-    try {
-      const finalizedTasks = finalizeTaskRunByRunId({
-        runId: taskBefore?.runId ?? entry.taskRunId ?? runId,
-        runtime: "subagent",
-        sessionKey: taskBefore?.childSessionKey ?? entry.childSessionKey,
-        status: "cancelled",
-        endedAt: killedAt,
-        lastEventAt: killedAt,
-        error:
-          observedError && observedError !== SUBAGENT_KILL_TASK_ERROR
-            ? observedError
-            : "Subagent run cancellation finalized.",
-        suppressDelivery: true,
-      });
-      if (finalizedTasks.length === 0) {
-        const taskAfterResolution = resolveGeneration().taskResolution;
-        const taskAfter = taskAfterResolution.task;
-        if (taskAfterResolution.lookup === "available" && isUnstableTask(taskAfter)) {
-          params.warn("killed task was not stabilized during sweep", {
-            runId,
-            childSessionKey: entry.childSessionKey,
-          });
-          return false;
-        }
-        if (taskAfterResolution.lookup === "unavailable") {
-          params.warn("retiring killed tombstone after opaque task finalization", {
-            runId,
-            childSessionKey: entry.childSessionKey,
-          });
-        }
-      }
-    } catch (error) {
-      params.warn("failed to finalize provisional killed task during sweep", {
-        error,
-        runId,
-        childSessionKey: entry.childSessionKey,
-      });
-      return false;
-    }
-  }
-  if (resolveGeneration().nextRunCreatedAt !== undefined) {
+
+  if (findNextRunCreatedAt() !== undefined) {
     await params.retireSupersededRun(runId, entry);
     return true;
   }
-  entry.suppressCompletionDelivery =
-    killReconciliation.suppressTaskDelivery === true ||
-    hasStableTaskCancellation ||
-    stableTaskCancellationAfterReconciliation
-      ? true
-      : undefined;
-  entry.suppressAnnounceReason = undefined;
-  entry.killReconciliation = undefined;
-  entry.cleanupHandled = false;
-  entry.cleanupCompletedAt = undefined;
-  params.startSubagentAnnounceCleanupFlow(runId, entry);
-  return true;
+  // The kill stands. Retire its obligations unless its kill owner already did; retiring
+  // again would abort the continuation its cohort may already be delivering. A yielded
+  // cohort keeps its retired member and resolves first; its release re-enters here.
+  if (runs.get(runId)?.suppressCompletionDelivery !== true) {
+    await params.retireObligations(runs.get(runId)!);
+  }
+  if (!isCurrentKill() || runs.get(runId)?.requesterSettleWake) {
+    return false;
+  }
+  const published = await mutateSubagentRuns(
+    [runId],
+    (rows) => {
+      const current = rows.get(runId);
+      if (
+        !current ||
+        !isCurrentKill(current) ||
+        current.requesterSettleWake ||
+        findNextRunCreatedAt() !== undefined
+      ) {
+        return { value: undefined };
+      }
+      const next: SubagentRunRecord = {
+        ...current,
+        // The requester hears of a confirmed kill once, through its cohort or this row's own
+        // completion, unless it already knows: it stopped or reset itself, or its own turn still
+        // held the row when the kill landed (a transferred row no longer names that turn).
+        suppressCompletionDelivery:
+          current.suppressCompletionDelivery === true ||
+          current.killReconciliation?.suppressTaskDelivery === true ||
+          current.requesterTurnRunId !== undefined
+            ? true
+            : undefined,
+        suppressAnnounceReason: undefined,
+        killReconciliation: undefined,
+        cleanupHandled: false,
+        cleanupCompletedAt: undefined,
+      };
+      return { value: next, postimages: new Map([[runId, next]]) };
+    },
+    { runs },
+  );
+  if (!published) {
+    return false;
+  }
+  return !params.startSubagentAnnounceCleanupFlow(published);
 }

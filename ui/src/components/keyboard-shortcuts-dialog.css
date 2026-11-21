@@ -1,0 +1,49 @@
+openclaw-keyboard-shortcuts-dialog {
+  display: contents;
+  --openclaw-modal-width: 560px;
+  & .oc-dialog {
+    max-height: min(720px, calc(100dvh - 64px));
+  }
+  & .oc-dialog__header {
+    padding: var(--overlay-modal-padding) var(--overlay-modal-padding) 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  & .oc-dialog__body {
+    display: block;
+    padding: 8px var(--overlay-modal-padding) 18px;
+  }
+  & section + section {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  & h3 {
+    margin: 18px 0 8px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  & .shortcut-row {
+    display: flex;
+    min-height: 34px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    font-size: 13px;
+  }
+
+  & .combos {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  & .combo {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+}

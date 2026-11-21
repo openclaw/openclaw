@@ -45,10 +45,11 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
       await expect.poll(() => row.count()).toBe(1);
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu: Copy session ID proof" }).click();
+      await row.click({ button: "right" });
 
       const menuHost = page.locator("openclaw-session-menu");
-      await openSessionMenuSubmenu(page, "Copy");
+      await openSessionMenuSubmenu(page, "Advanced");
+      await openSessionMenuSubmenu(page, "Copy details");
       const copyItem = menuHost.getByRole("menuitem", { name: "Session ID", exact: true });
       await expect.poll(() => copyItem.count()).toBe(1);
       await captureUiProof(suite, page, "copy-session-id-menu.png");

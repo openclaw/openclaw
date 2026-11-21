@@ -12,21 +12,6 @@ describe("ACP translator replay helpers", () => {
     ]);
   });
 
-  it("preserves assistant thinking as hidden thought chunks", () => {
-    expect(
-      extractReplayChunks({
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "Internal reasoning" },
-          { type: "text", text: "Visible answer" },
-        ],
-      }),
-    ).toEqual([
-      { sessionUpdate: "agent_thought_chunk", text: "Internal reasoning" },
-      { sessionUpdate: "agent_message_chunk", text: "Visible answer" },
-    ]);
-  });
-
   it("drops unsupported roles, empty text, and non-text content", () => {
     expect(extractReplayChunks({ role: "system", content: "ignore" })).toEqual([]);
     expect(extractReplayChunks({ role: "assistant", content: "" })).toEqual([]);

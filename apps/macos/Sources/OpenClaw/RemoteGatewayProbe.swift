@@ -108,7 +108,7 @@ enum RemoteGatewayAuthIssue: Equatable {
         case .gatewayTokenNotConfigured:
             "This gateway has token auth enabled, but no gateway.auth.token is configured on the host."
         case .setupCodeExpired:
-            "Setup code expired or already used. Get a fresh code from the Gateway owner and use Change connection."
+            "Setup code no longer valid. Get a fresh code from the Gateway owner and use Change connection."
         case .passwordRequired:
             "Click Change connection and enter the gateway password in the Gateway password field. "
                 + "If needed, configure gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD on the gateway host."
@@ -172,7 +172,7 @@ enum RemoteGatewayProbe {
             guard !trimmedUrl.isEmpty else {
                 return .failed("Set a gateway URL first")
             }
-            guard self.isValidWsUrl(trimmedUrl) else {
+            guard GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) != nil else {
                 return .failed(GatewayRemoteConfig.directGatewayUrlValidationMessage)
             }
         } else {
@@ -206,7 +206,7 @@ enum RemoteGatewayProbe {
             timeoutMs: self.gatewayProbeTimeoutMs)
     }
 
-    private static func probeGateway(
+    static func probeGateway(
         connection: GatewayConnection,
         timeoutMs: Double) async -> RemoteGatewayProbeResult
     {
@@ -234,20 +234,7 @@ enum RemoteGatewayProbe {
         }
     }
 
-    #if SWIFT_PACKAGE
-    static func _testProbeGateway(
-        connection: GatewayConnection,
-        timeoutMs: Double) async -> RemoteGatewayProbeResult
-    {
-        await self.probeGateway(connection: connection, timeoutMs: timeoutMs)
-    }
-    #endif
-
-    private static func isValidWsUrl(_ raw: String) -> Bool {
-        GatewayRemoteConfig.normalizeGatewayUrl(raw) != nil
-    }
-
-    private static func sshCheckCommand(
+    static func sshCheckCommand(
         target: String,
         identity: String,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
@@ -264,15 +251,6 @@ enum RemoteGatewayProbe {
             remoteCommand: ["echo", "ok"])
         return ["/usr/bin/ssh"] + args
     }
-
-    #if SWIFT_PACKAGE
-    static func _testSSHCheckCommand(
-        target: String,
-        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]?
-    {
-        self.sshCheckCommand(target: target, identity: "", hostKeyPolicy: hostKeyPolicy)
-    }
-    #endif
 
     private static func formatSSHFailure(_ response: Response, target: String) -> String {
         let payload = response.payload.flatMap { String(data: $0, encoding: .utf8) }

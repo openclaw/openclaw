@@ -1,9 +1,8 @@
-// Control UI link builder for local, LAN, tailnet, and custom gateway binds.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import {
-  inspectBestEffortPrimaryTailnetIPv4,
   pickBestEffortPrimaryLanIPv4,
+  pickBestEffortPrimaryTailnetIPv4,
 } from "../infra/network-discovery-display.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { isValidIPv4 } from "./net.js";
@@ -18,7 +17,6 @@ type ControlUiLinkParams = {
 
 type ControlUiLinks = { httpUrl: string; wsUrl: string };
 
-/** Resolve the advertised HTTP and websocket URLs for the Control UI. */
 export function resolveControlUiLinks(
   params: ControlUiLinkParams & { advertisedLanHost?: string | null },
 ): ControlUiLinks {
@@ -28,13 +26,13 @@ export function resolveControlUiLinks(
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
   const advertisedLanHost = normalizeOptionalString(params.advertisedLanHost);
-  const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
+  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
   const host = (() => {
     if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
       return customBindHost;
     }
     if (bind === "tailnet" && tailnetIPv4) {
-      return tailnetIPv4 ?? "127.0.0.1";
+      return tailnetIPv4;
     }
     if (bind === "lan") {
       return advertisedLanHost ?? pickBestEffortPrimaryLanIPv4() ?? "127.0.0.1";
@@ -42,17 +40,14 @@ export function resolveControlUiLinks(
     return "127.0.0.1";
   })();
   const basePath = normalizeControlUiBasePath(params.basePath);
-  const uiPath = basePath ? `${basePath}/` : "/";
-  const wsPath = basePath ? basePath : "";
   const httpScheme = params.tlsEnabled === true ? "https" : "http";
   const wsScheme = params.tlsEnabled === true ? "wss" : "ws";
   return {
-    httpUrl: `${httpScheme}://${host}:${port}${uiPath}`,
-    wsUrl: `${wsScheme}://${host}:${port}${wsPath}`,
+    httpUrl: `${httpScheme}://${host}:${port}${basePath}/`,
+    wsUrl: `${wsScheme}://${host}:${port}${basePath}`,
   };
 }
 
-/** Resolve Control UI URLs meant for display to nearby devices. */
 export async function resolveAdvertisedControlUiLinks(
   params: ControlUiLinkParams,
 ): Promise<ControlUiLinks> {
@@ -66,8 +61,10 @@ export async function resolveAdvertisedControlUiLinks(
 
 /** Resolve Control UI URLs for co-located readiness probes and health checks. */
 export function resolveLocalControlUiProbeLinks(params: ControlUiLinkParams): ControlUiLinks {
+  // Specific IPv4 binds also require loopback (resolveGatewayRequiredListenHosts).
+  // Local passwords in trusted-proxy mode are accepted only on that listener.
   return resolveControlUiLinks({
     ...params,
-    bind: params.bind === "lan" ? "loopback" : params.bind,
+    bind: "loopback",
   });
 }

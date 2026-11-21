@@ -1,7 +1,13 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { describe } from "vitest";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "playwright";
+import { describe, onTestFinished } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type {
@@ -20,6 +26,7 @@ import {
   type ControlUiE2eServer,
 } from "../../test-helpers/control-ui-e2e.ts";
 import {
+  createPluginDeclaredSurface,
   discoveryCategories,
   discoveryResult,
   finalDiscoveryPageItems,
@@ -218,18 +225,7 @@ const workboardInspection = {
     enabled: false,
   },
   source: { kind: "npm", packageName: workboardDisabled.packageName },
-  declared: {
-    channels: [],
-    providers: [],
-    tools: [],
-    contracts: [],
-    hooks: [],
-    mcpServers: [],
-    cliCommands: [],
-    cliBackends: [],
-    skills: [],
-    dangerousConfigFlags: [],
-  },
+  declared: createPluginDeclaredSurface(),
   components: {
     mapped: [],
     skills: [],
@@ -269,7 +265,10 @@ const calendarInspection = {
 } satisfies PluginsInspectResult;
 
 const matrixDetail = {
-  plugin: matrixDiscoveryPlugin,
+  plugin: {
+    ...matrixDiscoveryPlugin,
+    catalog: { ...matrixDiscoveryPlugin.catalog, latestVersion: "2.1.0" },
+  },
   detail: {
     origin: "clawhub",
     packageName: "matrix",
@@ -318,6 +317,7 @@ const matrixDetail = {
     security: {
       status: "clean",
       verdict: "benign",
+      auditUrl: "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
       summary: "Capabilities match the stated purpose.",
       guidance: "Review the access token before enabling.",
       checkedAt: 1_780_000_000_000,
@@ -442,12 +442,6 @@ const localCalendarDisabled = {
   removable: false,
 } satisfies PluginCatalogItem;
 
-const localCalendarEnabled = {
-  ...localCalendarDisabled,
-  enabled: true,
-  state: "enabled",
-} satisfies PluginCatalogItem;
-
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -519,7 +513,11 @@ export function enabledWorkboardCapabilities() {
   };
 }
 
-async function captureScreenshot(page: Page, name: string): Promise<void> {
+async function captureScreenshot(
+  page: Page,
+  name: string,
+  target: "content" | "viewport" = "content",
+): Promise<void> {
   if (!updateScreenshots) {
     return;
   }
@@ -528,18 +526,35 @@ async function captureScreenshot(page: Page, name: string): Promise<void> {
     artifactDir = createControlUiE2eArtifactDir("plugins");
     artifacts.set(page, artifactDir);
   }
-  await page.locator(".content").screenshot({
+  const clip =
+    target === "content"
+      ? await page.locator(".content").evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          return {
+            x: bounds.left + element.clientLeft,
+            y: bounds.top + element.clientTop,
+            width: element.clientWidth,
+            height: element.clientHeight,
+          };
+        })
+      : undefined;
+  await page.screenshot({
     animations: "disabled",
     caret: "hide",
+    clip,
     path: path.join(artifactDir, name),
   });
 }
 
-async function newContext(viewport = desktopViewport): Promise<BrowserContext> {
+async function newContext(
+  viewport = desktopViewport,
+  options: Pick<BrowserContextOptions, "hasTouch" | "recordVideo"> = {},
+): Promise<BrowserContext> {
   return browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
+    ...options,
   });
 }
 
@@ -553,6 +568,22 @@ function pluginMethodResponses() {
         { match: { pluginId: "workboard" }, response: workboardInspection },
         { match: { pluginId: "lobster" }, response: lobsterInspection },
         { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+        {
+          match: { pluginId: "local-calendar" },
+          response: {
+            ...workboardInspection,
+            plugin: localCalendarDisabled,
+            source: { kind: "npm", packageName: localCalendarDisabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
+        {
+          match: { pluginId: "matrix" },
+          response: {
+            ...workboardInspection,
+            plugin: matrixEnabled,
+            source: { kind: "npm", packageName: matrixEnabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
       ],
     },
     "plugins.search": {
@@ -630,6 +661,23 @@ function pluginMethodResponses() {
   };
 }
 
+export async function setupPluginPage(
+  methodResponses: Record<string, unknown> = {},
+  options: NonNullable<Parameters<typeof installMockGateway>[1]> = {},
+  viewport?: Parameters<typeof newContext>[0],
+  contextOptions?: Parameters<typeof newContext>[1],
+) {
+  const context = await newContext(viewport, contextOptions);
+  onTestFinished(() => context.close());
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, {
+    featureMethods: pluginMethods,
+    methodResponses: { ...pluginMethodResponses(), ...methodResponses },
+    ...options,
+  });
+  return { page, gateway, context };
+}
+
 export async function setupPluginsE2e(): Promise<void> {
   if (!chromiumAvailable) {
     throw new Error(
@@ -663,9 +711,9 @@ export {
   installMockGateway,
   inventory,
   localCalendarDisabled,
-  localCalendarEnabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
+  matrixDetail,
   matrixDiscoveryPlugin,
   matrixEnabled,
   matrixNeedsSetup,

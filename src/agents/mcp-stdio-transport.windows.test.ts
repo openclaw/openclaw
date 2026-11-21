@@ -45,14 +45,19 @@ describe.runIf(process.platform === "win32")("OpenClawStdioClientTransport on Wi
       await closed;
 
       await expect(fs.readFile(capturePath, "utf8")).resolves.toBe(configuredTemp);
+      await expect(transport.forceClose()).resolves.toBeUndefined();
     } finally {
-      await transport?.forceClose();
-      if (previousTemp === undefined) {
-        delete process.env.TEMP;
-      } else {
-        process.env.TEMP = previousTemp;
+      try {
+        // Assert cleanup above on success; do not replace a primary startup/capture failure.
+        await transport?.forceClose().catch(() => undefined);
+      } finally {
+        if (previousTemp === undefined) {
+          delete process.env.TEMP;
+        } else {
+          process.env.TEMP = previousTemp;
+        }
+        await fs.rm(root, { recursive: true, force: true });
       }
-      await fs.rm(root, { recursive: true, force: true });
     }
   });
 });

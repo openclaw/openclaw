@@ -1,3 +1,4 @@
+import type { PluginUiCapability } from "../../packages/gateway-protocol/src/plugin-ui-capabilities.js";
 import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type {
   PluginManifestCatalog,
@@ -5,9 +6,11 @@ import type {
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
   PluginManifestNativeSessionCatalogSetup,
+  PluginManifestOnboardingScope,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
+  OpenClawPackageBuild,
   PluginPackageChannel,
   PluginPackageInstall,
 } from "./package-manifest.types.js";
@@ -17,11 +20,13 @@ type ManifestKey = typeof MANIFEST_KEY;
 export type OfficialExternalProviderAuthChoice = {
   method?: string;
   choiceId?: string;
+  modelTarget?: "utility";
+  platforms?: readonly NodeJS.Platform[];
   deprecatedChoiceIds?: readonly string[];
   choiceLabel?: string;
   choiceHint?: string;
   assistantPriority?: number;
-  assistantVisibility?: "visible" | "manual-only";
+  assistantVisibility?: "visible" | "manual-only" | "detected-only";
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;
@@ -29,7 +34,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
+  onboardingScopes?: readonly PluginManifestOnboardingScope[];
 };
 
 type OfficialExternalProviderCatalogProvider = {
@@ -75,6 +80,8 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
+  /** An installable plugin can still belong to the default core distribution. */
+  build?: Pick<OpenClawPackageBuild, "bundledDist">;
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];
@@ -108,6 +115,7 @@ export type OfficialExternalPluginCatalogManifest = {
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;
+  uiCapabilities?: PluginUiCapability[];
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
 

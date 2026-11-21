@@ -7,6 +7,8 @@ import {
   memoryWorkspaceJournal,
   startConnectedTunnel,
 } from "./tunnel.test-support.js";
+import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
+import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 describe("worker tunnel manager hash memo", () => {
   it("persists the workspace hash memo across reconciliations for one placement", async () => {
@@ -30,6 +32,20 @@ describe("worker tunnel manager hash memo", () => {
         captureEnvelopes.push(JSON.parse(result.stdout));
       }
     });
+    const run = fake.runner.run.bind(fake.runner);
+    fake.runner.run = (argv, options) =>
+      run(
+        argv,
+        isMemoCapture(argv)
+          ? {
+              ...options,
+              baseEnv: {
+                ...options.baseEnv,
+                NODE_OPTIONS: `--import=data:text/javascript,Date.now=()=>${Date.now() + 60_000};`,
+              },
+            }
+          : options,
+      );
     const { handle } = await startConnectedTunnel(fake, "worker:memo-persist", 3);
 
     try {
@@ -43,27 +59,40 @@ describe("worker tunnel manager hash memo", () => {
       const journal = memoryWorkspaceJournal((manifestRef) => {
         acceptedManifestRef = manifestRef;
       });
+      const quiescence = { assertActive: async () => {}, resume: async () => {} };
       const memoInputs = () =>
         fake.runs
           .filter((entry) => isMemoCapture(entry.argv))
           .map((entry) => JSON.parse(entry.options.input as string) as [string, string][]);
 
       const first = await handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal },
+        source: {
+          kind: "local",
+          path: localPath,
+          journal,
+          stagedResult: { ref: workerWorkspaceResultRef("memo-first"), record: () => {} },
+        },
         remoteWorkspaceDir: synced.remoteWorkspaceDir,
         baseManifestRef: synced.manifestRef,
       });
       expect(first.changed).toBe(false);
+      await verifyReconciledWorkspaceFinal(first, quiescence);
       const firstTurnCaptures = memoInputs().length;
       // The placement's first reconciliation necessarily starts empty.
       expect(memoInputs()[0]).toEqual([]);
 
       const second = await handle.reconcileWorkspace({
-        source: { kind: "local", path: localPath, journal },
+        source: {
+          kind: "local",
+          path: localPath,
+          journal,
+          stagedResult: { ref: workerWorkspaceResultRef("memo-second"), record: () => {} },
+        },
         remoteWorkspaceDir: synced.remoteWorkspaceDir,
         baseManifestRef: acceptedManifestRef,
       });
       expect(second.changed).toBe(false);
+      await verifyReconciledWorkspaceFinal(second, quiescence);
       // The second turn's first capture must reuse the prior turn's worker
       // entries; a per-call memo would send an empty payload again.
       const secondTurnFirstInput = memoInputs()[firstTurnCaptures]!;

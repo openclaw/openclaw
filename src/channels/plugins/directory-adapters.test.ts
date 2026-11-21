@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   createChannelDirectoryAdapter,
   createEmptyChannelDirectoryAdapter,
-  emptyChannelDirectoryList,
   nullChannelDirectorySelf,
 } from "./directory-adapters.js";
 
@@ -35,12 +34,5 @@ describe("directory adapters", () => {
     await expect(adapter.listGroups?.({ cfg: {}, runtime: {} as never })).resolves.toStrictEqual(
       [],
     );
-  });
-
-  it("exports standalone null/empty helpers", async () => {
-    await expect(nullChannelDirectorySelf({ cfg: {}, runtime: {} as never })).resolves.toBeNull();
-    await expect(
-      emptyChannelDirectoryList({ cfg: {}, runtime: {} as never }),
-    ).resolves.toStrictEqual([]);
   });
 });

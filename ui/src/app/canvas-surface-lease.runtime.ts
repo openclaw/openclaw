@@ -1,5 +1,8 @@
 // Loaded after hello so capability renewal does not inflate the startup chunk.
-import { resolveSafeTimeoutDelayMs } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  resolveSafeTimeoutDelayMs,
+} from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const RENEWAL_LEAD_MS = 15_000;
@@ -12,38 +15,12 @@ const RETRY_START_MS = 1_000;
 // gateways to one cheap refresh request per five minutes per tab.
 const RETRY_MAX_MS = 5 * 60_000;
 
-type CanvasSurfaceRefresh = {
-  surface: "canvas";
-  canvasUrl: string;
-  expiresAtMs?: number;
-};
-
-type CanvasSurfaceLease = {
-  start: (helloUrl: string | undefined) => void;
-  stop: () => void;
-};
-
-export function createCanvasSurfaceLease<
-  TimerHandle = ReturnType<typeof globalThis.setTimeout>,
->(params: {
+export function createCanvasSurfaceLease(params: {
   request: (method: string, params: unknown) => Promise<unknown>;
   onChange: (url: string | null) => void;
-  onConnectionChange?: () => void;
-  now?: () => number;
-  setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
-  clearTimer?: (timer: TimerHandle) => void;
-}): CanvasSurfaceLease {
-  const now = params.now ?? Date.now;
-  const setTimer =
-    params.setTimer ??
-    ((callback: () => void, delayMs: number) =>
-      globalThis.setTimeout(callback, delayMs) as TimerHandle);
-  const clearTimer =
-    params.clearTimer ??
-    ((timer: TimerHandle) =>
-      globalThis.clearTimeout(timer as ReturnType<typeof globalThis.setTimeout>));
+}) {
   let currentUrl: string | null = null;
-  let timer: TimerHandle | null = null;
+  let timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   let inFlight: { generation: number; promise: Promise<void> } | null = null;
   let consecutiveFailures = 0;
   let generation = 0;
@@ -52,7 +29,7 @@ export function createCanvasSurfaceLease<
 
   const clearScheduledRenewal = () => {
     if (timer !== null) {
-      clearTimer(timer);
+      globalThis.clearTimeout(timer);
       timer = null;
     }
   };
@@ -62,7 +39,7 @@ export function createCanvasSurfaceLease<
       return;
     }
     clearScheduledRenewal();
-    timer = setTimer(
+    timer = globalThis.setTimeout(
       () => {
         if (!ownsGeneration(expectedGeneration)) {
           return;
@@ -109,10 +86,15 @@ export function createCanvasSurfaceLease<
         const delayMs =
           refreshed.expiresAtMs === undefined
             ? MISSING_EXPIRY_RENEWAL_DELAY_MS
-            : Math.max(MIN_RENEWAL_DELAY_MS, refreshed.expiresAtMs - now() - RENEWAL_LEAD_MS);
+            : refreshed.expiresAtMs - Date.now() - RENEWAL_LEAD_MS;
         schedule(delayMs, expectedGeneration);
       })
-      .catch(() => handleFailure(expectedGeneration))
+      .catch((error: unknown) => {
+        if (error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN") {
+          return;
+        }
+        handleFailure(expectedGeneration);
+      })
       .finally(() => {
         if (inFlight?.promise === request) {
           inFlight = null;
@@ -122,20 +104,18 @@ export function createCanvasSurfaceLease<
   };
 
   return {
-    start(helloUrl) {
+    start(this: void, helloUrl: string | undefined) {
       generation += 1;
       started = true;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      params.onConnectionChange?.();
-      const trimmedUrl = helloUrl?.trim();
-      currentUrl = trimmedUrl ? trimmedUrl : null;
+      currentUrl = helloUrl?.trim() || null;
       params.onChange(currentUrl);
       if (currentUrl) {
         renew(generation);
       }
     },
-    stop() {
+    stop(this: void) {
       if (!started && currentUrl === null && timer === null) {
         return;
       }
@@ -143,14 +123,13 @@ export function createCanvasSurfaceLease<
       started = false;
       consecutiveFailures = 0;
       clearScheduledRenewal();
-      params.onConnectionChange?.();
       currentUrl = null;
       params.onChange(null);
     },
   };
 }
 
-function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undefined {
+function parseCanvasSurfaceRefresh(value: unknown) {
   if (!value || typeof value !== "object") {
     return undefined;
   }
@@ -178,7 +157,6 @@ function parseCanvasSurfaceRefresh(value: unknown): CanvasSurfaceRefresh | undef
     return undefined;
   }
   return {
-    surface: "canvas",
     canvasUrl: canvasUrl.trim(),
     ...(expiresAtMs === undefined ? {} : { expiresAtMs }),
   };

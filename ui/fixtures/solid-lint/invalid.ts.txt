@@ -1,0 +1,13 @@
+import { createEffect, createResource as createDeferred, onMount } from "solid-js";
+import { render } from "solid-js/web";
+
+export function invalidLifecycle(read: () => string) {
+  createDeferred(read);
+  createEffect(() => {
+    document.title = read();
+  });
+  onMount(() => {
+    document.title = "legacy";
+  });
+  render(() => document.createTextNode(read()), document.body);
+}

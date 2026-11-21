@@ -9,10 +9,10 @@ describe("provider model id normalization", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro")).toBe("gemini-3.1-pro-preview");
   });
 
-  it("routes provider-prefixed Gemini 3 Pro to the current Gemini 3.1 Pro preview", () => {
-    expect(normalizeGooglePreviewModelId("google/gemini-3-pro-preview")).toBe(
-      "google/gemini-3.1-pro-preview",
-    );
+  it("routes the Gemini 4 shorthand to Gemini 4 Argon", () => {
+    expect(normalizeGooglePreviewModelId("gemini-4")).toBe("gemini-4-argon");
+    expect(normalizeGooglePreviewModelId("google/gemini-4")).toBe("google/gemini-4-argon");
+    expect(normalizeGooglePreviewModelId("gemini-4-argon")).toBe("gemini-4-argon");
   });
 
   it("does not rewrite already-current Gemini replacement ids", () => {
@@ -31,10 +31,5 @@ describe("provider model id normalization", () => {
 
   it("does not rewrite stable GA flash-lite", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
-  });
-
-  it("routes Gemma 4 26B shorthand to Google's canonical API id", () => {
-    expect(normalizeGooglePreviewModelId("gemma-4-26b")).toBe("gemma-4-26b-a4b-it");
-    expect(normalizeGooglePreviewModelId("google/gemma-4-26b")).toBe("google/gemma-4-26b-a4b-it");
   });
 });

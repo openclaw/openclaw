@@ -1,14 +1,13 @@
-// Provider stream helpers expose shared wrapper families and payload transforms for provider plugins.
-import { createGoogleThinkingPayloadWrapper } from "../llm/providers/stream-wrappers/google.js";
+import { resolveOpenAIResponsesPayloadPolicy } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import type { StreamFn } from "../agents/runtime/index.js";
+import { supportsOpenAIResponsesFastMode } from "../llm/providers/openai-fast-mode.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
-  createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
-  createOpenAIServiceTierWrapper,
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   createOpenAIThinkingLevelWrapper,
@@ -21,32 +20,35 @@ import {
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
+import { streamSimple } from "../llm/stream.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import {
+  createGoogleThinkingPayloadWrapper,
+  createPayloadPatchStreamWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
   resolveMoonshotThinkingType,
+  streamWithPayloadPatch,
 } from "./provider-stream-shared.js";
+import { asOptionalObjectRecord, filterStringEntries } from "./string-coerce-runtime.js";
 export {
   applyAnthropicEphemeralCacheControlMarkers,
-  applyAnthropicPayloadPolicyToParams,
   composeProviderStreamWrappers,
   createAnthropicThinkingPrefillPayloadWrapper,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
-  defaultToolStreamExtraParams,
-  isOpenAICompatibleThinkingEnabled,
   type ProviderStreamWrapperFactory,
-  resolveAnthropicPayloadPolicy,
-  resolveMoonshotThinkingType,
   streamWithPayloadPatch,
-  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 /** Named stream-wrapper bundles that provider plugins can opt into without duplicating policy. */
 export type ProviderStreamFamily =
+  /** Requests opaque xAI reasoning while respecting the route's effort controls. */
+  | "xai-responses-reasoning"
+  /** Applies the native Cohere Compatibility API instruction and tool-choice policy. */
+  | "cohere-compatibility"
   /** Applies Google thinking-level payload normalization. */
   | "google-thinking"
   /** Applies Kilocode proxy reasoning payload normalization. */
@@ -57,6 +59,8 @@ export type ProviderStreamFamily =
   | "minimax-fast-mode"
   /** Applies the default OpenAI Responses wrapper stack. */
   | "openai-responses-defaults"
+  /** Applies tier preferences to provider-qualified OpenAI Responses proxy routes. */
+  | "openai-responses-service-tier"
   /** Applies OpenRouter proxy reasoning payload normalization. */
   | "openrouter-thinking"
   /** Enables tool-call event streaming unless explicitly disabled. */
@@ -75,11 +79,44 @@ function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
-  if (typeof raw === "function") {
-    const resolved = (raw as () => unknown)();
-    return typeof resolved === "boolean" ? resolved : undefined;
+  const resolved = typeof raw === "function" ? (raw as () => unknown)() : raw;
+  return resolved === "ultrafast" ? true : typeof resolved === "boolean" ? resolved : undefined;
+}
+
+function createResponsesServiceTierStream(
+  ctx: ProviderWrapStreamFnContext,
+  routed = false,
+): StreamFn {
+  const underlying = ctx.streamFn ?? streamSimple;
+  const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
+  if (!serviceTier && !hasFastModeParam(ctx.extraParams)) {
+    return underlying;
   }
-  return typeof raw === "boolean" ? raw : undefined;
+  return (model, context, options) => {
+    // Snapshot timed Auto once per request, including async replacement payloads.
+    const fastMode = resolveOpenAIFastMode(ctx.extraParams);
+    const tier = fastMode
+      ? fastMode === "ultrafast"
+        ? "ultrafast"
+        : "priority"
+      : fastMode === false && serviceTier
+        ? "default"
+        : serviceTier;
+    // Proxies opt in only after qualifying their upstream route. Native callers
+    // retain their existing endpoint and Fast eligibility policy.
+    const eligible = routed
+      ? model.api === "openai-responses"
+      : resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" }).allowsServiceTier &&
+        (!fastMode || supportsOpenAIResponsesFastMode(model));
+    if (!tier || !eligible) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (payload.service_tier === undefined) {
+        payload.service_tier = tier;
+      }
+    });
+  };
 }
 
 /** Builds provider hook objects for one supported stream-wrapper family. */
@@ -90,6 +127,50 @@ export function buildProviderStreamFamilyHooks(
   family: ProviderStreamFamily,
 ): ProviderStreamFamilyHooks {
   switch (family) {
+    case "xai-responses-reasoning":
+      return {
+        wrapStreamFn: (ctx) =>
+          createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
+            if (
+              !model.reasoning ||
+              asOptionalObjectRecord(model.compat)?.supportsReasoningEffort === false
+            ) {
+              delete payload.reasoning;
+              delete payload.reasoningEffort;
+              delete payload.reasoning_effort;
+            }
+            if (model.api !== "openai-responses" || !model.reasoning) {
+              return;
+            }
+            const include = filterStringEntries(payload.include);
+            if (!include.includes("reasoning.encrypted_content")) {
+              include.push("reasoning.encrypted_content");
+            }
+            payload.include = include;
+          }),
+      };
+    case "cohere-compatibility":
+      return {
+        wrapStreamFn: (ctx) =>
+          createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload }) => {
+            if (Array.isArray(payload.messages)) {
+              payload.messages = payload.messages.map((message) => {
+                const record = asOptionalObjectRecord(message);
+                return record?.role === "system" ? { ...record, role: "developer" } : message;
+              });
+            }
+            // Cohere chooses tools when omitted; its Compatibility API does not accept tool_choice.
+            delete payload.tool_choice;
+            // Native catalog rows already declare these fields. Apply the same wire contract
+            // to credential-scoped routing catalogs without borrowing another route's facts.
+            if (payload.max_tokens === undefined && payload.max_completion_tokens !== undefined) {
+              payload.max_tokens = payload.max_completion_tokens;
+            }
+            delete payload.max_completion_tokens;
+            delete payload.store;
+            delete payload.stream_options;
+          }),
+      };
     case "google-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
@@ -130,18 +211,7 @@ export function buildProviderStreamFamilyHooks(
           // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
-          const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
-          // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
-          // Skip fast for valid config so its payload hook cannot install priority first.
-          if (!serviceTier && hasFastModeParam(ctx.extraParams)) {
-            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
-              resolveOpenAIFastMode(ctx.extraParams),
-            );
-          }
-
-          if (serviceTier) {
-            nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
-          }
+          nextStreamFn = createResponsesServiceTierStream({ ...ctx, streamFn: nextStreamFn });
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
           if (textVerbosity) {
@@ -163,13 +233,15 @@ export function buildProviderStreamFamilyHooks(
           );
         },
       };
+    case "openai-responses-service-tier":
+      return {
+        wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+          createResponsesServiceTierStream(ctx, true),
+      };
     case "openrouter-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
-          const thinkingLevel =
-            ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
-              ? undefined
-              : ctx.thinkingLevel;
+          const thinkingLevel = ctx.modelId === "auto" ? undefined : ctx.thinkingLevel;
           return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };
@@ -182,41 +254,22 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
-/** @deprecated Google provider-owned stream hook shortcut; use local provider hooks instead. */
-export const GOOGLE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("google-thinking");
-/** @deprecated Kilocode provider-owned stream hook shortcut; use local provider hooks instead. */
-export const KILOCODE_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("kilocode-thinking");
 /** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
 export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
-/** @deprecated MiniMax provider-owned stream hook shortcut; use local provider hooks instead. */
-export const MINIMAX_FAST_MODE_STREAM_HOOKS = buildProviderStreamFamilyHooks("minimax-fast-mode");
-/** @deprecated OpenAI provider-owned stream hook shortcut; use local provider hooks instead. */
-export const OPENAI_RESPONSES_STREAM_HOOKS = buildProviderStreamFamilyHooks(
-  "openai-responses-defaults",
-);
-/** @deprecated OpenRouter provider-owned stream hook shortcut; use local provider hooks instead. */
-export const OPENROUTER_THINKING_STREAM_HOOKS =
-  buildProviderStreamFamilyHooks("openrouter-thinking");
-/** @deprecated Provider-owned stream hook shortcut; use local provider hooks instead. */
-export const TOOL_STREAM_DEFAULT_ON_HOOKS =
-  buildProviderStreamFamilyHooks("tool-stream-default-on");
-
-// Public stream-wrapper helpers for provider plugins.
 
 export {
   createAnthropicToolPayloadCompatibilityWrapper,
   createOpenAIAnthropicToolPayloadCompatibilityWrapper,
 } from "../llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.js";
+export { sanitizeGoogleThinkingPayload } from "../llm/providers/stream-wrappers/google-thinking-payload.js";
 export {
-  createGoogleThinkingPayloadWrapper,
-  sanitizeGoogleThinkingPayload,
-} from "../llm/providers/stream-wrappers/google.js";
-export {
-  createKilocodeWrapper,
-  createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
   isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { createOpenRouterSystemCacheWrapper } from "../llm/providers/stream-wrappers/proxy.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { resolveMoonshotThinkingType } from "./provider-stream-shared.js";
 export { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
 export {
   createOpenAIAttributionHeadersWrapper,

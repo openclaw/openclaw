@@ -1,11 +1,4 @@
-// Line plugin module implements group history behavior.
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-
-type LineGroupHistoryReservation = {
-  inboundHistory?: HistoryEntry[];
-  commit: () => void;
-  release: () => void;
-};
 
 // Entries stay in the bounded history map while a turn owns them so failed
 // turns need no reinsertion or ordering repair. Other overlapping turns skip
@@ -21,7 +14,11 @@ export function reserveLineGroupHistory(
   historyMap: Map<string, HistoryEntry[]> | undefined,
   historyKey: string | undefined,
   limit: number,
-): LineGroupHistoryReservation {
+): {
+  inboundHistory?: HistoryEntry[];
+  commit: () => void;
+  release: () => void;
+} {
   if (!historyMap || !historyKey || limit <= 0) {
     return { commit: () => {}, release: () => {} };
   }

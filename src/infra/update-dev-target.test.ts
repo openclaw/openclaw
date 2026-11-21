@@ -1,27 +1,32 @@
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import {
   applyDevUpdateTargetEnv,
   devUpdateTargetFromGitTarget,
-  parseDevUpdateTargetEnv,
+  readDevUpdateTarget,
   resolveDevUpdateTargetRevision,
 } from "./update-dev-target.js";
 
 const TRACKED_VALUE =
   "openclaw-dev-target:v1:eyJ1cHN0cmVhbVJlZiI6Im9yaWdpbi9tYWluIiwidXBzdHJlYW1TaGEiOiJmcm96ZW4tc2hhIn0";
 
+const INVALID_TARGET_MESSAGE =
+  "Invalid internal OPENCLAW_UPDATE_DEV_TARGET_REF contract; expected a plain Git ref or a supported tracked-target encoding.";
+
 describe("dev update target environment", () => {
   it("preserves the legacy plain detached-ref contract", () => {
-    expect(parseDevUpdateTargetEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: " refs/tags/dev " })).toEqual({
-      status: "valid",
-      target: { mode: "detached", ref: "refs/tags/dev" },
-    });
+    expect(
+      withEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: " refs/tags/dev " }, readDevUpdateTarget),
+    ).toEqual({ mode: "detached", ref: "refs/tags/dev" });
   });
 
   it("distinguishes an absent target from an invalid one", () => {
-    expect(parseDevUpdateTargetEnv({})).toEqual({ status: "absent" });
     expect(
-      parseDevUpdateTargetEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: "refs/heads/my branch" }),
-    ).toEqual({ status: "invalid" });
+      withEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: undefined }, readDevUpdateTarget),
+    ).toBeUndefined();
+    withEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: "refs/heads/my branch" }, () => {
+      expect(readDevUpdateTarget).toThrow(INVALID_TARGET_MESSAGE);
+    });
   });
 
   it("serializes tracked targets deterministically through the existing env field", () => {
@@ -31,10 +36,12 @@ describe("dev update target environment", () => {
     );
 
     expect(env).toEqual({ KEEP: "value", OPENCLAW_UPDATE_DEV_TARGET_REF: TRACKED_VALUE });
-    expect(parseDevUpdateTargetEnv(env)).toEqual({
-      status: "valid",
-      target: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" },
-    });
+    expect(
+      withEnv(
+        { OPENCLAW_UPDATE_DEV_TARGET_REF: env.OPENCLAW_UPDATE_DEV_TARGET_REF },
+        readDevUpdateTarget,
+      ),
+    ).toEqual({ mode: "tracked", upstreamRef: "origin/main", upstreamSha: "frozen-sha" });
   });
 
   it("projects campaign targets and resolves both target modes", () => {
@@ -66,8 +73,8 @@ describe("dev update target environment", () => {
     `openclaw-dev-target:v1:${Buffer.from(JSON.stringify({ upstreamRef: " upstream ", upstreamSha: "ref" })).toString("base64url")}`,
     `openclaw-dev-target:v1:${Buffer.from(JSON.stringify({ upstreamRef: "origin/main", upstreamSha: "ref\0" })).toString("base64url")}`,
   ])("fails closed for malformed or unsupported tracked value %s", (value) => {
-    expect(parseDevUpdateTargetEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: value })).toEqual({
-      status: "invalid",
+    withEnv({ OPENCLAW_UPDATE_DEV_TARGET_REF: value }, () => {
+      expect(readDevUpdateTarget).toThrow(INVALID_TARGET_MESSAGE);
     });
   });
 });

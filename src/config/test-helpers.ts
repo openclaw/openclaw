@@ -1,4 +1,3 @@
-// Provides config test helpers for temporary homes and fixture writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome as withTempHomeBase } from "../plugin-sdk/test-env.js";
@@ -88,24 +87,11 @@ export function buildWebSearchProviderConfig(params: {
         : params.provider === "kimi"
           ? "moonshot"
           : params.provider;
-  return {
-    tools: {
-      web: {
-        search,
-      },
-    },
-    ...(params.providerConfig
-      ? {
-          plugins: {
-            entries: {
-              [pluginId]: {
-                config: {
-                  webSearch: params.providerConfig,
-                },
-              },
-            },
-          },
-        }
-      : {}),
-  };
+  const config: Record<string, unknown> = { tools: { web: { search } } };
+  if (params.providerConfig) {
+    config.plugins = {
+      entries: { [pluginId]: { config: { webSearch: params.providerConfig } } },
+    };
+  }
+  return config;
 }

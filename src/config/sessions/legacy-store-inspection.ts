@@ -6,15 +6,19 @@ import { tryResolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../../infra/errno.js";
+import type { DoctorSessionSqliteIssue } from "../../infra/session-sqlite-migration-issues.js";
+import { decodeUtf8Input } from "../../infra/utf8-input.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
+import { resolveSessionFilePathCore } from "./paths.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
+import { assertSupportedSessionStoreEntry } from "./supported-session-store.js";
 import type { SessionEntry } from "./types.js";
 
-type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
-type LegacySessionStoreIssue = { code: string; message: string; sessionKey?: string };
+export type LegacySessionStoreTarget = { agentId: string; storePath: string; sqlitePath?: string };
 
 export function listLegacySessionTranscriptFiles(directory: string): string[] {
   if (!fs.existsSync(directory)) {
@@ -28,7 +32,7 @@ export function listLegacySessionTranscriptFiles(directory: string): string[] {
 
 export function readLegacySessionStoreEntries(
   target: Pick<LegacySessionStoreTarget, "storePath">,
-  issues: LegacySessionStoreIssue[],
+  issues: DoctorSessionSqliteIssue[],
   options: { allowMissingStore?: boolean; sourcePath?: string } = {},
 ): { entries: Array<{ sessionKey: string; entry: SessionEntry }>; bytes?: Buffer } {
   // Open a file descriptor first, then stat and read through it to eliminate
@@ -81,7 +85,7 @@ export function readLegacySessionStoreEntries(
       }
       // Fail closed if the pinned file grows past the size validated above.
       raw = readFileDescriptorBoundedSync(fd, storeStat.size);
-      parsed = JSON.parse(raw.toString("utf-8"));
+      parsed = JSON.parse(decodeUtf8Input(raw, `Legacy session index ${target.storePath}`));
     } catch (err) {
       issues.push({
         code: "store_unreadable",
@@ -98,10 +102,11 @@ export function readLegacySessionStoreEntries(
     }
     const entries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
     for (const [sessionKey, value] of Object.entries(parsed)) {
+      assertSupportedSessionStoreEntry(value);
       if (!isSessionEntry(value)) {
         issues.push({
           code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
+          message: `${target.storePath}: session entry is missing a valid sessionId; skipped while preserving the original index for recovery.`,
           sessionKey,
         });
         continue;
@@ -145,6 +150,48 @@ export function shouldFilterLegacySessionRecordsByTarget(
   // Filtering depends on whether the authored store path encodes an owner,
   // not on the configured/default owner selected for its SQLite target.
   return !resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).agentId;
+}
+
+export function resolveLegacyTranscriptPaths(
+  target: Pick<LegacySessionStoreTarget, "agentId" | "storePath">,
+  entry: { sessionId: string; sessionFile?: unknown },
+  verifiedSourcePaths?: ReadonlySet<string>,
+): {
+  transcriptPath?: string;
+  transcriptCandidates: string[];
+  transcriptDependencies: string[];
+} {
+  const legacySessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile : undefined;
+  if (parseSqliteSessionFileMarker(legacySessionFile)) {
+    return { transcriptCandidates: [], transcriptDependencies: [] };
+  }
+  const sessionsDir = path.dirname(target.storePath);
+  const relocatedPath = legacySessionFile?.trim()
+    ? path.join(sessionsDir, path.basename(legacySessionFile))
+    : undefined;
+  let defaultPath: string;
+  try {
+    defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
+      agentId: target.agentId,
+      sessionsDir,
+    });
+  } catch (error) {
+    if (!relocatedPath) {
+      throw error;
+    }
+    defaultPath = relocatedPath;
+  }
+  const transcriptPaths = relocatedPath ? [defaultPath, relocatedPath] : [defaultPath];
+  const transcriptPath =
+    transcriptPaths.find((file) => verifiedSourcePaths?.has(path.resolve(file))) ??
+    transcriptPaths.find((file) => fs.existsSync(file)) ??
+    (relocatedPath ? defaultPath : undefined);
+  // Reads may retain a foreign root after archival, but recovery artifacts are direct
+  // files in this target's sessions directory. Their dependencies must stay local too.
+  const transcriptDependencies = transcriptPaths.map((file) =>
+    path.join(sessionsDir, path.basename(file)),
+  );
+  return { transcriptPath, transcriptCandidates: transcriptPaths, transcriptDependencies };
 }
 
 function isSessionEntry(value: unknown): value is SessionEntry {

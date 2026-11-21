@@ -57,7 +57,7 @@ When a new user sends their first DM:
 1. The channel generates a unique `agentId`: `feishu-{user_open_id}` for the default account, or a bounded account-prefixed identity digest for a named account
 2. Creates a new workspace at `workspaceTemplate` path
 3. Registers the agent and creates a binding for this user
-4. The workspace helper ensures bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) on first access
+4. The workspace helper creates missing bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) on first access
 5. Routes all future messages from this user to their dedicated agent
 
 ### Configuration options

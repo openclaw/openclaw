@@ -20,7 +20,7 @@ Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 ## Surface
 
 - Providers: `ollama`, `ollama-cloud`
-- Contracts: `embeddingProviders`, `tools`, `webSearchProviders`
+- Contracts: `embeddingProviders`, `tools`, `usageProviders`, `webSearchProviders`
 
 ## Related docs
 

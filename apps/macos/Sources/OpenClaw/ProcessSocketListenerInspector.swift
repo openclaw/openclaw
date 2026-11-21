@@ -1,4 +1,3 @@
-#if canImport(Darwin)
 import Darwin
 
 enum ProcessSocketListenerInspector {
@@ -78,4 +77,3 @@ enum ProcessSocketListenerInspector {
         return localPort == port
     }
 }
-#endif

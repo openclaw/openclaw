@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildConfigItems } from "./config.js";
-import { makeContext } from "./test/provider-helpers.js";
+import { hermesCase } from "./test/hermes-case.js";
+import { useHermesFixture } from "./test/migration-fixture.js";
 
-const ctx = makeContext({ source: "/hermes", stateDir: "/state", workspaceDir: "/workspace" });
+const fixture = useHermesFixture();
 
 describe("Hermes MCP policy migration", () => {
   it.each([
@@ -12,33 +12,31 @@ describe("Hermes MCP policy migration", () => {
     [true, true, { include: ["resources_list", "resources_read", "prompts_list", "prompts_get"] }],
   ])(
     "preserves an empty native allowlist with resources=%s and prompts=%s",
-    (resources, prompts, toolFilter) => {
-      const items = buildConfigItems({
-        ctx,
-        config: {
-          mcp_servers: {
-            acme: { command: "acme-mcp", tools: { include: [], resources, prompts } },
-          },
+    async (resources, prompts, toolFilter) => {
+      const h = hermesCase(fixture.paths.root);
+      await h.write("config.yaml", {
+        mcp_servers: {
+          acme: { command: "acme-mcp", tools: { include: [], resources, prompts } },
         },
       });
+      const { items } = await h.plan();
       expect(items.find((item) => item.id === "config:mcp-server:acme")?.details?.value).toEqual({
         acme: { command: "acme-mcp", toolFilter },
       });
     },
   );
 
-  it("preserves an empty string native allowlist", () => {
-    const items = buildConfigItems({
-      ctx,
-      config: {
-        mcp_servers: {
-          acme: {
-            command: "acme-mcp",
-            tools: { include: "", resources: false, prompts: false },
-          },
+  it("preserves an empty string native allowlist", async () => {
+    const h = hermesCase(fixture.paths.root);
+    await h.write("config.yaml", {
+      mcp_servers: {
+        acme: {
+          command: "acme-mcp",
+          tools: { include: "", resources: false, prompts: false },
         },
       },
     });
+    const { items } = await h.plan();
     expect(items.find((item) => item.id === "config:mcp-server:acme")?.details?.value).toEqual({
       acme: { command: "acme-mcp", toolFilter: { exclude: ["*"] } },
     });
@@ -46,11 +44,12 @@ describe("Hermes MCP policy migration", () => {
 
   it.each(["delete_?", "delete_[ab]"])(
     "requires review before activating an unsupported exclusion %s",
-    (pattern) => {
-      const items = buildConfigItems({
-        ctx,
-        config: { mcp_servers: { acme: { command: "acme-mcp", tools: { exclude: [pattern] } } } },
+    async (pattern) => {
+      const h = hermesCase(fixture.paths.root);
+      await h.write("config.yaml", {
+        mcp_servers: { acme: { command: "acme-mcp", tools: { exclude: [pattern] } } },
       });
+      const { items } = await h.plan();
       expect(
         items.find((item) => item.id === "config:mcp-server:acme")?.details?.value,
       ).toMatchObject({
@@ -65,23 +64,22 @@ describe("Hermes MCP policy migration", () => {
     },
   );
 
-  it("keeps the supported subset of an include policy without broadening its tool surface", () => {
-    const items = buildConfigItems({
-      ctx,
-      config: {
-        mcp_servers: {
-          acme: {
-            command: "acme-mcp",
-            tools: {
-              include: ["read_*", "find_?"],
-              exclude: ["delete_?"],
-              resources: false,
-              prompts: false,
-            },
+  it("keeps the supported subset of an include policy without broadening its tool surface", async () => {
+    const h = hermesCase(fixture.paths.root);
+    await h.write("config.yaml", {
+      mcp_servers: {
+        acme: {
+          command: "acme-mcp",
+          tools: {
+            include: ["read_*", "find_?"],
+            exclude: ["delete_?"],
+            resources: false,
+            prompts: false,
           },
         },
       },
     });
+    const { items } = await h.plan();
     expect(items.find((item) => item.id === "config:mcp-server:acme")?.details?.value).toEqual({
       acme: { command: "acme-mcp", toolFilter: { include: ["read_*"] } },
     });

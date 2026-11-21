@@ -8,8 +8,6 @@ type MediaCapabilityProvider = {
   describeVideo?: unknown;
 };
 
-// Capability checks for media-understanding provider objects.
-
 /** Image providers can use shared model dispatch; audio/video require registered methods. */
 export function providerSupportsCapability(
   provider: MediaCapabilityProvider | undefined,

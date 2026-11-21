@@ -1,5 +1,29 @@
 import type { CaptureEventView } from "./ui-types.js";
 
+type CaptureEventGroup = {
+  id: string;
+  label: string;
+  meta: string;
+  events: CaptureEventView[];
+};
+
+export function groupCaptureEvents(
+  events: CaptureEventView[],
+  describe: (event: CaptureEventView) => Omit<CaptureEventGroup, "events">,
+): CaptureEventGroup[] {
+  const groups = new Map<string, CaptureEventGroup>();
+  for (const event of events) {
+    const descriptor = describe(event);
+    const existing = groups.get(descriptor.id);
+    if (existing) {
+      existing.events.push(event);
+    } else {
+      groups.set(descriptor.id, { ...descriptor, events: [event] });
+    }
+  }
+  return [...groups.values()];
+}
+
 export function captureEventKey(
   event: Pick<CaptureEventView, "id" | "flowId" | "ts" | "kind">,
 ): string {

@@ -3,15 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { listOfficialExternalPluginCatalogEntries } from "../plugins/official-external-plugin-catalog.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
-import {
-  formatStartupPluginVerificationFailure,
-  runDoctorPluginConvergence,
-} from "./doctor-config-preflight-plugin-verification.js";
+import { runDoctorPluginConvergence } from "./doctor-config-preflight-plugin-verification.js";
 import { runPostCorePluginConvergence } from "./doctor/shared/post-core-plugin-convergence.js";
 
 const npmInstall = vi.hoisted(() =>
@@ -29,23 +26,6 @@ vi.mock("../plugins/clawhub.js", async (importOriginal) => ({
     throw new Error("unselected plugin reached ClawHub installation");
   },
 }));
-
-describe("formatStartupPluginVerificationFailure", () => {
-  it("uses install-neutral gateway restart guidance", () => {
-    expect(
-      formatStartupPluginVerificationFailure({
-        kind: "plugin-verification",
-        messages: ['Plugin "discord" has no install path.'],
-      }),
-    ).toBe(
-      [
-        "OpenClaw plugin verification failed; refusing to report the gateway ready.",
-        '- Plugin "discord" has no install path.',
-        "Resolve the plugin verification errors above, then restart the Gateway.",
-      ].join("\n"),
-    );
-  });
-});
 
 describe("update canary plugin verification", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,12 +49,24 @@ describe("update canary plugin verification", () => {
       const result = await runDoctorPluginConvergence({ cfg, env });
       expect(npmInstall).not.toHaveBeenCalled();
       expect(result).toEqual({
-        blockingDiagnostic: null,
-        quarantinedPlugins: [],
+        quarantinedPlugins: [
+          {
+            pluginId: "canary-fixture",
+            state: "configured-unavailable",
+            diagnostic: {
+              kind: "plugin-verification",
+              reason: "missing-install-path",
+              detail: "Install path is missing from the plugin install record.",
+            },
+          },
+        ],
         migrationInspection: {
           requiredPluginIds: [],
           inspectionRequiredPluginIds: [],
-          statelessPluginIds: [],
+          statelessPlugins: [],
+          runtimePluginAliases: [],
+          discoveryBlockedPluginIds: [],
+          inactivePluginIds: [],
         },
         deferredPlugins: [
           {
@@ -96,10 +88,11 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   async function converge(
     cfg: Parameters<typeof runDoctorPluginConvergence>[0]["cfg"],
     env: NodeJS.ProcessEnv,
+    changed = false,
   ) {
     if (first === "startup") {
       expect(await runDoctorPluginConvergence({ cfg, env })).toEqual({
-        blockingDiagnostic: null,
+        ...(changed ? { changed: true } : {}),
         quarantinedPlugins: [],
       });
     } else {
@@ -144,14 +137,14 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
       expect(listOfficialExternalPluginCatalogEntries().length).toBeGreaterThan(0);
       for (let start = 0; start < 2; start += 1) {
         await withPluginCache(createPluginCache(), async () => {
-          await converge(cfg, env);
+          await converge(cfg, env, retained && start === 0);
           const repair = await runPostCorePluginConvergence({ cfg, env });
           expect(repair.warnings).toEqual([]);
           expect(repair.installRecords).toEqual({});
         });
         // A completed lifecycle changes the next generation, not the invoking snapshot.
-        const persisted = withPluginCache(createPluginCache(), () =>
-          readPersistedInstalledPluginIndexInstallRecords({ env }),
+        const persisted = await withPluginCache(createPluginCache(), () =>
+          readPersistedInstalledPluginIndexInstallRecordsAsync({ env }),
         );
         expect(persisted).toEqual({});
       }
@@ -229,7 +222,7 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
         };
       });
       await withPluginCache(createPluginCache(), async () => {
-        await converge(cfg, env);
+        await converge(cfg, env, true);
       });
       await withPluginCache(createPluginCache(), async () => {
         const repair = await runPostCorePluginConvergence({ cfg, env });

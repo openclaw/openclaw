@@ -1,6 +1,3 @@
-// Operator approvals client e2e tests verify requester/approver scope behavior through a real gateway server.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -16,52 +13,32 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-s
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { removeGatewayTempHome, setupGatewayTempHome } from "./gateway.test-support.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE } from "./method-scopes.js";
 import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
-import {
-  configureManualGatewayBackgroundEnv,
-  MANUAL_GATEWAY_ENV_KEYS,
-} from "./test-helpers.manual-gateway-env.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
-const TEST_ENV_KEYS = [
-  "HOME",
-  ...MANUAL_GATEWAY_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_URL",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
-];
+const TEST_ENV_KEYS = ["OPENCLAW_GATEWAY_URL", "OPENCLAW_GATEWAY_PASSWORD"];
 
 type Cleanup = () => Promise<void> | void;
+type Client = Awaited<ReturnType<typeof connectGatewayClient>>;
 
-async function requestExecApproval(params: {
-  requester: Awaited<ReturnType<typeof connectGatewayClient>>;
-  id: string;
-}): Promise<void> {
+async function requestExecApproval(requester: Client, id: string): Promise<void> {
   await expect(
-    params.requester.request("exec.approval.request", {
-      id: params.id,
+    requester.request("exec.approval.request", {
+      id,
       command: "printf smoke",
       cwd: "/tmp",
       host: "local",
       ask: "always",
       twoPhase: true,
-      // This suite drives the stable ID directly from another authenticated
-      // device, so no legacy event delivery route is required.
+      // Devices resolve by ID, without a legacy event-delivery route.
       requireDeliveryRoute: false,
       timeoutMs: 60_000,
     }),
-  ).resolves.toMatchObject({
-    status: "accepted",
-    id: params.id,
-  });
+  ).resolves.toMatchObject({ status: "accepted", id });
 }
 
 describe("operator approval gateway client e2e", () => {
@@ -76,100 +53,87 @@ describe("operator approval gateway client e2e", () => {
     clearSessionStoreCacheForTest();
   });
 
-  it("uses runtime authority only for generated local gateway URLs", async () => {
+  async function gatewayFixture(prefix: string) {
     const envSnapshot = captureEnv(TEST_ENV_KEYS);
     cleanup.push(() => envSnapshot.restore());
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
+    for (const key of TEST_ENV_KEYS) {
+      deleteTestEnvValue(key);
+    }
+    const { envSnapshot: homeEnv, tempHome } = await setupGatewayTempHome({ prefix });
+    cleanup.push(
+      () => homeEnv.restore(),
+      () => removeGatewayTempHome(tempHome),
+    );
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
-
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-approval-client-e2e-"));
-    cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
-
     const stateDir = path.join(tempHome, ".openclaw");
-    await fs.mkdir(stateDir, { recursive: true });
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    configureManualGatewayBackgroundEnv(tempHome);
 
-    const port = await getGatewayE2ePortBlock();
-    const token = "approval-client-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
+    const claim = await acquireGatewayE2ePortBlock();
+    const token = "approval-e2e-token";
+    const url = `ws://127.0.0.1:${claim.port}`;
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
 
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      }),
+    );
     cleanup.push(() => server.close());
-
-    const admin = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "approval admin",
-      scopes: [ADMIN_SCOPE],
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(admin));
-
-    const requester = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "approval requester",
-      scopes: [APPROVALS_SCOPE],
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(requester));
 
     const localConfig = {
       gateway: {
-        port,
+        port: claim.port,
         auth: { mode: "token", token },
       },
     } satisfies OpenClawConfig;
+    const connect = async (
+      scopes: string[] = [APPROVALS_SCOPE],
+      deviceIdentity?: ReturnType<typeof loadOrCreateDeviceIdentity>,
+    ) => {
+      const client = await connectGatewayClient({
+        url,
+        token,
+        clientDisplayName: "approval test device",
+        scopes,
+        ...(deviceIdentity ? { deviceIdentity } : {}),
+        timeoutMs: 60_000,
+      });
+      cleanup.push(() => disconnectGatewayClient(client));
+      return client;
+    };
+    return { stateDir, url, localConfig, connect };
+  }
 
-    await requestExecApproval({ requester, id: "local-source-approval" });
-    await withOperatorApprovalsGatewayClient(
-      {
-        config: localConfig,
-        clientDisplayName: "local source approval resolver",
-      },
-      async (client) => {
-        await client.request(
-          "exec.approval.resolve",
-          { id: "local-source-approval", decision: "allow-once" },
-          { timeoutMs: 10_000 },
-        );
-      },
-    );
+  it("uses runtime authority only for generated local gateway URLs", async () => {
+    const { url, localConfig, connect } = await gatewayFixture("openclaw-approval-client-e2e-");
+    const admin = await connect([ADMIN_SCOPE]);
+    const requester = await connect();
+    const resolve = (config: OpenClawConfig, id: string) =>
+      withOperatorApprovalsGatewayClient(
+        { config, clientDisplayName: "approval resolver" },
+        (client) =>
+          client.request(
+            "exec.approval.resolve",
+            { id, decision: "allow-once" },
+            { timeoutMs: 10_000 },
+          ),
+      );
+
+    await requestExecApproval(requester, "local-source-approval");
+    await resolve(localConfig, "local-source-approval");
 
     const remoteLoopbackConfig = {
       gateway: {
         mode: "remote",
         remote: { url },
-        auth: { mode: "token", token },
+        auth: localConfig.gateway.auth,
       },
     } satisfies OpenClawConfig;
 
-    await requestExecApproval({ requester, id: "remote-loopback-approval" });
-    await expect(
-      withOperatorApprovalsGatewayClient(
-        {
-          config: remoteLoopbackConfig,
-          clientDisplayName: "remote loopback approval resolver",
-        },
-        async (client) => {
-          await client.request(
-            "exec.approval.resolve",
-            { id: "remote-loopback-approval", decision: "allow-once" },
-            { timeoutMs: 10_000 },
-          );
-        },
-      ),
-    ).rejects.toMatchObject({
+    await requestExecApproval(requester, "remote-loopback-approval");
+    await expect(resolve(remoteLoopbackConfig, "remote-loopback-approval")).rejects.toMatchObject({
       gatewayCode: "INVALID_REQUEST",
       details: { reason: "APPROVAL_NOT_FOUND" },
     });
@@ -182,117 +146,62 @@ describe("operator approval gateway client e2e", () => {
   }, 120_000);
 
   it("resolves one approval from distinct devices with first-answer-wins semantics", async () => {
-    const envSnapshot = captureEnv(TEST_ENV_KEYS);
-    cleanup.push(() => envSnapshot.restore());
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
-
-    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-approval-surfaces-e2e-"));
-    cleanup.push(() => fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }));
-
-    const stateDir = path.join(tempHome, ".openclaw");
-    await fs.mkdir(stateDir, { recursive: true });
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    configureManualGatewayBackgroundEnv(tempHome);
-
-    const requesterIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "approval-requester.sqlite"),
-    });
-    const reviewerIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "approval-reviewer.sqlite"),
-    });
-    const underscopedIdentity = loadOrCreateDeviceIdentity({
-      path: path.join(stateDir, "test-device-identities", "approval-underscoped.sqlite"),
-    });
+    const { stateDir, connect } = await gatewayFixture("openclaw-approval-surfaces-e2e-");
+    const identity = (role: string) =>
+      loadOrCreateDeviceIdentity({
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          `approval-${role}`,
+          "client",
+          "credentials.sqlite",
+        ),
+      });
+    const requesterIdentity = identity("requester");
+    const reviewerIdentity = identity("reviewer");
     expect(requesterIdentity.deviceId).not.toBe(reviewerIdentity.deviceId);
-
-    const port = await getGatewayE2ePortBlock();
-    const token = "approval-surfaces-e2e-token";
-    const url = `ws://127.0.0.1:${port}`;
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-
-    const server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-    cleanup.push(() => server.close());
-
-    const requester = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "approval requester device",
-      scopes: [APPROVALS_SCOPE],
-      deviceIdentity: requesterIdentity,
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(requester));
-
-    const reviewer = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "approval reviewer device",
-      scopes: [APPROVALS_SCOPE],
-      deviceIdentity: reviewerIdentity,
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(reviewer));
-
-    const underscoped = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "approval underscoped device",
-      scopes: [READ_SCOPE],
-      deviceIdentity: underscopedIdentity,
-      timeoutMs: 60_000,
-    });
-    cleanup.push(() => disconnectGatewayClient(underscoped));
+    const requester = await connect([APPROVALS_SCOPE], requesterIdentity);
+    const reviewer = await connect([APPROVALS_SCOPE], reviewerIdentity);
+    const underscoped = await connect([READ_SCOPE], identity("underscoped"));
 
     const approvalId = "multi-surface-first-answer-wins";
-    await requestExecApproval({ requester, id: approvalId });
+    await requestExecApproval(requester, approvalId);
+    const get = async (client: Client) => {
+      const result = await client.request<ApprovalGetResult>("approval.get", { id: approvalId });
+      expect(validateApprovalGetResult(result)).toBe(true);
+      return result.approval;
+    };
+    const resolve = async (client: Client, decision: "allow-once" | "deny") => {
+      const result = await client.request<ApprovalResolveResult>("approval.resolve", {
+        id: approvalId,
+        kind: "exec",
+        decision,
+      });
+      expect(validateApprovalResolveResult(result)).toBe(true);
+      return result;
+    };
 
-    const pending = await reviewer.request<ApprovalGetResult>("approval.get", { id: approvalId });
-    expect(validateApprovalGetResult(pending)).toBe(true);
-    expect(pending.approval).toMatchObject({
+    expect(await get(reviewer)).toMatchObject({
       id: approvalId,
       status: "pending",
       presentation: { kind: "exec" },
     });
 
-    await expect(underscoped.request("approval.get", { id: approvalId })).rejects.toThrow(
-      "missing scope: operator.approvals",
-    );
-    await expect(underscoped.request("approval.history", {})).rejects.toThrow(
-      "missing scope: operator.approvals",
-    );
-    await expect(
-      underscoped.request("approval.resolve", { id: approvalId, kind: "exec", decision: "deny" }),
-    ).rejects.toThrow("missing scope: operator.approvals");
-
-    const stillPending = await reviewer.request<ApprovalGetResult>("approval.get", {
-      id: approvalId,
-    });
-    expect(validateApprovalGetResult(stillPending)).toBe(true);
-    expect(stillPending.approval.status).toBe("pending");
+    for (const [method, params] of [
+      ["approval.get", { id: approvalId }],
+      ["approval.history", {}],
+      ["approval.resolve", { id: approvalId, kind: "exec", decision: "deny" }],
+    ] as const) {
+      await expect(underscoped.request(method, params)).rejects.toThrow(
+        "missing scope: operator.approvals",
+      );
+    }
+    expect((await get(reviewer)).status).toBe("pending");
 
     const [allowResult, denyResult] = await Promise.all([
-      requester.request<ApprovalResolveResult>("approval.resolve", {
-        id: approvalId,
-        kind: "exec",
-        decision: "allow-once",
-      }),
-      reviewer.request<ApprovalResolveResult>("approval.resolve", {
-        id: approvalId,
-        kind: "exec",
-        decision: "deny",
-      }),
+      resolve(requester, "allow-once"),
+      resolve(reviewer, "deny"),
     ]);
-    expect(validateApprovalResolveResult(allowResult)).toBe(true);
-    expect(validateApprovalResolveResult(denyResult)).toBe(true);
     expect([allowResult.applied, denyResult.applied].filter(Boolean)).toHaveLength(1);
     expect(allowResult.approval).toEqual(denyResult.approval);
 
@@ -303,17 +212,10 @@ describe("operator approval gateway client e2e", () => {
       decision: winningDecision,
     });
 
-    const replay = await reviewer.request<ApprovalResolveResult>("approval.resolve", {
-      id: approvalId,
-      kind: "exec",
-      decision: winningDecision,
-    });
-    expect(validateApprovalResolveResult(replay)).toBe(true);
+    const replay = await resolve(reviewer, winningDecision);
     expect(replay).toEqual({ applied: false, approval: allowResult.approval });
 
-    const terminal = await requester.request<ApprovalGetResult>("approval.get", { id: approvalId });
-    expect(validateApprovalGetResult(terminal)).toBe(true);
-    expect(terminal.approval).toEqual(allowResult.approval);
+    expect(await get(requester)).toEqual(allowResult.approval);
 
     const history = await reviewer.request<ApprovalHistoryResult>("approval.history", {
       limit: 10,

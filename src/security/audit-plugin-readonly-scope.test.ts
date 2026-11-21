@@ -12,8 +12,9 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
+// mock-isolation: Collector-scope fixtures supply channel owners without persisted plugin discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (...args: unknown[]) =>
+  resolveConfiguredChannelPluginIdsAsync: async (...args: unknown[]) =>
     resolveConfiguredChannelPluginIdsMock(...args),
 }));
 
@@ -42,7 +43,6 @@ function createAuditOptions(params: {
     env: {},
     platform: process.platform,
     includeFilesystem: false,
-    includeChannelSecurity: true,
     deep: false,
     deepTimeoutMs: 5000,
     stateDir: "/tmp/openclaw-test-state",
@@ -82,7 +82,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("keeps configured channel owner collectors when the provided channel plugin list omits them", async () => {
     const sourceConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         allow: ["external-channel-plugin", "audit-plugin"],
       },
@@ -130,7 +130,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("removes configured channel owner collectors only when channel security will audit them", async () => {
     const sourceConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         allow: ["external-channel-plugin", "audit-plugin"],
       },
@@ -163,7 +163,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("skips plugin runtime and collector discovery when collector loading is disabled", async () => {
     const sourceConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         allow: ["audit-plugin"],
       },
@@ -185,7 +185,7 @@ describe("security audit read-only plugin scope", () => {
 
   it("keeps plain security audit off plugin collector runtime discovery by default", async () => {
     const sourceConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: {
         allow: ["audit-plugin"],
       },
@@ -196,7 +196,7 @@ describe("security audit read-only plugin scope", () => {
       sourceConfig,
       env: {},
       includeFilesystem: false,
-      includeChannelSecurity: false,
+      plugins: [],
       stateDir: "/tmp/openclaw-test-state",
       configPath: "/tmp/openclaw-test-config.json",
     });

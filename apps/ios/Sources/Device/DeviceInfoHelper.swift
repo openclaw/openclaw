@@ -3,30 +3,16 @@ import OpenClawKit
 
 /// Shared device and platform info for Settings, gateway node payloads, and device status.
 enum DeviceInfoHelper {
-    /// Gateway platform metadata, including compatibility-app handling on Apple Silicon Macs.
-    @MainActor
-    static func platformString() -> String {
-        InstanceIdentity.platformString
-    }
-
     /// Always "iOS X.Y.Z" for UI display (e.g. Settings), matching legacy behavior on iPad.
     static func platformStringForDisplay() -> String {
         "iOS \(self.iOSVersionStringForDisplay())"
     }
 
     /// Version-only display string for About, e.g. "18.0.0".
-    static func iOSVersionStringForDisplay() -> String {
-        self.iOSVersionStringForDisplay(ProcessInfo.processInfo.operatingSystemVersion)
-    }
-
-    static func iOSVersionStringForDisplay(_ version: OperatingSystemVersion) -> String {
+    static func iOSVersionStringForDisplay(
+        _ version: OperatingSystemVersion = ProcessInfo.processInfo.operatingSystemVersion) -> String
+    {
         "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
-    }
-
-    /// Device family for gateway payloads: "iPad", "iPhone", or "iOS".
-    @MainActor
-    static func deviceFamily() -> String {
-        InstanceIdentity.deviceFamily
     }
 
     /// Machine model identifier, or a compatibility-host description when running on a Mac.
@@ -57,11 +43,9 @@ enum DeviceInfoHelper {
         return "\(version) (\(build))"
     }
 
-    static func buildMetadata() -> ArtifactBuildInfo {
-        self.buildMetadata(infoDictionary: Bundle.main.infoDictionary ?? [:])
-    }
-
-    static func buildMetadata(infoDictionary: [String: Any]) -> ArtifactBuildInfo {
+    static func buildMetadata(
+        infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]) -> ArtifactBuildInfo
+    {
         ArtifactBuildInfo(
             infoDictionary: infoDictionary,
             versionKeys: ["OpenClawCanonicalVersion", "CFBundleShortVersionString"])

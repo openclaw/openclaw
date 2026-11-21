@@ -28,7 +28,6 @@ describe("file-transfer shared params", () => {
         input: { maxBytes: "1024" },
         key: "maxBytes",
         defaultValue: 256,
-        hardMin: 1,
         hardMax: 512,
       }),
     ).toBe(512);
@@ -40,7 +39,6 @@ describe("file-transfer shared params", () => {
         input: { maxEntries: "2.5" },
         key: "maxEntries",
         defaultValue: 200,
-        hardMin: 1,
         hardMax: 5000,
       }),
     ).toThrow("maxEntries must be a positive integer");

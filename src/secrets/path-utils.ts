@@ -1,16 +1,12 @@
 /** Strict dotted-path get/set/delete helpers for secrets migration targets. */
 import { isDeepStrictEqual } from "node:util";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import type { ConcreteConfigPathSegment } from "../shared/dot-path.js";
+import { readObjectPath, type ConcreteConfigPathSegment } from "../shared/dot-path.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord } from "./shared.js";
 
-function parseArrayIndexSegment(segment: string): number | undefined {
-  return parseConfigPathArrayIndex(segment);
-}
-
 function requireArrayIndexSegment(segment: string, pathLabel: string): number {
-  const index = parseArrayIndexSegment(segment);
+  const index = parseConfigPathArrayIndex(segment);
   if (index === undefined) {
     throw new Error(`Invalid array index segment "${segment}" at ${pathLabel}.`);
   }
@@ -38,6 +34,18 @@ function parseArrayLeafTarget(
     return null;
   }
   return { array: cursor, index: requireArrayIndexSegment(String(leaf), segments.join(".")) };
+}
+
+function setLeafValueIfChanged<Key extends string | number>(
+  target: Record<Key, unknown>,
+  key: Key,
+  value: unknown,
+): boolean {
+  if (isDeepStrictEqual(target[key], value)) {
+    return false;
+  }
+  target[key] = value;
+  return true;
 }
 
 function traverseToLeafParent(params: {
@@ -82,25 +90,7 @@ function traverseToLeafParent(params: {
  * Missing containers, invalid array indexes, and scalar parents resolve to undefined.
  */
 export function getPath(root: unknown, segments: string[]): unknown {
-  if (segments.length === 0) {
-    return undefined;
-  }
-  let cursor: unknown = root;
-  for (const segment of segments) {
-    if (Array.isArray(cursor)) {
-      const arrayIndex = parseArrayIndexSegment(segment);
-      if (arrayIndex === undefined) {
-        return undefined;
-      }
-      cursor = cursor[arrayIndex];
-      continue;
-    }
-    if (!isRecord(cursor)) {
-      return undefined;
-    }
-    cursor = cursor[segment];
-  }
-  return cursor;
+  return segments.length === 0 ? undefined : readObjectPath(root, segments, "canonical");
 }
 
 /**
@@ -154,20 +144,12 @@ export function setPathCreateStrict(
   }
   const arrayTarget = parseArrayLeafTarget(cursor, leaf, segments);
   if (arrayTarget) {
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      changed = true;
-    }
-    return changed;
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value) || changed;
   }
   if (!isRecord(cursor) || typeof leaf !== "string") {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    changed = true;
-  }
-  return changed;
+  return setLeafValueIfChanged(cursor, leaf, value) || changed;
 }
 
 /**
@@ -187,11 +169,7 @@ export function setPathExistingStrict(
     if (arrayTarget.index < 0 || arrayTarget.index >= arrayTarget.array.length) {
       throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
     }
-    if (!isDeepStrictEqual(arrayTarget.array[arrayTarget.index], value)) {
-      arrayTarget.array[arrayTarget.index] = value;
-      return true;
-    }
-    return false;
+    return setLeafValueIfChanged(arrayTarget.array, arrayTarget.index, value);
   }
   if (!isRecord(cursor)) {
     throw new Error(`Invalid path shape at ${segments.slice(0, -1).join(".") || "<root>"}.`);
@@ -199,11 +177,7 @@ export function setPathExistingStrict(
   if (!Object.hasOwn(cursor, leaf)) {
     throw new Error(`Path segment does not exist at ${segments.join(".")}.`);
   }
-  if (!isDeepStrictEqual(cursor[leaf], value)) {
-    cursor[leaf] = value;
-    return true;
-  }
-  return false;
+  return setLeafValueIfChanged(cursor, leaf, value);
 }
 
 /**

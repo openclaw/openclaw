@@ -35,7 +35,6 @@ changing config.
 | Codex app-server harness  | Codex-compatible HTTPS route with runtime unset/`auto`, or explicit `agentRuntime.id: codex`  | Yes                                                                |
 | Server-side web search    | Native OpenAI Responses tool                                                                  | Yes, when web search is enabled and no other provider is pinned    |
 | Images                    | `image_generate`                                                                              | Yes                                                                |
-| Videos                    | `video_generate`                                                                              | Yes                                                                |
 | Text-to-speech            | `tts.provider: "openai"` / `tts`                                                              | Yes                                                                |
 | Batch speech-to-text      | `tools.media.audio` / media understanding                                                     | Yes                                                                |
 | Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                                                     | Yes                                                                |

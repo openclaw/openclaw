@@ -1,28 +1,26 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../../test-utils/env.js";
+import { aroundEach, expect, it, vi } from "vitest";
+import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
+import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
-  getSubagentSessionListRunsSnapshotForRead,
+  prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import { holdFirstCompactRead } from "./subagent-registry-state.read.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
-  return {
+  return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
-    requesterSessionKey: "agent:main:main",
-    requesterDisplayKey: "main",
     task: "collector task",
-    cleanup: "keep",
     createdAt: 100,
     execution: { status: "terminal", endedAt: 200 },
     completion: { required: false, resultText: `result-${runId}` },
@@ -31,7 +29,7 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
     swarmRequesterSessionKey: "agent:main:main",
     collectorCompletion: { status: "done" },
     ...overrides,
-  };
+  });
 }
 
 function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
@@ -40,110 +38,185 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
   };
   return createSubagentRegistryPublicApi({
     runs,
-    persist: unexpectedMutation,
-    persistOrThrow: unexpectedMutation,
     restoreOnce: unexpectedMutation,
-    startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,
+    markRequesterYielded: unexpectedMutation,
   });
 }
 
-async function withPersistedReads(run: () => Promise<void>): Promise<void> {
-  await withEnvAsync(
+aroundEach((run) =>
+  withOpenClawTestState(
     {
-      OPENCLAW_STATE_DIR: tempDirs.make("openclaw-subagent-known-reads-"),
-      OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1",
+      scenario: "minimal",
+      env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" },
     },
     async () => {
       clearSubagentRunsReadCacheForTest();
+      subagentRuns.clear();
       try {
         await run();
       } finally {
+        subagentRuns.clear();
         clearSubagentRunsReadCacheForTest();
-        closeOpenClawStateDatabaseForTest();
       }
     },
-  );
+  ),
+);
+
+function expectSelected(
+  prepared: PreparedSubagentRunsRead,
+  entry: SubagentRunRecord,
+  key = "collector",
+) {
+  expect(
+    prepared.consume((selected) => {
+      expect(selected.get(key)).toBe(entry);
+    }),
+  ).toEqual({ ready: true, value: undefined });
 }
 
-describe("subagent registry known-run reads", () => {
-  it("resolves retained collector aliases without hydrating unrelated results", async () => {
-    await withPersistedReads(async () => {
-      const retainedResult = "unrelated-retained-result".repeat(128);
-      const rows = [
-        createRun("collector"),
-        createRun("same-zulu", { swarmRunId: "collector", createdAt: 300 }),
-        createRun("same-alpha", { swarmRunId: "collector", createdAt: 300 }),
-        createRun("retained", { completion: { required: false, resultText: retainedResult } }),
-        createRun("malformed"),
-      ];
-      saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?")
-        .run("{", "malformed");
-      const api = createReadApi();
-      const parse = vi.spyOn(JSON, "parse");
-      try {
-        const selected = api.getSubagentRunsByRunIds([" collector ", "same-alpha", "missing"]);
-
-        expect([...selected.entries.keys()]).toEqual([" collector ", "same-alpha"]);
-        expect(selected.entries.get(" collector ")).toMatchObject({
-          runId: "same-zulu",
-          completion: { resultText: "result-same-zulu" },
-        });
-        expect(selected.entries.get("same-alpha")?.runId).toBe("same-alpha");
-        expect(parse.mock.calls.some(([raw]) => raw.includes(retainedResult))).toBe(false);
-      } finally {
-        parse.mockRestore();
-      }
-
-      // A scoped result must never masquerade as a complete registry cache.
-      expect(api.getSubagentRunByRunId("retained")?.completion?.resultText).toBe(retainedResult);
+it("uses the replacement owner published while collector payload hydration is pending", async () => {
+  const original = createRun("original", { swarmRunId: "collector" });
+  saveSubagentRegistryToSqlite(new Map([[original.runId, original]]));
+  const { entered, release, read } = holdFirstCompactRead("subagents.runs");
+  const pending = createReadApi(subagentRuns).prepareSubagentRunsByRunIds([
+    "collector",
+    "original",
+  ]);
+  try {
+    await Promise.race([
+      entered,
+      pending.then(() => {
+        throw new Error("Expected pending payload hydration");
+      }),
+    ]);
+    const replacement = createRun("replacement", {
+      swarmRunId: "collector",
+      requesterSessionKey: "agent:other:current-owner",
     });
+    persistRegistryFixture(new Map([[replacement.runId, replacement]]), [
+      original.runId,
+      replacement.runId,
+    ]);
+    release();
+    const prepared = await pending;
+    expect(prepared.consume((runs) => [...runs])).toEqual({
+      ready: true,
+      value: [["collector", replacement]],
+    });
+  } finally {
+    release();
+    await pending.catch(() => {});
+    read.mockRestore();
+  }
+});
+
+it("counts retained children without preparing unrelated descendant graphs", async () => {
+  const activeChildren = 4;
+  const rows = Array.from({ length: 256 }, (_, index) =>
+    createRun(`unrelated-${index}`, {
+      requesterSessionKey: "agent:other:main",
+      swarmRequesterSessionKey: "agent:other:main",
+    }),
+  );
+  rows.push(
+    ...Array.from({ length: activeChildren }, (_, index) =>
+      createRun(`active-${index}`, {
+        collect: false,
+        requesterAgentId: "main",
+        createdAt: Date.now(),
+        execution: { status: "running", startedAt: Date.now() },
+      }),
+    ),
+  );
+  saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
+  const memory = new Map<string, SubagentRunRecord>();
+  const api = createReadApi(memory);
+  expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
+  const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  try {
+    await prepareSubagentSessionListReadCache();
+    const count = () =>
+      api.countActiveRunsForSession("agent:main:main", {
+        collect: false,
+        requesterAgentId: "main",
+      });
+    expect(count()).toBe(activeChildren);
+    expect(read.mock.calls.map(([, command]) => command.type)).toEqual(["subagents.sessionList"]);
+    const settled = createRun("active-0", { collect: false, requesterAgentId: "main" });
+    memory.set(settled.runId, settled);
+    expect(count()).toBe(activeChildren - 1);
+
+    const descendant = createRun("descendant", {
+      collect: false,
+      requesterSessionKey: settled.childSessionKey,
+      execution: { status: "running", startedAt: Date.now() },
+    });
+    memory.set(descendant.runId, descendant);
+    expect(count()).toBe(activeChildren);
+    memory.set(descendant.runId, {
+      ...descendant,
+      execution: { status: "terminal", endedAt: Date.now() },
+      cleanupCompletedAt: Date.now(),
+    });
+    expect(count()).toBe(activeChildren - 1);
+    memory.set(
+      "active-1",
+      createRun("active-1", {
+        collect: false,
+        controllerSessionKey: "agent:other:main",
+        execution: { status: "running", startedAt: Date.now() },
+      }),
+    );
+    expect(count()).toBe(activeChildren - 2);
+  } finally {
+    read.mockRestore();
+  }
+});
+
+it("keeps live alias changes authoritative", async () => {
+  const direct = createRun("collector");
+  const replacement = createRun("replacement", { swarmRunId: "collector", createdAt: 300 });
+  const promoted = createRun("promoted", { swarmRunId: "other", createdAt: 200 });
+  saveSubagentRegistryToSqlite(
+    new Map([direct, promoted, replacement].map((row) => [row.runId, row])),
+  );
+  const moved = { ...replacement, swarmRunId: "different-collector" };
+  const memory = subagentRuns;
+  memory.set(moved.runId, moved);
+  const api = createReadApi(memory);
+
+  const original = await api.prepareSubagentRunsByRunIds(["collector"]);
+  expect(original.consume((selected) => selected.get("collector")?.runId)).toEqual({
+    ready: true,
+    value: "collector",
   });
 
-  it("keeps live alias changes authoritative", async () => {
-    await withPersistedReads(async () => {
-      const direct = createRun("collector");
-      const replacement = createRun("replacement", { swarmRunId: "collector", createdAt: 300 });
-      saveSubagentRegistryToSqlite(new Map([direct, replacement].map((row) => [row.runId, row])));
-      const moved = { ...replacement, swarmRunId: "different-collector" };
-      const memory = new Map<string, SubagentRunRecord>([[moved.runId, moved]]);
-      const api = createReadApi(memory);
+  const live = createRun("live", { swarmRunId: "collector", execution: { status: "queued" } });
+  memory.set(live.runId, live);
+  const current = await api.prepareSubagentRunsByRunIds(["collector"]);
+  expectSelected(current, live);
+  const different = await api.prepareSubagentRunsByRunIds(["different-collector"]);
+  expectSelected(different, moved, "different-collector");
 
-      const first = api.getSubagentRunsByRunIds(["collector"]).entries.get("collector")!;
-      expect(first.runId).toBe("collector");
-
-      const live = createRun("live", { swarmRunId: "collector", execution: { status: "queued" } });
-      memory.set(live.runId, live);
-      expect(api.getSubagentRunsByRunIds(["collector"]).entries.get("collector")).toBe(live);
-      expect(
-        api.getSubagentRunsByRunIds(["different-collector"]).entries.get("different-collector"),
-      ).toBe(moved);
-    });
+  memory.set(moved.runId, { ...moved, swarmRunId: "collector" });
+  expectSelected(current, live);
+  memory.delete(live.runId);
+  expect(current.consume((selected) => selected.get("collector")?.runId)).toEqual({
+    ready: true,
+    value: "replacement",
   });
-
-  it("refreshes physical rows replaced or deleted after another reader cached their aliases", async () => {
-    await withPersistedReads(async () => {
-      const previous = createRun("previous", { swarmRunId: "collector" });
-      saveSubagentRegistryToSqlite(new Map([[previous.runId, previous]]));
-      getSubagentSessionListRunsSnapshotForRead(new Map());
-
-      // A direct store write models another process without publishing local cache updates.
-      const replacement = createRun("replacement", {
-        swarmRunId: "collector",
-        createdAt: 300,
-        swarmRequesterSessionKey: "agent:other:main",
-      });
-      saveSubagentRegistryToSqlite(new Map([[replacement.runId, replacement]]));
-      const api = createReadApi();
-      expect(api.getSubagentRunsByRunIds(["collector"]).entries.get("collector")).toMatchObject({
-        runId: "replacement",
-        swarmRequesterSessionKey: "agent:other:main",
-      });
-
-      saveSubagentRegistryToSqlite(new Map());
-      expect(api.getSubagentRunsByRunIds(["collector"]).entries.size).toBe(0);
-    });
+  memory.clear();
+  // The live replacement disappeared; this read never hydrated its durable payload.
+  expect(current.consume((selected) => selected.get("collector")?.runId)).toEqual({
+    ready: false,
+  });
+  const durable = await api.prepareSubagentRunsByRunIds(["collector"]);
+  // A live move into the selection keeps the persisted row's original order.
+  // Appending all live selections would incorrectly make `promoted` win.
+  memory.set(promoted.runId, { ...promoted, swarmRunId: "collector" });
+  expect(durable.consume((selected) => selected.get("collector")?.runId)).toEqual({
+    ready: true,
+    value: "replacement",
   });
 });

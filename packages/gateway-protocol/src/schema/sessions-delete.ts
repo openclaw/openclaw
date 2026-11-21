@@ -42,7 +42,7 @@ export const PreservedSessionWorktreeSchema = closedObject({
   reason: WorktreePreservationReasonSchema,
 });
 
-/** Result returned after deleting a session and completing owned cleanup. */
+/** Durable deletion result; archivedOnly requests may acknowledge before owned worktree cleanup. */
 export const SessionsDeleteResultSchema = closedObject({
   ok: Type.Literal(true),
   key: NonEmptyString,

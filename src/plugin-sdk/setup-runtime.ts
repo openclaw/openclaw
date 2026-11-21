@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for channel setup wizards, prompts, and allowlist helpers.
- */
 export type { OpenClawConfig } from "../config/config.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createClackPrompter } from "../wizard/clack-prompter.js";

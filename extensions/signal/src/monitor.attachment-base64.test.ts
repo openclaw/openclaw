@@ -1,93 +1,54 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { SignalEventHandlerDeps } from "./monitor/event-handler.types.js";
-
-const signalRpcRequestMock = vi.hoisted(() => vi.fn());
-const saveMediaBufferMock = vi.hoisted(() => vi.fn());
-
-let capturedFetchAttachment: SignalEventHandlerDeps["fetchAttachment"] | undefined;
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
+import { expect, it, vi } from "vitest";
+import {
+  configureSignalToolResultTest,
+  installSignalToolResultTestHooks,
+  receiveSignalPayloads,
+  signalToolResultMocks,
+} from "./monitor.tool-result.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
     "openclaw/plugin-sdk/media-runtime",
   );
-  return {
-    ...actual,
-    saveMediaBuffer: saveMediaBufferMock,
-  };
+  return { ...actual, saveMediaBuffer: vi.fn(actual.saveMediaBuffer) };
 });
 
-vi.mock("./client-adapter.js", async () => {
-  const actual = await vi.importActual<typeof import("./client-adapter.js")>("./client-adapter.js");
-  return {
-    ...actual,
-    signalRpcRequest: signalRpcRequestMock,
-  };
-});
+installSignalToolResultTestHooks();
 
-vi.mock("./monitor/event-handler.js", () => ({
-  createSignalEventHandler: (deps: SignalEventHandlerDeps) => {
-    capturedFetchAttachment = deps.fetchAttachment;
-    return async () => {};
-  },
-}));
-
-vi.mock("./signal-ingress.js", () => ({
-  startSignalIngressMonitor: async () => ({
-    receive: async () => {},
-    stop: async () => {},
-  }),
-}));
-
-vi.mock("./sse-reconnect.js", () => ({
-  runSignalSseLoop: async () => {},
-}));
-
-const { monitorSignalProvider } = await import("./monitor.js");
-
-const config = {
-  channels: {
-    signal: {
-      transport: { kind: "external-native", url: "http://127.0.0.1:8080" },
-      dmPolicy: "open",
-      allowFrom: ["*"],
-    },
-  },
-} satisfies OpenClawConfig;
-
-function requireCapturedFetchAttachment(): SignalEventHandlerDeps["fetchAttachment"] {
-  if (!capturedFetchAttachment) {
-    throw new Error("expected monitor to configure fetchAttachment");
-  }
-  return capturedFetchAttachment;
-}
-
-describe("Signal attachment fetch", () => {
-  beforeEach(() => {
-    capturedFetchAttachment = undefined;
-    signalRpcRequestMock.mockReset();
-    saveMediaBufferMock.mockReset().mockResolvedValue({
-      path: "/tmp/signal-attachment.png",
-      contentType: "image/png",
-    });
+it("reports malformed base64 attachments unavailable without writing media", async () => {
+  const { replyMock, signalRpcRequestMock, sendMock } = signalToolResultMocks;
+  configureSignalToolResultTest({ autoStart: false }, { visibleReplies: "automatic" });
+  replyMock.mockResolvedValue({ text: "ok" });
+  sendMock.mockResolvedValue({ messageId: "1700000000002" });
+  signalRpcRequestMock.mockResolvedValue({
+    data: "iVBORw0KGgoAAAANSUhE%%%UgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2Nk+M/wHwAF/gL+M6Q10QAAAABJRU5ErkJggg==",
   });
 
-  it("rejects malformed base64 attachment data", async () => {
-    signalRpcRequestMock.mockResolvedValue({
-      data: "iVBORw0KGgoAAAANSUhE%%%UgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIW2Nk+M/wHwAF/gL+M6Q10QAAAABJRU5ErkJggg==",
-    });
+  vi.mocked(saveMediaBuffer).mockClear();
 
-    await monitorSignalProvider({ config, autoStart: false });
-    const fetchAttachment = requireCapturedFetchAttachment();
-
-    await expect(
-      fetchAttachment({
-        baseUrl: "http://127.0.0.1:8080",
-        attachment: { id: "attachment-123", contentType: "image/png" },
-        sender: "+15550001111",
-        maxBytes: 8 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("Signal attachment attachment-123 returned malformed base64 data");
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  await receiveSignalPayloads({
+    payloads: [
+      {
+        envelope: {
+          sourceNumber: "+15550001111",
+          timestamp: 1,
+          dataMessage: {
+            message: "read attachment",
+            attachments: [{ id: "attachment-123", contentType: "image/png" }],
+          },
+        },
+      },
+    ],
   });
+
+  expect(signalRpcRequestMock).toHaveBeenCalledWith(
+    "getAttachment",
+    { id: "attachment-123", recipient: "+15550001111" },
+    expect.anything(),
+  );
+  expect(replyMock).toHaveBeenCalledOnce();
+  expect(replyMock.mock.calls[0]?.[0]?.BodyForAgent).toContain("[signal attachment unavailable]");
+  expect(replyMock.mock.calls[0]?.[0]?.media?.[0]?.path).toBeUndefined();
+  expect(saveMediaBuffer).not.toHaveBeenCalled();
 });

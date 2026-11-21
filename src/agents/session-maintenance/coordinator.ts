@@ -1,17 +1,26 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import {
+  getSessionControllerEntryForOperation,
+  isCurrentSessionControllerOperation,
+} from "../../sessions/session-controller.identity.js";
+import {
+  sessionTargetOwnersMatch,
+  type SessionTarget,
+} from "../../sessions/session-controller.target.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withoutGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 
 type MaintenanceOwner = {
-  sequence: number;
-  lifecycleGeneration: string;
   controller: AbortController;
   done: Promise<void>;
   writesDone: Promise<void>;
@@ -19,28 +28,16 @@ type MaintenanceOwner = {
   predecessors: readonly MaintenanceOwner[];
   preemptible: boolean;
   running: boolean;
+  target?: SessionTarget;
 };
 type SessionMaintenance = {
   owners: Set<MaintenanceOwner>;
   foreground: number;
   wake: Set<() => void>;
 };
-const log = createSubsystemLogger("agents/session-maintenance");
-function recordPhase(sessionKey: string, owner: MaintenanceOwner, phase: string): void {
-  if (owner.preemptible) {
-    log.debug("session maintenance lifecycle", {
-      event: "session_maintenance",
-      phase,
-      sessionKey,
-      maintenanceId: owner.sequence,
-      lifecycleGeneration: owner.lifecycleGeneration,
-    });
-  }
-}
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionMaintenance"),
   () => ({
-    sequence: 0,
     sessions: new Map<string, SessionMaintenance>(),
     current: new AsyncLocalStorage<ReadonlySet<MaintenanceOwner>>(),
   }),
@@ -97,10 +94,27 @@ registerAgentEventLifecycleRotationHandler("session-maintenance", () => {
   }
 });
 
+function waitsForCurrentTurn(owner: MaintenanceOwner): boolean {
+  if (owner.running || !owner.target) {
+    return false;
+  }
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation || !isCurrentSessionControllerOperation(operation)) {
+    return false;
+  }
+  const entry = getSessionControllerEntryForOperation(operation);
+  return Boolean(
+    entry.target &&
+    entry.aliases.has(owner.target.sessionKey) &&
+    sessionTargetOwnersMatch(entry.target, owner.target),
+  );
+}
+
 /** Tracks a producer's real completion; cancellation never releases a writer early. */
 export function createSessionMaintenanceOwner(params: {
   sessionKey: string;
   preemptible?: boolean;
+  target?: SessionTarget;
   abortSignal?: AbortSignal;
 }) {
   const key = params.sessionKey.trim();
@@ -113,22 +127,14 @@ export function createSessionMaintenanceOwner(params: {
     getGatewayRestartDrainSignal(),
     ...(params.abortSignal ? [params.abortSignal] : []),
   ]);
-  let finish = () => {};
-  const done = new Promise<void>((resolve) => {
-    finish = resolve;
-  });
-  let finishWrites = () => {};
-  const writesDone = new Promise<void>((resolve) => {
-    finishWrites = resolve;
-  });
+  const { promise: done, resolve: finish } = createDeferredCore();
+  const { promise: writesDone, resolve: finishWrites } = createDeferredCore();
   const releaseWrites = () => {
     owner.writesReleased = true;
     owner.predecessors = [];
     finishWrites();
   };
   const owner: MaintenanceOwner = {
-    sequence: state.sequence++,
-    lifecycleGeneration: generation,
     controller,
     done,
     writesDone,
@@ -136,9 +142,9 @@ export function createSessionMaintenanceOwner(params: {
     predecessors: independentOwners(session, ancestors),
     preemptible: params.preemptible === true,
     running: params.preemptible !== true,
+    target: params.target,
   };
   session.owners.add(owner);
-  recordPhase(key, owner, "pending");
   const assertCurrent = () => {
     signal.throwIfAborted();
     assertAgentRunLifecycleGenerationCurrent(generation);
@@ -151,15 +157,16 @@ export function createSessionMaintenanceOwner(params: {
     done,
     assertCurrent,
     releaseWrites,
-    run: async <T>(run: () => Promise<T>): Promise<T> => {
+    run: async <T>(
+      work:
+        | (() => Promise<T>)
+        | { admit: (run: (work: () => Promise<T>) => Promise<T>) => Promise<T> },
+    ): Promise<T> => {
       // Waiting on successors would make nested model reads mutually await sibling work.
       await Promise.all(owner.predecessors.map((predecessor) => predecessor.writesDone));
       if (owner.preemptible) {
         while (session.foreground > 0) {
-          let wake = () => {};
-          const available = new Promise<void>((resolve) => {
-            wake = resolve;
-          });
+          const { promise: available, resolve: wake } = createDeferredCore();
           session.wake.add(wake);
           try {
             await racePromiseWithAbortSignal(available, signal);
@@ -168,17 +175,27 @@ export function createSessionMaintenanceOwner(params: {
           }
         }
         assertCurrent();
-        owner.running = true;
-        recordPhase(key, owner, "started");
       }
-      // A maintenance model call and a coalesced child must not wait on their own parent.
-      return state.current.run(new Set([...ancestors, owner]), run);
+      const run = (execute: () => Promise<T>) => {
+        if (owner.preemptible) {
+          assertCurrent();
+          // Queued controller admission is not a writer that its current turn must drain.
+          owner.running = true;
+        }
+        // Maintenance owns this session's work, never its launching turn's tool grants.
+        return withoutGatewayToolCallerIdentity(() =>
+          runOutsideOperatorToolGatewayAuthority(() =>
+            // Nested model reads must not wait on their own maintenance parent.
+            state.current.run(new Set([...ancestors, owner]), execute),
+          ),
+        );
+      };
+      return typeof work === "function" ? run(work) : work.admit(run);
     },
     track: <T>(work: Promise<T>): Promise<T> =>
       work.finally(() => {
         releaseWrites();
         session.owners.delete(owner);
-        recordPhase(key, owner, "settled");
         finish();
         releaseSessionState(key, session);
       }),
@@ -211,12 +228,9 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
   const existing = independentOwners(session, current);
   const optional = existing.filter((owner) => owner.preemptible);
   for (const owner of optional) {
-    recordPhase(key, owner, "foreground_preemption_requested");
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));
   }
-  await Promise.all(
-    existing.filter((owner) => owner.running || owner.preemptible).map((owner) => owner.done),
-  );
+  await Promise.all(existing.map((owner) => owner.done));
   return release;
 }
 
@@ -224,8 +238,14 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
 export async function waitForSessionMaintenance(sessionKey?: string): Promise<void> {
   const session = sessionKey ? state.sessions.get(sessionKey.trim()) : undefined;
   const current = state.current.getStore();
+  const blocked = new Set(current);
+  for (const owner of session?.owners ?? []) {
+    if (waitsForCurrentTurn(owner)) {
+      blocked.add(owner);
+    }
+  }
   await Promise.all(
-    independentOwners(session, current)
+    independentOwners(session, blocked)
       .filter((owner) => owner.running || session?.foreground === 0)
       .map((owner) => (current?.size ? owner.writesDone : owner.done)),
   );

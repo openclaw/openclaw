@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { decodeWorkerRequest } from "./protocol-record.js";
 
 const Identifier = z
   .string()
@@ -11,17 +12,14 @@ const Identity = z.object({
   preparationKey: z.string().regex(/^[a-f0-9]{64}$/u),
   cacheKey: z.string().regex(/^[a-f0-9]{64}$/u),
 });
+const WorkspacePath = z
+  .string()
+  .min(1)
+  .max(4_096)
+  .refine((value) => !value.includes("\0"));
 const Paths = z.object({
-  workspaceDir: z
-    .string()
-    .min(1)
-    .max(4_096)
-    .refine((value) => !value.includes("\0")),
-  homeDir: z
-    .string()
-    .min(1)
-    .max(4_096)
-    .refine((value) => !value.includes("\0")),
+  workspaceDir: WorkspacePath,
+  homeDir: WorkspacePath,
   sourceManifestRef: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
   preparedManifestRef: z.string().regex(/^sha256:[a-f0-9]{64}$/u),
 });
@@ -47,15 +45,7 @@ export type NodeWorkerPreparedWorkspaceResult = z.infer<typeof Result>;
 export function parseNodeWorkerPreparedWorkspaceInput(
   raw?: string | null,
 ): NodeWorkerPreparedWorkspaceInput {
-  if (!raw || Buffer.byteLength(raw, "utf8") > 16 * 1_024) {
-    throw new Error("INVALID_REQUEST: invalid prepared workspace request");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed prepared workspace request");
-  }
+  const value = decodeWorkerRequest(raw, 16 * 1_024, "prepared workspace");
   const parsed = Input.safeParse(value);
   if (!parsed.success) {
     throw new Error("INVALID_REQUEST: invalid prepared workspace request");
@@ -66,6 +56,5 @@ export function parseNodeWorkerPreparedWorkspaceInput(
 export function parseNodeWorkerPreparedWorkspaceResult(
   value: unknown,
 ): NodeWorkerPreparedWorkspaceResult | undefined {
-  const parsed = Result.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return Result.safeParse(value).data;
 }

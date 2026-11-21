@@ -1,4 +1,3 @@
-// Public Featherless provider plugin API exports.
 export {
   FEATHERLESS_BASE_URL,
   FEATHERLESS_DEFAULT_CONTEXT_WINDOW,
@@ -8,7 +7,7 @@ export {
   FEATHERLESS_DYNAMIC_CONTEXT_WINDOW,
   FEATHERLESS_DYNAMIC_MAX_TOKENS,
   buildFeatherlessCatalogModels,
+  buildFeatherlessProvider,
   isFeatherlessCatalogModelId,
 } from "./models.js";
 export { applyFeatherlessConfig } from "./onboard.js";
-export { buildFeatherlessProvider } from "./provider-catalog.js";

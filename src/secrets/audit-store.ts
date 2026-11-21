@@ -1,4 +1,5 @@
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { listSecretStoreEntries, readSecretStoreValue } from "./store/secret-store.js";
 
 export type PlaintextAssignment = {
@@ -7,17 +8,45 @@ export type PlaintextAssignment = {
   value: string;
 };
 
-export function findSecretStorePlaintextResidueFindings(params: {
+export async function findSecretStoreRedactedValueFindings(params: {
+  database: OpenClawStateDatabaseOptions;
+  excludeNames?: ReadonlySet<string>;
+}) {
+  const entries = await listSecretStoreEntries({
+    scope: { kind: "team" },
+    redactedOnly: true,
+    database: params.database,
+  });
+  return entries.flatMap((entry) => {
+    if (params.excludeNames?.has(entry.name)) {
+      return [];
+    }
+    return [
+      {
+        name: entry.name,
+        code: "PLACEHOLDER_VALUE" as const,
+        severity: "error" as const,
+        file: params.database.path ?? resolveOpenClawStateSqlitePath(params.database.env),
+        jsonPath: `secret_store_entries.${entry.name}`,
+        message: `Secret store entry "${entry.name}" contains a redaction placeholder and is unavailable. Run openclaw doctor --fix to repair a store-backed Gateway token; replace other entries with real credentials.`,
+      },
+    ];
+  });
+}
+
+export async function findSecretStorePlaintextResidueFindings(params: {
   assignments: PlaintextAssignment[];
   database: OpenClawStateDatabaseOptions;
-}): Array<{
-  code: "STORE_PLAINTEXT_RESIDUE";
-  severity: "warn";
-  file: string;
-  jsonPath: string;
-  message: string;
-}> {
-  const entries = listSecretStoreEntries({
+}): Promise<
+  Array<{
+    code: "STORE_PLAINTEXT_RESIDUE";
+    severity: "warn";
+    file: string;
+    jsonPath: string;
+    message: string;
+  }>
+> {
+  const entries = await listSecretStoreEntries({
     scope: { kind: "team" },
     database: params.database,
   });
@@ -26,7 +55,7 @@ export function findSecretStorePlaintextResidueFindings(params: {
   }
   const namesByValue = new Map<string, string[]>();
   for (const entry of entries) {
-    const result = readSecretStoreValue({
+    const result = await readSecretStoreValue({
       scope: { kind: "team" },
       name: entry.name,
       database: params.database,

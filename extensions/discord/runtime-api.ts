@@ -1,4 +1,3 @@
-// Discord API module exposes the plugin public contract.
 export { handleDiscordAction } from "./src/actions/runtime.js";
 export {
   isDiscordModerationAction,
@@ -36,11 +35,6 @@ export {
 } from "./src/resolve-channels.js";
 export { resolveDiscordUserAllowlist, type DiscordUserResolution } from "./src/resolve-users.js";
 export { setDiscordRuntime } from "./src/runtime.js";
-export type {
-  DiscordAllowList,
-  DiscordChannelConfigResolved,
-  DiscordGuildEntryResolved,
-} from "./src/monitor/allow-list.js";
 export {
   allowListMatches,
   isDiscordGroupAllowedByPolicy,
@@ -53,14 +47,16 @@ export {
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
+  type DiscordAllowList,
+  type DiscordChannelConfigResolved,
+  type DiscordGuildEntryResolved,
 } from "./src/monitor/allow-list.js";
 export type { DiscordMessageEvent, DiscordMessageHandler } from "./src/monitor/listeners.js";
 export { registerDiscordListener } from "./src/monitor/listeners.js";
 
 export { createDiscordMessageHandler } from "./src/monitor/message-handler.js";
 export { createDiscordNativeCommand } from "./src/monitor/native-command.js";
-export type { MonitorDiscordOpts } from "./src/monitor/provider.js";
-export { monitorDiscordProvider } from "./src/monitor/provider.js";
+export { monitorDiscordProvider, type MonitorDiscordOpts } from "./src/monitor/provider.js";
 
 export { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./src/monitor/threading.js";
 export {
@@ -74,12 +70,7 @@ export {
   registerGateway,
   unregisterGateway,
 } from "./src/monitor/gateway-registry.js";
-export {
-  clearPresences,
-  getPresence,
-  presenceCacheSize,
-  setPresence,
-} from "./src/monitor/presence-cache.js";
+export { clearPresences, getPresence, setPresence } from "./src/monitor/presence-cache.js";
 export {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
@@ -176,6 +167,7 @@ export {
   formatThreadBindingDurationLabel,
   getThreadBindingManager,
   listThreadBindingsBySessionKey,
+  listThreadBindingsBySessionKeyAsync,
   listThreadBindingsForAccount,
   reconcileAcpThreadBindingsOnStartup,
   resolveDiscordThreadBindingIdleTimeoutMs,
@@ -190,8 +182,11 @@ export {
   resolveThreadBindingsEnabled,
   resolveThreadBindingThreadName,
   setThreadBindingIdleTimeoutBySessionKey,
+  setThreadBindingIdleTimeoutBySessionKeyAsync,
   setThreadBindingMaxAgeBySessionKey,
+  setThreadBindingMaxAgeBySessionKeyAsync,
   unbindThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKeyAsync,
   type AcpThreadBindingReconciliationResult,
   type ThreadBindingManager,
   type ThreadBindingRecord,

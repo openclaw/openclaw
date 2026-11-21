@@ -1,5 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
-// Provides root logger helpers and themed terminal output.
 import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose } from "./global-state.js";
 import { writeRootConsoleLine } from "./logging/console.js";
@@ -23,67 +21,30 @@ function splitSubsystem(message: string) {
 }
 
 type LogMethod = "info" | "warn" | "error";
-type RuntimeMethod = "log" | "error";
-
-function logWithSubsystem(params: {
-  message: string;
-  runtime: RuntimeEnv;
-  runtimeMethod: RuntimeMethod;
-  runtimeFormatter: (value: string) => string;
-  loggerMethod: LogMethod;
-  subsystemMethod: LogMethod;
-}) {
-  const parsed = params.runtime === defaultRuntime ? splitSubsystem(params.message) : null;
+function logWithSubsystem(level: LogMethod, message: string, runtime: RuntimeEnv) {
+  const parsed = runtime === defaultRuntime ? splitSubsystem(message) : null;
   if (parsed) {
-    const method = expectDefined(
-      createSubsystemLogger(parsed.subsystem)[params.subsystemMethod],
-      "subsystem logger method",
-    );
-    method(parsed.rest);
+    createSubsystemLogger(parsed.subsystem)[level](parsed.rest);
     return;
   }
-  const formatted = params.runtimeFormatter(params.message);
-  if (params.runtime !== defaultRuntime || !writeRootConsoleLine(params.runtimeMethod, formatted)) {
-    params.runtime[params.runtimeMethod](formatted);
+  const runtimeMethod = level === "error" ? "error" : "log";
+  const formatted = theme[level](message);
+  if (runtime !== defaultRuntime || !writeRootConsoleLine(runtimeMethod, formatted)) {
+    runtime[runtimeMethod](formatted);
   }
-  getLogger()[params.loggerMethod](params.message);
+  getLogger()[level](message);
 }
 
-const info = theme.info;
-const warn = theme.warn;
-const danger = theme.error;
-
 export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "log",
-    runtimeFormatter: info,
-    loggerMethod: "info",
-    subsystemMethod: "info",
-  });
+  logWithSubsystem("info", message, runtime);
 }
 
 export function logWarn(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "log",
-    runtimeFormatter: warn,
-    loggerMethod: "warn",
-    subsystemMethod: "warn",
-  });
+  logWithSubsystem("warn", message, runtime);
 }
 
 export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) {
-  logWithSubsystem({
-    message,
-    runtime,
-    runtimeMethod: "error",
-    runtimeFormatter: danger,
-    loggerMethod: "error",
-    subsystemMethod: "error",
-  });
+  logWithSubsystem("error", message, runtime);
 }
 
 export function logDebug(message: string) {

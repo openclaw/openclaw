@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { resolveTelegramDirectPeerId, resolveTelegramSecurityDmRoute } from "./dm-session-key.js";
+import { resolveTelegramSecurityDmRoute } from "./dm-session-key.js";
 
 describe("Telegram DM session keys", () => {
-  it("prefers sender id and falls back to chat id", () => {
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777, senderId: 123456789 })).toBe(
-      "123456789",
-    );
-    expect(resolveTelegramDirectPeerId({ chatId: 777777777 })).toBe("777777777");
-  });
-
   it.each([
     {
       name: "named-account default fallback",

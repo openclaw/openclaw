@@ -1,22 +1,17 @@
 import type { Model } from "@openclaw/llm-core";
 import { describe, expect, it } from "vitest";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import {
   buildOpenAIResponsesCompactSystemMessage,
+  buildOpenAIResponsesParams,
   sanitizeOpenAICodexResponsesParams,
 } from "./openai-responses-params-internal.js";
 
-const reasoningModel = {
-  id: "gpt-5.6-luna",
+const reasoningModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 256_000,
-  maxTokens: 8_192,
-} satisfies Model<"openai-responses">;
+});
 
 describe("sanitizeOpenAICodexResponsesParams", () => {
   it.each([
@@ -77,5 +72,21 @@ describe("buildOpenAIResponsesCompactSystemMessage", () => {
       "Retain the conversation.",
     );
     expect(message.role).toBe("system");
+  });
+});
+
+describe("buildOpenAIResponsesParams reasoning summary", () => {
+  it.each([
+    [null, null],
+    [undefined, "auto"],
+  ] as const)("sends summary %s as %s", (reasoningSummary, expected) => {
+    const params = buildOpenAIResponsesParams(
+      reasoningModel,
+      { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
+      { reasoningEffort: "medium", reasoningSummary },
+    );
+
+    expect(params.reasoning).toEqual({ effort: "medium", summary: expected });
+    expect(params.include).toEqual(["reasoning.encrypted_content"]);
   });
 });

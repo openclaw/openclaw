@@ -5,6 +5,7 @@ import {
   validateComputerStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { computerRunOwner } from "../desktop/computer-owner.js";
+import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -20,10 +21,11 @@ function resolveComputerCaller(
 } {
   const { client, context, hasCurrentClientAuthority, sessionMutationCommitGuard } = options;
   const identity = client?.internal?.agentRuntimeIdentity;
+  const principal = client?.internal?.remoteIngressPrincipal;
   const discovery = purpose === "status" && client?.internal?.syntheticClient === true;
   if (
     !client ||
-    (!client.connId && !discovery) ||
+    (!client.connId && !principal && !discovery) ||
     (client.internal?.syntheticClient && !identity && !discovery)
   ) {
     throw new Error("Gateway computer requires an authenticated operator or admitted agent run");
@@ -36,10 +38,12 @@ function resolveComputerCaller(
   return {
     owner: identity
       ? computerRunOwner(identity.delegatedAuthority)
-      : JSON.stringify([discovery ? "discovery" : "operator", connId]),
+      : principal
+        ? JSON.stringify(["ingress", principal.bindingId])
+        : JSON.stringify([discovery ? "discovery" : "operator", connId]),
     signal,
     ...(!identity && !client.internal?.syntheticClient && client.connectionSignal
-      ? { ownerSignal: client.connectionSignal }
+      ? { ownerSignal: principal?.signal ?? client.connectionSignal }
       : {}),
     assertCurrent: () => {
       sessionMutationCommitGuard?.();
@@ -47,10 +51,10 @@ function resolveComputerCaller(
       if (client.invalidated || hasCurrentClientAuthority?.() === false) {
         throw new Error("Gateway computer requester authority is no longer current");
       }
+      if (principal && !hasCurrentPersonalGatewaySource(client, context)) {
+        throw new Error("Gateway computer requester grant is no longer current");
+      }
       if (identity && purpose === "invoke") {
-        if (context.validateAgentRuntimeApprovalAuthority?.(identity) !== true) {
-          throw new Error("Gateway computer agent run authority is no longer current");
-        }
         client.internal?.agentToolCaller?.assertCurrent?.();
       } else if (
         !client.internal?.syntheticClient &&
@@ -73,7 +77,7 @@ export const computerHandlers: GatewayRequestHandlers = {
       const caller = resolveComputerCaller(options, "status");
       caller.assertCurrent();
       const result = context.gatewayComputerService
-        ? await context.gatewayComputerService.status()
+        ? await context.gatewayComputerService.status(params)
         : { available: false, configured: false };
       caller.assertCurrent();
       respond(true, result);
