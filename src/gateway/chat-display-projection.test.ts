@@ -662,6 +662,30 @@ const terminal = (runId = "run-a") => ({
   details: { runId },
   __openclaw: { id: "terminal-" + runId, seq: 10, runId },
 });
+it("separates background deliveries from the yielded reply that actually stopped", () => {
+  const report = (runId: string, backgroundDelivery?: true) => ({
+    ...terminal(runId),
+    details: { runId, childRunId: "child-review", backgroundDelivery, error: "PRIVATE_DIAGNOSTIC" },
+  });
+  const rows = projectStable([
+    report("subagent-delivery-failure:child-review:1"),
+    report("batched-wake", true),
+    report("yielded-request"),
+    terminal("subagent-delivery-failure:user-supplied:1"),
+  ]);
+  expect(rows.map((row) => row.customType)).toEqual([
+    "subagent-delivery-failed",
+    "subagent-delivery-failed",
+    "run-failed-before-reply",
+    "run-failed-before-reply",
+  ]);
+  expect(rows.flatMap((row) => readRunFailureNotice(row)?.runId ?? [])).toEqual([
+    "yielded-request",
+    "subagent-delivery-failure:user-supplied:1",
+  ]);
+  expect(JSON.stringify(rows)).not.toContain("PRIVATE_DIAGNOSTIC");
+});
+
 it.each([undefined, "", "   ", "Desktop-specific failure details"])(
   "preserves shared failure text while projecting desktop notice %j",
   (desktopNotice) => {

@@ -536,8 +536,9 @@ contains more than the visible summary. To change models, use the model picker
 in the composer; retrying continues from the existing conversation without
 replaying the original request. Internal updates that return no answer keep their
 failed-run diagnostics without adding a retry notice to an already successful
-conversation. User-requested missing replies and actual provider or storage
-failures still show their failure notice.
+conversation. Open the work details to inspect a background result that could not
+be delivered. If the reply itself was waiting for that result and could not finish,
+its failure notice stays in the conversation, as it does for a provider or storage failure.
 
 Open **Panels**, then choose **Subagents** to inspect child runs, including swarm
 workers. **Details** also lists the conversation's subagents and opens a selected

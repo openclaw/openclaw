@@ -108,7 +108,19 @@ export function PreparedActivityRow(props: {
           {t(`chat.toolCards.${!props.activity.status ? "outcomeUnknown" : props.activity.status}`)}
         </span>
       </div>
-      <Show when={detail()}>{(text) => <div class="chat-tool-msg-body">{text()}</div>}</Show>
+      <Show when={detail()}>
+        {(text) => (
+          <div
+            class={
+              props.activity.kind === "subagent-delivery"
+                ? "chat-tool-card__block-content"
+                : "chat-tool-msg-body"
+            }
+          >
+            {text()}
+          </div>
+        )}
+      </Show>
     </div>
   );
 }

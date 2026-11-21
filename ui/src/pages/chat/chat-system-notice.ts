@@ -104,6 +104,7 @@ export function projectChatSystemNotice(
     endCause?: ChatPendingInputsPage["items"][number]["endCause"];
     retired?: NonNullable<Extract<ChatItem, { kind: "notice" }>["retiredPendingInput"]>;
   },
+  showToolCalls = true,
 ): ChatItem[] {
   const raw = asRecord(item.message);
   if (
@@ -133,6 +134,42 @@ export function projectChatSystemNotice(
         timestamp: (normalized ?? safeNormalizeMessage(item.message))?.timestamp ?? 0,
       },
     ];
+  }
+  if (raw?.role === "custom" && raw.customType === "subagent-delivery-failed") {
+    const title = t("chat.toolCards.backgroundResultDelivery");
+    const error = extractTextCached(item.message) ?? "";
+    // The work log owns these reports; hiding tools must not hide a retained result.
+    return showToolCalls
+      ? [
+          {
+            ...item,
+            message: {
+              ...raw,
+              content: [],
+              activity: [
+                {
+                  itemId: item.key,
+                  kind: "subagent-delivery",
+                  phase: "end",
+                  status: "failed",
+                  title,
+                  error,
+                },
+              ],
+            },
+          },
+        ]
+      : [
+          {
+            kind: "notice",
+            key: item.key,
+            text: error,
+            label: title,
+            collapsedBody: true,
+            systemEvent: "info",
+            timestamp: normalized?.timestamp ?? 0,
+          },
+        ];
   }
   if (raw?.role === "custom" && raw.customType === "session-model-change") {
     const details = asRecord(raw.details);
