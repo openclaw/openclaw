@@ -113,4 +113,73 @@ describe("standalone shell installers", () => {
       expect(policy.stdout).toBe("--no-frozen-lockfile\n");
     },
   );
+
+  it.each([
+    {
+      name: "--beta selects the beta tag",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 1,
+      npm: 'case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "v2026.11.6-beta.2",
+    },
+    {
+      name: "--beta without a requested version",
+      env: {},
+      useBeta: 1,
+      npm: 'case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "v2026.11.6-beta.2",
+    },
+    {
+      name: "no --beta keeps the latest tag",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 0,
+      npm: 'case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "v2026.11.5",
+    },
+    {
+      name: "--beta does not override a pinned version",
+      env: { OPENCLAW_VERSION: "2026.11.5" },
+      useBeta: 1,
+      npm: 'case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "v2026.11.5",
+    },
+    {
+      name: "branch requests pass through",
+      env: { OPENCLAW_VERSION: "somebranch" },
+      useBeta: 0,
+      npm: 'case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "somebranch",
+    },
+    {
+      name: "--beta falls back to latest when the beta tag is unavailable",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 1,
+      npm: 'case "${3:-}" in dist-tags.latest) echo 2026.11.5 ;; esac',
+      want: "v2026.11.5",
+    },
+    {
+      name: "--beta falls back to main when no dist-tag is resolvable",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 1,
+      npm: "",
+      want: "main",
+    },
+    {
+      name: "explicit --version beta keeps its literal meaning when unavailable",
+      env: { OPENCLAW_VERSION: "beta" },
+      useBeta: 0,
+      npm: "",
+      want: "beta",
+    },
+  ])("resolves the git install ref: $name", ({ env, useBeta, npm, want }) => {
+    const root = tempDirs.make("installer-git-ref-");
+    const probe = [
+      npm ? `installer_npm() { ${npm}; }` : "installer_npm() { return 1; }",
+      `source ${JSON.stringify(path.resolve("scripts/install-policy.sh"))}`,
+      "resolve_git_openclaw_ref",
+    ].join("\n");
+    const result = bash(root, ["-c", probe], { ...env, USE_BETA: String(useBeta) });
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(want);
+  });
 });
