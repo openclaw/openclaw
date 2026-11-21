@@ -5,6 +5,7 @@ import { Menu, type MenuEntry, type MenuItem } from "../../components/solid/menu
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
@@ -149,6 +150,25 @@ function SystemsInventory(props: { controller: Systems }) {
         );
       });
   });
+  let list: HTMLDivElement;
+  // A keyed move can blur the same button. Recover only a surviving row, not one filtered out.
+  createPendingFocus(
+    () => {
+      rows();
+      const button = list?.ownerDocument.activeElement;
+      return button instanceof HTMLButtonElement && list.contains(button) ? { button } : null;
+    },
+    {
+      requested: (target) =>
+        Boolean(
+          target &&
+          list.contains(target.button) &&
+          target.button.isConnected &&
+          target.button.ownerDocument.activeElement === target.button.ownerDocument.body,
+        ),
+      focus: (target) => target?.button.focus({ preventScroll: true }),
+    },
+  );
   const filterItem = (
     prefix: "sort" | "status",
     option: { value: string; labelKey: string },
@@ -274,7 +294,11 @@ function SystemsInventory(props: { controller: Systems }) {
           </Errored>
         )}
       </Show>
-      <div class="systems-sidebar__list" aria-busy={inventoryRead.pending() ? "true" : "false"}>
+      <div
+        ref={(element) => (list = element)}
+        class="systems-sidebar__list"
+        aria-busy={inventoryRead.pending() ? "true" : "false"}
+      >
         {inventoryRead.pending() && !controller().state.inventory ? (
           <p class="systems-sidebar__empty" role="status">
             {t("systems.loading")}
