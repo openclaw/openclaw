@@ -25,7 +25,7 @@ Bundled plugins. Same boundary as third-party plugins.
 - Native CLI runtimes (Claude Code, Codex, Copilot CLI, OpenCode): the CLI owns login, tokens and model menu. Read its status and menu; keep no token copies or static model tables.
 - Classify provider refusals by cause (model unavailable, free tier/funding, auth expired, quota) and name the next step. Model-level refusals never prompt re-sign-in or cool down the key.
 - Provider transport compat (`wrapStreamFn`, `buildReplayPolicy`, `normalizeToolSchemas`, `inspectToolSchemas`, payload patches): reuse a named shared `openclaw/plugin-sdk/*` family helper, never raw option bags or inline policy knobs (examples: OpenAI-style Anthropic tool payload compat, Gemini schema cleanup, XAI compat patch). Second copy: extract one helper and migrate both call sites in same change. Vendor attribution headers: one helper, on discovery and every transport.
-- Plugin work outliving originating caller/turn: active service-owned capability required. Never retain/extend caller-bound Gateway handles; revalidate service generation at effect boundary.
+- Plugin work outliving originating caller/turn: active service-owned capability required. Never retain/extend caller-bound Gateway handles. Check that the service is active when the deferred work starts.
 - Never eager global registry seeding/import-time side effects for plugin availability. Manifest ownership + targeted activation (`src/plugins/contracts/runtime-import-side-effects.contract.test.ts`).
 - Core hot-path plugin-owned static data: lightweight top-level artifact (`gateway-auth-api.ts`, `message-tool-api.ts`, similarly narrow `*-api.ts`). Artifact + full plugin reuse same local helper; fast paths must not drift from runtime behavior.
 

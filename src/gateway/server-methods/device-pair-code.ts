@@ -65,7 +65,7 @@ export const devicePairCodeHandlers: GatewayRequestHandlers = {
         // too, so enabling roles while approval is queued cannot mint an unusable grant.
         const assertPairingSupported = () => {
           authority.assertCurrent();
-          if (decision === "approve" && context.getRuntimeConfig().gateway?.roles) {
+          if (decision === "approve" && context.getRuntimeConfig().gateway?.roles?.default) {
             throw new Error(BROWSER_PAIR_IDENTITY_REQUIRED_MESSAGE);
           }
         };

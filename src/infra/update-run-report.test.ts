@@ -104,9 +104,40 @@ function render(patch: Partial<ReportRecord>) {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("labels standalone repair and leads with the update it repaired", () => {
+  const detail =
+    "Update 2b6f7c1e-9a41-4c2d-8f3e-5d6a7b8c9d0e to 2026.11.5 failed at activating: post-update-failed. finalize:doctor: database is locked";
+  const report = render({
+    after: { version: "2026.11.5" },
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "repairing", status: "completed" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expect(report.headline).toBe("✅ OpenClaw repair completed for 2026.11.5.");
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
+it("bounds the repaired update lead alongside long pending-repair guidance", () => {
+  const detail = "x".repeat(1024);
+  const report = render({
+    status: "skipped",
+    reason: "doctor-maintenance-pending",
+    origin: { nextAction: "Recovery instructions ".repeat(48) },
+    steps: [
+      { step: "repairing", status: "skipped" },
+      { step: "finalize:repaired-run", status: "completed", detail },
+    ],
+  });
+  expectChatBudget(report.markdown);
+  expectText(report.markdown, [report.headline, "Repaired update:"]);
+  expect(report.lines[0]).toBe(`Repaired update: ${detail}`);
+});
+
 it("reports repeated database-path advisories once across Doctor phases", () => {
   const detail =
-    "Skipped agent database path repair during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
+    "Skipped agent database path repair for 1 registration(s) during update Doctor. Run openclaw doctor --fix to repair agent database paths.";
   const report = render({
     steps: [
       { step: "warning:doctor", status: "completed", detail },
@@ -147,6 +178,26 @@ it.each([true, false])("bounds runtime guidance (saved=%s)", (saved) => {
   ]);
   expect(report.lines.join("\n")).toContain(action);
   expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
+});
+
+it("leads a fresh prerequisite refusal with its refusal block, not a saved one", () => {
+  const block =
+    "Update refused: openclaw@2026.11.9 needs Node >=24.22.1, but the Gateway service runs Node 24.20.0 at /n/node. No changes were made.\n1. Run `export OPENCLAW_PROFILE=work`.\n2. Run `nvm install 24.22.1 && nvm use 24.22.1`.";
+  const record = failed({
+    reason: "preflight-node-runtime-incompatible",
+    origin: { nextAction: `${block}\n\nFailing check node-runtime`, cause: "node-unsupported" },
+    steps: [failedStep("requested")],
+  });
+  const fresh = renderRecord(record, { nextAction: record.origin.nextAction });
+  const [headline, ...steps] = block.split("\n");
+  expect(fresh.headline).toBe(`⚠️ ${headline}`);
+  expect(fresh.lines).toEqual(steps);
+  expectText(fresh.markdown, [
+    "Reason code: preflight-node-runtime-incompatible",
+    "Cause: node-unsupported",
+  ]);
+  // Re-rendered history must not announce a fresh refusal after the host was repaired.
+  expect(renderRecord(record).headline).not.toContain("Update refused");
 });
 
 it.each([true, false])("separates saved and current health (responding=%s)", (responding) => {

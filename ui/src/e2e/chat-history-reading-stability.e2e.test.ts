@@ -87,9 +87,58 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await thread.getByText(/^Answer 190\./).waitFor();
-        // Read up to the boundary until the older page lands, then read on through it.
-        // Programmatic scrollTop steps stand in for touch and momentum movement.
-        const frames = await thread.evaluate(async (element, loaded) => {
+        // A mounted last row does not prove that the initial end placement has landed.
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const inner = element.querySelector(".chat-thread-inner");
+              return (
+                element.clientHeight > 0 &&
+                element.scrollHeight > element.clientHeight &&
+                Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop) <= 2 &&
+                inner !== null &&
+                getComputedStyle(inner).visibility === "visible"
+              );
+            }),
+          )
+          .toBe(true);
+        // Native input retires end-follow ownership. WebKit uses the explicit
+        // edge action rather than relying on a wheel animation through measured rows.
+        if (engine === "webkit") {
+          await thread.press("Home");
+        } else {
+          await thread.hover();
+          await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+        }
+        await expect
+          .poll(() =>
+            thread.evaluate((element) => {
+              const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
+                state: { chatMessages: unknown[] };
+              };
+              // State can contain the prefix while active scrolling still holds the old
+              // rendered window. Wait for retained rows to acquire their prepended indexes.
+              const prefixCommitted = [
+                ...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]"),
+              ].some((bubble) => {
+                const match = /(?:Question|Answer) (\d+)[?.]/.exec(bubble.textContent ?? "");
+                const sequence = match ? Number(match[1]) : 0;
+                return (
+                  sequence >= 161 &&
+                  Number(bubble.closest<HTMLElement>(".chat-virtual-row")?.dataset.index) ===
+                    sequence - 1
+                );
+              });
+              return {
+                messageCount: pane.state.chatMessages.length,
+                prefixCommitted,
+                readingRunwayReady: element.scrollTop > 240 * 24,
+              };
+            }),
+          )
+          .toEqual({ messageCount: LOADED, prefixCommitted: true, readingRunwayReady: true });
+        // Programmatic steps now sample reading through the loaded history.
+        const frames = await thread.evaluate(async (element) => {
           const pane = element.closest(".chat-pane-cache__pane--active") as HTMLElement & {
             state: { chatMessages: unknown[] };
           };
@@ -144,21 +193,7 @@ suite.define(() => {
               fonts: document.fonts.status,
             };
           };
-          const boundaries = [{ stage: "before-loading", geometry: snapshot() }];
-          for (let round = 0; round < 20 && pane.state.chatMessages.length < loaded; round++) {
-            for (
-              let step = 0;
-              step < 400 && element.scrollTop > 0 && pane.state.chatMessages.length < loaded;
-              step++
-            ) {
-              element.scrollTop -= 400;
-              await nextFrame();
-            }
-            await wait(400);
-          }
-          boundaries.push({ stage: "model-loaded", geometry: snapshot() });
-          await wait(600);
-          boundaries.push({ stage: "measurement-entry", geometry: snapshot() });
+          const boundaries = [{ stage: "measurement-entry", geometry: snapshot() }];
           const tops = () =>
             new Map(
               [...element.querySelectorAll<HTMLElement>(".chat-bubble[data-message-id]")].map(
@@ -217,7 +252,7 @@ suite.define(() => {
             residuals,
             diagnostic: { boundaries, samples },
           };
-        }, LOADED);
+        });
         console.info(
           "history-reading-geometry",
           JSON.stringify({ engine, width, ...frames.diagnostic }),

@@ -32,7 +32,7 @@ import {
   writeScreenRecordToFile,
 } from "../nodes-screen.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
-import { runNodesCommand, getNodesTheme } from "./cli-utils.js";
+import { runNodesCommand, runNodesReadCommand, getNodesTheme } from "./cli-utils.js";
 import { isNodesMachineOutput } from "./output-mode.js";
 import { registerNodesPairingCommands } from "./register.pairing.js";
 import { registerNodesStatusCommands } from "./register.status.js";
@@ -237,7 +237,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
       .description("List available cameras on a node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("camera list", async () => {
+        await runNodesReadCommand("camera list", async (signal) => {
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
           const raw = await callNodesGatewayCli(
             "node.invoke",
@@ -247,6 +247,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
               command: "camera.list",
               params: {},
             }),
+            { signal },
           );
 
           const payload = asRecord(asRecord(raw).payload);
@@ -554,7 +555,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
       .option("--location-timeout <ms>", "Location fix timeout (ms)", "10000")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("location get", async () => {
+        await runNodesReadCommand("location get", async (signal) => {
           const desiredAccuracyRaw = normalizeOptionalLowercaseString(opts.accuracy);
           const desiredAccuracy =
             desiredAccuracyRaw === "coarse" ||
@@ -581,7 +582,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
             timeoutMs: invokeTimeoutMs,
           });
 
-          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams);
+          const raw = await callNodesGatewayCli("node.invoke", opts, invokeParams, { signal });
           const payload = asRecord(asRecord(raw).payload);
 
           if (opts.json) {

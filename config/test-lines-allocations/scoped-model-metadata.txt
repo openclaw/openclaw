@@ -1,2 +1,0 @@
-# Agent-scoped metadata publications preserve unrelated catalog/auth reads and pending discovery settlement.
-125

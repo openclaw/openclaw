@@ -66,14 +66,12 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   font-weight: 500;
 }
 
-.openclaw-id-setup__status details,
-.openclaw-id-steps__message details {
+.openclaw-id-setup__status details {
   margin-top: 2px;
   color: var(--muted);
 }
 
-.openclaw-id-setup__status summary,
-.openclaw-id-steps__message summary {
+.openclaw-id-setup__status summary {
   width: max-content;
   cursor: var(--cursor-action);
 }
@@ -209,41 +207,63 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 }
 
 .openclaw-id-linking__title {
-  min-height: 40px;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
 
+.openclaw-id-linking__title.is-error {
+  color: var(--danger);
+}
+
 .openclaw-id-steps {
   display: grid;
-  gap: 2px;
   margin: 14px 0 0;
-  padding: 0;
+  padding: 4px 0;
   list-style: none;
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .openclaw-id-steps__item {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: start;
-  gap: 10px;
-  padding-block: 6px;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+  column-gap: 12px;
+  min-height: 38px;
+  padding: 0 8px 0 14px;
+  color: var(--text);
   font-size: var(--control-ui-text-sm);
   line-height: 18px;
-  overflow-wrap: anywhere;
 }
 
 .openclaw-id-steps__item[data-state="waiting"] {
   color: var(--muted);
 }
 
-.openclaw-id-steps__mark {
-  display: flex;
-  justify-content: center;
+.openclaw-id-steps__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.openclaw-id-steps__mark,
+.openclaw-id-steps__info {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
   color: var(--muted);
-  height: 18px;
-  align-items: center;
+}
+
+.openclaw-id-steps__item[data-state="waiting"] .openclaw-id-steps__mark {
+  opacity: 0.55;
 }
 
 .openclaw-id-steps__mark svg,
@@ -269,12 +289,52 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   color: var(--warn);
 }
 
-.openclaw-id-steps__message {
-  margin-top: 2px;
-  color: var(--muted);
+.openclaw-id-steps__info {
+  color: inherit;
+  cursor: var(--cursor-action);
+  transition: background 140ms ease;
+}
+
+.openclaw-id-steps__info:hover,
+.openclaw-id-steps__info:focus-visible,
+.openclaw-id-steps__tooltip[open] .openclaw-id-steps__info {
+  background: color-mix(in srgb, currentColor 13%, transparent);
+}
+
+.openclaw-id-steps__info:focus-visible {
+  outline: 2px solid color-mix(in srgb, currentColor 55%, transparent);
+  outline-offset: 1px;
+}
+
+.openclaw-id-steps__tooltip {
+  --openclaw-tooltip-max-width: min(292px, calc(100dvw - 16px));
+  --openclaw-tooltip-padding: 8px 10px;
+  --openclaw-tooltip-border-radius: 10px;
+  --openclaw-tooltip-background-color: var(--popover);
+  --openclaw-tooltip-shadow: 0 0 0 1px var(--border), 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+.openclaw-id-steps__tip {
+  display: grid;
+  gap: 5px;
+  color: var(--text);
   font-size: var(--control-ui-text-xs);
+  font-weight: 400;
   line-height: 17px;
   text-wrap: pretty;
+}
+
+.openclaw-id-steps__tip code {
+  display: block;
+  max-height: 112px;
+  padding: 0;
+  overflow: auto;
+  background: none;
+  color: var(--muted);
+  font: 11px/16px var(--mono);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  scrollbar-width: thin;
 }
 
 .openclaw-id-setup__spinner {
@@ -294,8 +354,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   }
 }
 
-.openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__mark,
-.openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__message {
+.openclaw-id-steps__item[data-state="failed"] .openclaw-id-steps__mark {
   color: var(--danger);
 }
 
@@ -312,8 +371,7 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
   animation: openclaw-id-setup-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.openclaw-id-setup__status.is-in > *,
-.openclaw-id-steps__message.is-in {
+.openclaw-id-setup__status.is-in > * {
   animation: openclaw-id-setup-in 200ms ease both;
 }
 
@@ -343,7 +401,6 @@ openclaw-modal-dialog.openclaw-id-setup-dialog {
 
   .openclaw-id-setup__enter,
   .openclaw-id-setup__status.is-in > *,
-  .openclaw-id-steps__message.is-in,
   .openclaw-id-steps__mark.chg {
     animation-duration: 0.01ms !important;
     animation-delay: 0.01ms !important;

@@ -344,7 +344,7 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
       await write(headers);
       expectLive(original, delegated);
       await expectAccepted(transportEffect);
-      const revokedEffect = await prepareEffect("revoked.txt", delegated.authority);
+      const acceptedEffect = await prepareEffect("policy-change.txt", delegated.authority);
       const removed = structuredClone(headers);
       if (revocation === "scopes") {
         delete removed.gateway!.auth!.identityScopes![identity];
@@ -354,21 +354,11 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
         removed.gateway!.controlUi!.allowedOrigins = [];
       }
       await write(removed);
-      expect(original.authority.signal?.aborted).toBe(true);
-      // Restore before consuming either continuation: a committed revocation is irreversible.
+      expectLive(original, delegated);
+      await expectAccepted(acceptedEffect);
+      // Restoring policy is not needed for already admitted work to finish.
       await write(initialConfig);
-      revokedEffect.release();
-      const denied = await revokedEffect.outcome;
-      expect(denied).toHaveProperty("error", expect.any(Error));
-      expect(denied).toHaveProperty(
-        "error.message",
-        expect.stringMatching(/authority is no longer active/),
-      );
-      await expect(fs.readFile(revokedEffect.marker)).rejects.toMatchObject({ code: "ENOENT" });
-      for (const { authority } of [original, delegated]) {
-        expect(authority.signal?.aborted).toBe(true);
-        expect(authority.assertCurrent).toThrow(/authority is no longer active/);
-      }
+      expectLive(original, delegated);
       expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
     } finally {

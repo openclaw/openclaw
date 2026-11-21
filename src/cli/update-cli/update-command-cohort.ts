@@ -62,11 +62,8 @@ export async function createUpdateCommandRollbackCapture(
   const previous = await readPackageUpdateIdentity(execution.root);
   assertCurrent();
   let candidate: Awaited<ReturnType<typeof readPackageUpdateIdentity>> | undefined;
-  let targetVersion = execution.packageTargetVersion;
+  const targetVersion = execution.packageTargetVersion;
   return {
-    selectTargetVersion(version: string | undefined) {
-      targetVersion = version;
-    },
     async observeCandidate(root: string) {
       candidate = await readPackageUpdateIdentity(root);
       assertCurrent();
@@ -91,7 +88,7 @@ export async function createUpdateCommandRollbackCapture(
           execution.packageUpdateNodeRunner ??
           process.execPath,
       };
-      await beginUpdatePluginCohort({
+      const pair = await beginUpdatePluginCohort({
         runId: run.runId,
         env: context?.env ?? run.env,
         fence,
@@ -101,12 +98,19 @@ export async function createUpdateCommandRollbackCapture(
       });
       assertCurrent();
       // Reservation writes share the state database; capture their settled generation.
-      return await captureUpdateDatabases({
+      const captured = await captureUpdateDatabases({
         transaction,
         execution,
         context,
         assertCurrent,
       });
+      if (captured.backup) {
+        captured.backup.pluginCohortRecovery = {
+          runId: pair.cohort.runId,
+          transactionId: pair.cohort.transactionId,
+        };
+      }
+      return captured;
     },
   };
 }

@@ -1,5 +1,5 @@
 export const delegatedProfileAuthority = "oce";
-export const delegatedUserSubjectPrefix = `${delegatedProfileAuthority}:v1:`;
+const delegatedUserSubjectPrefix = `${delegatedProfileAuthority}:v1:`;
 
 /** Dotted providers cannot collide with Tailscale's email-ish provider aliases. */
 export const delegatedProfileProvider = `${delegatedProfileAuthority}.external`;

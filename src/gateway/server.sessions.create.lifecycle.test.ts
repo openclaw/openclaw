@@ -34,7 +34,6 @@ import {
   setupPersistentSessionCreateTestHarness,
   removeSessionWorktree,
   chatSendOwner,
-  sessionCreateRuntimeClient,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import * as sharingAuthorization from "./session-sharing-authorization-async.js";
@@ -226,17 +225,22 @@ test.for([
 
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   const category = "Deferred category";
-  let validations = 0;
-  const failed = await createSession(
-    { category, key: "agent:main:dashboard:failed-category-create" },
-    {
-      context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 3,
+  const bindCreation = vi.fn(() => {
+    throw new Error("session commit rejected");
+  });
+  await expect(
+    createSession(
+      { category, key: "agent:main:dashboard:failed-category-create" },
+      {
+        sessionMutationAuthorization: {
+          assertCurrent: vi.fn(),
+          assertTargetCurrent: vi.fn(),
+          bindCreation,
+        },
       },
-      client: sessionCreateRuntimeClient(["operator.write"]) as never,
-    },
-  );
-  expect(failed.ok).toBe(false);
+    ),
+  ).rejects.toThrow("session commit rejected");
+  expect(bindCreation).toHaveBeenCalledOnce();
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
   const broadcastToConnIds = vi.fn();
   const created = await createSession(

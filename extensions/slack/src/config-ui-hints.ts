@@ -2,10 +2,10 @@ import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 const observedGroupHistoryHint = {
-  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+  help: "Automatic observed-message context uses a default of 50 and a maximum of 200 messages; 0 disables automatic injection. The JSON integer maximum selects the 50-message default. Chat history trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
 const observedDmHistoryHint = {
-  help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Session transcript trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
+  help: "Automatic observed-DM context uses a default of 0 and a maximum of 200 messages; 0 disables that extra context. The JSON integer maximum selects the 0-message default. Chat history trimming separately counts user turns, where 0 means no trimming. The observed-message cap does not rewrite saved values.",
 };
 const botThreadMentionHint = {
   label: "Require Mention in Bot Threads",
@@ -176,7 +176,7 @@ export const slackChannelConfigUiHints = {
   },
   "thread.inheritParent": {
     label: "Slack Thread Parent Inheritance",
-    help: "If true, Slack thread sessions inherit the parent channel transcript (default: false).",
+    help: "If true, Slack thread sessions inherit the parent channel chat history (default: false).",
   },
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",

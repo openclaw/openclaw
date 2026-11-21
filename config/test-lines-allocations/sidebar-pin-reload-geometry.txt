@@ -1,2 +1,0 @@
-78
-# Preserve pin and collapsed-parent disclosure geometry through native warm reload.

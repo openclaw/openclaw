@@ -20,7 +20,12 @@ import {
   providerDisplayLabel,
   type ProviderPresentation,
 } from "../../components/provider-icon-data.ts";
-import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import {
+  listSelectableAgents,
+  normalizeAgentLabel,
+  resolveAgentConfig,
+  resolveAgentModelPrimary,
+} from "../../lib/agents/display.ts";
 import {
   canonicalModelAuthProviderId,
   isMonitoredAuthProvider,
@@ -47,6 +52,7 @@ export type ModelProviderRemovalTarget = { provider: string; credentialType?: "a
 /** One account's sign-out, or a provider removal with its displayed credential scope. */
 export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { target: ModelProviderLogoutTarget }
+  | { removeConfigKey: string; defaultModels?: string }
   | {
       removeTargets: ModelProviderRemovalTarget[];
       keptSource?: string;
@@ -59,8 +65,10 @@ export type ModelProviderPendingLogout = { cardId: string; label: string } & (
 export type ModelProviderCard = ProviderPresentation & {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
-  /** Exact config map key; provider ids are otherwise normalized for display/runtime use. */
+  /** Preferred entry for presentation and key edits, not a provider-removal target. */
   configKey?: string;
+  /** Exact entries on this card, including aliases without credentials. */
+  configKeys: string[];
   configAuthMode?: string;
   apiKeySupported?: boolean;
   /** Provider ids that own credentials merged into this card. */
@@ -144,6 +152,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       profileOrderLocks: {},
       credentialProviderIds: [],
       logoutTargets: [],
+      configKeys: [],
       configApiKeys: [],
       modelCount: 0,
       availableModelCount: 0,
@@ -215,6 +224,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     if (!card) {
       continue;
     }
+    card.configKeys.push(provider.key);
     card.configKey ??= provider.key;
     if (provider.hasApiKey) {
       card.configKey = provider.key;
@@ -582,6 +592,32 @@ export function buildUnconfiguredProviderOptions(
   return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
+export type AgentUtilityOverride = {
+  agentId: string;
+  label: string;
+  /** Own primary; "" disables utility for the agent, undefined inherits the default primary. */
+  model: string | undefined;
+  fallbacks: string[];
+};
+
+/**
+ * Agents with their own utilityModel primary or fallbacks. An explicit empty fallback
+ * chain without a primary is not listed (accepted: rare, and visible in raw config).
+ */
+export function listAgentUtilityOverrides(
+  configObject: Record<string, unknown> | null,
+  agents: AgentsListResult["agents"],
+): AgentUtilityOverride[] {
+  return agents.flatMap((agent) => {
+    const own = readModelSetting(resolveAgentConfig(configObject, agent.id).entry?.utilityModel);
+    const model = modelSettingPrimary(own);
+    const fallbacks = modelSettingFallbacks(own);
+    return model === undefined && fallbacks.length === 0
+      ? []
+      : [{ agentId: agent.id, label: normalizeAgentLabel(agent), model, fallbacks }];
+  });
+}
+
 /** Assembles admitted snapshots for the Models page without owning state or effects. */
 export function buildModelProviderPresentation(params: {
   configObject: Record<string, unknown> | null;
@@ -630,10 +666,15 @@ export function buildModelProviderPresentation(params: {
     agentLabel: selected ? normalizeAgentLabel(selected) : agentId,
     values: {
       configuredModels,
+      // Setup owns the page until this agent has a chosen model; an available catalog
+      // entry (for example a local model) is not a choice. Unloaded config is not "none".
+      modelRequired:
+        params.configObject !== null && !resolveAgentModelPrimary(params.configObject, agentId),
       defaultModels: defaults,
       decisionModels: catalog.decisionModels ?? [],
       authStatus: data.authStatus,
       automaticUtilityModel: catalog.defaultModels?.automaticUtilityModel,
+      utilityOverrides: listAgentUtilityOverrides(params.configObject, agents),
       utilityRuntime: catalog.defaultModels?.utilityRuntime,
       thinkingLevel: defaults.thinkingLevel,
       thinkingOverridden: defaults.thinkingOverridden,

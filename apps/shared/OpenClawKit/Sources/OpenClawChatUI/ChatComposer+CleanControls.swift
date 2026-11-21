@@ -14,7 +14,6 @@ extension OpenClawChatComposer {
         }
         .buttonStyle(.plain)
         .controlSize(.small)
-        .help("Add attachment")
         .accessibilityLabel("Attachments")
         .accessibilityIdentifier("chat-attachment-picker")
         .disabled(!self.isAttachmentInputEnabled)
@@ -256,10 +255,13 @@ extension OpenClawChatComposer {
                 .font(OpenClawChatTypography.captionSemiBold)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.tail)
+                // Hug short names; long catalog names stop at a cap instead of crowding Send.
+                .padding(.horizontal, 6)
                 .frame(
-                    width: CleanChatComposerMetrics.regularModelWidth,
-                    height: CleanChatComposerMetrics.controlTouchSize)
+                    minWidth: CleanChatComposerMetrics.controlTouchSize,
+                    maxWidth: CleanChatComposerMetrics.regularModelMaxWidth,
+                    minHeight: CleanChatComposerMetrics.controlTouchSize)
                 .contentShape(Rectangle())
         }
         #endif
@@ -388,8 +390,13 @@ extension OpenClawChatComposer {
         return nil
     }
 
-    @ViewBuilder
+    /// Send/Talk observes the draft independently of the expensive model menu.
     var cleanCaptureAndPrimaryControls: some View {
+        ChatComposerSection { self.cleanCaptureAndPrimaryContent }
+    }
+
+    @ViewBuilder
+    private var cleanCaptureAndPrimaryContent: some View {
         let showsTalkMicrophone = self.talkControl?.isEnabled == true &&
             self.talkControl?.toggleMicrophone != nil
         // Live Talk owns its microphone control in the activity strip, not the dictation slot.

@@ -1,2 +1,0 @@
-# 270 own rendered readiness/order/recovery lines; no inherited main debt or spare headroom.
-270

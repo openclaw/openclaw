@@ -9,11 +9,20 @@ import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { runWithLocalStateOwner } from "../local-state-owner.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 
-/** A durably failed run that never activated retires its own original-state capture. */
-export function failedBeforeActivation(runId: string, env: NodeJS.ProcessEnv): boolean {
+/**
+ * A durably failed run that never activated retires its own original-state capture. Any
+ * other finished failure keeps its newest backup set and may release older ones; the
+ * cleanup owner skips it while an update recovery is pending.
+ */
+export function failedUpdateCanCleanUp(runId: string, env: NodeJS.ProcessEnv): boolean {
   try {
     const record = getUpdateRun(runId, { env });
-    return record !== undefined && isNeverActivatedFailedUpdate(record);
+    return (
+      record !== undefined &&
+      (isNeverActivatedFailedUpdate(record) ||
+        (record.finishedAtMs !== null &&
+          (record.status === "failed" || record.status === "rolled-back")))
+    );
   } catch {
     // Unreadable history cannot release a recovery source.
     return false;

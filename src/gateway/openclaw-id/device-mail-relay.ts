@@ -1,6 +1,7 @@
 // A narrow browser-D transport relay. No Gateway key participates in device authentication.
 import { isDeepStrictEqual } from "node:util";
 import {
+  DEVICE_MAIL_RELAY_TIMEOUT_MS,
   verifyDiscoveryRequest,
   deviceMailRoute,
   type DeviceMailRequest,
@@ -64,8 +65,8 @@ export async function relayDeviceMail(params: {
     redirect: "error",
     ...(route.method === "POST" ? { body: r.body } : {}),
     signal: params.signal
-      ? AbortSignal.any([params.signal, AbortSignal.timeout(25_000)])
-      : AbortSignal.timeout(25_000),
+      ? AbortSignal.any([params.signal, AbortSignal.timeout(DEVICE_MAIL_RELAY_TIMEOUT_MS)])
+      : AbortSignal.timeout(DEVICE_MAIL_RELAY_TIMEOUT_MS),
   });
   const body = (
     await readResponseWithLimit(response, 1_048_576, { signal: params.signal, timeoutMs: 5_000 })

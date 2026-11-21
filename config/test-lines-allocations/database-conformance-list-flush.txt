@@ -1,2 +1,0 @@
-# Buffered POSIX stdout regression for the conformance target-list CLI.
-12

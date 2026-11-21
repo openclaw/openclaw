@@ -1,4 +1,5 @@
-import { normalizeAgentId } from "../routing/session-key.js";
+// Shared with the Control UI, which names the agent it wants before Add.
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 
 export function templateAgentCopyNumber(baseId: string, agentId: string): number {
   const prefix = `${normalizeAgentId(baseId)}-`;

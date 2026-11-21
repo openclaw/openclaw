@@ -1,2 +1,0 @@
-34
-# People motion: normal/reduced exit timing and existing assertions that await the departed row.

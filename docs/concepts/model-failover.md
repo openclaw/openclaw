@@ -39,6 +39,17 @@ errors. `Retry-After` and exhausted quota reset headers are honored by the provi
 error parser. A full-refill reset is not a minimum wait when the bucket still has
 tokens and the provider supplies a shorter retry hint.
 
+A timed 429 with a retry delay longer than one minute also uses this shared
+route/account gate, even without organization-TPM wording. When the remaining
+wait exceeds `retry.provider.maxRetryDelayMs`, later turns fail fast without
+sending another request to that route. The terminal notice names the limited
+model, gives the provider's reset time as a relative wait and an absolute date,
+and points to the model picker or `agents.defaults.model.fallbacks` in Settings.
+Dates use the configured UI locale and `agents.defaults.userTimezone` when
+available, otherwise the host's locale and timezone. Short or unknown waits
+retain the brief retry notice. These in-memory gates do not survive a Gateway
+restart; saved auth-profile cooldowns retain their existing persistence.
+
 During recovery, interactive turns take priority over subagents and background
 work such as reviews and titles. Queued requests resume one at a time with
 100–250 ms of jitter between admissions. The status reads **Waiting for rate
@@ -303,6 +314,8 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
     Per-agent SQLite auth profile entries for the provider.
   </Step>
 </Steps>
+
+With multiple Codex subscriptions, **Settings → Models → Provider access → OpenAI** shows one bar per quota window. Each segment shows what is left on that account, not a share of a combined allowance. The Credits row shows each account’s reported balance separately: zero is a reported balance; a dash means no balance was reported. Select an account name for its plan and account actions, or a quota segment for its reset time. When the order is editable, drag a segment left or right (or focus it and use the arrow keys) to change the selected agent’s stored priority. This does not change a session’s explicitly selected account.
 
 If no explicit order is configured, OpenClaw uses a round-robin order:
 

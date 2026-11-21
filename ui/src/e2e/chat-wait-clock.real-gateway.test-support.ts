@@ -19,9 +19,21 @@ export const waitClockFixture = {
   updateReply: "The review is still running. I will report its result when it finishes.",
   childReply: "The release notes review is complete. No issues found.",
   resumedReply: "The review finished successfully. No issues found in the release notes.",
+  trailingNarration: "Waiting quietly for the review session to finish before replying again.",
 };
 
-export async function createWaitClockInstance(port: number, controlUiRoot: string) {
+/**
+ * reply: the update turn answers with ordinary assistant text after already_pending.
+ * message-tool: it sends its visible reply with message(final: false), then yields; any
+ * trailing text the model writes after already_pending is narration, not a reply.
+ */
+export type WaitClockUpdateVia = "reply" | "message-tool";
+
+export async function createWaitClockInstance(
+  port: number,
+  controlUiRoot: string,
+  options: { visibleReplies?: "message_tool" } = {},
+) {
   const instance = await createChatGatewayInstance({
     name: "wait-clock",
     provider: "wait-fixture",
@@ -38,6 +50,7 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
       update: { checkOnStart: false },
       gateway: { controlUi: { enabled: true, root: controlUiRoot } },
       tools: { profile: "full", codeMode: false, toolSearch: false },
+      ...(options.visibleReplies ? { messages: { visibleReplies: options.visibleReplies } } : {}),
     },
   });
   instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
@@ -45,7 +58,7 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
 }
 
 type ProviderInput = { type?: string; name?: string; call_id?: string; output?: string };
-function toolResult(input: ProviderInput[] | undefined, toolName: string) {
+function toolOutput(input: ProviderInput[] | undefined, toolName: string) {
   // Responses replay normalizes tool-call IDs; match the actual emitted call, not our wire ID.
   const call = input?.findLast((item) => item.type === "function_call" && item.name === toolName);
   expect(call?.call_id, "the real transcript must retain the tool call").toBeTruthy();
@@ -53,11 +66,16 @@ function toolResult(input: ProviderInput[] | undefined, toolName: string) {
     (item) => item.type === "function_call_output" && item.call_id === call?.call_id,
   )?.output;
   expect(typeof output, "the real runtime must deliver this tool result").toBe("string");
+  return output!;
+}
+
+function toolResult(input: ProviderInput[] | undefined, toolName: string) {
+  const output = toolOutput(input, toolName);
   const result: {
     status?: string;
     childSessionKey?: string;
     pendingChildren?: unknown[];
-  } = JSON.parse(output!);
+  } = JSON.parse(output);
   return result;
 }
 
@@ -70,7 +88,8 @@ function writeReply(response: ServerResponse, text: string, id: string) {
 }
 
 /** Model transport only: the Gateway executes all tools and owns the native child registry. */
-export async function startWaitClockProvider() {
+export async function startWaitClockProvider(options: { updateVia?: WaitClockUpdateVia } = {}) {
+  const updateVia = options.updateVia ?? "reply";
   const childStarted = createDeferred();
   const failure = createDeferred<never>();
   void failure.promise.catch(() => {});
@@ -78,6 +97,8 @@ export async function startWaitClockProvider() {
   const requests: Array<{ method?: string; url?: string }> = [];
   const receipts: Array<{ step: number; tool: string; result: ReturnType<typeof toolResult> }> = [];
   let parentRequests = 0;
+  let trailingNarrationRequests = 0;
+  let completionInput: string | undefined;
   let childResponse: ServerResponse | undefined;
   let childReleased = false;
   let stopped = false;
@@ -95,6 +116,11 @@ export async function startWaitClockProvider() {
           const body: { model: string; tools?: Array<{ name?: string }>; input?: ProviderInput[] } =
             JSON.parse((await buffer(request)).toString("utf8"));
           if (body.model === "child") {
+            if (childReleased && updateVia === "message-tool") {
+              // A message-tool-only child may take one more model turn after its held reply.
+              writeReply(response, waitClockFixture.childReply, "child_followup");
+              return;
+            }
             expect(childResponse, "the child must not retry while held").toBeUndefined();
             childResponse = response;
             childStarted.resolve();
@@ -125,18 +151,41 @@ export async function startWaitClockProvider() {
           } else if (step === 2) {
             expect(JSON.stringify(body.input)).toContain(waitClockFixture.updatePrompt);
             expect(childReleased).toBe(false);
+            if (updateVia === "message-tool") {
+              writeToolCall(response, "message", {
+                action: "send",
+                message: waitClockFixture.updateReply,
+                final: false,
+              });
+            } else {
+              writeToolCall(response, "sessions_yield", {});
+            }
+          } else if (step === 3 && updateVia === "message-tool") {
+            // The message tool returns its human-readable delivery receipt, not JSON.
+            expect(toolOutput(body.input, "message")).toMatch(/^Sent\b/u);
+            receipts.push({ step, tool: "message", result: { status: "sent" } });
+            expect(childReleased).toBe(false);
             writeToolCall(response, "sessions_yield", {});
-          } else if (step === 3) {
+          } else if (step === 3 || (step === 4 && updateVia === "message-tool" && !childReleased)) {
             const result = toolResult(body.input, "sessions_yield");
             receipts.push({ step, tool: "sessions_yield", result });
             // Never manufacture already_pending: this must come from the real registry/tool owner.
             expect(result.status).toBe("already_pending");
             expect(result.pendingChildren).toHaveLength(1);
-            writeReply(response, waitClockFixture.updateReply, "update");
+            if (updateVia === "message-tool") {
+              // Reached only when the runtime keeps the turn open after the delivered reply.
+              trailingNarrationRequests += 1;
+              writeReply(response, waitClockFixture.trailingNarration, "narration");
+            } else {
+              writeReply(response, waitClockFixture.updateReply, "update");
+            }
           } else {
             expect(step, "exactly one completion turn must resume the parent").toBe(4);
             expect(childReleased).toBe(true);
-            expect(JSON.stringify(body.input)).toContain(waitClockFixture.childReply);
+            completionInput = JSON.stringify(body.input);
+            if (updateVia === "reply") {
+              expect(completionInput).toContain(waitClockFixture.childReply);
+            }
             writeReply(response, waitClockFixture.resumedReply, "resumed");
           }
         })();
@@ -159,6 +208,8 @@ export async function startWaitClockProvider() {
       withinTest(Promise.race([childStarted.promise, failure.promise]), signal),
     check: () => Promise.race([failure.promise, Promise.resolve()]),
     parentRequests: () => parentRequests,
+    trailingNarrationRequests: () => trailingNarrationRequests,
+    completionInput: () => completionInput,
     childIsRunning: () => childResponse?.destroyed === false && !childReleased,
     releaseChild() {
       if (!childResponse || childResponse.destroyed || childReleased) {

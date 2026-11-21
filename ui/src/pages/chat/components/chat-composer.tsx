@@ -120,7 +120,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   const prediction = createComposerPrediction(readPredictionSource);
   const questionPanel = createComposerQuestionPanel(
     () => props.questions,
-    composition,
     () => props.getTranscriptElement,
   );
   const streaming = createMemo(() => currentProps.stream !== null);
@@ -151,6 +150,11 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       if (!current.emojiEnabled || current.draftKey !== previous?.context.draftKey) {
         state.emojiMenu.close();
       }
+      // A proposal belongs to the draft it was offered for; another chat never shows it.
+      if (previous && current.draftKey !== previous.context.draftKey) {
+        state.tasks()?.dismiss();
+      }
+      state.tasks()?.syncDraft(current.visibleDraft);
       const options = current.dictationOptions;
       voice.picker.syncCatalog(options.client, options.connected, options.sessionKey);
       voice.dictation.update(options);
@@ -176,7 +180,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         directory: current.mentionDirectory,
         host:
           current.mentionDirectory &&
-          current.showComposer &&
           !state.composerComposing &&
           !state.dictation?.locksComposer &&
           state.composerTextarea?.isConnected
@@ -193,6 +196,20 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+  onSettled(() => {
+    const stop = () => context().stopRunFromEscape();
+    const send = () => context().runControlsProps.onSend();
+    state.stopRunFromEscape = stop;
+    state.sendDraft = send;
+    return () => {
+      if (state.stopRunFromEscape === stop) {
+        state.stopRunFromEscape = null;
+      }
+      if (state.sendDraft === send) {
+        state.sendDraft = null;
+      }
+    };
+  });
 
   // Owners and handlers retain live reads; only scalar presentation values filter updates.
   const scalarContext = createProjection(() => {
@@ -207,7 +224,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       runStatusAnnouncement: current.runStatusAnnouncement,
       cancellationCaveat: current.cancellationCaveat,
       sendShortcut: current.sendShortcut,
-      showComposer: current.showComposer,
+      showComposerProgress: current.showComposerProgress,
       draftKey: current.draftKey,
       mentionError: current.mentionError,
     };

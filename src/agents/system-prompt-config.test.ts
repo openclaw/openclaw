@@ -14,7 +14,6 @@ import { prepareConfiguredModelAliases } from "./prepared-model-runtime.configur
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "./system-prompt-config.js";
 import { buildAgentHarnessBasePrompt } from "./system-prompt-harness-base.js";
-import * as systemPrompt from "./system-prompt.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 vi.mock("../tts/tts-settings.js", async (importOriginal) => ({
@@ -148,9 +147,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
             "Full Access or a tool allowlist does not resolve this collision",
           );
         }
-        expect(prompt).toContain("not a free-form substitute for the missing setup tool");
-        expect(prompt).toContain("setup or repair on another host");
-        expect(prompt).toContain("remote task on local agent-ID migration");
+        expect(prompt).toContain("never instruct users to send free-form setup");
+        expect(prompt).toContain("Remote hosts: verify it is not this Gateway");
+        expect(prompt).toContain("do not block on local agent-ID migration");
       }
     },
   );
@@ -191,6 +190,80 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     expect(prompt.includes("/status shows when enabled.")).toBe(enabled);
   });
 
+  it.each([
+    { toolNames: ["exec"] },
+    { toolNames: ["exec", "openclaw"] },
+    { toolNames: ["exec", "gateway", "openclaw"] },
+    { toolNames: ["gateway", "openclaw"] },
+  ])("scopes the in-place Git update exception with tools $toolNames", async ({ toolNames }) => {
+    const config: OpenClawConfig = { commands: { restart: false } };
+    const prompts = [
+      await buildPrompt({ config, toolNames }),
+      buildAgentHarnessBasePrompt({ config, toolNames }),
+    ];
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain("maintenance tools, not exec or detached jobs");
+      expect(prompt).not.toContain("perform the work with `gateway`");
+      expect(prompt).not.toContain("restart, config, channels");
+      expect(prompt).not.toContain("For an update request, use the Control UI");
+      expect(prompt).not.toContain("For updates there, use `openclaw update --yes`");
+      expect(prompt).toContain("Use the built-in updater for standard installs.");
+      expect(prompt).toContain(
+        "For a directly served Git checkout, use its documented in-place update procedure only when the host authorizes it for this caller. An owner need not specify a revision for that procedure.",
+      );
+      expect(prompt).toContain(
+        "Otherwise use Git on source installs only for an explicitly requested exact revision with host maintenance authorization.",
+      );
+      expect(prompt).toContain(
+        "If you cannot establish the serving installation or an authorized procedure, report the blocker instead of guessing.",
+      );
+      expect(prompt).toContain(
+        "Shell access is not update authority. Change installation methods only on explicit operator request.",
+      );
+      expect(prompt).toContain("Keep a working restart path before stopping");
+      expect(prompt).toContain(
+        "if runtime admission refuses, report the blocker and never bypass via `exec`",
+      );
+      expect(
+        prompt.includes(
+          "`gateway`: use update.run only when the installation uses the built-in updater",
+        ),
+      ).toBe(toolNames.includes("gateway"));
+    }
+  });
+
+  it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
+    "keeps bounded local config recovery available with tools $toolNames",
+    async ({ toolNames }) => {
+      for (const prompt of [
+        await buildPrompt({ toolNames }),
+        buildAgentHarnessBasePrompt({ toolNames }),
+      ]) {
+        expect(prompt).toContain("blocks an explicit local repair");
+        expect(prompt).toContain("use existing file/exec permissions");
+        expect(prompt).toContain("save a rollback copy");
+        expect(prompt).toContain("validate, and read back");
+        expect(prompt).toContain(
+          "Never override approvals, readonly config, containment, or disabled tools",
+        );
+        expect(prompt).toContain("or edit access/approval/ownership policies");
+        expect(prompt).not.toContain("Exact commands need no helper inference");
+      }
+    },
+  );
+
+  it("teaches exact config recovery on regular and native harness surfaces", async () => {
+    const toolNames = ["openclaw", "exec"];
+    for (const prompt of [
+      await buildPrompt({ toolNames }),
+      buildAgentHarnessBasePrompt({ toolNames }),
+    ]) {
+      expect(prompt).toContain("config set <path> <value>");
+      expect(prompt).toContain("Exact commands need no helper inference");
+      expect(prompt).toContain("normal approval/write checks apply");
+    }
+  });
+
   it.each([{ toolNames: [] }, { toolNames: ["gateway"] }])(
     "does not recommend disabled update or restart commands with tools $toolNames",
     async ({ toolNames }) => {
@@ -200,7 +273,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       });
       expect(disabled).not.toContain("`/update`");
       expect(disabled).not.toContain("`/restart`");
-      expect(disabled).toContain("maintenance tools, not exec or detached jobs");
+      expect(disabled).toContain("Keep a working restart path before stopping");
       expect(disabled).toContain("Toggle /reasoning; /status shows when enabled.");
       const enabled = await buildPrompt({ toolNames, config: {} });
       expect(enabled).toContain("`/update`");
@@ -415,7 +488,6 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     { name: "absent", config: undefined },
     { name: "empty", config: {} },
   ])("preserves owner display semantics with $name config", async ({ config }) => {
-    const render = vi.spyOn(systemPrompt, "buildAgentSystemPrompt");
     const prompt = await buildPrompt({
       config,
       ownerNumbers: ["owner-a"],
@@ -423,17 +495,12 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       ownerDisplaySecret: "caller-secret", // pragma: allowlist secret
     });
 
-    expect(render).toHaveBeenCalledTimes(1);
-    const renderParams = render.mock.calls[0]?.[0];
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplay")).toBe(true);
-    expect(Object.hasOwn(renderParams ?? {}, "ownerDisplaySecret")).toBe(true);
-    expect(renderParams?.ownerDisplay).toBe(config ? "raw" : "hash");
-    expect(renderParams?.ownerDisplaySecret).toBe(config ? undefined : "caller-secret");
-    expect(prompt).toMatch(
+    expect(prompt).toContain(
       config
-        ? /Allowlisted senders: owner-a\. Allowlisted != owner\./
-        : /Allowlisted senders: [a-f0-9]{12}\. Allowlisted != owner\./,
+        ? "Allowlisted senders: owner-a. Allowlisted != owner."
+        : "Allowlisted senders: 5e50de41a7a7. Allowlisted != owner.",
     );
+    expect(prompt).not.toContain("caller-secret");
   });
 
   const prefer = { subagents: { delegationMode: "prefer" as const } };
@@ -466,6 +533,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
       toolNames: ["sessions_spawn", "subagents"],
     });
     expect(prompt.includes("## Delegation")).toBe(expected);
-    expect(prompt.includes("- Subagents: `sessions_spawn`")).toBe(!expected);
+    // The child brief has one owner: `## Delegation` when it renders, otherwise Tooling.
+    expect(prompt.includes("objective/output/write-scope/verification")).toBe(!expected);
   });
 });

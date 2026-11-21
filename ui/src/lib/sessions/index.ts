@@ -1,4 +1,5 @@
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import { isConversationConfigChange } from "../../../../src/config/read-dependencies.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
@@ -542,12 +543,12 @@ export function createSessionCapability(
       githubPublication.observePullRequests(event.payload);
       return;
     }
-    if (event.event === "config.changed" || event.event === "chat.metadata.changed") {
+    if (event.event === "chat.metadata.changed" || isConversationConfigChange(event)) {
       roster.observations.descriptions.clear();
-    }
-    if (event.event === "config.changed") {
-      // Config can change configured-agent membership even with no chat pane mounted.
-      roster.scheduleEvent();
+      if (event.event === "config.changed") {
+        // Config can change configured-agent membership even with no chat pane mounted.
+        roster.scheduleEvent();
+      }
       return;
     }
     if (event.event !== "sessions.changed" && event.event !== "session.message") {

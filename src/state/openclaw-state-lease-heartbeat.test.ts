@@ -1,11 +1,24 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { MessageChannel, Worker, type WorkerOptions } from "node:worker_threads";
+import {
+  getEnvironmentData,
+  MessageChannel,
+  Worker,
+  type WorkerOptions,
+} from "node:worker_threads";
+import pg from "pg";
 import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
   readSqliteDatabaseWriteRevision,
@@ -22,14 +35,20 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import {
+  cleanupPostgresStateFixture,
+  installPostgresStateFixture,
+} from "./openclaw-state-db.postgres-fixture.test-support.js";
+import {
   leaseHeartbeatState,
   type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
+import { startOpenClawStateLeaseHeartbeat } from "./openclaw-state-lease-heartbeat.js";
 import { acquireOpenClawStateLeaseInTransaction } from "./openclaw-state-lease-store.js";
 import { runWithOpenClawStateLeaseWorker } from "./openclaw-state-lease-worker-operation.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
@@ -149,6 +168,60 @@ describe("maintenance lease heartbeat", () => {
       expect(workers[0]?.threadId).toBe(-1);
     },
   );
+
+  it("releases an existing-schema lease refused by maintenance during heartbeat startup", async ({
+    state,
+  }) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const leaseOptions = {
+      ...options(state.env),
+      database: { ...options(state.env).database, schemaPolicy: "existing" as const },
+      leaseMs: 60_000,
+    };
+    const ownerPath = resolveGatewayStateOwnerPath(database.path);
+    const holder = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    await once(holder, "spawn");
+    const stopped = once(holder, "exit");
+    let entered = false;
+    heartbeatWorkers.beforeCreate = () => {
+      fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({ ...defaultPayload(database.path), pid: holder.pid, startTime: undefined }),
+      );
+    };
+    try {
+      await expect(
+        withOpenClawStateLease(leaseOptions, async () => {
+          entered = true;
+        }),
+      ).rejects.toThrow();
+      expect(entered).toBe(false);
+      // Custody still blocks cleanup: no release or protected callback may bypass it.
+      expect(
+        database.db
+          .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .get("core:test-maintenance", "maintenance"),
+      ).toBeDefined();
+      fs.rmSync(ownerPath);
+      heartbeatWorkers.beforeCreate = undefined;
+      // Retry must release the original row, not wait for its minute-long expiry.
+      await expect(
+        withOpenClawStateLease({ ...leaseOptions, waitMs: 2_000 }, async (lease) => {
+          lease.assertOwned();
+          return "reacquired";
+        }),
+      ).resolves.toBe("reacquired");
+      expect(readLease(state.env)).toBeUndefined();
+    } finally {
+      heartbeatWorkers.beforeCreate = undefined;
+      fs.rmSync(ownerPath, { force: true });
+      holder.kill();
+      await stopped;
+    }
+  });
 
   it("preserves native renewal errors through worker and lease rejection", async ({ state }) => {
     const { db } = openOpenClawStateDatabase({ env: state.env });
@@ -390,8 +463,8 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     "activation-worker.mts",
     `
       import { parentPort, workerData } from "node:worker_threads";
-      import { registerHooks } from "node:module";
-      registerHooks({
+      import nodeModule from "node:module";
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier.includes("openclaw-state-db-engine.")) {
             const gate = new Int32Array(workerData.fixtureLoadGate);
@@ -440,7 +513,6 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     env: {},
   });
   trackSqliteDatabaseAdmissionWorker(worker);
-  worker.once("exit", () => databaseAdmission.finish());
   const prepared = createDeferredCore();
   const processed = createDeferredCore();
   const ready = createDeferredCore();
@@ -537,7 +609,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     } finally {
       Atomics.store(loadGate, 0, 2);
       Atomics.notify(loadGate, 0);
-      registrationAdmission.finish();
+      await registrationAdmission.finish();
       registrationPort.port1.close();
       registrationPort.port2.close();
       registrationLoss.port1.close();
@@ -549,6 +621,7 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     }
     writer.close();
     await worker.terminate();
+    await databaseAdmission.finish();
     loss.port1.close();
     loss.port2.close();
   }
@@ -606,4 +679,119 @@ it("admits worker writes without host blocking and rolls back revoked commits", 
       .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
       .all("core:mcp-oauth", storeKey),
   ).toEqual([]);
+});
+
+const configured: unknown = getEnvironmentData("openclaw.test.state.conformance.connection");
+const connection = typeof configured === "string" ? configured : undefined;
+
+describe.skipIf(!connection)("PostgreSQL state lease heartbeat reconnect", () => {
+  const directories = useAutoCleanupTempDirTracker(afterEach);
+  baseIt.each([false, true])(
+    "recovers an interrupted renewal without reviving lost rows (ownership changed: %s)",
+    async (replace) => {
+      const directory = directories.make("state-heartbeat-reconnect-");
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: directory,
+        OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+      };
+      fs.writeFileSync(env.OPENCLAW_CONFIG_PATH, "{}");
+      installPostgresStateFixture(connection!, "heartbeat_reconnect");
+      const client = new pg.Client({ connectionString: connection });
+      const observer = new pg.Client({ connectionString: connection });
+      await client.connect();
+      await observer.connect();
+      const heartbeats: ReturnType<typeof startOpenClawStateLeaseHeartbeat>[] = [];
+      let namespace: string | undefined;
+      let pathname = "";
+      try {
+        const database = withEngineStoreAdmission(() => openOpenClawStateDatabase({ env }));
+        pathname = database.path;
+        namespace = getPostgresPhysicalFacts(database.db)!.namespace;
+        const table = `"${namespace}".state_leases`;
+        const leaseMs = 30_000;
+        const lost = [vi.fn(), vi.fn()];
+        for (const [index, key] of ["first", "second"].entries()) {
+          const identity = { scope: "core:test-heartbeat", key, owner: "original" };
+          const acquired = withEngineStoreAdmission(() =>
+            runOpenClawStateWriteTransaction(
+              ({ db }) => acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs),
+              { database, env },
+            ),
+          );
+          if (acquired.kind !== "acquired") {
+            throw new Error("Fixture did not acquire its lease");
+          }
+          const heartbeat = startOpenClawStateLeaseHeartbeat({
+            path: pathname,
+            identity,
+            leaseMs,
+            acquiredAt: acquired.expiresAt - leaseMs,
+            expiresAt: acquired.expiresAt,
+            heartbeatMs: 100,
+            onLost: lost[index]!,
+          });
+          heartbeats.push(heartbeat);
+          await heartbeat.ready;
+        }
+        const rows = async () =>
+          (await observer.query(`SELECT * FROM ${table} ORDER BY lease_key`)).rows;
+        await client.query("BEGIN");
+        await client.query(`LOCK TABLE ${table} IN ACCESS EXCLUSIVE MODE`);
+        const before = (await client.query(`SELECT * FROM ${table} ORDER BY lease_key`)).rows;
+        let backend: number | undefined;
+        // Wait for the real renewal UPDATE to block, so the socket dies in flight,
+        // rather than on idle checkout (which already reconnects).
+        await expect
+          .poll(async () => {
+            const { rows: waiting } = await observer.query<{ pid: number }>(
+              `SELECT pid FROM pg_locks WHERE relation = $1::regclass AND NOT granted`,
+              [table],
+            );
+            backend = waiting[0]?.pid;
+            return backend;
+          })
+          .toBeTypeOf("number");
+        await observer.query("SELECT pg_terminate_backend($1)", [backend]);
+        if (replace) {
+          await client.query(`UPDATE ${table} SET owner = 'successor' WHERE lease_key = 'first'`);
+          await client.query(`UPDATE ${table} SET expires_at = 0 WHERE lease_key = 'second'`);
+        }
+        await client.query("COMMIT");
+        if (replace) {
+          await expect
+            .poll(() => lost.map((callback) => callback.mock.calls.length))
+            .toEqual([1, 1]);
+          expect(lost[0]!.mock.calls[0]?.[0]).toMatchObject({ loss: { reason: "replaced" } });
+          expect(lost[1]!.mock.calls[0]?.[0]).toMatchObject({ loss: { reason: "expired" } });
+          const after = await rows();
+          expect(after[0].owner).toBe("successor");
+          expect(Number(after[1].expires_at)).toBe(0);
+          expect(after.map((row) => row.heartbeat_at)).toEqual(
+            before.map((row) => row.heartbeat_at),
+          );
+        } else {
+          await expect
+            .poll(async () => {
+              const after = await rows();
+              return after.every(
+                (row, index) => Number(row.heartbeat_at) > Number(before[index].heartbeat_at),
+              );
+            })
+            .toBe(true);
+          expect(lost.map((callback) => callback.mock.calls)).toEqual([[], []]);
+          for (const heartbeat of heartbeats) {
+            await expect(heartbeat.verify()).resolves.toBeGreaterThan(Date.now());
+            await expect(heartbeat.renew()).resolves.toBeGreaterThan(Date.now());
+          }
+        }
+      } finally {
+        await client.query("ROLLBACK").catch(() => {});
+        await Promise.all(heartbeats.map((heartbeat) => heartbeat.stop()));
+        await closeOpenClawStateDatabaseAsync();
+        await observer.end();
+        await cleanupPostgresStateFixture(client, pathname, namespace);
+      }
+    },
+  );
 });

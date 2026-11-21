@@ -12,7 +12,6 @@ import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
-import { createCliHistoryOwnerProbe, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import { applySessionGoalOperation } from "./goals-operation-policy.js";
 import { readSessionGoalOperationReceipt } from "./goals-operation-receipts.js";
 import {
@@ -37,7 +36,6 @@ import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worke
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { readSessionSourceValidation } from "./session-source-predicate.worker.js";
-import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { prepareSessionTurnRouting } from "./session-turn-predicate.js";
 import {
   createSessionTranscriptTurnKernel,
@@ -57,36 +55,6 @@ function inCustody<T>(
   run: () => T,
   readEntry?: () => Parameters<typeof readSessionPendingInputAuthorityFacts>[3],
 ): T {
-  const assertCurrent = () =>
-    context.admit("transaction", { kind: "session-entry-patch-validated" });
-  // Coverage asks the host for its live owner check inside this transaction, once.
-  const probe = createCliHistoryOwnerProbe();
-  let probed = false;
-  const confirmsOwner = () => {
-    if (!probed) {
-      context.admit("transaction", probe.fact);
-      probed = true;
-    }
-    return probe.holds();
-  };
-  const owned = () =>
-    runWithCliHistoryWriter(
-      input.cliWriter
-        ? {
-            ...input.cliWriter,
-            ...(input.cliWriter.confirmOwner ? { confirmsOwner } : {}),
-            target: {
-              agentId: input.agentId,
-              sessionKey: input.sessionKey,
-              sessionId: input.options.expectedSessionId,
-              storePath: context.options.path,
-            },
-            assertCurrent,
-            assertReadable: assertCurrent,
-          }
-        : undefined,
-      run,
-    );
   return input.custody
     ? runWithSessionPendingInputWorkerCustody(
         input.custody,
@@ -103,9 +71,9 @@ function inCustody<T>(
                 )
               : undefined,
           }),
-        owned,
+        run,
       ).value
-    : owned();
+    : run();
 }
 
 export function prepareSessionTurn(
@@ -265,11 +233,6 @@ export function prepareSessionTurn(
       messages,
       coldArchive: undefined,
       version: transcriptState?.version,
-      expectedSessionState:
-        expectedEntry &&
-        buildSessionTranscriptTurnExpectedState(
-          selected?.entry ?? { sessionId: scope.sessionId, updatedAt: 0 },
-        ),
       goalId:
         mutation && !result && expectedEntry && input.options.messages.length
           ? applySessionGoalOperation(expectedEntry, mutation.operation, Date.now())?.id
@@ -418,7 +381,9 @@ export function applySessionTurn<T>(
                     {
                       ...committed.identity,
                       pendingArchiveRecovery: false,
-                      membershipInvalidatedKeys: [],
+                      membershipInvalidatedKeys: committed.membershipChanged
+                        ? [scope.sessionKey]
+                        : [],
                       maintenancePlans: [],
                     },
                     database,
