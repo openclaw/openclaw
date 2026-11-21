@@ -1411,7 +1411,9 @@ class ChatController internal constructor(
         fetchSessionsForCurrentWindow()
         true
       } catch (err: Throwable) {
-        updateErrorText(err.message)
+        synchronized(gatewayScopeApplyLock) {
+          if (requestCacheScope == currentCacheScope()) updateErrorText(err.message)
+        }
         false
       }
     }
