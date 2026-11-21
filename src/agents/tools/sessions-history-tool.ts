@@ -13,6 +13,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { capArrayByJsonBytes } from "../../gateway/session-transcript-readers.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  isContractToolCallBlock,
+  isContractToolResultBlock,
+} from "../../shared/tool-block-contract.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId, resolveSessionAgentIds } from "../agent-scope.js";
 import { requesterProfileSchema } from "../schema/typebox.js";
@@ -127,7 +131,7 @@ type ChatHistoryPaginationMetadata = Partial<
 
 function sanitizeHistoryMessage(
   message: unknown,
-  maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS,
+  { maxChars = SESSIONS_HISTORY_TEXT_MAX_CHARS, stripToolBlocks = false } = {},
 ): {
   message: unknown;
   truncated: boolean;
@@ -155,9 +159,16 @@ function sanitizeHistoryMessage(
   if (typeof entry.content === "string") {
     entry.content = sanitizeText(entry.content);
   } else if (Array.isArray(entry.content)) {
-    entry.content = entry.content.map((block: unknown) => {
+    // Filter blocks, not their parent rows: message IDs and paging still refer to those rows.
+    const rawBlocks: unknown[] = entry.content;
+    const blocks: unknown[] = [];
+    for (const block of rawBlocks) {
+      if (stripToolBlocks && (isContractToolCallBlock(block) || isContractToolResultBlock(block))) {
+        continue;
+      }
       if (!block || typeof block !== "object") {
-        return block;
+        blocks.push(block);
+        continue;
       }
       const content = { ...(block as Record<string, unknown>) };
       const fields =
@@ -167,8 +178,9 @@ function sanitizeHistoryMessage(
           content[field] = sanitizeText(content[field]);
         }
       }
-      return content;
-    });
+      blocks.push(content);
+    }
+    entry.content = blocks;
   }
   if (typeof entry.text === "string") {
     entry.text = sanitizeText(entry.text);
@@ -188,7 +200,9 @@ function boundPendingInputs(page: ChatPendingInputsPage) {
   );
   let truncated = false;
   const items = page.items.map((item, index) => {
-    const result = sanitizeHistoryMessage(item.message, Math.max(1, Math.floor(messageBudget / 8)));
+    const result = sanitizeHistoryMessage(item.message, {
+      maxChars: Math.max(1, Math.floor(messageBudget / 8)),
+    });
     const record = asOptionalRecord(result.message);
     const media = asOptionalRecord(record?.["__openclaw"])?.media;
     const message = { role: "user", content: record?.content, ...(media ? { media } : {}) };
@@ -519,7 +533,9 @@ export function createSessionsHistoryTool(opts?: {
       const pending = result?.pendingInputs ? boundPendingInputs(result.pendingInputs) : undefined;
       const transcriptBudget = SESSIONS_HISTORY_MAX_BYTES - (pending?.bytes ?? 0);
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
-      const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
+      const sanitizedMessages = selectedMessages.map((message) =>
+        sanitizeHistoryMessage(message, { stripToolBlocks: !includeTools }),
+      );
       const contentTruncated =
         sanitizedMessages.some((entry) => entry.truncated) || pending?.truncated === true;
       const sanitizedItems = sanitizedMessages.map((entry) => entry.message);
