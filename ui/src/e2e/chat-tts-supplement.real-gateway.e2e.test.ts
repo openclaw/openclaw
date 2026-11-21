@@ -363,7 +363,8 @@ suite.define(() => {
                   await element.play();
                   element.pause();
                 });
-                expect(await page.locator(".chat-bubble audio").count()).toBe(total);
+                // Reload restores each attachment's authorization independently.
+                await expect.poll(() => page.locator(".chat-bubble audio").count()).toBe(total);
                 expect(
                   await page
                     .locator(".chat-bubble")
