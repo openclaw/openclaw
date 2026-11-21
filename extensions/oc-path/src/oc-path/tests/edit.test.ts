@@ -10,6 +10,14 @@ function edit(raw: string, address: string, value: string) {
 }
 
 describe("setOcPath", () => {
+  it.each(["", " \t", "\r\n"])("rejects blank Markdown field value %j without mutating input", (value) => {
+    const raw = "## Tools\n- name: original\n";
+    const ast = parseMd(raw);
+    expect(() => setOcPath(ast, parseOcPath("oc://AGENTS.md/tools/name/name"), value)).toThrow(
+      expect.objectContaining({ reason: "parse-error" }),
+    );
+    expect(ast.raw).toBe(raw);
+  });
   it("preserves fenced examples before the selected field", () => {
     const raw = "## Tools\n- \x60\x60\x60\n  name: decoy\n  \x60\x60\x60\n\n  name: old\n";
     expect(edit(raw, "tools/#0/name", "new").raw).toBe(raw.replace("name: old", "name: new"));
@@ -28,7 +36,7 @@ describe("setOcPath", () => {
     expect(r.raw).toBe(`---\nname: github\ndescription: new desc\n---\nBody ${REDACTED_SENTINEL}.`);
   });
 
-  it.each(["has: colon", "1.10", "0123", "true", "~", "null", "- draft"])(
+  it.each(["", "has: colon", "1.10", "0123", "true", "~", "null", "- draft"])(
     "keeps the string %s readable as the same string",
     (value) => {
       const r = edit("---\nversion: 9.9\n---\n", "[frontmatter]/version", value);
