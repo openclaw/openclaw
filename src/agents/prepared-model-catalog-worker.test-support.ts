@@ -586,3 +586,42 @@ export function expectCatalogAuth(snapshot: PreparedModelRuntimeSnapshot, provid
     ),
   );
 }
+
+export const workerCatalogRoute = {
+  api: "openai-completions" as const,
+  baseUrl: "https://worker-catalog.invalid/v1",
+};
+
+export function storedWorkerCatalog(
+  sourceUrl: string,
+  sourceCommit: string,
+  generatedAt: number,
+  models: { id: string; name: string; contextWindow: number; maxTokens: number }[],
+) {
+  return {
+    id: 1,
+    source_url: sourceUrl,
+    generated_at: generatedAt,
+    min_version: null,
+    etag: null,
+    last_modified: null,
+    checked_at: generatedAt,
+    bundle_json: JSON.stringify({
+      schemaVersion: 1,
+      sourceCommit,
+      generatedAt,
+      providers: { [PROVIDER_ID]: { ...workerCatalogRoute, models } },
+      pricing: {},
+    }),
+  };
+}
+
+export function setWorkerCatalogDiscovery(root: string, discovery: "runtime" | "static") {
+  const file = path.join(root, "plugin/openclaw.plugin.json");
+  const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+  manifest.modelCatalog.providers = {
+    [PROVIDER_ID]: { ...workerCatalogRoute, models: [{ id: "sqlite-model" }] },
+  };
+  manifest.modelCatalog.discovery = { [PROVIDER_ID]: discovery };
+  fs.writeFileSync(file, JSON.stringify(manifest), "utf8");
+}

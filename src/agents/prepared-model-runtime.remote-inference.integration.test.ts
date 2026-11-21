@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runPublishModelCatalog } from "../../scripts/publish-model-catalog.mts";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareModelPricingContext, resolveModelPricing } from "../model-catalog/pricing.js";
 import {
@@ -24,6 +23,9 @@ import {
   createCatalogFixture,
   HARNESS_ID,
   PROVIDER_ID,
+  setWorkerCatalogDiscovery,
+  storedWorkerCatalog,
+  workerCatalogRoute,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import {
@@ -44,38 +46,18 @@ afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
 
 const sourceUrl = "https://catalog-retention.invalid/catalog.json";
 const modelCount = 256;
-const retentionRoute = {
-  api: "openai-completions" as const,
-  baseUrl: "https://worker-catalog.invalid/v1",
-};
-
 function storedCatalog(revision: number) {
-  return {
-    id: 1,
-    source_url: sourceUrl,
-    generated_at: revision,
-    min_version: null,
-    etag: null,
-    last_modified: null,
-    checked_at: revision,
-    bundle_json: JSON.stringify({
-      schemaVersion: 1,
-      sourceCommit: "retention-fixture",
-      generatedAt: revision,
-      providers: {
-        [PROVIDER_ID]: {
-          ...retentionRoute,
-          models: Array.from({ length: modelCount }, (_, index) => ({
-            id: `revision-${revision}-${index}`,
-            name: `Revision ${revision} model ${index}`,
-            contextWindow: 8192,
-            maxTokens: 1024,
-          })),
-        },
-      },
-      pricing: {},
-    }),
-  };
+  return storedWorkerCatalog(
+    sourceUrl,
+    "retention-fixture",
+    revision,
+    Array.from({ length: modelCount }, (_, index) => ({
+      id: `revision-${revision}-${index}`,
+      name: `Revision ${revision} model ${index}`,
+      contextWindow: 8192,
+      maxTokens: 1024,
+    })),
+  );
 }
 
 type References = Record<string, WeakRef<object>>;
@@ -150,10 +132,7 @@ function liveReferences(references: References) {
 
 it("carries published task facts through HTTP, SQLite and prepared role selection", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  const route: Pick<ModelProviderConfig, "api" | "baseUrl"> = {
-    api: "openai-completions",
-    baseUrl: "https://worker-catalog.invalid/v1",
-  };
+  const route = workerCatalogRoute;
   const nativeBaseUrl = "https://native-worker-catalog.invalid/v1";
   const manifestFile = path.join(fixture.root, "plugin/openclaw.plugin.json");
   const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
@@ -308,13 +287,7 @@ it("carries published task facts through HTTP, SQLite and prepared role selectio
 
 it("releases remote catalog predecessors while the current publication and its callbacks remain live", async () => {
   const fixture = await createCatalogFixture(makeTempDir, 0);
-  const manifestPath = path.join(fixture.root, "plugin/openclaw.plugin.json");
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  manifest.modelCatalog.providers = {
-    [PROVIDER_ID]: { ...retentionRoute, models: [{ id: "sqlite-model" }] },
-  };
-  manifest.modelCatalog.discovery = { [PROVIDER_ID]: "static" };
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+  setWorkerCatalogDiscovery(fixture.root, "static");
   await withEnvAsync(fixture.env, async () => {
     const config: OpenClawConfig = {
       ...fixture.config,
