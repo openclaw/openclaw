@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectRequestCount,
@@ -245,6 +252,84 @@ suite.define(() => {
         });
         await page.waitForTimeout(100);
         expect((await gateway.getRequests("terminal.input")).length).toBe(3);
+      },
+    );
+  });
+
+  it("stages a pasted clipboard image and keeps text pastes native", async () => {
+    await suite.withPage(
+      { serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const sessionKey = "agent:main:terminal-paste-e2e";
+        const stagedPath = "/tmp/openclaw-terminal-upload/pasted.png";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [createControlUiSessionRow(sessionKey, "Paste surface", 1_790_000_000_000)],
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open", "terminal.upload"],
+          methodResponses: { "terminal.upload": { path: stagedPath, size: 4 } },
+          terminalEnabled: true,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiGatewayReady(page);
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        // The composer only exists on the embedded (chat side panel) surface.
+        const embedded = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
+        await openChatSidePanelType(pane, "Terminal");
+        await gateway.waitForRequest("terminal.open");
+
+        const composer = embedded.locator(".tp-composer input");
+        if (!expectUploadSurface) {
+          expect(await composer.count()).toBe(0);
+
+          return;
+        }
+        // Embedded desktop opens on Sessions; dismissing it reveals the composer.
+        await embedded.locator(".tp-session.is-current").click();
+        await composer.waitFor({ state: "visible" });
+
+        // A text-only clipboard paste stays with the input, not the upload owner.
+        await composer.evaluate((element) => {
+          element.dispatchEvent(
+            new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: new DataTransfer(),
+            }),
+          );
+        });
+        expect((await gateway.getRequests("terminal.upload")).length).toBe(0);
+
+        await gateway.deferNext("terminal.upload");
+        await composer.evaluate((element) => {
+          const clipboard = new DataTransfer();
+          clipboard.items.add(
+            new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "pasted.png", {
+              type: "image/png",
+            }),
+          );
+          element.dispatchEvent(
+            new ClipboardEvent("paste", {
+              bubbles: true,
+              cancelable: true,
+              clipboardData: clipboard,
+            }),
+          );
+        });
+
+        const upload = await gateway.waitForRequest("terminal.upload");
+        expect(upload.params).toMatchObject({
+          sessionId: expect.stringMatching(/^control-ui-mock-terminal-/u),
+          name: "pasted.png",
+          contentBase64: "iVBORw==",
+        });
+        await gateway.resolveDeferred("terminal.upload", { path: stagedPath, size: 4 });
+
+        await expect
+          .poll(async () => (await embedded.locator(".tp-attachment").textContent()) ?? "")
+          .toContain("pasted.png");
+        // Staging is not submission: no PTY input before an explicit Send.
+        expect((await gateway.getRequests("terminal.input")).length).toBe(0);
       },
     );
   });
