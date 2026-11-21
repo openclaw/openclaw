@@ -119,10 +119,9 @@
 }
 
 .agent-chat__composer-status-icon {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: inherit;
+  display: grid;
+  flex: 0 0 var(--chat-composer-footer-icon-size, 16px);
+  place-items: center;
 }
 
 .agent-chat__composer-status-icon svg {
