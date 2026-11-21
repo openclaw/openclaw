@@ -168,16 +168,23 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     // Plugins is the landing page for the Customize section.
     expect(await title.textContent()).toBe(active === "plugins" ? "Customize" : expected.title);
   }
-  await expect
-    .poll(() =>
-      header.evaluate((element) => {
-        const title = element.querySelector(".page-title")?.getBoundingClientRect();
-        return title ? title.width > 1 && title.height > 1 : null;
-      }),
-    )
-    .toBe(!floatingHeader);
-  if (active === "skill-workshop" && floatingHeader) {
-    // The learning state replaces the subtitle on phones; its gear now holds the docs.
+  const compactWorkshop =
+    active === "skill-workshop" &&
+    (await page.evaluate(
+      () =>
+        matchMedia(
+          "(max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)",
+        ).matches,
+    ));
+  expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
+  if (compactWorkshop) {
+    // The compact title is visually clipped, not removed from the accessibility tree.
+    expect(
+      await header
+        .locator(".hub-page-header__title")
+        .evaluate((el) => getComputedStyle(el).clipPath),
+    ).toBe("inset(50%)");
+    // The learning state replaces the subtitle; its gear contains the docs link.
     await header.getByText("Learning from work, saves on its own", { exact: true }).waitFor();
     const mode = "Skill Workshop learning mode";
     await header.getByRole("button", { name: mode, exact: true }).click();
@@ -188,7 +195,14 @@ async function expectHeaderCopy(page: Page, active: "plugins" | "skills" | "skil
     await page.keyboard.press("Escape");
     await menu.waitFor({ state: "hidden" });
   } else {
-    expect(await header.locator(".page-subtitle").textContent()).toContain(expected.subtitle);
+    await expect
+      .poll(() =>
+        header.evaluate((element) => {
+          const title = element.querySelector(".page-title")?.getBoundingClientRect();
+          return title ? title.width > 1 && title.height > 1 : null;
+        }),
+      )
+      .toBe(!floatingHeader);
     expect(await header.getByRole("link", { name: "Learn more" }).getAttribute("href")).toBe(
       expected.docs,
     );
@@ -366,6 +380,7 @@ suite.define(() => {
       nextMedia: {
         items: [
           publishedNovita,
+          installedVideo,
           {
             ...fal,
             id: "ch_bW90aW9u",
@@ -446,6 +461,27 @@ suite.define(() => {
         expect(await cards.filter({ hasText: name }).count()).toBe(1);
       }
       await captureScreenshot(page, "media-discovery-after.png");
+      // Installed providers belong in search, not in ordinary browsing or its later pages.
+      const search = page.getByRole("searchbox", { name: "Search plugins", exact: true });
+      await search.fill("video");
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        match: { intent: "all", query: "video", searchSource: "openclaw-control-ui" },
+      });
+      await expectFilteredCards("All", ["fal", "Novita", "Studio Video", "Z.AI"]);
+      await chips.getByRole("button", { name: "Media", exact: true }).click();
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        match: { category: "media", query: "video" },
+      });
+      await expectFilteredCards("Media", ["fal", "Novita", "Studio Video", "Z.AI"]);
+      const priorBrowse = (
+        await gateway.getRequests("plugins.catalog.browse", { category: "media" })
+      ).length;
+      await search.fill("");
+      await gateway.waitForRequest("plugins.catalog.browse", {
+        after: priorBrowse,
+        match: { category: "media" },
+      });
+      await expectFilteredCards("Media", ["fal", "Novita", "Z.AI"]);
       await gateway.setMethodResponse("plugins.catalog.browse", catalogPages.nextMedia);
       await page.getByRole("button", { name: "Load more", exact: true }).click();
       await gateway.waitForRequest("plugins.catalog.browse", {

@@ -1046,27 +1046,29 @@
   }
 }
 
-/* Only the floating shell supplies a visual title; keep the page heading for assistive tech. */
-.shell--floating-header {
+/* Phone and narrow windows: the learning state takes the subtitle's place, gear at the right. */
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .content-header.hub-page-header--untabbed.plugins-hub-header.sw-hub-header {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: "actions";
   }
 
+  /* Keep the page heading accessible when the learning state replaces its row. */
   .sw-hub-header .hub-page-header__title {
-    display: contents;
+    position: absolute;
+    clip-path: inset(50%);
   }
 
   .sw-hub-header .page-subtitle {
     display: none;
   }
 
-  .sw-hub-header .hub-page-header__actions,
-  .sw-hub-header .sw-learning {
+  .sw-hub-header .hub-page-header__actions {
     width: 100%;
   }
 
   .sw-hub-header .sw-learning {
+    width: 100%;
     justify-content: space-between;
   }
 
