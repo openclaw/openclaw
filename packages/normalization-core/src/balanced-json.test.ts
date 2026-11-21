@@ -1,7 +1,234 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { extractBalancedJsonFragments, extractBalancedJsonPrefix } from "./balanced-json.js";
 
 describe("balanced JSON extraction", () => {
+  const strictRecovery = { strictJson: true, recoverAtLineStart: true } as const;
+  const fragmentsAt = (raw: string, records: string[]) =>
+    records.map((json) => ({
+      json,
+      startIndex: raw.indexOf(json),
+      endIndex: raw.indexOf(json) + json.length - 1,
+    }));
+
+  it("retains native JSON syntax across 72 direct-child substitution cases", () => {
+    const children = ["{}", "[]", '{"x":1}', "[true,null]", '{"x":"q\\\\\\"tail"}', '[{"x":[0]}]'];
+    for (const child of children) {
+      expect(() => JSON.parse(child)).not.toThrow();
+    }
+    const templates = [
+      '{"child":CHILD}',
+      "[CHILD]",
+      '{"before":1,"child":CHILD,"after":false}',
+      "[\r\nCHILD\r\n]",
+      '{"child":{"nested":CHILD}}',
+      "[CHILD,CHILD]",
+      '{"child" CHILD}',
+      "[CHILD 0]",
+      "[0 CHILD]",
+      "{CHILD}",
+      "[CHILDCHILD]",
+      "[CHILD,]",
+    ];
+    const cases = templates.flatMap((template) =>
+      children.map((child) => template.replaceAll("CHILD", child)),
+    );
+    expect(cases).toHaveLength(72);
+    for (const raw of cases) {
+      let valid = false;
+      try {
+        JSON.parse(raw);
+        valid = true;
+      } catch {
+        // The full original parse is the independent syntax oracle.
+      }
+      expect(extractBalancedJsonFragments(raw, { strictJson: true }), raw).toEqual(
+        valid ? fragmentsAt(raw, [raw]) : [],
+      );
+    }
+  });
+
+  it("recovers pretty children of a balanced invalid warning without changing defaults", () => {
+    const first = '{\r\n "text": "q\\"tail",\r\n "count": 7\r\n}';
+    const second = "[\r\n false,\r\n null\r\n]";
+    const wrapper = `{\r\nwarning\r\n${first}\r\n${second}\r\n}`;
+    const next = '{"next":1}';
+    const raw = `🦊 ${wrapper}\r\n${next}`;
+    expect(extractBalancedJsonFragments(raw, strictRecovery)).toEqual(
+      fragmentsAt(raw, [first, second, next]),
+    );
+    expect(extractBalancedJsonPrefix(raw, strictRecovery)).toEqual(fragmentsAt(raw, [first])[0]);
+    expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
+      fragmentsAt(raw, [wrapper, next]),
+    );
+    expect(extractBalancedJsonFragments(raw, { strictJson: true })).toEqual(
+      fragmentsAt(raw, [next]),
+    );
+  });
+
+  it("gives valid parents precedence and respects quoted lines and filtered container kinds", () => {
+    const child = '{"ok":[1,{"nested":true}]}';
+    const raw = `[\r\n "note {} and [0]",\r\n ${child}\r\n]`;
+    expect(extractBalancedJsonFragments(raw, strictRecovery)).toEqual(fragmentsAt(raw, [raw]));
+    expect(extractBalancedJsonFragments(raw, { ...strictRecovery, openers: ["{"] })).toEqual(
+      fragmentsAt(raw, [child]),
+    );
+    expect(
+      extractBalancedJsonFragments(`[${child}]`, { strictJson: true, openers: ["{"] }),
+    ).toEqual(fragmentsAt(`[${child}]`, [child]));
+    expect(extractBalancedJsonFragments(`"note {} and [0]"\r\n${child}`, strictRecovery)).toEqual(
+      fragmentsAt(`"note {} and [0]"\r\n${child}`, [child]),
+    );
+  });
+
+  it.each(["{\nwarning\n", "[\nwarning\n", '{\n"unterminated\n'])(
+    "retains children of incomplete or mismatched wrappers: %j",
+    (prefix) => {
+      const child = '{\n "ok": true\n}';
+      for (const suffix of ["", "\n]", "\n}", "\n]\n}"]) {
+        const raw = prefix + child + suffix;
+        expect(extractBalancedJsonFragments(raw, strictRecovery)).toEqual(
+          fragmentsAt(raw, [child]),
+        );
+      }
+    },
+  );
+
+  it("binds admission and child string ownership to original text, not its discovery view", () => {
+    const child = '{"ok":true}';
+    const original = `{\u001b[31m\n${child}\n}`;
+    const discovery = original.replace("\u001b[31m", "     ");
+    expect(
+      extractBalancedJsonFragments(discovery, {
+        ...strictRecovery,
+        strictJson: { source: original },
+      }),
+    ).toEqual(fragmentsAt(original, [child]));
+    const invalid = '{"msg":"{"key":1}"}';
+    const apparentChild = invalid.indexOf('{"key"');
+    const masked =
+      invalid.slice(0, apparentChild).replaceAll('"', " ") + invalid.slice(apparentChild);
+    expect(
+      extractBalancedJsonFragments(masked, { ...strictRecovery, strictJson: { source: invalid } }),
+    ).toEqual([]);
+    const quoted = '"note {} and [0]"';
+    const valid = `[\n${quoted},\n${child}\n]`;
+    const hiddenString = valid.replace(quoted, " ".repeat(quoted.length));
+    expect(
+      extractBalancedJsonFragments(hiddenString, {
+        ...strictRecovery,
+        strictJson: { source: valid },
+      }),
+    ).toEqual(fragmentsAt(valid, [valid]));
+    expect(
+      extractBalancedJsonFragments(quoted.replaceAll('"', " "), {
+        ...strictRecovery,
+        strictJson: { source: quoted },
+      }),
+    ).toEqual([]);
+    expect(() => extractBalancedJsonFragments("{}", { strictJson: { source: "{ }" } })).toThrow(
+      RangeError,
+    );
+  });
+
+  it("retains original numeric lexemes, duplicate keys, and escaped strings in admitted records", () => {
+    const json = '{"value":9007199254740993,"value":-0,"exponent":1e3,"text":"\\u0000 \\ud800"}';
+    expect(extractBalancedJsonFragments(json, strictRecovery)).toEqual(fragmentsAt(json, [json]));
+  });
+
+  it("bounds total native admission work for deeply nested valid and invalid containers", () => {
+    const parse = JSON.parse;
+    for (const invalid of [false, true]) {
+      const depth = 4096;
+      const leaf = '{"leaf":true}';
+      const prefix = '{\n"child":\n';
+      const suffix = invalid ? ',\n"bad":undefined\n}' : "\n}";
+      const raw = prefix.repeat(depth) + leaf + suffix.repeat(depth);
+      let units = 0;
+      let calls = 0;
+      const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        units += String(text).length;
+        calls += 1;
+        return parse(text, reviver);
+      });
+      let result: ReturnType<typeof extractBalancedJsonFragments>;
+      try {
+        result = extractBalancedJsonFragments(raw, strictRecovery);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(result).toEqual(fragmentsAt(raw, [invalid ? leaf : raw]));
+      expect(calls).toBeLessThanOrEqual(depth + 1);
+      expect(units).toBeLessThanOrEqual(raw.length + 2 * depth);
+      for (const fragment of result) {
+        expect(() => parse(fragment.json)).not.toThrow();
+      }
+    }
+  });
+
+  it.each(["warning: [", "warning: {", "[", "\t{", "\u001b[31mwarning\u001b[0m ["])(
+    "recovers an explicit record after an unmatched warning opener: %s",
+    (prefix) => {
+      const json = '{\n  "password": "q\\"tail",\n  "nested": [\n    {"ok": true}\n  ]\n}';
+      const raw = `${prefix}\n${json}\n{"next":1}`;
+      expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
+        [json, '{"next":1}'].map((text) => ({
+          json: text,
+          startIndex: raw.indexOf(text),
+          endIndex: raw.indexOf(text) + text.length - 1,
+        })),
+      );
+      expect(extractBalancedJsonPrefix(raw)).toBeNull();
+      expect(extractBalancedJsonPrefix(raw, { recoverAtLineStart: true })?.json).toBe(json);
+      expect(
+        extractBalancedJsonPrefix(`${prefix}\n{"incomplete":`, { recoverAtLineStart: true }),
+      ).toBeNull();
+    },
+  );
+
+  it("recovers later records after multiple unfinished line-start warnings", () => {
+    const first = '{\r\n  "nested": [\r\n    {"ok":true}\r\n  ]\r\n}';
+    const second = '{"next":2}';
+    const raw = `${"[\r\n".repeat(2048)}${first}\r\n${"{\r\n".repeat(2048)}${second}`;
+    expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
+      [first, second].map((json) => ({
+        json,
+        startIndex: raw.indexOf(json),
+        endIndex: raw.indexOf(json) + json.length - 1,
+      })),
+    );
+  });
+
+  it.each(["\n", "\r\n"])(
+    "resets impossible quoted-string state only for opt-in recovery (%j)",
+    (newline) => {
+      const first = '{\n "publicShare": {"id": "opaque"},\n "count": 7\n}';
+      const second = '{"next":true}';
+      const warning = 'warning: [ "unterminated';
+      const raw = `${warning}${newline}${first}${newline}]${newline}${second}`;
+      expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
+        [first, second].map((json) => ({
+          json,
+          startIndex: raw.indexOf(json),
+          endIndex: raw.indexOf(json) + json.length - 1,
+        })),
+      );
+      expect(extractBalancedJsonPrefix(raw, { recoverAtLineStart: true })?.json).toBe(first);
+      expect(extractBalancedJsonFragments(raw)).toEqual([]);
+      const valid = '[\n "quoted \\"value\\"",\n {"nested": [1, 2]}\n]';
+      expect(extractBalancedJsonPrefix(valid, { recoverAtLineStart: true })?.json).toBe(valid);
+    },
+  );
+
+  it.each(["", "warning: "])(
+    "keeps a valid multiline root with nested line-start containers after %j",
+    (prefix) => {
+      const json = '[\n{\n"ok": true\n}\n]';
+      expect(extractBalancedJsonPrefix(prefix + json, { recoverAtLineStart: true })?.json).toBe(
+        json,
+      );
+    },
+  );
+
   it.each([
     ['prefix "notjson{here}" middle {"a":[1,{"b":"c"}]} suffix', '{"a":[1,{"b":"c"}]}'],
     ['prefix "array[here]" then [1,{"b":"c"}]', '[1,{"b":"c"}]'],
