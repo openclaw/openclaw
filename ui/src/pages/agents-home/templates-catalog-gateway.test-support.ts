@@ -49,6 +49,7 @@ export async function installTemplateCatalogGateway(
     historyMessages: [
       {
         role: "assistant",
+        __openclaw: { seq: 1 },
         content: [
           {
             type: "text",

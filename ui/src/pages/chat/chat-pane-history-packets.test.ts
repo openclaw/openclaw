@@ -5,6 +5,8 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import "./chat-pane.tsx";
+import * as automationProjection from "./chat-automation-projection-loader.ts";
+import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { prepareChatHistoryPacket } from "./chat-history-window.ts";
@@ -328,6 +330,167 @@ it.each(
     }
   },
 );
+
+it.each(
+  (["owner", "reader"] as const).flatMap((cancellation) =>
+    (["resolve", "reject"] as const).map((outcome) => ({ cancellation, outcome })),
+  ),
+)(
+  "retires a packet during optional projection loading ($cancellation, $outcome)",
+  async ({ cancellation, outcome }) => {
+    const projector = vi.fn(await automationProjection.loadAutomationProjection());
+    const held = createDeferred<automationProjection.AutomationProjection>();
+    const load = vi
+      .spyOn(automationProjection, "loadAutomationProjection")
+      .mockReturnValue(held.promise);
+    const request = vi.fn(async () => ({
+      messages: [
+        persisted(3),
+        {
+          ...nativeHistoryMessage(4),
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [
+            {
+              type: "automation_creation_plan",
+              planId: "history-plan",
+              slots: [{ slotId: "first", name: "History automation" }],
+            },
+          ],
+        },
+      ],
+      hasMore: false,
+    }));
+    const { pane, state } = createStagedPrefetchPane(request);
+    admitChatHistoryPages(
+      state,
+      [historyPage([1, 2], { hasMore: false, newerCursor: "newer-3" })],
+      "around",
+    );
+    const { persisted, pending } = pendingInput(state, "held-input", "Pending input");
+    const before = state.chatMessages;
+    const coverage = state.chatHistoryPagination;
+    const published = vi.spyOn(state, "chatMessages", "set");
+    let settled: boolean | undefined;
+    const loading = pane.loadNewerMessages().then((result) => {
+      settled = result;
+      return result;
+    });
+    const owner = pane.stagedHistory;
+    const release = () =>
+      outcome === "resolve"
+        ? held.resolve(projector)
+        : held.reject(new Error("Optional projection unavailable"));
+
+    const unchanged = () => {
+      expect(state.chatMessages).toBe(before);
+      expect(state.chatHistoryPagination).toBe(coverage);
+      expect(published).not.toHaveBeenCalled();
+      expect(pending()).toBe(true);
+      expect(pane.stagedHistory.page).toBeNull();
+      expect(pane.stagedHistory.load).toBeNull();
+      expect(pane.history.olderError).toBeNull();
+      expect(state.lastError).toBeNull();
+      expect(projector).not.toHaveBeenCalled();
+      expect(request).toHaveBeenCalledOnce();
+    };
+
+    try {
+      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+      expect(settled).toBeUndefined();
+      if (cancellation === "owner") {
+        pane.presented = false;
+        expect(owner.controller.signal.aborted).toBe(true);
+        expect(pane.stagedHistory).not.toBe(owner);
+      } else {
+        // No older edge: cancel this reader while preserving its packet owner.
+        await expect(pane.loadOlderMessages()).resolves.toBe(false);
+        expect(pane.stagedHistory).toBe(owner);
+        expect(owner.controller.signal.aborted).toBe(false);
+      }
+      // Cancellation must settle without the optional module finishing.
+      await vi.waitFor(() => expect(settled).toBe(false));
+      unchanged();
+      release();
+      await Promise.allSettled([held.promise, loading]);
+      unchanged();
+    } finally {
+      release();
+      await Promise.allSettled([held.promise, loading]);
+      load.mockRestore();
+    }
+  },
+);
+
+it("admits four automation-only older packets as visible history", async () => {
+  const projector = await automationProjection.loadAutomationProjection();
+  const page = (end: number): ChatHistoryResult => {
+    const runId = `automation-run-${end}`;
+    const toolCallId = `automation-call-${end}`;
+    return {
+      messages: [
+        {
+          ...nativeHistoryMessage(end - 1),
+          role: "assistant",
+          runId,
+          content: [
+            {
+              type: "toolCall",
+              id: toolCallId,
+              name: "automations",
+              arguments: { action: "plan" },
+            },
+          ],
+        },
+        {
+          ...nativeHistoryMessage(end),
+          role: "toolResult",
+          runId,
+          toolCallId,
+          toolName: "automations",
+          isError: false,
+          content: [],
+          details: {
+            automationCreation: {
+              type: "automation_creation_plan",
+              planId: `plan-${end}`,
+              slots: [{ slotId: "first", name: `Automation ${end}` }],
+            },
+          },
+        },
+      ],
+      hasMore: end > 2,
+      ...(end > 2 ? { olderCursor: `older-${end - 2}` } : {}),
+      totalMessages: 10,
+    };
+  };
+  const request = vi.fn(async (_method: string, params: { cursor: string }) =>
+    page(Number(params.cursor.replace("older-", ""))),
+  );
+  const { pane, state } = createStagedPrefetchPane(request);
+  state.settings = { ...state.settings, chatShowToolCalls: false };
+  admitChatHistoryPages(
+    state,
+    [historyPage([9, 10], { ...pagination(10, 2), olderCursor: "older-8" })],
+    "around",
+  );
+  // Hidden tool rows need the authenticated card to count as visible history.
+  const messages = page(8).messages!;
+  expect(projector(messages, []).cards.size).toBe(1);
+  expect(hasVisibleOlderHistoryPage(state, pane.paneId, messages)).toBe(false);
+  expect(hasVisibleOlderHistoryPage(state, pane.paneId, messages, projector)).toBe(true);
+
+  const published = vi.spyOn(state, "chatMessages", "set");
+  await expect(pane.loadOlderMessages()).resolves.toBe(true);
+  expectNativeHistoryRange(state.chatMessages, 1, 10);
+  expect(state.chatHistoryPagination.hasMore).toBe(false);
+  expect(published).toHaveBeenCalledOnce();
+  expect(request).toHaveBeenCalledTimes(4);
+  expect(pane.stagedHistory.page).toBeNull();
+  expect(pane.stagedHistory.load).toBeNull();
+  expect(pane.history.olderError).toBeNull();
+});
 
 it("keeps prefetch failures silent and retries reactively", async () => {
   const nextPage = vi

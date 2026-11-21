@@ -5,6 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import "./chat-pane.tsx";
+import * as automationProjection from "./chat-automation-projection-loader.ts";
 import * as historyBudget from "./chat-history-request-budget.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { admitChatHistoryPages } from "./chat-pane-history-packets.runtime.ts";
@@ -316,51 +317,90 @@ it("reports capacity when eight strictly smaller adaptive replies still cannot c
   }
 });
 
-it("charges an uncovered streaming pin arriving during the broad reply without inventing page coverage", async () => {
-  const fixture = holdCapacityReply("newer");
-  const { state, request, broad } = fixture;
-  const pinned = {
-    ...source(901),
-    role: "assistant",
-    content: "pinned reply".repeat(10_000),
-    __openclaw: { id: "source-901", seq: 901, runId: "pending" },
-  };
-  try {
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
-    reduceChatSessionProjection(state, { type: "runDelta", runId: "pending", message: pinned });
-    reduceChatSessionProjection(state, {
-      type: "messagePersisted",
-      message: pinned,
-      envelope: { runId: "pending" },
-    });
-    expect(
-      getChatSessionProjection(state).entries.find((entry) => entry.message === pinned)?.live,
-    ).toBe(true);
-    expect(
-      state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources),
-    ).not.toContain("id:source-901");
-    const before = state.chatMessages;
-    const coverage = state.chatHistoryPagination;
-    broad.resolve(fixture.wire(request.mock.calls[0]![1]));
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    expect(request.mock.calls[1]![1]).toMatchObject({
-      cursor: request.mock.calls[0]![1].cursor,
-      limit: 399,
-    });
-    expect(request.mock.calls[1]![1].maxBytes).toBeLessThan(request.mock.calls[0]![1].maxBytes);
-    expect(state.chatMessages).toBe(before);
-    expect(state.chatHistoryPagination).toBe(coverage);
-  } finally {
-    await fixture.finish();
-  }
-  expect(state.chatMessages.filter((message) => message === pinned)).toHaveLength(1);
-  expectNativeHistoryRange(
-    state.chatMessages.filter((message) => message !== pinned),
-    384,
-    399,
-  );
-  expect(state.chatMessages).toHaveLength(400);
-});
+it.each(["reply", "projector"] as const)(
+  "charges an uncovered streaming pin arriving during %s preparation without inventing page coverage",
+  async (arrival) => {
+    const realLoad = automationProjection.loadAutomationProjection;
+    const projector = await realLoad();
+    const held = createDeferred<automationProjection.AutomationProjection>();
+    const load = vi
+      .spyOn(automationProjection, "loadAutomationProjection")
+      .mockImplementation(realLoad);
+    if (arrival === "projector") {
+      load.mockReturnValueOnce(held.promise);
+    }
+    const fixture = holdCapacityReply("newer");
+    const { state, request, broad } = fixture;
+    const pinned = {
+      ...source(901),
+      role: "assistant",
+      content: "pinned reply".repeat(10_000),
+      __openclaw: { id: "source-901", seq: 901, runId: "pending" },
+    };
+    try {
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      const reply = fixture.wire(request.mock.calls[0]![1]);
+      if (arrival === "projector") {
+        reply.messages![0] = {
+          ...source(384),
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [
+            {
+              type: "automation_creation_plan",
+              planId: "history-plan",
+              slots: [{ slotId: "first", name: "History automation" }],
+            },
+          ],
+        };
+        broad.resolve(reply);
+        await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+      }
+      reduceChatSessionProjection(state, { type: "runDelta", runId: "pending", message: pinned });
+      reduceChatSessionProjection(state, {
+        type: "messagePersisted",
+        message: pinned,
+        envelope: { runId: "pending" },
+      });
+      expect(
+        getChatSessionProjection(state).entries.find((entry) => entry.message === pinned)?.live,
+      ).toBe(true);
+      expect(
+        state.chatHistoryPagination.segments?.flatMap((segment) => segment.sources),
+      ).not.toContain("id:source-901");
+      const before = state.chatMessages;
+      const coverage = state.chatHistoryPagination;
+      if (arrival === "reply") {
+        broad.resolve(reply);
+      } else {
+        held.resolve(projector);
+      }
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+      expect(request.mock.calls[1]![1]).toMatchObject({
+        cursor: request.mock.calls[0]![1].cursor,
+        limit: 399,
+      });
+      expect(request.mock.calls[1]![1].maxBytes).toBeLessThan(request.mock.calls[0]![1].maxBytes);
+      expect(state.chatMessages).toBe(before);
+      expect(state.chatHistoryPagination).toBe(coverage);
+    } finally {
+      held.resolve(projector);
+      try {
+        await fixture.finish();
+      } finally {
+        load.mockRestore();
+      }
+    }
+    expect(state.chatMessages.filter((message) => message === pinned)).toHaveLength(1);
+    expectNativeHistoryRange(
+      state.chatMessages.filter((message) => message !== pinned),
+      384,
+      399,
+    );
+    expect(state.chatMessages).toHaveLength(400);
+  },
+);
 
 it("releases rejected broad bodies while the smaller adaptive reply is pending", async () => {
   const narrowed = createDeferred<ChatHistoryResult>();

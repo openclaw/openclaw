@@ -3,6 +3,7 @@ import {
   reduceSessionProjection,
   type SessionProjectionEntry,
 } from "@openclaw/gateway-client/browser";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -10,6 +11,10 @@ import {
   nativeHistoryMessageSourceIdentity,
 } from "../../lib/chat/history-message-identity.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
+import {
+  hasAutomationActivity,
+  loadAutomationProjection,
+} from "./chat-automation-projection-loader.ts";
 import { prepareChatHistoryPages } from "./chat-history-page-preparation.ts";
 import { hasVisibleOlderHistoryPage } from "./chat-history-page-visibility.ts";
 import {
@@ -430,6 +435,18 @@ export async function loadPreparedChatHistoryPackets(
       if (cursor === requestedCursor) {
         throw new Error("History returned the same boundary. Reload the session to retry.");
       }
+      // Release captured packet bodies when their reader/owner is retired while
+      // the optional projector loads, then refit against current resident custody.
+      const projectAutomations =
+        readerIntent && (result.messages ?? []).some(hasAutomationActivity)
+          ? await racePromiseWithAbortSignal(
+              loadAutomationProjection,
+              AbortSignal.any([signal, owner.controller.signal]),
+            )
+          : undefined;
+      if (!settleForegroundRead()) {
+        return false;
+      }
       let page: StagedOlderHistoryPage | null = {
         claim: read.claim,
         requestedCursor,
@@ -490,7 +507,12 @@ export async function loadPreparedChatHistoryPackets(
         break;
       }
       packets.push(page);
-      const visible = hasVisibleOlderHistoryPage(state, paneId, result.messages ?? []);
+      const visible = hasVisibleOlderHistoryPage(
+        state,
+        paneId,
+        result.messages ?? [],
+        projectAutomations,
+      );
       if (!visible && ++sparse >= (readerIntent ? 3 : 1)) {
         break;
       }
