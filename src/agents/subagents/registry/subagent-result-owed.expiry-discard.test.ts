@@ -12,6 +12,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
+import { startControlProducer } from "./subagent-control-native.test-support.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -47,9 +48,11 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it.each(["suspended", "pending", "not_required"] as const)(
-  "reports expired %s delivery to an idle requester only when required",
-  async (status) => {
+it.each(["suspended", "pending", "live requester", "unknown blocker", "not_required"] as const)(
+  "expires orphaned delivery with a notice but preserves its live requester (%s)",
+  async (scenario) => {
+    const status =
+      scenario === "live requester" || scenario === "unknown blocker" ? "pending" : scenario;
     using warn = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const endedAt = Date.now();
     const required = status !== "not_required";
@@ -69,10 +72,22 @@ it.each(["suspended", "pending", "not_required"] as const)(
       lifecycleRevision: "expiry-requester-revision",
       updatedAt: endedAt,
     });
+    const requester =
+      scenario === "live requester" || scenario === "unknown blocker"
+        ? startControlProducer(
+            target.sessionKey,
+            target.sessionId,
+            target.storePath,
+            undefined,
+            "requester-live-turn",
+          )
+        : undefined;
+    requester?.operation.setPhase("running");
     // Restore the durable drain-interrupted outcome; the requester never starts another turn.
     const entry = createSubagentStoreRunFixture({
       runId: "owed-expiry-child",
       requesterStorePath: target.storePath,
+      requesterTurnRunId: requester ? "requester-live-turn" : undefined,
       expectsCompletionMessage: required,
       endedReason: "subagent-error",
       completionRequesterSessionId: target.sessionId,
@@ -92,7 +107,14 @@ it.each(["suspended", "pending", "not_required"] as const)(
       },
       delivery: suspended
         ? { status: "suspended", suspendedAt: endedAt, suspendedReason: "expiry" }
-        : { status },
+        : {
+            status,
+            requesterDelivery: {
+              state: "waiting",
+              blockingRunId:
+                scenario === "unknown blocker" ? "unknown-turn" : "requester-live-turn",
+            },
+          },
     });
     await mutateSubagentRuns([entry.runId], () => ({
       value: undefined,
@@ -108,6 +130,13 @@ it.each(["suspended", "pending", "not_required"] as const)(
     await testing.sweepOnceForTests();
     await settleRootWork(true);
 
+    if (scenario === "live requester") {
+      expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery?.status).toBe("pending");
+      expect(await loadTranscriptEvents(target)).toEqual([]);
+      await requester!.finish();
+      await testing.sweepOnceForTests();
+      await settleRootWork(true);
+    }
     const persisted = loadSubagentRegistryFromSqlite().get(entry.runId);
     const notices = (await loadTranscriptEvents(target)).filter((event) => {
       const message = event as {

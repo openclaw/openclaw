@@ -23,6 +23,10 @@ have no terminal non-delivery disposition. Once the transcript owner commits the
 input, it immediately records `state: "consumed"` and the consuming run in the
 registry, before the requester source settles. Registry readers use that stored
 fact directly.
+The 30-minute idle delivery deadline does not discard a result waiting behind its
+recorded blocker while that execution still belongs to the live requester. When
+the turn ends or yields, normal completion admission resumes. Dead or unknown
+blockers retain the expiry notice path.
 An ordinary requester run ending or a later follow-up taking over does not discard
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
