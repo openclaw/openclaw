@@ -186,6 +186,59 @@ it("retries the original video once within the remaining batch budget", async ()
   expect(attachments()[0]?.id).toBe(id);
 });
 
+it("requires separate omission consent and preserves it across retry", async () => {
+  const { reads, entry, worker, attachments } = await encoding();
+  worker.reply({ type: "compatible-copy", omission: { omitApacTrackId: 3 } });
+  await vi.waitFor(() => expect(entry.preparation).toBe("compatible-copy"));
+  expect(attachments()).toEqual([]);
+  expect(EncoderWorker.jobs).toHaveLength(1);
+  const original = worker.request!.file;
+  expect(entry.originalFile).toBe(original);
+  const consent = entry.createCompatibleCopy!;
+  consent();
+  consent();
+  await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(2));
+  expect(EncoderWorker.jobs[1]!.request).toMatchObject({
+    file: original,
+    omission: { omitApacTrackId: 3 },
+  });
+  EncoderWorker.jobs[1]!.reply({ type: "error", reason: "failed" });
+  await vi.waitFor(() => expect(entry.state).toBe("error"));
+  entry.compress!();
+  await vi.waitFor(() => expect(EncoderWorker.jobs).toHaveLength(3));
+  expect(EncoderWorker.jobs[2]!.request).toMatchObject({
+    file: original,
+    omission: { omitApacTrackId: 3 },
+  });
+  ready(EncoderWorker.jobs[2]!);
+  await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
+  expect(entry.originalFile).toBe(original);
+  reads.remove(entry);
+  expect(entry.originalFile).toBeUndefined();
+  consent();
+  expect(EncoderWorker.jobs).toHaveLength(3);
+});
+
+it.each(["remove", "reset"] as const)(
+  "invalidates compatible-copy consent on %s",
+  async (action) => {
+    const { reads, entry, worker, attachments } = await encoding();
+    worker.reply({ type: "compatible-copy", omission: { omitApacTrackId: 3 } });
+    await vi.waitFor(() => expect(entry.preparation).toBe("compatible-copy"));
+    const consent = entry.createCompatibleCopy!;
+    if (action === "remove") {
+      reads.remove(entry);
+    } else {
+      reads.abortReads();
+    }
+    consent();
+    await Promise.resolve();
+    expect(entry.originalFile).toBeUndefined();
+    expect([reads.pendingReads, attachments(), reads.project([])]).toEqual([0, [], []]);
+    expect(EncoderWorker.jobs).toHaveLength(1);
+  },
+);
+
 it("reports a full batch without restarting the failed encoder", async () => {
   const { reads, entry, props } = await failedEncoding();
   appendChatAttachmentFiles([file(80, "first.txt", ""), file(20, "second.txt", "")], props);
