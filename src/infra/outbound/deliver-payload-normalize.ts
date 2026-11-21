@@ -47,8 +47,8 @@ export function stripInternalRuntimeScaffoldingFromPayload(payload: ReplyPayload
     !Array.isArray(stripped)
     ? copyReplyPayloadMetadata(
         payload,
-        // SAFETY: The walker preserves enumerable string-keyed shapes and value kinds,
-        // and leaves non-plain objects untouched. Canonical payload metadata is copied here.
+        // The walker leaves non-plain objects untouched; canonical payload metadata is copied here.
+        // SAFETY: Enumerable string-keyed shapes and value kinds are preserved.
         stripped as ReplyPayload,
       )
     : payload;
