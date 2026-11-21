@@ -150,3 +150,25 @@ it("uses a scoped session key before the configured default", () => {
     });
   expect([matches("main"), matches("ops")]).toEqual([false, true]);
 });
+
+it("keeps admitted current-job access independent of its delivery account", () => {
+  const job = createCronJob({
+    agentId: "main",
+    scheduledToolPolicy: {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:creator",
+      ownerAccountId: "creator",
+    },
+  });
+  const matches = (currentJobId: string, agentId: string, allowCurrentJob: boolean) =>
+    cronJobMatchesCallerScope({
+      job,
+      callerScope: { kind: "agentTool", agentId, accountId: "delivery", currentJobId },
+      allowCurrentJob,
+    });
+  expect(matches(job.id, "main", true)).toBe(true);
+  expect(matches(job.id, "main", false)).toBe(false);
+  expect(matches("other-job", "main", true)).toBe(false);
+  expect(matches(job.id, "other-agent", true)).toBe(false);
+});
