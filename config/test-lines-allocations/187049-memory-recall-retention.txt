@@ -1,0 +1,2 @@
+# PR #187049: recall-store retention regression coverage (overflow regression, promotion flow, retention policy, age window). Each file proves a distinct shipped behavior that failed before this change.
+248
