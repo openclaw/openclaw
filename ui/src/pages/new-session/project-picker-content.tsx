@@ -79,7 +79,7 @@ function DevicePathEntry(props: ProjectChipProps) {
       }}
     >
       <label class="new-session-page__device-path-entry">
-        {t("newSession.deviceFolderPath")}
+        <span>{t("newSession.deviceFolderPath")}</span>
         <input
           type="text"
           class="input"

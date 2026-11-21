@@ -203,7 +203,7 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, used tools");
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands");
     expectCount(".chat-tool-row", 2);
   });
 

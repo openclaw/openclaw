@@ -73,7 +73,8 @@ export async function cleanupCompletedUpdateRecovery(
         readConfig,
         confirm: async (verified) => {
           // Backward clock adjustments must not make this run its own successor. Only its
-          // own verified success releases its backups.
+          // own verified success releases its backups, and nothing releases its own
+          // database snapshot: that waits for a later verified update.
           if (
             verified.artifacts.some(
               (item) =>
@@ -81,7 +82,7 @@ export async function cleanupCompletedUpdateRecovery(
                 item.runs.includes(runId) &&
                 !(item.kind === "update-capture"
                   ? ownCaptureReleased
-                  : isVerifiedSuccessfulUpdate(run)),
+                  : item.kind !== "database-snapshot" && isVerifiedSuccessfulUpdate(run)),
             )
           ) {
             throw new Error(

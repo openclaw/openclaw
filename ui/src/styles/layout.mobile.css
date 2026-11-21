@@ -684,6 +684,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     --settings-header-inline-padding: 0;
     padding: var(--space-3) var(--space-3) var(--space-4);
 
+    /* A standalone intro shares the page gutter; hub tabs and nested headers own theirs. */
+    .content-header--intro:not(.settings-page *),
     .settings-page {
       padding-inline: 0;
     }

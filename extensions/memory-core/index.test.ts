@@ -18,7 +18,6 @@ const authorizeSearchHitsMock = vi.hoisted(() => vi.fn(async ({ hits }) => hits)
 const createMemoryRuntimeMock = vi.hoisted(() =>
   vi.fn((_host: MemoryCoreRuntimeHost = {}) => ({
     authorizeSearchHits: authorizeSearchHitsMock,
-    closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
     getMemorySearchManager: getMemorySearchManagerMock,
   })),
 );
@@ -26,6 +25,10 @@ const createMemoryRuntimeMock = vi.hoisted(() =>
 // mock-isolation: Keep the lazy manager engine outside registration tests.
 vi.mock("./src/runtime-provider.js", () => ({
   createMemoryRuntime: createMemoryRuntimeMock,
+}));
+// mock-isolation: Observe manager cleanup; the real close skips managers this test never loaded.
+vi.mock("./src/memory/manager-runtime-loader.js", () => ({
+  closeAllMemorySearchManagers: closeAllMemorySearchManagersMock,
 }));
 
 import plugin from "./index.js";
@@ -453,6 +456,20 @@ describe("memory-core plugin runtime registration", () => {
       }
     },
   );
+
+  it("closes index managers without first-loading the runtime provider", async () => {
+    const {
+      services: [service],
+      context,
+    } = captureCapability({ config: indexConfig() });
+    assert(service?.stop, "Expected memory index cleanup owner");
+    await service.start(context);
+    createMemoryRuntimeMock.mockClear();
+    // Gateway shutdown can run after an update replaced the provider's chunk on disk.
+    await service.stop(context);
+    expect(closeAllMemorySearchManagersMock).toHaveBeenCalledOnce();
+    expect(createMemoryRuntimeMock).not.toHaveBeenCalled();
+  });
 
   it("defers nested host runtime access until the injected operation runs", async () => {
     const acquireLocalService = vi.fn(async () => undefined);

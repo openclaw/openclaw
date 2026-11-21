@@ -232,11 +232,12 @@ export class SidebarSessionProjection {
         this.#rosterPresentation.readRevision(
           () => [rosterSnapshot.cards],
           () =>
-            rosterSnapshot.cards.map(({ id, name, avatar, textAvatar }) => [
+            rosterSnapshot.cards.map(({ id, name, avatar, textAvatar, assistantPreview }) => [
               id,
               name,
               avatar,
               textAvatar,
+              assistantPreview,
             ]),
           sameSidebarPresentation,
         ),
