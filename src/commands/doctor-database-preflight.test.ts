@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it, vi } from "vitest";
-import { SqliteSnapshotCapacityError } from "../infra/sqlite-snapshot-capacity-error.js";
-import * as snapshots from "../infra/sqlite-snapshot-source.js";
+import { pathToFileURL } from "node:url";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
@@ -20,53 +19,48 @@ import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 const oldVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
 
-it.each([
-  {
-    error: new SqliteSnapshotCapacityError("snapshot storage unavailable (code=ENOSPC)"),
-    restore: false,
-  },
-  { error: new Error("database disk image is malformed"), restore: true },
-  { error: Object.assign(new Error("source open failed"), { code: "ENOSPC" }), restore: true },
-  {
-    error: new AggregateError([
-      new SqliteSnapshotCapacityError("disk full"),
-      new Error("cleanup failed"),
-    ]),
-    restore: true,
-  },
-])("preserves early Doctor recovery guidance (restore: $restore)", async ({ error, restore }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await state.writeConfig({ plugins: { enabled: false } });
-    const source = openOpenClawStateDatabase({ env: state.env }).path;
-    await closeStateDatabaseForTest();
-    const original = fs.readFileSync(source);
-    const prepare = snapshots.prepareSqliteReadOnlyLocation;
-    const snapshot = vi
-      .spyOn(snapshots, "prepareSqliteReadOnlyLocation")
-      .mockImplementation((file, options) => {
-        if (file === source) {
-          return Promise.reject(error);
-        }
-        return prepare(file, options);
+it.skipIf(process.platform === "win32")(
+  "reports a real sync child's SIGTERM as interrupted and refuses Doctor repair",
+  async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
+      const source = openOpenClawStateDatabase({ env: state.env }).path;
+      await closeStateDatabaseForTest();
+      const original = fs.readFileSync(source);
+      const preload = state.path("interrupt-read.mjs");
+      fs.writeFileSync(
+        preload,
+        `import fs from "node:fs";
+const read = fs.readSync;
+fs.readSync = (fd, ...args) => {
+  const count = read(fd, ...args);
+  if (process.argv.includes("sync") && fs.fstatSync(fd).ino === fs.statSync(${JSON.stringify(source)}).ino) {
+    process.kill(process.pid, "SIGTERM");
+  }
+  return count;
+};`,
+      );
+      vi.stubEnv(
+        "NODE_OPTIONS",
+        `${process.env.NODE_OPTIONS ?? ""} --import=${pathToFileURL(preload).href}`,
+      );
+      onTestFinished(() => {
+        vi.unstubAllEnvs();
       });
-    try {
       const failure = await prepareDoctorDatabasePreflight({ scope: "state" }).catch(
         (cause: unknown) => cause,
       );
-      expect(failure).toMatchObject({ name: "DoctorUnreadableStateDatabaseError", cause: error });
       expect(failure).toMatchObject({
-        message: expect.stringContaining(
-          restore
-            ? "restore this file from a verified backup"
-            : "Free snapshot disk space or quota, then retry the inspection.",
-        ),
+        name: "DoctorUnreadableStateDatabaseError",
+        cause: { cause: { signal: "SIGTERM" } },
       });
+      expect(String(failure)).toContain("state database inspection was interrupted");
+      expect(String(failure)).toContain("rerun the command");
+      expect(String(failure)).not.toContain("restore this file");
       expect(fs.readFileSync(source)).toEqual(original);
-    } finally {
-      snapshot.mockRestore();
-    }
-  });
-});
+    });
+  },
+);
 
 it.each([false, true])(
   "keeps an idle WAL agent store's update generation when preserving sources: %s",

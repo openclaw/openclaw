@@ -25,6 +25,7 @@ import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createGitHubPublishTool } from "../agents/tools/github-publish-tool.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
+import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
 import { ensureEmptyWorktreeSource } from "../agents/worktrees/empty-source.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import {
@@ -54,11 +55,15 @@ import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-
 export const mocks = githubPublicationTestMocks();
 
 export function observeManagedLayoutCaptures() {
-  let layoutChanged = false;
+  let layoutPrepared = false;
   const ensureMounts = skillsRuntime.prepareSandboxMountSources;
   const mounts = vi
     .spyOn(skillsRuntime, "prepareSandboxMountSources")
-    .mockImplementation(async (...args) => (layoutChanged = await ensureMounts(...args)));
+    .mockImplementation(async (...args) => {
+      const created = await ensureMounts(...args);
+      layoutPrepared = true;
+      return created;
+    });
   const observations: string[] = [];
   const withStore = workspaceStore.withLocalWorkspaceStore;
   const storeObserver = vi
@@ -69,7 +74,7 @@ export function observeManagedLayoutCaptures() {
           ...store,
           manifest: async (row, action) => {
             if (
-              layoutChanged &&
+              layoutPrepared &&
               (action.kind === "probe" || action.kind === "scan") &&
               !action.prehash
             ) {
@@ -110,6 +115,7 @@ export async function fixture(
     unpublishedProjectWork?: boolean;
     baseBranch?: string;
     projectFork?: boolean;
+    sandboxLayout?: boolean;
   } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
@@ -303,7 +309,13 @@ export async function fixture(
   if (!owner) {
     throw new Error("Fixture managed workspace unavailable");
   }
-  const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const projection = options.sandboxLayout
+    ? await withWorktreeAllocationLease({ env: process.env }, (allocation) =>
+        withLocalWorkspaceProjection(owner, (state) =>
+          state.prepare({ sandbox: resolveSandboxConfigForAgent(f.config, "main"), allocation }),
+        ),
+      )
+    : await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   const sandbox = createSandboxTestContext({
     overrides: {
       sessionKey: f.session.sessionKey,

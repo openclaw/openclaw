@@ -157,9 +157,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
     case "ui/src/i18n/locales/en-agents-home.ts":
-    case "ui/src/pages/labs/labs-feature-state.ts":
-    case "ui/src/pages/labs/templates-lab-feature.ts":
-      // Draft navigation and its Labs gate belong to the optional template flow.
+      // Draft navigation belongs to the optional template flow.
       return "template-draft-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.

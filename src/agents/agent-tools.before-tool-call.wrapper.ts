@@ -1,4 +1,7 @@
-import { attachInternalToolExecutionPreparer } from "../../packages/agent-core/src/internal-hooks.js";
+import {
+  attachInternalToolExecutionPreparer,
+  getInternalToolResultContentSource,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -504,7 +507,8 @@ export function wrapToolWithBeforeToolCallHook(
         observeToolOutcome({
           ctx,
           toolName: normalizedToolName,
-          resultContentSource: tool.resultContentSource,
+          resultContentSource:
+            getInternalToolResultContentSource(result) ?? tool.resultContentSource,
           toolCallOrdinal,
           terminalPresentation: preparedTerminalPresentation?.project?.(result),
         });

@@ -1997,7 +1997,10 @@ function Resolve-GitCheckoutPath {
     if (-not $parentDir) {
         $parentDir = (Get-Location).Path
     }
-    New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    # Windows PowerShell 5.1 rejects New-Item on a drive root such as C:\, even with -Force.
+    if (-not (Test-Path -LiteralPath $parentDir -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+    }
     $parentDir = Resolve-PhysicalDirectoryPath -Path $parentDir
     $repoEntry = Get-Item -LiteralPath $RepoDir -Force -ErrorAction SilentlyContinue
     if ($repoEntry -and $repoEntry.PSIsContainer) {
@@ -2334,7 +2337,8 @@ function Refresh-GatewayServiceIfLoaded {
 function Test-PreviousGitWrapper {
     $wrapper = Join-Path (Join-Path $env:USERPROFILE ".local\bin") "openclaw.cmd"
     if (-not (Test-Path -LiteralPath $wrapper -PathType Leaf)) { return $false }
-    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+[\\/]dist[\\/]entry\.js" %\*\r?\n?$')
+    # `openclaw update` points a Git install's wrapper at the release launcher.
+    return ([System.IO.File]::ReadAllText($wrapper) -match '^@echo off\r?\nnode ".+([\\/]dist[\\/]entry\.js|[\\/]git-install[\\/]openclaw-launcher\.mjs)" %\*\r?\n?$')
 }
 
 function Remove-PreviousGitWrapper {

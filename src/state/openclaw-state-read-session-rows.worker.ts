@@ -1,4 +1,5 @@
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
+import { getRegistryWorktreeInDatabase } from "../agents/worktrees/registry-read.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
@@ -24,6 +25,9 @@ export function readSessionRowsSharedFacts(
           ? findSessionRepositoryWorkspaceInDatabase(db, entry.repositoryWorkspace)
           : undefined;
         return {
+          ...(entry.worktreeId
+            ? { worktree: getRegistryWorktreeInDatabase(db, entry.worktreeId) ?? null }
+            : {}),
           ...(entry.acp ? { acp: acp.rows[acpIndex++] ?? null } : {}),
           ...(entry.repositoryWorkspace
             ? {
@@ -37,7 +41,7 @@ export function readSessionRowsSharedFacts(
       }),
     };
   };
-  return command.entries.some((entry) => entry.repositoryWorkspace)
+  return command.entries.some((entry) => entry.repositoryWorkspace || entry.worktreeId)
     ? runSqliteReadSnapshotSync(db, readSharedFacts)
     : readSharedFacts();
 }

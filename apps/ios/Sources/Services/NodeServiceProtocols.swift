@@ -1,13 +1,19 @@
 import CoreLocation
 import Foundation
 import OpenClawKit
-import UIKit
 
 typealias OpenClawCameraSnapResult = (format: String, base64: String, width: Int, height: Int)
 typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs: Int, hasAudio: Bool)
 
+struct OpenClawCameraDeviceInfo: Codable, Sendable {
+    var id: String
+    var name: String
+    var position: String
+    var deviceType: String
+}
+
 protocol CameraServicing: Sendable {
-    func listDevices() async -> [CameraController.CameraDeviceInfo]
+    func listDevices() async -> [OpenClawCameraDeviceInfo]
     func snap(
         params: OpenClawCameraSnapParams,
         defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
@@ -146,7 +152,3 @@ protocol WatchMessagingServicing: AnyObject, Sendable {
     func sendChatDeliveryReceipt(
         _ receipt: OpenClawWatchChatDeliveryReceipt) async throws -> WatchNotificationSendResult
 }
-
-extension CameraController: CameraServicing {}
-extension ScreenRecordService: ScreenRecordingServicing {}
-extension LocationService: LocationServicing {}

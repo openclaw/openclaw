@@ -88,15 +88,14 @@ suite.define(() => {
           },
         },
         browser: { enabled: false },
-        tools: {
-          codeMode: { enabled: "auto" },
-          profile: "minimal",
-        },
+        gateway: { controlUi: { experimental: { chatBubbles: true } } },
+        tools: { profile: "minimal" },
       };
       const afterLabsReset = {
         agents: initialConfig.agents,
         browser: initialConfig.browser,
-        tools: { codeMode: {}, profile: "minimal" },
+        gateway: { controlUi: { experimental: {} } },
+        tools: initialConfig.tools,
       };
       const afterThinkingReset = {
         agents: {
@@ -116,24 +115,26 @@ suite.define(() => {
       });
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-      const codeModeRow = settingsRow(page, "Code Mode");
-      const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
-      await codeModeSwitch.waitFor();
-      expect(await codeModeSwitch.isChecked()).toBe(true);
-      await expectQuietDefault(codeModeRow);
+      const bubblesRow = settingsRow(page, "Speech bubbles");
+      const bubblesSwitch = bubblesRow.getByRole("switch", { name: "Speech bubbles", exact: true });
+      await expect.poll(() => bubblesSwitch.isEnabled()).toBe(true);
+      await expect.poll(() => bubblesSwitch.isChecked()).toBe(true);
+      await expectQuietDefault(bubblesRow);
 
       const configGetsBeforeLabsReset = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.patch");
-      await codeModeSwitch.click();
+      await bubblesSwitch.click();
       const labsPatch = requestRaw(await gateway.waitForRequest("config.patch"));
-      expect(labsPatch).toEqual({ tools: { codeMode: { enabled: null } } });
+      expect(labsPatch).toEqual({
+        gateway: { controlUi: { experimental: { chatBubbles: null } } },
+      });
 
       await finishPatch(gateway, afterLabsReset, "curated-defaults-2");
       await expect
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(configGetsBeforeLabsReset + 1);
-      await expectQuietDefault(codeModeRow);
-      expect(await codeModeSwitch.isChecked()).toBe(false);
+      await expectQuietDefault(bubblesRow);
+      expect(await bubblesSwitch.isChecked()).toBe(false);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/security`))?.status()).toBe(200);
       const browserRow = settingsRow(page, "Browser tools");
@@ -220,13 +221,13 @@ suite.define(() => {
       expect(await radio(reloadedFastModeRow, /^Default/u).isChecked()).toBe(true);
 
       expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
-      const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-      await expectQuietDefault(reloadedCodeModeRow);
+      const reloadedBubblesRow = settingsRow(page, "Speech bubbles");
+      await expectQuietDefault(reloadedBubblesRow);
       expect(
-        await reloadedCodeModeRow
-          .getByRole("switch", { name: "Code Mode", exact: true })
+        await reloadedBubblesRow
+          .getByRole("switch", { name: "Speech bubbles", exact: true })
           .isChecked(),
-      ).toBe(true);
+      ).toBe(false);
     });
   });
 });

@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { waitForFile } from "../../test/helpers/process-wait.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { withWorkerPreload } from "../../test/helpers/runtime-preload.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
@@ -122,19 +123,13 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
       filename: string | URL,
       options: ConstructorParameters<typeof Worker>[1],
     ) {
-      const worker = actual.createCpuTrackedWorker(filename, {
-        ...options,
-        execArgv: [
-          ...(options?.execArgv ?? []),
-          "--import",
-          `data:text/javascript,${encodeURIComponent(preload)}`,
-        ],
-        workerData: {
-          ...options?.workerData,
+      const worker = actual.createCpuTrackedWorker(
+        filename,
+        withWorkerPreload(options, preload, {
           testIntegrityPath: counter.path,
           testIntegrityChecks: counter.checks,
-        },
-      });
+        }),
+      );
       if (String(filename).includes("sqlite-store.worker")) {
         counter.workers.add(worker);
         worker.once("exit", () => counter.workers.delete(worker));
