@@ -440,6 +440,25 @@ describe("ClawHub chat recommendations", () => {
     },
   );
 
+  it.each([undefined, "https://example.com/package.png"])(
+    "uses the publisher image only when the catalog omits package art (package=%s)",
+    async (imageUrl) => {
+      const publisher = "https://example.com/publisher.png";
+      const result = detail(false, { imageUrl });
+      iconFetch.catalog.mockResolvedValue("blob:catalog-art");
+      const { card } = mount(async () => ({
+        ...result,
+        detail: { ...result.detail, author: { imageUrl: publisher } },
+      }));
+      await waitForSolid(() =>
+        expect(card.querySelector("img")?.getAttribute("src")).toBe("blob:catalog-art"),
+      );
+      expect(iconFetch.catalog).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ iconUrl: imageUrl ?? publisher }),
+      );
+    },
+  );
+
   it("retains detail-only decoded artwork through pending, failed, and retried status refreshes", async () => {
     vi.useFakeTimers();
     const refresh = deferred<ReturnType<typeof detail>>();
@@ -708,7 +727,8 @@ describe("ClawHub chat recommendations", () => {
       expectPublisher(card, skill.name);
       part(card, "listing")!.click();
       expect(context.navigate).toHaveBeenCalledWith("skills", {
-        search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+        pathname: "/skills/clawhub/@openclaw/calendar",
+        search: "?agent=research",
       });
       if (!installed) {
         expect(part(card, "dismiss")).toBeNull();
@@ -716,7 +736,8 @@ describe("ClawHub chat recommendations", () => {
         vi.mocked(context.navigate).mockClear();
         part(card, "install")!.click();
         expect(context.navigate).toHaveBeenCalledWith("skills", {
-          search: "?clawhub=%40openclaw%2Fcalendar&agent=research",
+          pathname: "/skills/clawhub/@openclaw/calendar",
+          search: "?agent=research",
         });
       }
     },

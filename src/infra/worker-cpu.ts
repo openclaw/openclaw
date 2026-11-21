@@ -13,6 +13,7 @@ import type {
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import * as sqliteReaderMetrics from "./sqlite-reader-metrics.js";
+import { buildWorkerCensus, type WorkerPoolPolicy } from "./worker-census.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
 import {
   canObserveWorkerMessages,
@@ -52,6 +53,7 @@ type WorkerSource = {
   requestClass?: () => string | undefined;
   lifecycleMessages?: boolean;
   poolId?: number;
+  policy?: WorkerPoolPolicy;
   taskMetrics?: NonNullable<DiagnosticMemoryUsage["workerTaskMetrics"]>[number];
   workerSlot?: number;
   started?: boolean;
@@ -192,6 +194,7 @@ export function attributeWorkerToPool(
   worker: WorkerCpuHandle,
   pool: object,
   workerClass?: WorkerPoolClass,
+  policy?: WorkerPoolPolicy,
 ): void {
   const source = trackedWorkers.workers.get(worker);
   if (!source) {
@@ -203,6 +206,7 @@ export function attributeWorkerToPool(
     trackedWorkers.poolIds.set(pool, poolId);
   }
   source.poolId = poolId;
+  source.policy = policy;
   attributeWorkerMetrics(source, workerClass, 0);
 }
 
@@ -238,25 +242,9 @@ function attributeWorkerMetrics(
 /** A bounded census of live pools, including Workers whose retirement is pending. */
 export function getTrackedWorkerPoolSnapshot() {
   pruneExitedWorkers();
-  const pools = new Map<number, { poolId: number; script: string; workerCount: number }>();
-  for (const source of trackedWorkers.workers.values()) {
-    if (source.poolId === undefined) {
-      continue;
-    }
-    const pool = pools.get(source.poolId);
-    if (pool) {
-      pool.workerCount++;
-    } else {
-      pools.set(source.poolId, { poolId: source.poolId, script: source.script, workerCount: 1 });
-    }
-  }
   return {
-    workerCount: trackedWorkers.workers.size,
+    ...buildWorkerCensus(trackedWorkers.workers.values()),
     ...summarizePostgresBridgeCounters(getTrackedPostgresBridgeCounters()),
-    workerPoolCount: pools.size,
-    workerPools: [...pools.values()]
-      .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
-      .slice(0, 100),
   };
 }
 

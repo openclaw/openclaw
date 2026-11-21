@@ -214,6 +214,7 @@ export type CatalogBackingSessionDisplay = {
 };
 
 export type CatalogSessionMenuRequest = {
+  originalUrl?: string;
   key: CatalogSessionKey;
   agentId: string;
   routeId: "chat" | "new-session";

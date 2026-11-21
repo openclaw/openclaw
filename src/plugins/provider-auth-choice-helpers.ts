@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
-import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-selection-normalize.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,

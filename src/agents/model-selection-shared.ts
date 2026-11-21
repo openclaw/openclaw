@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
@@ -21,6 +22,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
+import { modelKey } from "../shared/model-key.js";
 import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { hasExactConfiguredProviderModelRef } from "./configured-provider-model.js";
@@ -31,15 +33,7 @@ import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import {
-  createConfiguredProviderCatalogModelIdNormalizer,
-  normalizeConfiguredProviderCatalogModelId,
-  type ModelManifestNormalizationContext,
-  type ModelRef,
-  modelKey,
-  normalizeModelRef,
-  normalizeProviderId,
-} from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import {
   createModelAliasScope,
   type EffectiveModelAlias,
@@ -47,7 +41,13 @@ import {
   preferLiteralPrimary,
   providerAliasKey,
 } from "./model-selection-alias-scope.js";
-import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import {
+  createConfiguredProviderCatalogModelIdNormalizer,
+  findNormalizedProviderValue,
+  normalizeConfiguredProviderCatalogModelId,
+  normalizeModelRef,
+  parseModelRef,
+} from "./model-selection-normalize.js";
 import {
   warnDisallowedConfiguredModel,
   warnUnqualifiedConfiguredModel,

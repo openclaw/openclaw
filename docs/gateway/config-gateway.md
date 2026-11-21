@@ -382,3 +382,37 @@ The earlier `"restart"` and `"hot"` values are retired; [`openclaw doctor --fix`
 Reload debounce and in-flight operation deferral are no longer configurable and run behind built-in defaults. [`openclaw doctor --fix`](/cli/doctor) removes the retired `debounceMs` and `deferralTimeoutMs` keys from older config files.
 
 ---
+
+## `gateway.resources.profile`
+
+```json5
+{ gateway: { resources: { profile: "auto" } } }
+```
+
+- `auto` (default): choose `lean` when effective memory is **below 8 GiB**;
+  exactly 8 GiB or more selects `standard`. Automatic selection is enabled by default
+  and depends only on memory, not CPU count.
+- `standard` or `lean`: explicitly override automatic selection.
+- Memory is the smallest visible cgroup v2 `memory.max` across the process's cgroup
+  and ancestors, bounded by total host RAM. Without a finite readable limit,
+  total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
+  `memory.high`, swap and current free memory do not select
+  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+- Changing the setting requires a Gateway restart.
+
+**Both profiles currently use identical worker behavior.** This setting is the
+foundation for subsequent lean resource changes, not a memory cap or OOM guarantee.
+
+`openclaw status` (also `--json` and `--all`) and the `diagnostics.lanes` Gateway RPC
+report the active profile, selection reason, effective memory limit/source and CPU
+count. Their live census reports direct worker kind, count, retained idle floor,
+normal cap, point-read cap, idle policy and sampled heap usage. Floors are retained
+after first use, not eager startup counts. A zero idle timeout means until-close;
+warm-worker grace can extend configured timeouts. Workers remain counted until
+native exit, including pending retirement.
+
+Heap samples reuse the existing diagnostic sampler; unavailable or partial samples
+are labeled rather than reported as zero. Workers outside task pools have unknown
+policy fields. The census covers directly registered workers, not subprocesses or
+nested workers; it is not a process RSS breakdown. Offline status does not substitute
+the CLI's own resource profile for the Gateway's.
