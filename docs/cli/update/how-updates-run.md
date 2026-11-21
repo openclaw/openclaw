@@ -1616,7 +1616,10 @@ explicit overall update timeout still applies. Only serving-build and readiness 
 confirm the update. This behavior requires the updated updater and, for the extended
 wait, a running Gateway that records acceptance. If restart signals are disabled, an updater in an
 independent terminal can still use the native restart of its verified, owned service.
-A managed handoff never selects that route to restart a running incumbent.
+A managed handoff never selects that route to restart a running incumbent. On macOS,
+if a loaded KeepAlive job has no listener when verification times out, the updater
+leaves the trial unconfirmed rather than restarting the job a second time: launchd
+may still bring it up. Inspect `openclaw gateway status --deep` before taking action.
 
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that

@@ -92,12 +92,11 @@ function useService(runtime: Parameters<typeof restart.makeGatewayService>[0] = 
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
   return service;
 }
-function busyPort(commandLine?: string, readyAtMs = 0) {
+function busyPort(commandLine?: string, readyAtMs = 0, pid: number = running.pid) {
   restart.inspectPortUsage.mockImplementation(async (port) =>
-    restart.portUsage(
-      restart.monotonicClock.nowMs < readyAtMs ? [] : [{ pid: running.pid, commandLine }],
-      { port },
-    ),
+    restart.portUsage(restart.monotonicClock.nowMs < readyAtMs ? [] : [{ pid, commandLine }], {
+      port,
+    }),
   );
 }
 function gatewayFixture(
@@ -735,7 +734,12 @@ async function gitReleaseRestart() {
         refreshDefinition: false,
       },
     });
-  return { service, incumbent, successor, onVerified, verify, trial };
+  const serve = (pid: number) => {
+    vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid });
+    busyPort("openclaw-gateway", 0, pid);
+    rpc.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+  };
+  return { service, incumbent, successor, onVerified, verify, trial, serve };
 }
 
 it("does not settle a native Git restart from a listener after the managed service stops", async () => {
@@ -842,6 +846,7 @@ it.each([
 );
 
 const conflicts = ["stale", "healthy", "woke", "foreign", "reused", "busy", "leased", "revoked"];
+const replacements = ["successor", "unmatched"];
 it.each([
   ["changed", "stopped", "free"],
   ["incumbent", "stopped", "free"],
@@ -851,11 +856,16 @@ it.each([
   ["absent", "unknown", "stale"],
   ["incumbent", "stopped", "stale"],
   ["absent", "stopped", "masked"],
-  ...conflicts.map((port) => ["absent", "stopped", port] as const),
+  ...[...conflicts, ...replacements].map((port) => ["absent", "stopped", port] as const),
 ] as const)(
   "recovers a switched Git release only after confirmed stop: %s, %s, %s",
   async (owner, status, port) => {
-    const { service, incumbent, successor, onVerified, verify } = await gitReleaseRestart();
+    const { service, incumbent, successor, onVerified, verify, serve } = await gitReleaseRestart();
+    using now = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    const replaces = replacements.includes(port);
+    if (replaces) {
+      result.postUpdate = changedPlugins();
+    }
     lease.mockReturnValueOnce(owner === "absent" ? undefined : incumbent);
     if (owner === "changed") {
       lease.mockReturnValueOnce(successor);
@@ -894,19 +904,27 @@ it.each([
         const unknown = { ...successor, state: "unknown" as const };
         lease.mockImplementation((q) => (q?.current ? unknown : undefined));
       }
-      if (port !== "busy") {
+      if (replaces) {
+        now.mockReturnValue(10_100);
+        const pid = successor.pid;
+        lease.mockReturnValue({
+          ...successor,
+          listeningAt: 10_050,
+          pid: port === "unmatched" ? pid + 1 : pid,
+        });
+        serve(pid);
+      } else if (port !== "busy") {
         setFree();
       }
       return pids;
     });
     const stopped = status === "stopped";
-    const cleans = stopped && owner === "absent" && ["stale", "busy", "leased"].includes(port);
+    const cleans =
+      stopped && owner === "absent" && (replaces || ["stale", "busy", "leased"].includes(port));
     const recovers = stopped && (port === "free" || (cleans && port === "stale"));
     if (recovers) {
       command.mockImplementationOnce(async () => {
-        vi.mocked(service.readRuntime).mockResolvedValue(running);
-        busyPort("openclaw-gateway");
-        rpc.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+        serve(running.pid);
         return "accepted";
       });
     }
@@ -917,13 +935,16 @@ it.each([
       return;
     }
     const failure = port === "masked" ? "reconciliation-pending" : "restart-health-failed";
-    expect(await verify()).toBe(recovers ? "ok" : failure);
+    const settled = recovers || port === "successor";
+    expect(await verify()).toBe(
+      settled ? "ok" : port === "unmatched" ? "readiness-pending" : failure,
+    );
     expect(cleanup).toHaveBeenCalledTimes(Number(cleans));
     expect(command).toHaveBeenCalledTimes(Number(recovers));
-    expect(onVerified).toHaveBeenCalledTimes(Number(recovers));
+    expect(onVerified).toHaveBeenCalledTimes(Number(settled));
     expect(vi.mocked(recordUpdateRunVerification).mock.calls[0]?.[1]).toMatchObject({
-      serviceRunning: stopped ? false : undefined,
-      settled: false,
+      serviceRunning: replaces ? true : stopped ? false : undefined,
+      settled: port === "successor",
     });
   },
 );

@@ -10,7 +10,7 @@ import type { UpdateServiceRestartParams } from "./update-command-service-contex
 
 /** No owner row names the old listener. Bind it to this profile before stale-PID recovery. */
 export async function recoverStaleGitListener(
-  params: UpdateServiceRestartParams,
+  params: UpdateServiceRestartParams & { unverifiedGitHandoff?: { incumbentPid?: number } },
   health: GatewayRestartSnapshot,
   reinspect: () => Promise<GatewayRestartSnapshot>,
   assertCurrent: () => void,
@@ -81,5 +81,13 @@ export async function recoverStaleGitListener(
     },
   });
   assertCurrent();
-  return terminated.length ? await reinspect() : current;
+  if (!terminated.includes(pid)) {
+    return current;
+  }
+  // The verifier may compare a replacement to this lock-bound predecessor. Removal
+  // does not itself establish the identity, build or readiness of the new listener.
+  if (params.unverifiedGitHandoff) {
+    params.unverifiedGitHandoff.incumbentPid = pid;
+  }
+  return await reinspect();
 }

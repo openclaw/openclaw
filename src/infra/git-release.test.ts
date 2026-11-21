@@ -42,6 +42,16 @@ async function release(prefix: string, version: string, entry: string) {
   return root;
 }
 
+async function publishFixture(prefix: string, version: string, entry: string, trial: boolean) {
+  const releaseRoot = await release(prefix, version, entry);
+  await publishGitRelease({ prefix, releaseRoot, trial });
+}
+
+async function publishFailingTrial(prefix: string, previousTrial: boolean) {
+  await publishFixture(prefix, "1.0.0", 'console.log("old");\n', previousTrial);
+  await publishFixture(prefix, "2.0.0", 'throw new Error("boot");\n', true);
+}
+
 async function setup() {
   const stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-")));
   roots.push(stateDir);
@@ -253,11 +263,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         path.join(old, "package.json"),
         JSON.stringify({ name: "openclaw", version: "1.0.0" }),
       );
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "2.0.0", ""),
-        trial: false,
-      });
+      await publishFixture(prefix, "2.0.0", "", false);
 
       const releases = await listPackageReleases(gitReleaseSlot(prefix));
       expect(releases.map(({ id, version, selected }) => ({ id, version, selected }))).toEqual(
@@ -401,10 +407,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("resumes an interrupted rollback before the link moves", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: true });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, true);
       const db = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(db, { recursive: true });
       await fs.writeFile(path.join(db, "blocker"), "");
@@ -431,10 +434,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("keeps a family's restored WAL when a rollback resumes after partial progress", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: true });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, true);
       const db = path.join(stateDir, "state", "openclaw.sqlite");
       await fs.mkdir(path.dirname(db), { recursive: true });
       // The previous rollback recorded the family, restored the WAL, then stopped.
@@ -472,10 +472,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       vi.stubEnv("OPENCLAW_HOME", home);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", "~/cfg/openclaw.json");
       try {
-        const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-        await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-        const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-        await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+        await publishFailingTrial(prefix, false);
       } finally {
         vi.unstubAllEnvs();
       }
@@ -511,10 +508,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("keeps the applied plan and the trial when removing an addition fails", async () => {
       const { stateDir, prefix } = await setup();
-      const good = await release(prefix, "1.0.0", 'console.log("old");\n');
-      await publishGitRelease({ prefix, releaseRoot: good, trial: false });
-      const bad = await release(prefix, "2.0.0", 'throw new Error("boot");\n');
-      await publishGitRelease({ prefix, releaseRoot: bad, trial: true });
+      await publishFailingTrial(prefix, false);
       // An addition that cannot be removed (here a non-empty directory).
       const stuck = path.join(stateDir, "client", "credentials.sqlite");
       await fs.mkdir(stuck, { recursive: true });
@@ -539,16 +533,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
 
     it("stops counting once the trial release reports ready", async () => {
       const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "2.0.0", 'console.log("new");\n'),
-        trial: true,
-      });
+      await publishFixture(prefix, "1.0.0", "", false);
+      await publishFixture(prefix, "2.0.0", 'console.log("new");\n', true);
       const trial = path.join(prefix, "releases", GIT_RELEASE_TRIAL);
       expect(JSON.parse(await fs.readFile(trial, "utf8"))).toMatchObject({ version: "2.0.0" });
 
@@ -610,11 +596,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       const { inspectManagedGatewayServiceBeforeUpdate } =
         await import("../cli/update-cli/update-command-service-plan.js");
       const { prefix } = await setup();
-      await publishGitRelease({
-        prefix,
-        releaseRoot: await release(prefix, "1.0.0", ""),
-        trial: false,
-      });
+      await publishFixture(prefix, "1.0.0", "", false);
       const launcher = path.join(prefix, "openclaw-launcher.mjs");
       const verdict = await inspectManagedGatewayServiceBeforeUpdate({
         root: gitReleaseSlot(prefix),
@@ -669,16 +651,8 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", "1");
           expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
           // An interrupted conversion selected a trial without rebinding the loaded job.
-          await publishGitRelease({
-            prefix,
-            releaseRoot: await release(prefix, "1.0.0", ""),
-            trial: false,
-          });
-          await publishGitRelease({
-            prefix,
-            releaseRoot: await release(prefix, "2.0.0", ""),
-            trial: true,
-          });
+          await publishFixture(prefix, "1.0.0", "", false);
+          await publishFixture(prefix, "2.0.0", "", true);
           expect(await gatewayServiceOwnsGitInstall(checkout, true)).toBe(false);
           // A later independent update must not adopt the unserved trial as its fallback.
           vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);

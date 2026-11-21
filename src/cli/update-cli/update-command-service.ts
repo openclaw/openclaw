@@ -330,12 +330,12 @@ export async function maybeRestartService(
     expectedGatewayVersion = expectedVersion,
   ) => {
     recordPhase("verifying");
+    const context = { ...activation, ...opts };
     const verification = await verifyUpdatedGateway({
-      ...activation,
+      ...context,
       onProgress,
       expectedVersion: expectedGatewayVersion,
       expectedBuildId: expectedGatewayBuildId,
-      ...opts,
       recoverHealth: async (initial, reinspect, assertReady) => {
         assertReady();
         if (
@@ -346,7 +346,7 @@ export async function maybeRestartService(
           return { health: initial, launchAgentRecovery: null };
         }
         if (opts.recoverHealth === "stopped-stale") {
-          const health = await recoverStaleGitListener(activation, initial, reinspect, assertReady);
+          const health = await recoverStaleGitListener(context, initial, reinspect, assertReady);
           skipFurtherHealthRecovery = initial.waitOutcome === "stale-pids";
           return { health, launchAgentRecovery: null };
         }
