@@ -100,7 +100,7 @@ without activating it.
 | `proxy`                  | Loopback traffic goes through the proxy. A remote proxy resolves `127.0.0.1`/`localhost` against itself, so this mode can break local runtime listeners.                                   |
 | `block`                  | OpenClaw denies Gateway control-plane, browser CDP, and guarded local-provider loopback connections before opening a socket. Other requests use the proxy.                                 |
 
-The implicit bypass covers `localhost` and literal loopback IP URLs. LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
+The implicit bypass covers `localhost` and literal loopback IP URLs. Unless explicitly opted out below, LAN, tailnet, private-network, and public hosts continue through the managed proxy. Application-level SSRF checks still apply to untrusted destinations.
 
 Local Gateway HTTP health checks follow this policy too, including HTTPS checks
 used by Doctor and restart checks. HTTPS checks verify the configured Gateway
@@ -109,17 +109,16 @@ that verification.
 
 Update canary `/startupz` and `/readyz` checks use the same loopback routing policy. If a running canary never answers within the validation budget, the update records the observed failure as a warning, including the next troubleshooting step, and continues best effort.
 
-Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). These ambient environment bypass lists do not override managed proxy policy.
+Environment-only HTTP proxy routing honors `no_proxy`/`NO_PROXY` (lowercase takes precedence). Managed routing ignores those variables by default. To use their bypass list with a managed proxy, opt in:
 
-For managed mode, set `OPENCLAW_PROXY_NO_PROXY` in the Gateway's environment
-to explicitly opt specific destinations out of the proxy. For example,
-`OPENCLAW_PROXY_NO_PROXY=.svc.cluster.local` trusts the Kubernetes service DNS
-suffix for direct connections. It uses the same host, suffix, and port syntax
-as `NO_PROXY`, but ignores a standalone `*` entry rather than allowing all
-traffic to go direct. The entries are added to both child-process bypass
-variables in `gateway-only` mode. The `proxy` and `block` modes ignore
-this setting. Only list trusted destinations that should not be filtered by the
-forward proxy; application-level destination checks still apply.
+```yaml
+proxy:
+  proxyUrl: http://127.0.0.1:3128
+  loopbackMode: gateway-only
+  useEnvNoProxy: true
+```
+
+For example, start the Gateway with `NO_PROXY=cognee.example.svc.cluster.local:8000` and leave `no_proxy` unset. The Gateway reads the list at startup and combines it with the loopback exceptions for native child processes. An explicitly empty lowercase variable still takes precedence over uppercase. A standalone `*` entry is ignored. Unmatched destinations still use the managed proxy, and application-level destination checks still apply. The `proxy` and `block` modes ignore this setting.
 
 ### WebChat or Codex fails after upgrading
 
@@ -246,7 +245,7 @@ Add any additional metadata hosts or reserved ranges your cloud provider or netw
 
 - This is process-level coverage for JavaScript HTTP/WebSocket clients, not an OS-level network sandbox.
 - Raw `net`, `tls`, `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
-- Loopback routing is direct in the default mode; this is not a general local-network bypass. LAN, tailnet, private-network, and public model hosts still use the managed proxy. Guarded local providers retain their configured-origin and DNS checks.
+- Loopback routing is direct in the default mode; this is not a general local-network bypass. LAN, tailnet, private-network, and public model hosts still use the managed proxy unless explicitly opted out. Guarded local providers retain their configured-origin and DNS checks.
 - The local debug proxy's direct upstream forwarding (for proxy requests and `CONNECT` tunnels) is disabled by default while managed proxy mode is active; enable it only for approved local diagnostics.
 - OpenClaw does not inspect, test, or certify your proxy policy. Treat proxy policy changes as security-sensitive operational changes.
 

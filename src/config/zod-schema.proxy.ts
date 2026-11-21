@@ -17,6 +17,7 @@ export const ProxyConfigSchema = z
         caFile: z.string().min(1).optional(),
       })
       .optional(),
+    useEnvNoProxy: z.boolean().optional(),
     loopbackMode: z.enum(["gateway-only", "proxy", "block"]).optional(),
   })
   .optional();

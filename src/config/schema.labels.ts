@@ -394,6 +394,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "proxy.proxyUrl": "Managed Proxy URL",
   "proxy.tls": "Managed Proxy TLS",
   "proxy.tls.caFile": "Managed Proxy TLS CA File",
+  "proxy.useEnvNoProxy": "Managed Proxy Environment Bypasses",
   "proxy.loopbackMode": "Managed Proxy Loopback Mode",
   ...AGENT_MODEL_FIELD_LABELS,
   "agents.defaults.humanDelay.mode": "Human Delay Mode",

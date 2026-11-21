@@ -77,7 +77,7 @@ describe("startProxy", () => {
   const envKeysToClean = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"]
     .flatMap((key) => [key, key.toUpperCase()])
     .concat(
-      ["ACTIVE", "CA_FILE", "LOOPBACK_MODE", "NO_PROXY", "URL"].map(
+      ["ACTIVE", "ACTIVE_NO_PROXY", "CA_FILE", "LOOPBACK_MODE", "URL"].map(
         (key) => `OPENCLAW_PROXY_${key}`,
       ),
     );
@@ -181,20 +181,31 @@ describe("startProxy", () => {
   });
 
   it.each(["gateway-only", "proxy", "block"] as const)(
-    "projects only explicit bypasses in gateway-only mode (%s)",
+    "honors an opted-in startup bypass list only in gateway-only mode (%s)",
     async (loopbackMode) => {
-      vi.stubEnv("OPENCLAW_PROXY_NO_PROXY", "*, .svc.cluster.local");
-      vi.stubEnv("no_proxy", "ambient.example");
-      await startProxy({ proxyUrl, loopbackMode });
+      vi.stubEnv("NO_PROXY", "shadowed.example");
+      vi.stubEnv("no_proxy", "*, cognee.test.svc.cluster.local:8000");
+      const handle = await startProxy({ proxyUrl, loopbackMode, useEnvNoProxy: true });
       const noProxy = process.env["no_proxy"] ?? "";
       expect(noProxy).toBe(process.env["NO_PROXY"]);
-      expect(noProxy).not.toContain("ambient.example");
+      expect(noProxy).not.toContain("shadowed.example");
       expect(noProxy.split(",")).not.toContain("*");
       if (loopbackMode === "gateway-only") {
-        expect(noProxy.split(",")).toContain(".svc.cluster.local");
+        expect(noProxy.split(",")).toContain("cognee.test.svc.cluster.local:8000");
+        // Reinstalling the inherited runtime must use the projected policy, not
+        // a child process's ambient NO_PROXY override.
+        process.env["no_proxy"] = "*";
+        ensureInheritedManagedProxyRoutingActive();
+        expect(process.env["no_proxy"]).toBe(noProxy);
       } else {
         expect(noProxy).toBe("");
       }
+      await stopProxy(handle);
+      expectEnv({
+        NO_PROXY: "shadowed.example",
+        no_proxy: "*, cognee.test.svc.cluster.local:8000",
+      });
+      expect(process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"]).toBeUndefined();
     },
   );
 

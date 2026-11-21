@@ -107,7 +107,12 @@ function createTunnelProxy(seenConnectTargets: string[], tlsTargetPort?: number)
   return proxy;
 }
 
-async function runNodeModule(source: string, env: NodeJS.ProcessEnv, imports = "") {
+async function runNodeModule(
+  source: string,
+  env: NodeJS.ProcessEnv,
+  imports = "",
+  useEnvNoProxy = false,
+) {
   const script = `
         ${imports}
         import assert from "node:assert/strict";
@@ -127,7 +132,7 @@ async function runNodeModule(source: string, env: NodeJS.ProcessEnv, imports = "
           return { status: response.statusCode, body: await text(response) };
         }
 
-        const handle = await startProxy({ enabled: true });
+        const handle = await startProxy({ enabled: true, useEnvNoProxy: ${useEnvNoProxy} });
         assert.notEqual(handle, null, "expected external proxy routing to start");
         try {
           ${source}
@@ -229,7 +234,7 @@ describe("SSRF external proxy routing", () => {
     expect(seenConnectTargets).toEqual(["gateway.example.com:443"]);
   });
 
-  it("routes only explicitly allowed service destinations directly", async () => {
+  it("routes only opted-in environment service destinations directly", async () => {
     const targetPort = await listen(createServer(respond(218, "from cluster service")));
     const seenTargets: string[] = [];
     const proxyPort = await listen(
@@ -250,9 +255,11 @@ describe("SSRF external proxy routing", () => {
       `,
       {
         OPENCLAW_PROXY_URL: `http://127.0.0.1:${proxyPort}`,
-        OPENCLAW_PROXY_NO_PROXY: "*,.svc.cluster.local",
-        no_proxy: "ambient.example.invalid",
+        NO_PROXY: "ambient.example.invalid",
+        no_proxy: `*,cognee.test.svc.cluster.local:${targetPort}`,
       },
+      "",
+      true,
     );
     expect(seenTargets).toEqual(["http://ambient.example.invalid/health"]);
   });

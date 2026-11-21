@@ -117,6 +117,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "TLS settings used when connecting to the managed proxy endpoint. These settings apply to proxy TLS, not destination TLS after CONNECT.",
   "proxy.tls.caFile":
     "Filesystem path to a custom CA bundle used to verify an HTTPS managed proxy endpoint certificate.",
+  "proxy.useEnvNoProxy":
+    "Honor the Gateway startup no_proxy or NO_PROXY list in gateway-only mode (default: false). A standalone * entry is ignored.",
   "proxy.loopbackMode":
     'Controls Gateway loopback control-plane routing while managed proxy mode is active: "gateway-only", "proxy", or "block".',
   "models.providers.*.request.tls":

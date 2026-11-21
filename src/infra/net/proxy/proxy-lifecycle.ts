@@ -42,10 +42,11 @@ const NO_PROXY_ENV_KEYS = ["no_proxy", "NO_PROXY"] as const;
 const LOOPBACK_NO_PROXY = "127.0.0.1,localhost,localhost.,::1,[::1],127.0.0.0/8";
 const managedBypassPolicy: ProxylineBypassPolicy = ({ url }) =>
   getActiveManagedProxyLoopbackMode() === "gateway-only" &&
-  (isLoopbackProxyUrl(url) || matchesNoProxy(url, { NO_PROXY: resolveExplicitProxyBypasses() }));
+  (isLoopbackProxyUrl(url) ||
+    matchesNoProxy(url, { NO_PROXY: process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"] }));
 
-function resolveExplicitProxyBypasses(): string {
-  return (process.env["OPENCLAW_PROXY_NO_PROXY"] ?? "")
+function resolveEnvNoProxy(snapshot: ProxyEnvSnapshot): string {
+  return (snapshot.no_proxy ?? snapshot.NO_PROXY ?? "")
     .split(/[,\s]+/)
     .filter((entry) => entry && entry !== "*")
     .join(",");
@@ -54,6 +55,7 @@ const PROXY_ACTIVE_KEYS = [
   "OPENCLAW_PROXY_ACTIVE",
   "OPENCLAW_PROXY_LOOPBACK_MODE",
   "OPENCLAW_PROXY_CA_FILE",
+  "OPENCLAW_PROXY_ACTIVE_NO_PROXY",
 ] as const;
 const ALL_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, ...NO_PROXY_ENV_KEYS, ...PROXY_ACTIVE_KEYS] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
@@ -75,6 +77,7 @@ function captureProxyEnv(): ProxyEnvSnapshot {
     OPENCLAW_PROXY_ACTIVE: process.env["OPENCLAW_PROXY_ACTIVE"],
     OPENCLAW_PROXY_LOOPBACK_MODE: process.env["OPENCLAW_PROXY_LOOPBACK_MODE"],
     OPENCLAW_PROXY_CA_FILE: process.env["OPENCLAW_PROXY_CA_FILE"],
+    OPENCLAW_PROXY_ACTIVE_NO_PROXY: process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"],
   };
 }
 
@@ -82,6 +85,7 @@ function applyProxyEnv(
   proxyUrl: string,
   loopbackMode: ProxyLoopbackMode,
   proxyCaFile: string | undefined,
+  envNoProxy: string | undefined,
 ): void {
   for (const key of PROXY_ENV_KEYS) {
     process.env[key] = proxyUrl;
@@ -93,10 +97,14 @@ function applyProxyEnv(
   } else {
     delete process.env["OPENCLAW_PROXY_CA_FILE"];
   }
+  const bypasses = loopbackMode === "gateway-only" ? envNoProxy : undefined;
+  if (bypasses) {
+    process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"] = bypasses;
+  } else {
+    delete process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"];
+  }
   const noProxy =
-    loopbackMode === "gateway-only"
-      ? [LOOPBACK_NO_PROXY, resolveExplicitProxyBypasses()].filter(Boolean).join(",")
-      : "";
+    loopbackMode === "gateway-only" ? [LOOPBACK_NO_PROXY, bypasses].filter(Boolean).join(",") : "";
   for (const key of NO_PROXY_ENV_KEYS) {
     process.env[key] = noProxy;
   }
@@ -174,7 +182,12 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     caFileOverride: process.env["OPENCLAW_PROXY_CA_FILE"],
   });
   const proxyTls = loadManagedProxyTlsOptionsSync(proxyCaFile);
-  applyProxyEnv(proxyUrl, getActiveManagedProxyLoopbackMode() ?? "gateway-only", proxyCaFile);
+  applyProxyEnv(
+    proxyUrl,
+    getActiveManagedProxyLoopbackMode() ?? "gateway-only",
+    proxyCaFile,
+    process.env["OPENCLAW_PROXY_ACTIVE_NO_PROXY"],
+  );
   proxylineHandle = loadProxyline().installGlobalProxy({
     mode: "managed",
     proxyUrl,
@@ -206,7 +219,12 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   const lifecycleBaseEnvSnapshot = captureProxyEnv();
 
   try {
-    applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
+    applyProxyEnv(
+      proxyUrl,
+      loopbackMode,
+      proxyCaFile,
+      config?.useEnvNoProxy ? resolveEnvNoProxy(lifecycleBaseEnvSnapshot) : undefined,
+    );
     proxylineHandle = loadProxyline().installGlobalProxy({
       mode: "managed",
       proxyUrl,
