@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import type {
   DmPolicy,
   OpenClawConfig,
@@ -24,6 +25,8 @@ import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
 import {
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
+  getTelegramTextParts,
+  resolveTelegramPrimaryMedia,
   type TelegramThreadSpec,
 } from "./bot/helpers.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
@@ -356,6 +359,33 @@ export function createTelegramHandlerAuthorization({
             }));
       if (!dmAuthorized) {
         return { allowed: false };
+      }
+    }
+
+    if (!params.isGroup && resolveTelegramPrimaryMedia(params.msg)) {
+      const text = getTelegramTextParts(params.msg).text;
+      const commandOptions = { botUsername: bot.botInfo?.username ?? opts.botInfo?.username };
+      if (hasControlCommand(text, undefined, commandOptions)) {
+        // A disabled command is still a command, never an ordinary media request.
+        if (!hasControlCommand(text, authorizationCfg, commandOptions)) {
+          return { allowed: false };
+        }
+        const commandAccess = await resolveTelegramCommandIngressAuthorization({
+          accountId,
+          cfg: authorizationCfg,
+          dmPolicy,
+          isGroup: false,
+          chatId: params.chatId,
+          resolvedThreadId,
+          senderId: params.senderId,
+          effectiveDmAllow,
+          allowTextCommands: true,
+          hasControlCommand: true,
+          modeWhenAccessGroupsOff: "allow",
+        });
+        if (commandAccess.shouldBlockControlCommand) {
+          return { allowed: false };
+        }
       }
     }
 

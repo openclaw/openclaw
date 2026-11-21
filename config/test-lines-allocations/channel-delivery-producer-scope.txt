@@ -1,0 +1,2 @@
+# 50 closed-producer-scope regression lines.
+50
