@@ -26,6 +26,8 @@ export function buildRequesterSettleWakeMessage(params: {
   /** The bounded descendant-delivery wait expired before every result arrived. */
   descendantsUnsettled?: boolean;
   children: readonly SubagentRunRecord[];
+  /** Members of the same yielded batch that are still working and report later. */
+  pendingMembers?: readonly SubagentRunRecord[];
   completionChannel?: string;
   requesterOrigin: DeliveryContext | undefined;
   retainedMessage?: string;
@@ -76,11 +78,18 @@ export function buildRequesterSettleWakeMessage(params: {
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
   const completionChannel = normalizeMessageChannel(params.completionChannel);
+  const pending = params.pendingMembers ?? [];
   return [
-    params.descendantsUnsettled
-      ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
-      : describeSettledBatch(params.children),
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+    ...(pending.length
+      ? [
+          `[Subagent Context] These results are ready, but ${pending.length} other subagent(s) from this batch are still working: ${pending.map(describeChild).join("; ")}. Each remaining result arrives later as its own completion. Act on the ready results now without reporting the batch as finished, or call sessions_yield to wait for the rest.`,
+        ]
+      : [
+          params.descendantsUnsettled
+            ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
+            : describeSettledBatch(params.children),
+          "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+        ]),
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
     params.parentOnly
@@ -118,13 +127,14 @@ export function describeChildrenEndedWithoutResult(labels: readonly string[]): s
   return `ended without a result: ${labels.length} stopped, killed, or deleted before finishing (${labels.join("; ")})`;
 }
 
+const describeChild = (child: SubagentRunRecord) =>
+  child.label?.trim() || child.taskName?.trim() || child.task.trim() || child.runId;
+
 // A cohort whose every member was stopped, killed, or deleted resolves with no result to review.
 function describeSettledBatch(children: readonly SubagentRunRecord[]): string {
   if (children.length === 0 || !children.every(isSubagentObligationRetired)) {
     return "[Subagent Context] Every subagent in this batch has now settled, including its descendants.";
   }
-  const labels = children.map(
-    (child) => child.label?.trim() || child.taskName?.trim() || child.task.trim() || child.runId,
-  );
+  const labels = children.map(describeChild);
   return `[Subagent Context] Every child in this batch ${describeChildrenEndedWithoutResult(labels)}.`;
 }
