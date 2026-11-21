@@ -55,6 +55,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -273,13 +275,16 @@ private fun WorkspaceEntryRow(
   onClick: () -> Unit,
 ) {
   val context = LocalContext.current
+  val entryKind = if (entry.isDirectory) nativeString("Folder") else nativeString("File")
   Row(
     modifier =
       Modifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp, vertical = 10.dp),
+        .semantics {
+          stateDescription = entryKind
+        }.padding(horizontal = 10.dp, vertical = 10.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
