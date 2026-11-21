@@ -134,6 +134,8 @@ test("keeps a session-only Access guest connected when no named role is configur
           JSON.stringify({ iss: accessOrigin, exp: Math.floor(Date.now() / 1_000) + 600 }),
         ).toString("base64url")}.signature`,
       });
+      const closes: number[] = [];
+      socket.on("close", (code) => closes.push(code));
       try {
         const hello = await connectReq(socket, {
           skipDefaultAuth: true,
@@ -142,8 +144,12 @@ test("keeps a session-only Access guest connected when no named role is configur
           scopes: ["operator.sessions.write"],
         });
         expect(hello.ok, JSON.stringify(hello.error)).toBe(true);
-        expect(transport).toHaveBeenCalledTimes(2);
-        // Hello must publish the profile resolved for this session-only connection.
+        await vi.waitFor(() => expect(transport).toHaveBeenCalledTimes(2), { timeout: 10_000 });
+        await new Promise((resolve) => {
+          setTimeout(resolve, 500);
+        });
+        expect(closes).toEqual([]);
+        // Hello already names the guest's own profile, so attaching it changes nothing.
         const helloAuth = (hello.payload as { auth?: { profileActivityViewerId?: unknown } }).auth;
         expect(helloAuth?.profileActivityViewerId).toEqual(expect.any(String));
         expect((await rpcReq(socket, "sessions.list", {})).ok).toBe(true);

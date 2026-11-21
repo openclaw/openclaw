@@ -1140,6 +1140,58 @@ AFTER_CD
     ]);
   });
 
+  it("publishes changed timing refits only after planner admission and retains failed reports", () => {
+    const steps = readWorkflow(".github/workflows/ci-test-timings-refit.yml").jobs.refit
+      .steps as WorkflowStep[];
+    const refit = requiredWorkflowStep(steps, "Refit measured test timings");
+    const admission = requiredWorkflowStep(steps, "Validate refit planner admission");
+    const report = requiredWorkflowStep(steps, "Upload full timing refit report");
+    const publish = requiredWorkflowStep(steps, "Update standing refit pull request");
+    expect(steps.indexOf(refit)).toBeLessThan(steps.indexOf(admission));
+    expect(steps.indexOf(admission)).toBeLessThan(steps.indexOf(report));
+    expect(steps.indexOf(report)).toBeLessThan(steps.indexOf(publish));
+    expect(admission.run?.replace(/\\\s*/gu, "").trim().split(/\s+/u)).toEqual([
+      "pnpm",
+      "test",
+      "test/scripts/ci-node-test-plan.test.ts",
+      "test/scripts/ci-node-test-plan.commands.test.ts",
+      "test/scripts/ci-changed-node-test-plan.test.ts",
+      "--maxWorkers=1",
+    ]);
+    expect(admission["continue-on-error"]).not.toBe(true);
+    for (const [changed, outcome, shouldValidate, shouldPublish] of [
+      ["true", "success", true, true],
+      ["true", "failure", true, false],
+      ["true", "skipped", true, false],
+      ["", "skipped", false, false],
+    ] as const) {
+      const context = {
+        cancelled: () => false,
+        steps: {
+          [refit.id!]: { outputs: { changed }, outcome: "success" },
+          [admission.id!]: { outcome },
+        },
+      };
+      const evaluate = (step: WorkflowStep) =>
+        runInNewContext(step.if!.replace(/^\$\{\{|\}\}$/gu, ""), context);
+      expect(evaluate(admission)).toBe(shouldValidate);
+      expect(evaluate(publish)).toBe(shouldPublish);
+      expect(evaluate(report)).toBe(true);
+    }
+    for (const [outcome, cancelled, shouldReport] of [
+      ["failure", false, true],
+      ["skipped", false, false],
+      ["success", true, false],
+    ] as const) {
+      expect(
+        runInNewContext(report.if!.replace(/^\$\{\{|\}\}$/gu, ""), {
+          cancelled: () => cancelled,
+          steps: { [refit.id!]: { outcome } },
+        }),
+      ).toBe(shouldReport);
+    }
+  });
+
   type PublicationCase = {
     name: string;
     change?: "a" | "b";
@@ -1259,13 +1311,31 @@ AFTER_CD
         ["summary", "Preserved stale generated pull request"],
       ],
     },
-    {
-      name: "defers timing refits when their codec changes on main",
+    ...[
+      "scripts/lib/ci-node-test-groups-codec.mts",
+      "scripts/lib/ci-node-test-plan.mts",
+      "test/vitest/vitest.unit-fast-paths.mjs",
+      "test/scripts/fixtures/ci-measured-compact-jobs.json",
+      "src/commands/agent.test.ts",
+    ].map((updateSource): PublicationCase => ({
+      name: `defers timing refits when admission input changes on main: ${updateSource}`,
       invalidationOwner: [".github/workflows/ci-test-timings-refit.yml", "refit"],
-      options: { updateSource: "scripts/lib/ci-node-test-groups-codec.mts" },
+      options: { updateSource },
       expected: { branchExists: false, mainGeneratedA: "old-a", mergeCalls: "" },
       contains: [["summary", staleInputs]],
-    },
+    })),
+    ...[
+      "src/commands/README.md",
+      "patches/README.md",
+      "ui/public/example.png",
+      ".github/actions/setup-android-toolchain/action.yml",
+    ].map((updateSource): PublicationCase => ({
+      name: `publishes timing refits after unrelated changes on main: ${updateSource}`,
+      invalidationOwner: [".github/workflows/ci-test-timings-refit.yml", "refit"],
+      options: { updateSource },
+      expected: { branchExists: true, generatedA: "desired-a" },
+      excludes: [["summary", staleInputs]],
+    })),
     ...(
       [
         [
