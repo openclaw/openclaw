@@ -393,8 +393,8 @@ suite.define(() => {
     }
   });
 
-  // Diagnostic for #199621: records current semantics, not a proposed membership fix.
-  it("changes agent scope when the sidebar owner filter is cleared", async () => {
+  // Keep the selected-agent contract from #201207 across owner-filter changes.
+  it("keeps the selected agent scope when the sidebar owner filter changes", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -456,7 +456,7 @@ suite.define(() => {
           const mine = ownerFilter !== "all";
           await expect.poll(() => queries.length).toBeGreaterThan(previousQueries);
           expect(queries.at(-1)?.ownerId).toBe(mine ? viewerId : undefined);
-          expect(queries.at(-1)?.agentId).toBe(mine ? undefined : "main");
+          expect(queries.at(-1)?.agentId).toBe("main");
           await expect
             .poll(async () =>
               rows.evaluateAll((elements) =>
@@ -466,9 +466,7 @@ suite.define(() => {
               ),
             )
             .toEqual(
-              (mine ? [main, research] : [main, other]).toSorted((left, right) =>
-                left.localeCompare(right),
-              ),
+              (mine ? [main] : [main, other]).toSorted((left, right) => left.localeCompare(right)),
             );
           expect(page.url()).toBe(chatUrl);
           expect(
