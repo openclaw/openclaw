@@ -47,6 +47,7 @@ import {
 } from "../../../tts/provider-registry.js";
 import { isTtsProviderConfiguredAsync, resolveTtsConfig } from "../../../tts/tts.js";
 import { READ_SCOPE } from "../../operator-scopes.js";
+import { isStartableMainSession } from "../../server-methods/session-scoped-read.js";
 import type { GatewayRequestContext, GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
@@ -528,7 +529,8 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
       );
       return;
     }
-    const agentId = resolveTalkSessionAgentId(config, catalogParams.sessionKey);
+    const sessionKey = catalogParams.sessionKey;
+    const agentId = resolveTalkSessionAgentId(config, sessionKey);
     // Wait outside the authorization callback so disclosure stays synchronous there.
     await awaitFirstSnapshot();
     const resolveStarted = Date.now();
@@ -538,15 +540,27 @@ export const talkCatalogHandler: GatewayRequestHandler = async ({
         client,
         isCurrent: () => getSessionRowProjection(context) === projection,
         p: {
-          key: catalogParams.sessionKey,
+          key: sessionKey,
           agentId,
           includeGlobal: true,
           includeUnknown: true,
+          allowMissing: true,
         },
       },
       (session) => {
         if (!session.ok) {
           respond(false, undefined, session.error);
+        } else if (
+          "missing" in session &&
+          isStartableMainSession({
+            cfg: config,
+            client,
+            sessionKey,
+            agentId,
+          })
+        ) {
+          // The first turn creates this main conversation; its agent already owns Talk.
+          respondCatalog(catalogParams);
         } else if ("missing" in session || "ambiguous" in session) {
           respond(
             false,
