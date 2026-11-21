@@ -34,6 +34,7 @@ import { connectOpenAIQuicksilverSideband } from "./realtime-quicksilver-sideban
 import type { OpenAIQuicksilverSocketFactory } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
+  resolveOpenAIQuicksilverStartupContext,
   createOpenAIQuicksilverCall,
   createOpenAIQuicksilverRequestIds,
   hangupOpenAIRealtimeCall,
@@ -558,6 +559,12 @@ export function createOpenAIQuicksilverBrowserSessionBroker(
             : {}),
           runAgentConsult,
           signal: abortController.signal,
+          startupContext: resolveOpenAIQuicksilverStartupContext({
+            auth: offer.auth,
+            model: offer.request.model,
+            hostControlsInput: Boolean(nativeControl?.handleDelegationInput),
+            instructions: offer.request.instructions,
+          }),
         },
         context.formatErrorMessage,
       );

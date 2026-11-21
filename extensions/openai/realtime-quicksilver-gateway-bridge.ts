@@ -44,6 +44,7 @@ import type {
 } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
+  resolveOpenAIQuicksilverStartupContext,
   buildOpenAIQuicksilverSessionUpdate,
   buildOpenAIQuicksilverWebSocketUrl,
   createOpenAIQuicksilverCall,
@@ -287,7 +288,14 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   ): Promise<void> {
     this.transport = "webrtc";
     this.pendingAudio.append(this.audio.decodeInput(this.pendingRawAudio.take()));
-    this.delegations = this.createDelegationController();
+    this.delegations = this.createDelegationController({
+      startupContext: resolveOpenAIQuicksilverStartupContext({
+        auth,
+        model: this.config.model,
+        hostControlsInput: Boolean(this.config.handleDelegationInput),
+        instructions: this.config.instructions,
+      }),
+    });
     const createPeer =
       this.config.createPeer ??
       (async (callbacks: OpenAIQuicksilverAudioPeerCallbacks, signal: AbortSignal) => {
@@ -452,6 +460,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
 
   private createDelegationController(params?: {
     onSessionStarted?: () => void;
+    startupContext?: string;
   }): OpenAIQuicksilverDelegationController {
     const runAgentConsult = this.config.runAgentConsult;
     if (!runAgentConsult) {
@@ -507,6 +516,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         },
         runAgentConsult,
         signal: this.abortController.signal,
+        startupContext: params?.startupContext,
       },
       this.runtime.formatErrorMessage,
     );

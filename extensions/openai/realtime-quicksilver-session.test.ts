@@ -645,6 +645,35 @@ describe("GPT-Live browser session lifecycle", () => {
     expect(realtime.getSessionCounts()).toEqual(emptyCounts);
   });
 
+  it("repeats ChatGPT call instructions once as silent session context", async () => {
+    const socket = new FakeSocket("manual");
+    const { realtime, runAgentConsult } = makeBroker({ socketFactory: () => socket });
+    const request = {
+      ...nativeRequest(runAgentConsult, { ownerConnId: "startup-context-owner" }),
+      instructions: "Your name is Lachlan.",
+    };
+    const reservation = await reserve(realtime, request);
+    const { handling } = startOffer(realtime, {
+      token: reservation.clientSecret,
+      body: AUDIO_ONLY_SDP,
+    });
+    await vi.waitFor(() => expect(socket.listenerCount("open")).toBeGreaterThan(0));
+    socket.readyState = 1;
+    socket.emit("open");
+    await handling;
+    emitSideband(socket, { type: "session.started", session: {} });
+    emitSideband(socket, { type: "session.started", session: {} });
+
+    expect(parseSent(socket)).toEqual([
+      {
+        type: "session.context.append",
+        channel: "commentary",
+        content: [{ type: "input_text", text: "Your name is Lachlan." }],
+      },
+    ]);
+    await realtime.broker.cancelBrowserSession(reservation);
+  });
+
   it.each([
     [
       "throwing error callback",
