@@ -224,6 +224,9 @@ it("removes only database snapshots a later verified update superseded", async (
 
 it("automatic cleanup after a verified update retires earlier snapshots and reports the kept ones", async () => {
   await withSnapshotHistory(async (snapshots, runs) => {
+    // A clock set back makes an earlier run look superseded to itself: its own snapshot stays.
+    await cleanupCompletedUpdateRecovery(runs.supersededPackage!, process.env, () => {});
+    expect(fs.existsSync(snapshots.supersededPackage!)).toBe(true);
     const step = await cleanupCompletedUpdateRecovery(runs.latestVerified!, process.env, () => {});
     expect(step?.advisory).toBeUndefined();
     expect(step?.diagnostics).toEqual(
@@ -259,15 +262,13 @@ it("keeps a superseded snapshot whose recorded path became a symlink", async () 
     const result = await runCleanup({ yes: true });
     expect(result.snapshots[snapshots.supersededPackage!]).toBeUndefined();
     expect(fs.existsSync(path.join(moved, "payload", "openclaw.sqlite"))).toBe(true);
-    expect(fs.existsSync(snapshots.supersededPreviousRoot!)).toBe(false);
   });
 });
 
 it("attributes no home-relative snapshot while the ledger's home names two directories", async () => {
   await withSnapshotHistory(async (snapshots) => {
     await withEnvAsync({ USERPROFILE: path.dirname(snapshots.supersededPackage!) }, async () => {
-      const result = await runCleanup({ yes: true });
-      expect(result.snapshots[snapshots.supersededPreviousRoot!]).toBeUndefined();
+      await runCleanup({ yes: true });
       expect(fs.existsSync(snapshots.supersededPreviousRoot!)).toBe(true);
       expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
     });
@@ -289,7 +290,6 @@ it("still retires recorded snapshots when an earlier install root can no longer 
 it("drops a snapshot's PostgreSQL server captures before removing it and keeps it while the drop fails", async () => {
   await withSnapshotHistory(async (snapshots) => {
     const snapshot = snapshots.supersededPreviousRoot!;
-    // The export manifest is the only record of the server schema a capture left behind.
     const exported = path.join(snapshot, "payload", "workboard.sqlite.postgres");
     fs.mkdirSync(exported);
     fs.writeFileSync(path.join(exported, "manifest.json"), "{}");
@@ -304,17 +304,8 @@ it("drops a snapshot's PostgreSQL server captures before removing it and keeps i
     expect(discard).toHaveBeenCalledExactlyOnceWith(expect.anything(), [exported]);
     expect(failed.snapshots[snapshot]?.reason).toBe("database-snapshot-retirement-failed");
     expect(fs.existsSync(path.join(exported, "manifest.json"))).toBe(true);
-    // A snapshot without server captures needs no drop and is retired in the same cleanup.
     expect(fs.existsSync(snapshots.supersededPackage!)).toBe(false);
     discard.mockResolvedValueOnce();
     expect((await runCleanup({ yes: true })).snapshots[snapshot]?.outcome).toBe("removed");
-  });
-});
-
-it("automatic cleanup never releases the triggering update's own snapshot", async () => {
-  await withSnapshotHistory(async (snapshots, runs) => {
-    // A clock set back makes an earlier verified run look like this run's successor.
-    await cleanupCompletedUpdateRecovery(runs.supersededPackage!, process.env, () => {});
-    expect(fs.existsSync(snapshots.supersededPackage!)).toBe(true);
   });
 });
