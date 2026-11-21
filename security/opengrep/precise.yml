@@ -1866,20 +1866,26 @@ rules:
             ...
           }
       - pattern: |
-          app.get($ROUTE, ...)
+          $APP.$M($ROUTE, ...)
+      - metavariable-regex:
+          metavariable: $APP
+          regex: ^(app|server|router)$
+      - metavariable-regex:
+          metavariable: $M
+          regex: ^(get|post|put|patch|delete|options|head|all)$
       - metavariable-regex:
           metavariable: $ROUTE
           regex: ^["'`](?:/sandbox/novnc|/[^"'`]*(?:helper|observer|novnc)[^"'`]*)["'`]$
       - pattern-not-inside: |
           export async function $F(...){
             ...
-            installBrowserAuthMiddleware(app, ...)
+            installBrowserAuthMiddleware($APP, ...)
             ...
-            app.get($ROUTE, ...)
+            $APP.$M($ROUTE, ...)
             ...
           }
       - pattern-not: |
-          app.get($ROUTE, ($REQ, $RES) => {
+          $APP.$M($ROUTE, ($REQ, $RES) => {
             if (!hasVerifiedBrowserAuth($REQ)) {
               ...
             }
@@ -1896,6 +1902,8 @@ rules:
       detector-bucket: precise
       source-run: 2026-04-17T07-37-10Z
       source-rule-id: openclaw-browser-bridge-preauth-helper-route
+      advisory-id: GHSA-92JP-89MQ-4374
+      source-file: security/opengrep/rules/ghsa-92jp-89mq-4374/browser-bridge-preauth-helper-route.yml
   - id: ghsa-94pw-c6m8-p9p9.openclaw-gateway-config-mutation-guard-missing-dangerous-flag-diff
     languages:
       - typescript
