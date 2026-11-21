@@ -1,0 +1,2 @@
+5
+# Bounded Workshop lifetime repair: configured timeout and unrelated foreground controls.

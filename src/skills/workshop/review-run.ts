@@ -2,13 +2,8 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { onGatewayWorkMetricsChanged } from "../../infra/gateway-work-metrics-events.js";
 import { getSkillWorkshopReviewLane } from "../../process/background-work.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
-import {
-  getActiveSessionRunCount,
-  isSessionRunActive,
-} from "../../sessions/session-controller.queries.js";
 
 /**
  * The background Workshop review run: the openclaw harness on a locked model, crediting
@@ -22,17 +17,8 @@ export async function runSkillWorkshopReview(
     skillWorkshopReviewOf: string;
   },
 ) {
-  const foreground = new AbortController();
-  const yieldToForeground = () => {
-    const ownRun = isSessionRunActive(params.sessionId) ? 1 : 0;
-    if (getActiveSessionRunCount() > ownRun) {
-      foreground.abort(new DOMException("Skill review yielded to foreground work", "AbortError"));
-    }
-  };
-  const unsubscribe = onGatewayWorkMetricsChanged(yieldToForeground);
   const abortSignal = AbortSignal.any([
     getGatewayRestartDrainSignal(),
-    foreground.signal,
     ...(params.abortSignal ? [params.abortSignal] : []),
   ]);
   // Background runs stay out of the Control UI and never project into a user session.
@@ -46,7 +32,6 @@ export async function runSkillWorkshopReview(
     projectSessionMessages: false,
   });
   try {
-    yieldToForeground();
     abortSignal.throwIfAborted();
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
@@ -80,7 +65,7 @@ export async function runSkillWorkshopReview(
       contextTokenBudget: 16_384,
       streamParams: { maxTokens: 2_048 },
       thinkLevel: "low",
-      timeoutMs: Math.min(params.timeoutMs, 120_000),
+      timeoutMs: params.timeoutMs,
       disableTrajectory: true,
       silentExpected: true,
       allowEmptyAssistantReplyAsSilent: true,
@@ -88,10 +73,9 @@ export async function runSkillWorkshopReview(
       cleanupBundleMcpOnRunEnd: true,
       verboseLevel: "off",
     });
-    foreground.signal.throwIfAborted();
+    abortSignal.throwIfAborted();
     return result;
   } finally {
-    unsubscribe();
     params.preparedRunAdmission.close();
     clearAgentRunContext(params.runId);
     cleanupSessionResources(params.sessionId);

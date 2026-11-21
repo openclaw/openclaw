@@ -113,6 +113,7 @@ it.each(["success", "failure"])(
     mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
       reviewSessionId = params.sessionId;
       expect(params.trigger).toBeUndefined();
+      expect(params.timeoutMs).toBe(300_000);
       observe(reviewSessionId);
       if (outcome === "failure") {
         throw new Error("review provider failed");
@@ -120,6 +121,10 @@ it.each(["success", "failure"])(
       return completedReview;
     });
 
+    candidate.config.agents = {
+      ...candidate.config.agents,
+      defaults: { ...candidate.config.agents?.defaults, timeoutSeconds: 300 },
+    };
     const review = runSkillExperienceReview(candidate);
     await (outcome === "failure"
       ? expect(review).rejects.toThrow("review provider failed")
@@ -131,7 +136,7 @@ it.each(["success", "failure"])(
   },
 );
 
-it("yields an in-flight review when interactive work starts", async () => {
+it("keeps an in-flight review running when unrelated interactive work starts", async () => {
   const ownHandle = createEmbeddedRunHandle();
   const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
   mocks.runEmbeddedAgent.mockImplementation(async (params: ReviewParams) => {
@@ -139,15 +144,15 @@ it("yields an in-flight review when interactive work starts", async () => {
     try {
       expect(params.abortSignal?.aborted).toBe(false);
       registerTestEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
-      expect(params.abortSignal?.aborted).toBe(true);
+      expect(params.abortSignal?.aborted).toBe(false);
       expect(interactiveHandle.abort).not.toHaveBeenCalled();
-      return { meta: { durationMs: 1, aborted: true } };
+      return completedReview;
     } finally {
       clearTestEmbeddedRun("interactive-session", interactiveHandle);
       clearTestEmbeddedRun(params.sessionId, ownHandle);
     }
   });
-  await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+  await expect(runSkillExperienceReview(candidate)).resolves.toBeUndefined();
 });
 
 it("announces changes committed before the review run failed", async () => {
