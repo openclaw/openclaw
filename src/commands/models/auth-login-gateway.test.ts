@@ -7,7 +7,8 @@ import {
 } from "../../gateway/call.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { WizardCancelledError } from "../../wizard/prompts.js";
+import { DEVICE_CODE_PHISHING_WARNING, WizardCancelledError } from "../../wizard/prompts.js";
+import { WizardSession } from "../../wizard/session.js";
 import { readGatewayLoginParams, runGatewayLoginWizard } from "./auth-login-gateway.js";
 import { refreshRunningGatewayAuthState } from "./auth-refresh.js";
 
@@ -118,6 +119,35 @@ it("renders device codes and sends selection answers on the admitted session", a
   );
   expect(prompts.note).toHaveBeenCalledWith("ABCD-1234", "Device code");
   expect(h.calls).toEqual([next(), next("device"), next("access", "keep")]);
+});
+
+it("renders a gateway device-code step on separate lines and still strips terminal controls", async () => {
+  const session = new WizardSession(async (prompter) => {
+    await prompter.deviceCode?.({
+      title: "Provider OAuth",
+      code: "ABCD-1234",
+      expiresInMinutes: 30,
+      message: "Enter this one-time code on the sign-in page.\u001b[31m",
+    });
+  });
+  const request: GatewayRequestFunction = async <T>(method: string, params?: unknown) => {
+    expect(method).toBe("wizard.next");
+    const answer = (params as { answer?: { stepId: string; value: unknown } }).answer;
+    if (answer) {
+      await session.answer(answer.stepId, answer.value);
+    }
+    return (await session.next()) as T;
+  };
+  await runGatewayLoginWizard(request, "login", new AbortController().signal, runtime);
+  expect(prompts.note).toHaveBeenCalledWith(
+    [
+      "Enter this one-time code on the sign-in page.",
+      "Code: ABCD-1234",
+      "Code expires in 30 minutes.",
+      DEVICE_CODE_PHISHING_WARNING,
+    ].join("\n"),
+    "Provider OAuth",
+  );
 });
 
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
