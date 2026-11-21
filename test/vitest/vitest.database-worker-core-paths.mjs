@@ -1382,6 +1382,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/run/auth-profile-shared-usage.worker.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.test.ts",
   "src/agents/embedded-agent-runner/run/auth-controller.request-auth.test.ts",
+  "src/agents/embedded-agent-runner/run/auth-controller.request-auth-peer-refresh.test.ts",
   "src/agents/auth-profiles.markauthprofilefailure.test.ts",
 
   "src/node-host/node-worker-launch-store.test.ts",

@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { Model } from "../../../llm/types.js";
 import { assertProviderAuthAuthority } from "../../../plugins/provider-auth-authority.js";
 import type { ProviderCreateStreamFnContext } from "../../../plugins/provider-transport.types.js";
+import { assertSettledAuthProfileAuthorization } from "../../auth-profiles/authorization-settle.js";
 import { hasOAuthIdentity, isSafeToCopyOAuthIdentity } from "../../auth-profiles/oauth-identity.js";
 import type { OAuthCredential } from "../../auth-profiles/types.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../../model-auth.js";
@@ -41,12 +42,13 @@ export function createEmbeddedRequestAuth(params: {
         assertAdmission();
         params.assertCurrent();
       };
-      assertCurrent();
       // Omit the attempt's captured store. Canonical resolution owns refresh/rotation.
       const current = await params.withDeadline(
         "credential resolution",
-        (authSignal) =>
-          getApiKeyForModelCore({
+        async (authSignal) => {
+          await assertSettledAuthProfileAuthorization(assertCurrent, authSignal);
+          while (true) {
+            const resolved = await getApiKeyForModelCore({
             model: params.model,
             cfg: params.config,
             profileId: params.profileId,
@@ -67,10 +69,15 @@ export function createEmbeddedRequestAuth(params: {
                 throw new Error("Provider request credentials changed account identity.");
               }
             },
-          }),
+            });
+            // Re-read if a peer published credentials after this lookup.
+            if (!(await assertSettledAuthProfileAuthorization(assertCurrent, authSignal))) {
+              return resolved;
+            }
+          }
+        },
         requestSignal,
       );
-      assertCurrent();
       if (current.profileId !== params.profileId || current.mode !== "oauth" || !current.apiKey) {
         throw new Error("Provider request credentials no longer match the selected OAuth profile.");
       }
