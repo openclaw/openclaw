@@ -374,9 +374,11 @@ export function UsageInsights(props: {
         ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
         : t("usage.common.emptyValue");
     const throughputCostLabel =
-      stats.throughputCostPerMin !== undefined
-        ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
-        : t("usage.common.emptyValue");
+      stats.throughputCostPerMin === undefined
+        ? empty
+        : totals.totalCost === 0 && totals.missingCostEntries > 0
+          ? t("usage.overview.unpriced")
+          : `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`;
     const avgDurationLabel =
       stats.durationCount > 0
         ? (formatDurationCompact(stats.avgDurationMs) ?? t("usage.common.emptyValue"))
