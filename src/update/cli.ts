@@ -45,7 +45,18 @@ export async function runReleaseUpdateCli(opts: UpdateCliOptions): Promise<boole
       },
     });
   }
-  const runId = await requestGatewayUpdate(opts.sha);
+  // The protocol names the tracked upstream with the commit; the install status already reads it.
+  const upstreamRef = status.git?.upstream;
+  if (opts.sha && !upstreamRef) {
+    throw new Error(
+      "--sha needs a checkout that tracks an upstream branch (git branch --set-upstream-to).",
+    );
+  }
+  const target =
+    opts.sha && upstreamRef
+      ? { kind: "git" as const, upstreamRef, upstreamSha: opts.sha }
+      : undefined;
+  const runId = await requestGatewayUpdate(target);
   const record = runId
     ? await followRun(runId, opts.json)
     : await updateWithoutGateway(runningRoot, channel, opts.sha);
@@ -54,11 +65,15 @@ export async function runReleaseUpdateCli(opts: UpdateCliOptions): Promise<boole
   return true;
 }
 
-async function requestGatewayUpdate(sha?: string): Promise<string | null> {
+async function requestGatewayUpdate(target?: {
+  kind: "git";
+  upstreamRef: string;
+  upstreamSha: string;
+}): Promise<string | null> {
   try {
     const response = await callGateway<{ runId: string | null; ok: boolean; message?: string }>({
       method: "update.run",
-      params: sha ? { target: { kind: "git", upstreamSha: sha } } : {},
+      params: target ? { target } : {},
       timeoutMs: 30_000,
     });
     if (!response.runId) {
