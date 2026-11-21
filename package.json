@@ -83,6 +83,7 @@
     ".openclaw-lifecycle-pending",
     "!dist/.buildstamp",
     "!dist/.runtime-postbuildstamp",
+    "!dist/**/.source-module-urls/**",
     "!dist/**/*.app",
     "!dist/control-ui.build-*",
     "!dist/**/*.map",

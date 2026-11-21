@@ -1,0 +1,3 @@
+# Exact net regression growth: real npm packing excludes root and nested build-only
+# source-module URL metadata while retaining every core runtime and worker archive.
+7

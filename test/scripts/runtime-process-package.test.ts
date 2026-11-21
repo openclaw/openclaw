@@ -8,7 +8,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("packs every core runtime process without exposing the portable worker graph", () => {
+it("packs core runtime processes without portable worker sources or build-only metadata", () => {
   const root = tempDirs.make("runtime-process-package-");
   const { files } = JSON.parse(
     readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -18,8 +18,14 @@ it("packs every core runtime process without exposing the portable worker graph"
     "dist/state/openclaw-state-lease-heartbeat.worker-postgres-fixture.mjs",
   ];
   const archivePath = `dist/worker-artifacts/${"a".repeat(64)}.tar.gz`;
+  const buildMetadataPaths = [
+    "dist/.source-module-urls/build.json",
+    "dist/config-doctor/.source-module-urls/build.json",
+    "dist/state-retention/.source-module-urls/build.json",
+  ];
   // Only the file-selection boundary is under test; no build or lifecycle scripts run.
   const fixturePaths = [
+    ...buildMetadataPaths,
     ...runtimePaths,
     ...WORKER_BUNDLE_ARTIFACT_PATHS.map((entry) => `dist/worker/${entry}`),
     "dist/worker/worker-chunk-fixture.mjs",
@@ -39,5 +45,6 @@ it("packs every core runtime process without exposing the portable worker graph"
   const packed = new Set(inventory.files);
   expect(runtimePaths.filter((file) => !packed.has(file))).toEqual([]);
   expect(packed.has(archivePath)).toBe(true);
+  expect(buildMetadataPaths.filter((file) => packed.has(file))).toEqual([]);
   expect(inventory.files.filter((file) => file.startsWith("dist/worker/"))).toEqual([]);
 });
