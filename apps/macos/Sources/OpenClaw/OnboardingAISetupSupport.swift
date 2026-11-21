@@ -138,8 +138,6 @@ extension OnboardingAISetupModel {
         let authOptions: [AuthOption]?
         let prepareOptions: [PrepareOption]?
         let recommendedInstalls: [RecommendedInstall]?
-        let nativeSessionCatalogs: [NativeSessionCatalog]?
-        let nativeSessionCatalogPreferenceRequired: Bool?
         let configuredModel: String?
         let utilityModel: String?
         let setupModel: String?
@@ -305,16 +303,6 @@ extension OnboardingAISetupModel {
         let brandId: String?
     }
 
-    struct NativeSessionCatalog: Identifiable, Equatable, Decodable {
-        let pluginId: String
-        let label: String
-        let detail: String?
-
-        var id: String {
-            self.pluginId
-        }
-    }
-
     struct PrepareOption: Identifiable, Equatable, Decodable {
         let id: String
         let label: String
@@ -398,10 +386,6 @@ extension OnboardingAISetupModel {
     var connected: Bool {
         if case .connected = self.phase { return true }
         return false
-    }
-
-    var nativeSessionCatalogSummary: String {
-        self.nativeSessionCatalogs.map(\.label).formatted(.list(type: .and))
     }
 
     var busyReason: String? {
