@@ -8,7 +8,6 @@ import {
   type PluginCommandScheduleBinding,
   type PluginCommandScheduleHost,
 } from "./plugin-command-schedule.types.js";
-import { autoDisableCronJob } from "./service/auto-disable.js";
 import type { CronStoredJob } from "./types.js";
 
 const MAX_PLUGIN_COMMAND_SCHEDULE_BYTES = 65_536;
@@ -197,9 +196,9 @@ export function isPluginCommandCronJob(
 
 /** Terminal command schedules stay inspectable but never wake or force-run again. */
 export function retirePluginCommandJob(job: CronStoredJob, nowMs: number): void {
-  // The schedule spent its budget or outlived its host: it is done, not broken.
-  autoDisableCronJob(job, { reason: "completed" });
+  job.enabled = false;
   job.updatedAtMs = nowMs;
+  delete job.state.nextRunAtMs;
   delete job.state.startupCatchupAtMs;
   delete job.state.pacedNextRunAtMs;
   delete job.state.forcePreservedNextRunAtMs;

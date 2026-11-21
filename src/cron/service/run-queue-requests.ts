@@ -15,7 +15,7 @@ export type CronRunOptions = ManualRunOptions & {
 };
 
 /** Event and on-exit runs carry their own event; everything else evaluates unless skipped. */
-export function evaluatesCronRunTrigger(options: CronRunOptions): boolean {
+function evaluatesCronRunTrigger(options: CronRunOptions): boolean {
   return !options.skipTrigger && !options.event && !options.onExit;
 }
 

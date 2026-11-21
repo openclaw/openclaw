@@ -2,7 +2,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 
 /**
  * A headless script has no later turn to collect a backgrounded command, so exec waits for its
- * command within the script's deadline unless the script asks for `background: true`. The
+ * command within the script's deadline unless the script asks for `background` or `durable`. The
  * process tool keeps its granted operations, for example to stop what a command left running.
  */
 export function headlessScriptTool(tool: AnyAgentTool, deadline: number): AnyAgentTool {
@@ -12,6 +12,7 @@ export function headlessScriptTool(tool: AnyAgentTool, deadline: number): AnyAge
   return {
     ...tool,
     execute: async (toolCallId, input, signal, onUpdate) => {
+      // SAFETY: exec validates its own parameters; this reads only optional scalar fields.
       const args = input as Record<string, unknown>;
       // Background and durable launches keep their own contract; the process tool manages them.
       if (args.background === true || args.durable === true) {
@@ -28,6 +29,7 @@ export function headlessScriptTool(tool: AnyAgentTool, deadline: number): AnyAge
         signal,
         onUpdate,
       );
+      // SAFETY: exec results carry ExecToolDetails; every field read below is checked.
       const details = result.details as
         | { status?: unknown; exitCode?: unknown; aggregated?: unknown }
         | undefined;
