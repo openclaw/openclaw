@@ -53,6 +53,12 @@ backup.
 
 ## Update implementation contract
 
+Candidate Doctor removes empty snapshot directories left by cancellation between
+private directory creation and native-token acquisition, after its inspection
+workers have settled. Unconfirmed worker cleanup and unowned snapshot payloads
+remain retained. The candidate must contain this repair; installed updaters need
+no schema or protocol change.
+
 Service reconciliation recognizes a deleted pnpm store generation only when it
 belongs to the same global root as a verified active pnpm install. This repairs
 older service definitions without adopting another global installation. The
