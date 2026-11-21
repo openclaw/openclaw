@@ -660,16 +660,17 @@ span.new-session-page__select {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
 }
 
-.new-session-page__device-folder {
-  flex-basis: 100%;
-  min-width: 0;
-  flex-wrap: wrap;
+.new-session-page__device-path-entry {
+  display: grid;
+  gap: 6px;
+  padding: var(--picker-inset);
+  font-size: 12px;
+  color: var(--muted);
 }
 
-.new-session-page__device-folder > span:last-child {
-  flex: 1 1 100%;
+.new-session-page__device-path-entry input {
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
 .new-session-page__branch-field {
@@ -1714,13 +1715,6 @@ span.new-session-page__select {
   height: 36px;
   padding-block: 0;
   padding-inline: calc(var(--new-session-tray-edge) - 10px);
-}
-
-/* The device path and its explanation need their own content-sized row. */
-.new-session-page__context-tray
-  .new-session-page__triggers:has(> .new-session-page__device-folder) {
-  flex-wrap: wrap;
-  height: auto;
 }
 
 .new-session-page__context-tray .new-session-page__workspace {

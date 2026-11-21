@@ -26,7 +26,7 @@ import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { SessionMenuItem } from "./cloud-target-view.tsx";
 import { findBrowsableDeviceFolderHost } from "./device-placement.ts";
 import type { BrowserProjectRegistration } from "./draft-place-browser.ts";
-import { parentFolderDisplayName } from "./path.ts";
+import { isAbsolutePath, parentFolderDisplayName } from "./path.ts";
 import { PickerNavigation, pickerOptionRef } from "./picker-navigation.ts";
 import { createPickerScrollRef, PickerSkeleton } from "./picker.tsx";
 import { PlaceBrowser } from "./place-browser.tsx";
@@ -61,6 +61,54 @@ function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
   );
 }
 
+function DevicePathEntry(props: ProjectChipProps) {
+  const [path, setPath] = createSignal(() => props.params.place.deviceFolder?.path ?? "");
+  const canUse = () =>
+    isAbsolutePath(path().trim()) &&
+    props.params.place.deviceFolderAvailable &&
+    !props.params.submitting &&
+    !props.params.pendingPlacement;
+  return (
+    <form
+      data-chat-autotype-exempt
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canUse()) {
+          props.params.place.selectDeviceFolder(path().trim());
+        }
+      }}
+    >
+      <label class="new-session-page__device-path-entry">
+        {t("newSession.deviceFolderPath")}
+        <input
+          type="text"
+          class="input"
+          value={path()}
+          placeholder={t("newSession.deviceFolderPathPlaceholder")}
+          ref={(node) => {
+            if (props.focus) {
+              props.focus.path = node;
+            }
+          }}
+          onInput={(event) => setPath(event.currentTarget.value)}
+        />
+      </label>
+      <div class="new-session-page__browser-actions">
+        <button
+          type="button"
+          class="new-session-page__browser-register"
+          onClick={() => props.params.place.browser.showRoot()}
+        >
+          {t("common.back")}
+        </button>
+        <button type="submit" class="new-session-page__browser-use" disabled={!canUse()}>
+          {t("newSession.browserUse")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function ProjectPickerContent(props: ProjectChipProps) {
   const navigation = useContext(PickerNavigation);
   const browseRef = pickerOptionRef();
@@ -69,8 +117,7 @@ export function ProjectPickerContent(props: ProjectChipProps) {
       props.params.place.applyFolder(folder);
     } else if (folder) {
       // An emptied draft names no device folder; keep the current device path.
-      props.params.place.selectDeviceFolder();
-      props.params.place.setDeviceFolderPath(folder);
+      props.params.place.selectDeviceFolder(folder);
     }
   };
   const selectClone = (cloneUrl: string) =>
@@ -292,7 +339,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
 
   return (
     <>
-      {props.params.place.browser.browserOpen ? (
+      {props.params.place.browser.devicePathEntryOpen ? (
+        <DevicePathEntry {...props} />
+      ) : props.params.place.browser.browserOpen ? (
         <PlaceBrowser
           pathRef={(node) => props.focus && (props.focus.path = node)}
           registeringProject={
@@ -378,15 +427,15 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     t("newSession.deviceFolderDescription"),
                   checked: Boolean(props.params.place.deviceFolder),
                   // Admins pick the folder in the device browser; writers type its path.
-                  hasSubmenu: Boolean(view().deviceBrowse),
-                  keepOpen: Boolean(view().deviceBrowse),
+                  hasSubmenu: true,
+                  keepOpen: true,
                   onSelect: () =>
                     view().deviceBrowse
                       ? props.params.place.browser.selectDeviceBrowser(
                           props.params.place.deviceId,
                           props.params.place.deviceFolder?.path.trim() || undefined,
                         )
-                      : props.params.place.selectDeviceFolder(),
+                      : props.params.place.browser.enterDevicePath(props.params.place.deviceId),
                 }}
                 submitting={props.params.submitting || props.params.pendingPlacement}
               />
