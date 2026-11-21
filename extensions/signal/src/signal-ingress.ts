@@ -25,6 +25,7 @@ type SignalIngressEnvelope = {
   dataMessage?: unknown;
   editMessage?: { dataMessage?: unknown } | null;
   reactionMessage?: unknown;
+  receiptMessage?: unknown;
 };
 
 type SignalIngressEventFacts = {
@@ -103,8 +104,9 @@ function inspectSignalIngressEvent(
   }
   const dataMessage = resolveDataMessage(envelope);
   const reactionMessage = isRecord(envelope.reactionMessage) ? envelope.reactionMessage : null;
-  if (!dataMessage && !reactionMessage) {
-    // Receipts, typing notifications, and other transport-only envelopes never dispatch.
+  const readReceipt = isRecord(envelope.receiptMessage) && envelope.receiptMessage.isRead === true;
+  if (!dataMessage && !reactionMessage && !readReceipt) {
+    // Delivery receipts, typing notifications, and other transport-only envelopes never dispatch.
     return null;
   }
   const senderUuid = normalizeRawString(envelope.sourceUuid);
