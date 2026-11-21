@@ -37,6 +37,8 @@ type PreparedModelRuntimeAuthTransaction = {
   >;
   publicationQueued: boolean;
   profileSetChanged: boolean;
+  /** Configured agents rebuilt by every mutation coalesced into this transaction. */
+  rebuiltAgentIds: Set<string>;
 };
 
 function partitionAuthMutationOwners(
@@ -83,9 +85,13 @@ export class PreparedModelRuntimeAuthPublicationOwner {
         ownerGates: new Map(),
         publicationQueued: false,
         profileSetChanged: false,
+        rebuiltAgentIds: new Set(),
       });
     transaction.profileSetChanged ||= profileSetChanged;
     for (const owner of invalidatedOwners) {
+      if (owner.provenance === "configured" && owner.input.agentId) {
+        transaction.rebuiltAgentIds.add(owner.input.agentId);
+      }
       let gate = transaction.ownerGates.get(owner);
       if (!gate) {
         gate = createDeferredCore<PreparedModelRuntimeSnapshot>();

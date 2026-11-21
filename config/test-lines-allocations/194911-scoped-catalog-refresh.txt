@@ -1,0 +1,2 @@
+35
+# Scoped provider-catalog refresh regressions: publication scope, coalesced auth mutations and adopted auth owners (#194911).
