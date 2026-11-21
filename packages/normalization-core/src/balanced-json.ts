@@ -33,9 +33,10 @@ type JsonContainer = {
   eligible: boolean;
   invalid: boolean;
   valid: boolean;
+  quote?: QuoteState;
 };
 
-type QuoteState = { quoted: boolean; escaped: boolean };
+type QuoteState = { quoted: boolean; escaped: boolean; damaged: boolean };
 
 type RecoveryFrame = {
   opener: JsonOpeningDelimiter;
@@ -44,19 +45,34 @@ type RecoveryFrame = {
   start: number;
   checkpoint: number;
   epoch: number;
+  quote?: QuoteState;
 };
 
-/** Only container-owned strings become invalid at a literal newline; prose keeps its quote. */
-function advanceQuotedText(state: QuoteState, char: string | undefined, recover: boolean): boolean {
+/** A newline damages a container string, but its closing quote still owns retirement. */
+function advanceQuotedText(
+  state: QuoteState,
+  char: string | undefined,
+  recover: boolean,
+  atLineStart: boolean,
+  activeOpeners: Readonly<Record<JsonOpeningDelimiter, number>>,
+): "consumed" | "invalidated" | "suspend" | "retire" {
+  if (state.damaged && atLineStart) {
+    // A recovered child suspends its parent's damaged quote. Only retiring
+    // that owner or consuming its original closing quote ends its lifetime.
+    if (char === "{" || char === "[") return "suspend";
+    if ((char === "}" && activeOpeners["{"] > 0) || (char === "]" && activeOpeners["["] > 0))
+      return "retire";
+  }
   if (recover && (char === "\n" || char === "\r")) {
-    state.quoted = false;
+    const invalidated = !state.damaged;
+    state.damaged = true;
     state.escaped = false;
-    return true;
+    return invalidated ? "invalidated" : "consumed";
   }
   if (state.escaped) state.escaped = false;
   else if (char === "\\") state.escaped = true;
-  else if (char === '"') state.quoted = false;
-  return false;
+  else if (char === '"') state.quoted = state.damaged = false;
+  return "consumed";
 }
 
 function extractStrictJsonFragments(
@@ -88,7 +104,7 @@ function extractStrictJsonFragments(
   const stack: JsonContainer[] = [];
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
   let selectedDepth = 0;
-  const quote: QuoteState = { quoted: false, escaped: false };
+  const rootQuote: QuoteState = { quoted: false, escaped: false, damaged: false };
   let lineStart = true;
   let opaqueIndex = 0;
   let spanEnd = -1;
@@ -100,13 +116,15 @@ function extractStrictJsonFragments(
     return node;
   };
   for (let index = 0; index < source.length; index += 1) {
+    const parent = stack.at(-1);
+    const quote = parent ? parent.quote : rootQuote;
     const atLineStart = lineStart;
     const entering = opaqueSpans[opaqueIndex];
     if (entering?.startIndex === index) {
       // Decide at entry: a span inside a string cannot become framing after
       // that string closes, including in the caller's masked discovery view.
       spanEnd = entering.endIndex;
-      spanOpaque = !quote.quoted;
+      spanOpaque = !quote?.quoted;
       opaqueIndex++;
     }
     const char = source[index];
@@ -122,15 +140,22 @@ function extractStrictJsonFragments(
     const discovery = inSpan ? char : raw[index];
     // Except for declared framing, original text owns structure and strings.
     // Hidden discovery quotes must not turn string interiors into child records.
-    if (quote.quoted) {
-      const parent = stack.at(-1);
-      if (advanceQuotedText(quote, char, !!opts.recoverAtLineStart && parent !== undefined)) {
+    if (quote?.quoted) {
+      const transition = advanceQuotedText(
+        quote,
+        char,
+        !!opts.recoverAtLineStart && parent !== undefined,
+        atLineStart,
+        activeOpeners,
+      );
+      if (transition === "invalidated") {
         parent!.invalid = true;
       }
-      continue;
+      if (transition === "consumed" || transition === "invalidated") continue;
     }
     if (char === '"') {
-      quote.quoted = true;
+      if (parent) parent.quote = { quoted: true, escaped: false, damaged: false };
+      else rootQuote.quoted = true;
     } else if (char === "{" || char === "[") {
       const selected = discovery === char && openers.includes(char);
       const node: JsonContainer = {
@@ -142,7 +167,6 @@ function extractStrictJsonFragments(
         invalid: false,
         valid: false,
       };
-      const parent = stack.at(-1);
       (parent ? parent.children : roots).push(node);
       nodes.push(node);
       stack.push(node);
@@ -279,7 +303,7 @@ function extractRecoverableJsonFragments(
   const spans: JsonSpan[] = [];
   const stack: RecoveryFrame[] = [];
   const activeOpeners: Record<JsonOpeningDelimiter, number> = { "{": 0, "[": 0 };
-  const quote: QuoteState = { quoted: false, escaped: false };
+  const rootQuote: QuoteState = { quoted: false, escaped: false, damaged: false };
   let selectedDepth = 0;
   let lineStart = true;
   let epoch = 0;
@@ -290,18 +314,28 @@ function extractRecoverableJsonFragments(
     return frame;
   };
   for (let index = 0; index < raw.length; index += 1) {
+    const parent = stack.at(-1);
+    const quote = parent ? parent.quote : rootQuote;
     const char = raw[index];
     const atLineStart = lineStart;
     lineStart =
       char === "\n" ||
       char === "\r" ||
       (lineStart && (char === " " || char === "\t" || char === "\r"));
-    if (quote.quoted) {
-      if (advanceQuotedText(quote, char, stack.length > 0)) epoch += 1;
-      continue;
+    if (quote?.quoted) {
+      const transition = advanceQuotedText(
+        quote,
+        char,
+        stack.length > 0,
+        atLineStart,
+        activeOpeners,
+      );
+      if (transition === "invalidated") epoch += 1;
+      if (transition === "consumed" || transition === "invalidated") continue;
     }
     if (char === '"') {
-      quote.quoted = true;
+      if (parent) parent.quote = { quoted: true, escaped: false, damaged: false };
+      else rootQuote.quoted = true;
     } else if (char === "{" || char === "[") {
       const selected = openers.includes(char);
       // Selection belongs to the original owner, including filtered containers.

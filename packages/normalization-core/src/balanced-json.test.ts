@@ -460,6 +460,232 @@ describe("balanced JSON extraction", () => {
     },
   );
 
+  it.each(["\n", "\r\n", "\r"])(
+    "retires newline-damaged quotes with their wrappers before adjacent records (%j)",
+    (newline) => {
+      const kept = '{"kept":0}';
+      const records = ['{"first":1}', '{"second":[2]}'];
+      for (const [opener, closer] of [
+        ["[", "]"],
+        ['{"text":', "}"],
+      ]) {
+        for (const text of ["line two", String.raw`line \"two\"`]) {
+          const wrapper = `${opener}"line one${newline}${text}"${closer}`;
+          for (const prefix of [
+            wrapper,
+            `warning: [${newline}${wrapper}${newline}]`,
+            `[${newline}${kept},${newline}${wrapper}${newline}]`,
+          ]) {
+            const raw = `${prefix}${newline}${records.join(" ")}`;
+            const expected = prefix.includes(kept) ? [kept, ...records] : records;
+            for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+              for (const openers of [undefined, ["{"] as const]) {
+                expect(extractBalancedJsonFragments(raw, { ...options, openers }), raw).toEqual(
+                  fragmentsAt(raw, expected),
+                );
+              }
+            }
+            const discovery = raw.replace(/[\r\n]/g, " ");
+            expect(
+              extractBalancedJsonFragments(discovery, {
+                ...strictRecovery,
+                strictJson: { source: raw },
+              }),
+            ).toEqual(fragmentsAt(raw, expected));
+          }
+        }
+      }
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
+    "releases unfinished damaged quotes only at explicit original boundaries (%j)",
+    (newline) => {
+      const child = `{${newline} "nested": [1, 2]${newline}}`;
+      const records = ['{"first":1}', '{"second":2}'];
+      for (const [opener, closer] of [
+        ["[", "]"],
+        ['{"text":', "}"],
+      ]) {
+        for (const recovered of ["", `${child}${newline}`]) {
+          const raw = `${opener}"unfinished${newline}${recovered}${closer}${newline}${records.join(" ")}`;
+          const expected = recovered ? [child, ...records] : records;
+          for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+            expect(extractBalancedJsonFragments(raw, options), raw).toEqual(
+              fragmentsAt(raw, expected),
+            );
+          }
+        }
+      }
+      const raw = `["line one${newline}} still quoted \\"quote\\" \u009dtext"]${newline}${records.join(" ")}`;
+      const startIndex = raw.indexOf("\u009d");
+      for (const discovery of [
+        raw,
+        raw.slice(0, startIndex) + " ".repeat(raw.length - startIndex),
+      ]) {
+        expect(
+          extractBalancedJsonFragments(discovery, {
+            ...strictRecovery,
+            strictJson: {
+              source: raw,
+              opaqueSpans: [{ startIndex, endIndex: raw.length - 1 }],
+            },
+          }),
+        ).toEqual(fragmentsAt(raw, records));
+      }
+    },
+  );
+
+  it("does not rescan damaged quote suffixes or copy discarded wrappers", () => {
+    const records = ['{"first":1}', '{"second":2}'];
+    for (const depth of [256, 1024]) {
+      const raw = '["line one\nline two"]\n'.repeat(depth) + records.join(" ");
+      const pop = Array.prototype.pop;
+      const slice = String.prototype.slice;
+      let pops = 0;
+      let copiedUnits = 0;
+      let result: ReturnType<typeof extractBalancedJsonFragments>;
+      Array.prototype.pop = function (this: unknown[]) {
+        pops++;
+        return Reflect.apply(pop, this, []);
+      };
+      String.prototype.slice = function (this: string, start, end) {
+        const value = Reflect.apply(slice, this, [start, end]);
+        if (String(this) === raw) copiedUnits += value.length;
+        return value;
+      };
+      try {
+        result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
+      } finally {
+        Array.prototype.pop = pop;
+        String.prototype.slice = slice;
+      }
+      expect(result).toEqual(fragmentsAt(raw, records));
+      expect(pops).toBe(depth + records.length);
+      expect(copiedUnits).toBe(records.join("").length);
+    }
+  });
+
+  it.each(["\n", "\r\n", "\r"])(
+    "resumes the owning damaged quote after recovered children (%j)",
+    (newline) => {
+      const records = ['{"first":1}', '{"second":2}'];
+      const cases = [
+        { children: ['{"inside":0}'], objects: ['{"inside":0}'] },
+        { children: ['{"inside":[{"nested":0}]}'], objects: ['{"inside":[{"nested":0}]}'] },
+        { children: ["[0]"], objects: [] },
+        { children: ['{"inside":0}', '{"again":1}'], objects: ['{"inside":0}', '{"again":1}'] },
+      ];
+      for (const [opener, closer] of [
+        ['{"text":', "}"],
+        ["[", "]"],
+      ]) {
+        for (const { children, objects } of cases) {
+          for (const tail of ["line three", String.raw`line \"three\"`]) {
+            const wrapper = `${opener}"line one${newline}${children.join(newline)}${newline}${tail}"${closer}`;
+            const raw = `${wrapper}${newline}${records.join(" ")}`;
+            for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+              for (const openers of [undefined, ["{"] as const]) {
+                expect(extractBalancedJsonFragments(raw, { ...options, openers }), raw).toEqual(
+                  fragmentsAt(raw, [...(openers ? objects : children), ...records]),
+                );
+              }
+            }
+            const discovery = raw.replace(/[\r\n]/g, " ");
+            expect(
+              extractBalancedJsonFragments(discovery, {
+                ...strictRecovery,
+                strictJson: { source: raw },
+              }),
+            ).toEqual(fragmentsAt(raw, [...children, ...records]));
+          }
+        }
+      }
+    },
+  );
+
+  it.each(["\n", "\r\n", "\r"])(
+    "retires only popped quote owners and resumes surviving owners (%j)",
+    (newline) => {
+      const child = '{"inside":0}';
+      const records = ['{"first":1}', '{"second":2}'];
+      const cases = [
+        `["outer${newline}{"text":"inner${newline}${child}${newline}inner end"}${newline}outer end"]`,
+        `["outer${newline}{"text":"inner${newline}${child}${newline}]`,
+        `{"text":"outer${newline}[unfinished${newline}${child}${newline}}`,
+        `["outer${newline}${child}${newline}} stray closer${newline}outer end"]`,
+      ];
+      for (const wrapper of cases) {
+        const raw = `${wrapper}${newline}${records.join(" ")}`;
+        for (const options of [{ recoverAtLineStart: true }, strictRecovery]) {
+          expect(extractBalancedJsonFragments(raw, options), raw).toEqual(
+            fragmentsAt(raw, [child, ...records]),
+          );
+        }
+      }
+      const invalid = "{invalid:0}";
+      const raw = `["outer${newline}${invalid}${newline}outer end"]${newline}${records.join(" ")}`;
+      expect(extractBalancedJsonFragments(raw, { recoverAtLineStart: true })).toEqual(
+        fragmentsAt(raw, [invalid, ...records]),
+      );
+      expect(extractBalancedJsonFragments(raw, strictRecovery)).toEqual(fragmentsAt(raw, records));
+      const hidden = `["outer${newline}${child}${newline}outer end"]${newline}${records.join(" ")}`;
+      const discovery = hidden.replace(child, " ".repeat(child.length));
+      expect(
+        extractBalancedJsonFragments(discovery, {
+          ...strictRecovery,
+          strictJson: { source: hidden },
+        }),
+      ).toEqual(fragmentsAt(hidden, records));
+      const opaque = `["outer${newline}${child}${newline}\u009dtitle end"]${newline}${records.join(" ")}\u0007`;
+      const startIndex = opaque.indexOf("\u009d");
+      for (const view of [
+        opaque,
+        opaque.slice(0, startIndex) + " ".repeat(opaque.length - startIndex),
+      ]) {
+        expect(
+          extractBalancedJsonFragments(view, {
+            ...strictRecovery,
+            strictJson: {
+              source: opaque,
+              opaqueSpans: [{ startIndex, endIndex: opaque.length - 1 }],
+            },
+          }),
+        ).toEqual(fragmentsAt(opaque, [child, ...records]));
+      }
+    },
+  );
+
+  it("restores suspended quotes from the surviving frame without scanning ancestry", () => {
+    const leaf = '{"inside":0}';
+    const records = ['{"first":1}', '{"second":2}'];
+    for (const depth of [256, 1024]) {
+      const raw = '["outer\n'.repeat(depth) + leaf + '\ntail"]'.repeat(depth) + records.join(" ");
+      const at = Array.prototype.at;
+      const pop = Array.prototype.pop;
+      let lookups = 0;
+      let pops = 0;
+      let result: ReturnType<typeof extractBalancedJsonFragments>;
+      Array.prototype.at = function (this: unknown[], index) {
+        lookups++;
+        return Reflect.apply(at, this, [index]);
+      };
+      Array.prototype.pop = function (this: unknown[]) {
+        pops++;
+        return Reflect.apply(pop, this, []);
+      };
+      try {
+        result = extractBalancedJsonFragments(raw, { recoverAtLineStart: true });
+      } finally {
+        Array.prototype.at = at;
+        Array.prototype.pop = pop;
+      }
+      expect(result).toEqual(fragmentsAt(raw, [leaf, ...records]));
+      expect(pops).toBe(depth + records.length + 1);
+      expect(lookups).toBeLessThanOrEqual(raw.length * 2);
+    }
+  });
+
   it("keeps leading and inter-record prose quotes owned during recovery", () => {
     const first = '{"actual":1}';
     const second = '{"next":2}';
