@@ -133,6 +133,11 @@ and before its effects. If the device or grant is revoked, or the role changes,
 the next occurrence is refused with a message asking you to recreate the
 automation from an authenticated turn, and the job is disabled. A revocation
 during a run stops that run's remaining operator effects.
+Rotating a shared Gateway token or password refuses jobs created through it. A job
+created through [trusted-proxy authentication](/gateway/trusted-proxy-auth) follows
+its proxy user's grant instead: changing `trustedProxies`, `userHeader`, or
+`requiredHeaders` keeps it, while removing the user from `allowUsers`, changing
+its identity scopes, or leaving trusted-proxy mode refuses it.
 
 The link names the creating conversation by key. After a message edit, branch
 switch, or reset, a linked detached job keeps that conversation's workspace,

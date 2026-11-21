@@ -170,18 +170,24 @@ async function restoreGatewayOperatorSnapshot(params: {
     assertLifetime();
     assertCurrent();
     const generationOwner = context.sharedGatewaySessionGenerationState;
-    if (snapshot.sharedGeneration !== undefined) {
+    // A proxy-authenticated source has no shared secret: its generation hashes proxy
+    // admission policy, which never revokes accepted work. Its saved grant does.
+    const sharedGeneration =
+      snapshot.authPolicy?.authMethod === "trusted-proxy" && !snapshot.openclawIdPrincipal
+        ? undefined
+        : snapshot.sharedGeneration;
+    if (sharedGeneration !== undefined) {
       if (!generationOwner) {
         throw new Error("Restart recovery authentication owner is unavailable.");
       }
-      if (generationOwner.requiredGeneration !== snapshot.sharedGeneration) {
+      if (generationOwner.requiredGeneration !== sharedGeneration) {
         throw new GatewayOperatorRecoveryAuthorizationError(
           "Restart recovery authentication owner changed; start a new user turn.",
         );
       }
       subscriptions.push(
         generationOwner.onInvalidated(
-          snapshot.sharedGeneration,
+          sharedGeneration,
           () => revoke(new GatewayOperatorRecoveryAuthorizationError()),
           snapshot.authPolicy,
         ),
@@ -210,7 +216,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       if (
         (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) ||
         !device.isCurrent() ||
-        (snapshot.sharedGeneration !== undefined &&
+        (sharedGeneration !== undefined &&
           context.sharedGatewaySessionGenerationState !== generationOwner)
       ) {
         throw new GatewayOperatorRecoveryAuthorizationError(
