@@ -1,4 +1,397 @@
 {
   "schema": "openclaw.release-validation-waivers/v1",
-  "waivers": []
+  "waivers": [
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-17 (bun)",
+      "reason": "Concurrent auth-removal refresh-warning assertion did not reproduce in the unchanged real-Gateway Bun replay; credential removal itself was recorded.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server-methods/models-auth-removal.integration.test.ts",
+            "test": "models.authLogout with a concurrent registered config set > publishes removal before returning when… :: AssertionError: {\"result\":{\"provider\":\"fixture\",\"removedProfiles\":[],\"abortedRunIds\":[],\"warning\":\"Credentials were removed, but the Gateway has not confirmed applying the change. Run `openclaw gateway restart` to apply it. Model auth changes were saved, but the Gateway could not refresh them. Run `openclaw gateway restart` to apply the saved changes.\"}}: expected { result: { …(4) }, error: undefined } to not match object { result: { warning: Any<String> } }\n\nCompared values have no visual difference.\n\n❯ src/gateway/server-methods/models-auth-removal.integration.test.ts:183:58\n181|             });\n182|           } else {\n183|             expect(outcome, JSON.stringify(outcome)).not.toMatchObject…\n|                                                          ^\n184|               result: { warning: expect.any(String) },\n185|             });"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run QA Live Matrix catalog / Run Matrix live QA lane",
+      "reason": "Optional Matrix live action proof is blocked by the fixture account lacking room pin authority; no product permission change is warranted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "qa_live_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media audio plugins)",
+      "reason": "Optional live media proof is blocked by provider credit exhaustion and remote reference-image acceptance.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins A)",
+      "reason": "Optional Byteplus live media proof lacks usable test-account credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins B)",
+      "reason": "Optional video-provider qualification is blocked by unavailable Veo model and missing Pixverse test credentials.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins C)",
+      "reason": "Optional Novita video-provider route is unavailable in the test account.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media video plugins D)",
+      "reason": "Optional video-provider proof lacks Together credentials and Vydra credits.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live Moonshot plugin)",
+      "reason": "Optional Moonshot web-search proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins L-N)",
+      "reason": "Optional Mistral live transcription and realtime proof is blocked by test-account authentication.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "productPerformance",
+      "jobName": "Kova mock provider performance",
+      "reason": "Accepted Kova performance threshold failures, including memory, for this beta. This grant does not authorize skipping required evidence or accepting correctness, isolation, integrity, or install/update failures.",
+      "aggregates": []
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "android-build-wear",
+      "reason": "Accepted intermittent Android Wear dependency-resolution failure; preceding unchanged build passed. Artifact integrity is not waived.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "android finished with failure (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-20 (node)",
+      "reason": "Accepted runtime-publication timeout after all four local terminal-outcome cases passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts",
+            "test": "worker turn launcher terminal results > retains the ACKed finishing outcome after assistant stop (reconciliation fails: false; cleanup: undefined; provider fallback: undefined) :: AssertionError: expected Error: prepared model runtime publication… to match object { message: StringContaining{…} }\n\n- Expected\n+ Received\n\n- {\n-   \"message\": StringContaining \"turn failed | provider failed | computer cleanup failed | native close failed\",\n+ Error {\n+   \"message\": \"prepared model runtime publication (workspace plugins; agent main) timed out\",\n}\n\n❯ src/gateway/worker-environments/worker-turn-launcher-terminal-results.test.ts:421:26\n419|           return;\n420|         }\n421|         expect(observed).toMatchObject({ message: expect.stringContain…\n|                          ^\n422|         if (reconciliationFails) {\n423|           expect(observed).toMatchObject({ cause: { cause: reconciliat…"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-22 (node)",
+      "reason": "Accepted admission timeout after all nine local policy-admission variants passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-admission.test.ts",
+            "test": "worker-side before_agent_run admission > gates the final worker prompt before inference and persistence ({\"modern\":true,\"block\":false,\"recorderOwned\":false,\"forged\":false}) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-admission.test.ts:96:5\n94|     { modern: false, block: false, recorderOwned: true, forged: false …\n95|     { modern: true, block: false, recorderOwned: false, forged: true },\n96|   ])(\n|     ^\n97|     \"gates the final worker prompt before inference and persistence (%…\n98|     async ({ modern, block, recorderOwned, forged }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-27 (bun)",
+      "reason": "Accepted intermittent broker IPC failure; exact recovery case and full 16-case local lifecycle fixture passed.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-45 (node)",
+      "reason": "Accepted launch-identity timeout after all three local identity variants passed unchanged.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/worker-environments/worker-turn-launcher-computer.test.ts",
+            "test": "worker launch capabilities > carries only a current GitHub identity in the launch envelope (available) :: Error: Test timed out in 120000ms.\nIf this is a long-running test, pass a timeout value as the last argument or configure it globally with \"testTimeout\".\n❯ src/gateway/worker-environments/worker-turn-launcher-computer.test.ts:92:5\n90|     { label: \"unavailable\", available: false, revoked: false },\n91|     { label: \"revoked before launch\", available: true, revoked: true },\n92|   ])(\n|     ^\n93|     \"carries only a current GitHub identity in the launch envelope ($l…\n94|     async ({ available, revoked }) => {"
+          }
+        ]
+      }
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-ui",
+      "reason": "Accepted UI failure for this release; cancelled or incomplete required execution remains blocking. Current workload uses maintained UI sharding.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-ui finished with cancelled (selected=true)"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (Moonshot)",
+      "reason": "Accepted intermittent Moonshot completion assertion failure; same probe passed previously with unchanged provider path.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Docker live models (xAI)",
+      "reason": "Accepted xAI exact-phrase refusal for this release; no passing provider behavior is asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 4/4)",
+      "reason": "Accepted historical restart fixture failure after repaired real-Gateway file passed all five cases.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live media music Google)",
+      "reason": "Accepted intermittent Google music RECITATION/no-audio outcome; preceding unchanged suite passed all three cases.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Live media suites (Native live plugins A-K)",
+      "reason": "Accepted A-K prerequisite coverage gaps including unavailable service credentials and Apple FM platform. Forwarding and opt-in repairs remain included.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+      "reason": "Accepted historical trajectory fixture failure after repaired real live test passed with compiled process owner.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live plugins O-Z other)",
+      "reason": "Accepted O-Z prerequisite coverage gaps including unverified Qwen Standard entitlement and SenseAudio platform; no passing completion asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "releaseChecksIndependent",
+      "jobName": "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "reason": "Accepted decision-index coverage gaps for four unavailable provider credentials; no passing provider proof asserted.",
+      "aggregates": [
+        {
+          "jobName": "Verify release checks",
+          "stepName": "Verify release check results",
+          "causes": [
+            "live_repo_e2e_release_checks ended with failure"
+          ]
+        }
+      ]
+    }
+  ]
 }
