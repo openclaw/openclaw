@@ -1906,7 +1906,7 @@ describe("buildGatewayCronService", () => {
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
         expect(announce.text).toContain(
-          'Automation "script failure detail" was turned off because its run failed and will not be retried.\nCause: automation script failed internally',
+          'Automation "script failure detail" failed. It was set to run one time, so it will not try again.\nCause: the automation script could not run because of an OpenClaw fault, not a fault in the script.',
         );
         expect(announce.text).not.toContain(rawError);
 

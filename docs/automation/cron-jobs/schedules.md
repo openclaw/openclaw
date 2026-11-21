@@ -316,10 +316,12 @@ errors throw and remain actionable scheduler failures; do not convert them to
 `fire: false`. A failed evaluation records the thrown message as the run's error
 and keeps no command output, so the message must carry what you need to diagnose
 it. In a script, `exec` waits for its command to finish within the script's
-deadline and returns `{ exitCode, output }`; `yieldMs` and `background` are
-ignored and the `process` tool is unavailable, because a headless script has no
-later turn to collect a background process. A thrown error is recorded with the
-`script_error` code, and the job stays scheduled for its next occurrence. Keep this example within the 16 KiB state limit by scoping large
+deadline and returns `{ exitCode, output }` with the full exec result; `yieldMs`
+is ignored, because a headless script has no later turn to collect the command.
+A shorter `timeoutSeconds` still applies. To keep a command running, pass `background: true`
+and manage it with the `process` tool when the job grants it. A thrown error or
+an invalid return value is recorded with the `script_error` code, and the job
+stays scheduled for its next occurrence. Keep this example within the 16 KiB state limit by scoping large
 repositories to the checks the watcher owns. Do not use a change-only gate for an
 explicitly requested recurring report or digest: that job should deliver at its
 requested cadence even if the observations are unchanged.

@@ -34,10 +34,13 @@ export function parseTriggerResult(
 ): CronTriggerEvaluationResult {
   const candidate = scriptResultCandidate(result, true);
   if (!isRecord(candidate) || typeof candidate.fire !== "boolean") {
-    return scriptFailure("cron trigger script must return an object with boolean fire");
+    return scriptFailure(
+      "cron trigger script must return an object with boolean fire",
+      "script_error",
+    );
   }
   if (candidate.message !== undefined && typeof candidate.message !== "string") {
-    return scriptFailure("cron trigger script message must be a string");
+    return scriptFailure("cron trigger script message must be a string", "script_error");
   }
   const state = validateCronState(candidate, "cron trigger");
   if (!state.ok) {
@@ -72,14 +75,14 @@ function validateCronState(candidate: Record<string, unknown>, label: string) {
   } catch (error) {
     return {
       ok: false as const,
-      code: "internal_error" as const,
+      code: "script_error" as const,
       error: `${label} state is not JSON-serializable: ${formatErrorMessageWithCode(error)}`,
     };
   }
   if (serialized === undefined) {
     return {
       ok: false as const,
-      code: "internal_error" as const,
+      code: "script_error" as const,
       error: `${label} state is not JSON-serializable`,
     };
   }
@@ -102,22 +105,28 @@ export function parseScriptPayloadResult(
 ): CronScriptPayloadExecutionResult {
   const candidate = scriptResultCandidate(result);
   if (!isRecord(candidate)) {
-    return scriptFailure("cron script payload must return an object");
+    return scriptFailure("cron script payload must return an object", "script_error");
   }
   if (candidate.notify !== undefined && typeof candidate.notify !== "string") {
-    return scriptFailure("cron script payload notify must be a string");
+    return scriptFailure("cron script payload notify must be a string", "script_error");
   }
   if (
     candidate.wake !== undefined &&
     candidate.wake !== "now" &&
     candidate.wake !== "next-heartbeat"
   ) {
-    return scriptFailure('cron script payload wake must be "now" or "next-heartbeat"');
+    return scriptFailure(
+      'cron script payload wake must be "now" or "next-heartbeat"',
+      "script_error",
+    );
   }
   let nextCheck: { delayMs: number } | undefined;
   if (candidate.nextCheck !== undefined) {
     if (typeof candidate.nextCheck !== "string") {
-      return scriptFailure("cron script payload nextCheck must be a duration string");
+      return scriptFailure(
+        "cron script payload nextCheck must be a duration string",
+        "script_error",
+      );
     }
     try {
       const delayMs = parseDurationMs(candidate.nextCheck);
@@ -126,7 +135,10 @@ export function parseScriptPayloadResult(
       }
       nextCheck = { delayMs };
     } catch {
-      return scriptFailure("cron script payload nextCheck must be a positive duration");
+      return scriptFailure(
+        "cron script payload nextCheck must be a positive duration",
+        "script_error",
+      );
     }
   }
   const state = validateCronState(candidate, "cron script payload");

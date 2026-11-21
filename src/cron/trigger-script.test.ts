@@ -60,7 +60,7 @@ function createEvaluator(
 }
 
 const INPUT = { jobId: "probe", script: "return result", state: null };
-const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
+const SCRIPT_ERROR = expect.objectContaining({ kind: "error", code: "script_error" });
 
 it("snapshots a cron tool result without temporary object-value arrays", async () => {
   const details = {
@@ -284,16 +284,72 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it.skipIf(process.platform === "win32")(
+  "gives a trigger only the command's output when the command leaves a process running",
+  async () => {
+    // One JSON line, then a child that outlives the command (as `gh` does with its telemetry).
+    const command = `printf '{"ok":true}\\n'; (sleep 5 >/dev/null 2>&1 &)`;
+
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          // exec waits for the command and stops what it left running.
+          const result = await exec({ command: ${JSON.stringify(command)} });
+          return { fire: false, state: JSON.parse(result.aggregated) };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: false, state: { ok: true } });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps granted process operations for a command the script backgrounds",
+  async () => {
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec", "process"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const started = await exec({ command: "sleep 30", background: true });
+          if (started.status !== "running" || !started.sessionId) {
+            throw new Error("not backgrounded: " + JSON.stringify(started));
+          }
+          await process({ action: "kill", sessionId: started.sessionId });
+          return { fire: true };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps a shorter timeout the script asked exec for",
+  async () => {
+    const startedAt = performance.now();
+    await expect(
+      execEvaluator("gateway")({
+        ...INPUT,
+        toolsAllow: ["exec"],
+        scheduledToolPolicy: { version: 1, mode: "trusted" },
+        script: `
+          const { exitCode } = await exec({ command: "sleep 20", timeoutSeconds: 1 });
+          return { fire: exitCode !== 0 };
+        `,
+      }),
+    ).resolves.toEqual({ kind: "evaluated", fire: true });
+    expect(performance.now() - startedAt).toBeLessThan(15_000);
+  },
+);
+
 it.each([
   [
     "throws",
     'throw new Error("gh search did not complete: running");',
     "gh search did not complete",
-  ],
-  [
-    "calls the unavailable process tool",
-    'await process({ action: "poll", sessionId: "s1", timeout: 26000 });',
-    "process is unavailable in automation scripts",
   ],
 ] as const)("records a script that %s as script_error", async (_name, script, message) => {
   const result = await execEvaluator("gateway")({
@@ -323,8 +379,8 @@ it.each([
     ]),
     { kind: "evaluated", fire: true, state: { current: true } },
   ],
-  ["rejects a nonboolean fire", completed({ fire: "yes" }), INTERNAL_ERROR],
-  ["rejects a nonstring message", completed({ fire: true, message: 42 }), INTERNAL_ERROR],
+  ["rejects a nonboolean fire", completed({ fire: "yes" }), SCRIPT_ERROR],
+  ["rejects a nonstring message", completed({ fire: true, message: 42 }), SCRIPT_ERROR],
   [
     "rejects oversized state",
     completed({ fire: false, state: { value: "x".repeat(16 * 1024) } }),
