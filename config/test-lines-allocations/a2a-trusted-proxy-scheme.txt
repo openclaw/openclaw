@@ -1,0 +1,2 @@
+# A2A discovery re-reads proxy trust per request; guard rows cover removal/reload, fallbacks, and overrides.
+52
