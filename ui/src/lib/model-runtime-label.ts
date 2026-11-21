@@ -17,7 +17,7 @@ const AGENT_RUNTIME_LABELS = new Map([
   ["openclaw", "OpenClaw"],
 ]);
 
-function formatAgentRuntimeLabel(id: string): string {
+export function formatAgentRuntimeLabel(id: string): string {
   const normalized = id.trim().toLowerCase();
   return (
     AGENT_RUNTIME_LABELS.get(normalized) ??
