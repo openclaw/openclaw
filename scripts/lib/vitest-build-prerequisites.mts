@@ -3,14 +3,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
-import {
-  fullSuiteVitestShards,
-  privateQaRuntimeConfigTestPattern,
-} from "../../test/vitest/vitest.test-shards.mjs";
-import {
-  getRepositoryFileInventory,
-  uiE2eRealGatewayTestFiles,
-} from "../../test/vitest/vitest.ui-paths.mjs";
+import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
 import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
@@ -46,22 +40,6 @@ export type VitestRuntimeTestSelection = {
     includePatterns: readonly string[] | null | undefined,
   ) => boolean;
 };
-
-// The shared inventory may already contain the complete checkout.
-const configTestInventory = getRepositoryFileInventory(
-  undefined,
-  [privateQaRuntimeConfigTestPattern],
-  "glob",
-);
-
-function runtimeConfigConsumers(files: readonly string[], mode: VitestPretestBuildMode) {
-  return files.map((file) => ({
-    file: file.replaceAll("\\", "/"),
-    configs: ["test/vitest/vitest.runtime-config.config.ts"],
-    dir: "src",
-    mode,
-  }));
-}
 
 // These tests consume built runtime artifacts. Prepare their strongest
 // prerequisite before admitting any workers: a child build invalidates dist
@@ -242,15 +220,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  ...runtimeConfigConsumers(startupCorpusTestFiles, "runtime"),
-  ...runtimeConfigConsumers(
-    configTestInventory
-      ? [...configTestInventory].filter((file) =>
-          path.matchesGlob(file, privateQaRuntimeConfigTestPattern),
-        )
-      : fs.globSync(privateQaRuntimeConfigTestPattern, { cwd: new URL("../../", import.meta.url) }),
-    "private-qa",
-  ),
+  ...[
+    ...startupCorpusTestFiles,
+    "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.runtime-config.config.ts"],
+    mode: "runtime" as const,
+    dir: "src",
+  })),
   {
     file: "test/agent-exec-code-mode.live.test.ts",
     configs: ["test/vitest/vitest.live.config.ts"],

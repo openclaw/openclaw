@@ -2004,7 +2004,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       };
       const runtimeFiles = new Set(listVitestRuntimeConsumerFiles(target.configs));
       const runtimeConsumers = target.includePatterns.filter((file) => runtimeFiles.has(file));
-      const buildMode = "private-qa";
+      const buildMode = "runtime";
       useFixtureProjects((config) => target.configs.includes(config));
 
       spyTimings().mockImplementation((profile) => ({

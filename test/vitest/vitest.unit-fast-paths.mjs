@@ -11,7 +11,6 @@ import {
 } from "./vitest.gateway-server-paths.mjs";
 import { markdownTestFiles } from "./vitest.markdown-paths.mjs";
 import { pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
-import { privateQaRuntimeConfigTestPattern } from "./vitest.test-shards.mjs";
 import { isToolingIsolatedTestFile } from "./vitest.tooling-isolated-paths.mjs";
 import { getRepositoryFileInventory } from "./vitest.ui-paths.mjs";
 import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
@@ -144,7 +143,6 @@ const broadUnitFastCandidatePatterns = prepareGlobPatterns(
   directoryPrefixForGlob,
 );
 const ownerRoutedUnitTestPatterns = [
-  privateQaRuntimeConfigTestPattern,
   ...markdownTestFiles,
   // This family proof belongs to the PostgreSQL conformance owner.
   "src/infra/database-engine/port-provider.postgres.test.ts",

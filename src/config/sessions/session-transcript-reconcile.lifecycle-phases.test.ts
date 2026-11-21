@@ -25,12 +25,12 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { withSqliteWorkerLifecycleCoordination } from "../sessions/session-accessor.sqlite-worker-coordination.js";
-import { observeReconcileHostSqlite } from "../sessions/session-transcript-reconcile.sql-observer.test-support.js";
+import { withSqliteWorkerLifecycleCoordination } from "./session-accessor.sqlite-worker-coordination.js";
+import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
 import type {
   SessionTranscriptReconcileWorkerTask,
   SessionTranscriptReconcileWorkerMessage,
-} from "../sessions/session-transcript-reconcile.worker.js";
+} from "./session-transcript-reconcile.worker.js";
 
 type Pool = WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>;
 function createPool(failNativeCloseAt?: string): Pool {
@@ -42,7 +42,7 @@ function createPool(failNativeCloseAt?: string): Pool {
     ...(failNativeCloseAt
       ? {
           workerUrl: new URL(
-            "../sessions/session-transcript-reconcile.close-failure.test-support.mjs",
+            "./session-transcript-reconcile.close-failure.test-support.mjs",
             import.meta.url,
           ),
           workerOptions: {

@@ -24,6 +24,16 @@ it("retains the database rollback consumer of factory-created native entrypoints
   );
 });
 
+it("builds the reconciliation worker when its source changes", () => {
+  const target = "src/config/sessions/session-transcript-reconcile.lifecycle-phases.test.ts";
+  const shards = createChangedNodeTestShards(
+    ["src/config/sessions/session-transcript-reconcile.worker.ts"],
+    { selectionMode: "aggressive", runnerBackend: "github", dedicatedBuildArtifacts: true },
+  );
+  const rows = shards?.filter((row) => selectedFiles([row]).includes(target));
+  expect(rows?.map((row) => row.pretestBuildMode)).toEqual(["runtime"]);
+});
+
 it("keeps the TUI support unit owner without a fallback", () => {
   const target = "src/tui/tui-pty-local-test-support.test.ts";
   const reasons: string[] = [];

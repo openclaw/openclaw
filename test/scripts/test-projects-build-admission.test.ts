@@ -320,7 +320,7 @@ syncFixtureBuiltinExports();\n`,
     ["config short control", runVitest, ["run", "-c", configPath("extension-qa")]],
     ["config empty long", runVitest, ["run", "--config=", configPath("extension-qa")]],
     ["root config", runVitest, ["run", "--config", "vitest.config.ts"]],
-    ["implicit root directory", runVitest, ["run", "src/config"], "private-qa"],
+    ["implicit root directory", runVitest, ["run", "src/config"], "runtime"],
     [
       "CLI process selective exclusion",
       runVitest,
