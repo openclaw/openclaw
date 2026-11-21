@@ -8,15 +8,17 @@ const catalog = {
       moveToProject: {
         action: "Move to project…",
         title: "Move to a project",
+        project: "Project",
         move: "Move",
-        moving: "Moving… this can take a minute",
+        moving: "Moving…",
         noProjects:
           "No projects are available to move into. An admin can register a project from Browse folders.",
-        checkoutPreview:
-          "Carry work from {folder} at commit {commit}. Files with unsaved changes: {unsavedFiles}.",
-        moved: "Moved into {project}. It opens on its own branch with your next message.",
+        copySavedWork: "Your saved work will be copied.",
+        copyOneFile: "Changes to 1 file will be copied.",
+        copyFiles: "Changes to {count} files will be copied.",
+        moved: "Moved this conversation into {project}.",
         movedWithWork:
-          "Moved into {project} with your work from {folder}. It opens on its own branch with your next message.",
+          "Moved this conversation into {project}. Your work will be copied when you send your next message.",
         failed: "Couldn’t move this conversation. Try again.",
       },
     },

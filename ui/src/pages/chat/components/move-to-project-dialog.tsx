@@ -1,4 +1,4 @@
-import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
+import { createMemo, createSignal, createUniqueId, Errored, Loading, Show } from "solid-js";
 import type {
   ProjectsMoveSessionOptionsResult,
   ProjectsMoveSessionResult,
@@ -7,6 +7,7 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { withPromiseModalHost } from "../../../components/promise-modal-host.ts";
 import { Picker } from "../../../components/select-picker.ts";
 import { DialogHeader } from "../../../components/solid/dialog-header.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatMoveToProjectEnglish } from "../../../i18n/locales/en-chat-move-to-project.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
@@ -55,6 +56,20 @@ function renderMoveToProjectDialog(
   });
   // When several clones match, preview and carry the same first checkout.
   const checkout = () => project()?.checkouts[0];
+  const pickerId = createUniqueId();
+  const copySummaryId = createUniqueId();
+  const copySummary = () => {
+    const count = checkout()?.unsavedFiles;
+    if (count === undefined) {
+      return undefined;
+    }
+    if (count === 0) {
+      return t("chat.sessionHeader.moveToProject.copySavedWork");
+    }
+    return count === 1
+      ? t("chat.sessionHeader.moveToProject.copyOneFile")
+      : t("chat.sessionHeader.moveToProject.copyFiles", { count: String(count) });
+  };
   const close = () => {
     if (!moving()) {
       finish(false);
@@ -79,7 +94,7 @@ function renderMoveToProjectDialog(
       showToast({
         severity: "success",
         message: folder
-          ? t("chat.sessionHeader.moveToProject.movedWithWork", { project: target.name, folder })
+          ? t("chat.sessionHeader.moveToProject.movedWithWork", { project: target.name })
           : t("chat.sessionHeader.moveToProject.moved", { project: target.name }),
       });
     } catch (failure) {
@@ -141,27 +156,36 @@ function renderMoveToProjectDialog(
               }
             >
               <div class="oc-dialog__body">
-                <Picker
-                  params={{
-                    label: title,
-                    disabled: moving(),
-                    value: project()?.id ?? null,
-                    options: options().projects.map(({ id, name, originUrl }) => ({
-                      value: id,
-                      label: name,
-                      description: originUrl,
-                    })),
-                    onChange: setProjectChoice,
-                  }}
-                />
-                <Show when={checkout()}>
-                  {(detected) => (
-                    <p>
-                      {t("chat.sessionHeader.moveToProject.checkoutPreview", {
-                        folder: detected().path,
-                        commit: detected().commit.slice(0, 12),
-                        unsavedFiles: String(detected().unsavedFiles),
-                      })}
+                <div class="field">
+                  <label for={pickerId} class="muted">
+                    {t("chat.sessionHeader.moveToProject.project")}
+                  </label>
+                  <Picker
+                    params={{
+                      id: pickerId,
+                      label: t("chat.sessionHeader.moveToProject.project"),
+                      describedBy: checkout() ? copySummaryId : undefined,
+                      disabled: moving(),
+                      value: project()?.id ?? null,
+                      options: options().projects.map(({ id, name, originUrl }) => ({
+                        value: id,
+                        label: name,
+                        description: originUrl,
+                      })),
+                      renderLeading: () => <Icon name="folder" style="width:16px;height:16px" />,
+                      onChange: setProjectChoice,
+                    }}
+                  />
+                </div>
+                <Show when={copySummary()}>
+                  {(summary) => (
+                    <p
+                      id={copySummaryId}
+                      class="muted"
+                      style="display:flex;align-items:center;gap:8px;margin:0"
+                    >
+                      <Icon name="fileText" style="width:16px;height:16px;flex:none" />
+                      <span>{summary()}</span>
                     </p>
                   )}
                 </Show>

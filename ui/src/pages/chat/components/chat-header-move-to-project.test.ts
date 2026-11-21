@@ -105,9 +105,8 @@ it.each([
   });
   options[1]!.click();
   flush();
-  expect(document.body.textContent).toContain(
-    "Carry work from billing at commit eac9b90e94b1. Files with unsaved changes: 2.",
-  );
+  expect(document.body.textContent).toContain("Changes to 2 files will be copied.");
+  expect(document.body.textContent).not.toContain("eac9b90e94b1");
   expectDefined(
     document.body.querySelector<HTMLFormElement>("openclaw-modal-dialog form"),
     "dialog form",
