@@ -155,6 +155,11 @@ function aggregated(details: { status: string; aggregated?: string }): string {
   return details.aggregated ?? "";
 }
 
+/** OpenClaw's notes about a finished command, kept apart from the command's output. */
+function warningText(details: { status: string; warningText?: string }): string {
+  return details.warningText ?? "";
+}
+
 function hostExec(cwd: string, scopeKey: string, allowBackground = false) {
   return createExecTool({
     host: "gateway",
@@ -210,14 +215,17 @@ child.once("spawn", () => {
           command: `exec ${node} ${quote(fixture)}`,
         });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-        const output = aggregated(result.details);
-        const [survivor, ...group]: number[] = JSON.parse(output.split("\n")[0]!);
+        // The output is exactly what the command wrote, so a program can parse it whole.
+        const [survivor, ...group]: number[] = JSON.parse(aggregated(result.details));
         expect(
           [survivor, ...group].every((pid) => Number.isSafeInteger(pid) && (pid ?? 0) > 1),
         ).toBe(true);
         started.push(survivor!);
         // Every survivor is reported and tracked; capacity never stops one.
-        expect(output).toMatch(new RegExp(`pid ${survivor} .*keeps running as background session`));
+        expect(warningText(result.details)).toMatch(
+          new RegExp(`pid ${survivor} .*keeps running as background session`),
+        );
+        expect(JSON.stringify(result.content)).toContain(`pid ${survivor} `);
         adopted.push(survivor!);
         // The direct native owner has a shared caller, not an owned relay above it.
         const hosts = new Set([process.pid, getSpawnBroker()?.pid]);
@@ -491,8 +499,10 @@ it.skipIf(process.platform === "win32")(
       const fill = await exec.execute("fill", {
         command: `for i in $(seq 20); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
       });
-      const output = aggregated(fill.details);
-      const pids = [...output.matchAll(/PID=(\d+)/g)].map((match) => Number(match[1]));
+      const pids = [...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((match) =>
+        Number(match[1]),
+      );
+      const output = warningText(fill.details);
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
@@ -547,7 +557,7 @@ it.skipIf(process.platform === "win32")(
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
       const extraPid = firstPid(aggregated(extra.details));
-      expect(aggregated(extra.details)).toMatch(
+      expect(warningText(extra.details)).toMatch(
         new RegExp(`pid ${extraPid} .*keeps running as background session`),
       );
       expect(isPidAlive(extraPid)).toBe(true);
@@ -604,8 +614,8 @@ it.skipIf(process.platform === "win32")(
             "for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17; do sleep 0.5 & done; echo ok",
         });
         expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
-        expect(aggregated(result.details)).not.toMatch(
-          /background session|Stopped|allowed services/,
+        expect(JSON.stringify(result)).not.toMatch(
+          /background session|Stopped|allowed services|could not confirm/i,
         );
       }
       expect(runningIn(scopeKey)).toEqual([]);
