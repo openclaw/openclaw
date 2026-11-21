@@ -148,7 +148,7 @@ class GatewayDevicePairingTest {
       remoteIp = null,
       roles = listOf("operator"),
       scopes = listOf("operator.read"),
-      tokens = emptyList(),
-      approvedAtMs = 1L,
+      tokenCount = 0,
+      activeTokenCount = 0,
     )
 }
