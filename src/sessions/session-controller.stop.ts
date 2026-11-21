@@ -138,6 +138,8 @@ type SessionStopRequestBase = {
   capture: SessionControllerStopCapture | (() => SessionControllerStopCapture);
   assertCurrent?: () => void;
   reason?: unknown;
+  /** Per-session reason; undefined keeps the request reason. */
+  reasonForSession?: (agentId: string | undefined, sessionKey: string | undefined) => unknown;
   messageIdentity?: unknown;
   recordAbortTarget?: (options: { recordCutoff: boolean }) => Promise<void>;
   hookContext?: SessionStopHookContext;
@@ -202,6 +204,7 @@ function applySessionControllerStop(
     | "source"
     | "assertCurrent"
     | "reason"
+    | "reasonForSession"
     | "cancelInput"
     | "cancelOperation"
     | "afterQueued"
@@ -247,6 +250,8 @@ function applySessionControllerStop(
         : params.source === "channel-user"
           ? createAgentRunDirectAbortError(true)
           : undefined);
+  const reasonFor = (agentId: string | undefined, sessionKey: string | undefined) =>
+    params.reasonForSession?.(agentId, sessionKey) ?? reason;
   const once = (
     effect: () => boolean,
     committedAfterFailure: () => boolean,
@@ -295,7 +300,14 @@ function applySessionControllerStop(
     const wasRetiring = input.retirementRequested;
     const wasAborted = input.abortSignal.aborted;
     const cancel = once(
-      () => abortSessionControllerInput(input, reason, assertCurrent),
+      () =>
+        abortSessionControllerInput(
+          input,
+          operation
+            ? reasonFor(operation.agentId, operation.key)
+            : reasonFor(input.target?.agentId, input.target?.sessionKey),
+          assertCurrent,
+        ),
       () =>
         (!hadResult && operation?.result?.kind === "aborted") ||
         (!wasRetiring &&
@@ -392,7 +404,9 @@ function applySessionControllerStop(
           if (!isCurrentSessionControllerOperation(operation)) {
             return false;
           }
-          return params.source === "watchdog" ? operation.abortForStall() : operation.abort(reason);
+          return params.source === "watchdog"
+            ? operation.abortForStall()
+            : operation.abort(reasonFor(operation.agentId, operation.key));
         },
         () =>
           !hadResult &&

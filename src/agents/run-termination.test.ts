@@ -10,6 +10,8 @@ import { FailoverError } from "./failover/error.js";
 import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  createAgentRunResumableRestartAbortError,
+  isAgentRunResumableRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
   resolveCliToolTerminalReason,
@@ -84,6 +86,18 @@ it("only turns live restart refusals into recovery and preserves explicit stop o
     resetGatewayWorkAdmission();
   }
   expectLifecycle(error, {});
+});
+it("keeps a resumable shutdown abort a restart abort and every other abort unmarked", () => {
+  const resumable = createAgentRunResumableRestartAbortError();
+  expect(isAgentRunResumableRestartAbortReason(resumable)).toBe(true);
+  expectLifecycle(undefined, { aborted: true, stopReason: "restart" }, abortedSignal(resumable));
+  for (const reason of [
+    createAgentRunRestartAbortError(),
+    createAgentRunDirectAbortError(true),
+    new GatewayDrainingError(),
+  ]) {
+    expect(isAgentRunResumableRestartAbortReason(reason)).toBe(false);
+  }
 });
 it("keeps a retryable connection reset as a failure for run and tool terminals", () => {
   const failure = coerceToFailoverError(new Error("fetch failed: ECONNRESET"));

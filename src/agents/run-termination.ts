@@ -83,6 +83,18 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_RESTART_ABORT_ERROR_CODE);
 }
 
+/** Shutdown abort of a session whose restart marker is written; the next Gateway resumes it. */
+export function createAgentRunResumableRestartAbortError(): Error {
+  return Object.assign(createAgentRunRestartAbortError(), { resumesAfterRestart: true });
+}
+
+/** Resets, evictions and unmarked shutdown sessions keep the plain restart abort. */
+export function isAgentRunResumableRestartAbortReason(value: unknown): boolean {
+  return (
+    isAgentRunRestartAbortReason(value) && asOptionalRecord(value)?.resumesAfterRestart === true
+  );
+}
+
 export function isAgentRunSupersededAbortReason(value: unknown): boolean {
   return collectNestedErrorCandidates(value).some((candidate) =>
     hasAgentRunAbortCode(candidate, AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE),
