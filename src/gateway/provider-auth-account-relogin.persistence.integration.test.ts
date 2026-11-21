@@ -57,6 +57,11 @@ function writeIdentityProvider(workspaceDir: string, credential: AuthProfileCred
                 incoming.provider === existing.provider &&
                 incoming.accountId === existing.accountId;
             },
+            canReplaceGeneratedProfile(incoming, existing) {
+              return incoming.type === "oauth" && existing.type === "oauth" &&
+                incoming.provider === existing.provider &&
+                incoming.accountId === existing.accountId;
+            },
             async run() {
               return { profiles: [{
                 profileId: ${JSON.stringify(generatedProfileId)},
@@ -160,6 +165,18 @@ it("keeps a different account under its provider-generated profile id", async ()
   expect(persistedProfiles(state)).toEqual({
     [pinnedProfileId]: oauthCredential("account-a", "old"),
     [generatedProfileId]: oauthCredential("account-b", "new"),
+  });
+});
+
+it("does not overwrite another account at the generated profile id", async () => {
+  const occupied = oauthCredential("account-c", "occupied");
+  const { state, runLogin } = await proofFixture("account-b", "new", {
+    [generatedProfileId]: occupied,
+  });
+  await expect(runLogin()).rejects.toThrow("already in use");
+  expect(persistedProfiles(state)).toEqual({
+    [pinnedProfileId]: oauthCredential("account-a", "old"),
+    [generatedProfileId]: occupied,
   });
 });
 

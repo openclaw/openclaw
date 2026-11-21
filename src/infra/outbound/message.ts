@@ -57,6 +57,7 @@ type MessageSendParams = Pick<
   | "to"
   | "runId"
   | "executionIdentityToken"
+  | "gatewayClientScopes"
   | "gifPlayback"
   | "forceDocument"
   | "accountId"
@@ -101,6 +102,8 @@ type MessageSendParams = Pick<
     content: string;
     /** Originating session key used for requester-scoped outbound media policy. */
     requesterSessionKey?: string;
+    /** @internal Validated producing session for destination history only. */
+    transcriptProducerSessionKey?: string;
     /** Actual producing turn; requester identity may instead scope media access only. */
     session?: OutboundSessionContext;
     channel?: string;
@@ -324,6 +327,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         cfg,
         agentId: params.agentId,
         sessionKey: params.requesterSessionKey,
+        transcriptProducerSessionKey: params.transcriptProducerSessionKey,
         conversationType: params.conversationType,
         requesterAccountId: params.requesterAccountId ?? params.accountId,
         requesterSenderId: params.requesterSenderId,
@@ -367,6 +371,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         session: outboundSession,
         runId: params.runId,
         executionIdentityToken: params.executionIdentityToken,
+        gatewayClientScopes: params.gatewayClientScopes,
         accountId: params.accountId,
         conversationReadOrigin: params.conversationReadOrigin,
         payloads: normalizedPayloads,

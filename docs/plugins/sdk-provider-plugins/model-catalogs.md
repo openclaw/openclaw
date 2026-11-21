@@ -352,6 +352,12 @@ Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
 
+Simple completions copy the selected model from that prepared generation and
+create fresh request-local credential storage. They materialize the full captured
+catalog only for another-model lookup, inventory access, or model registration.
+Agent-session stores and custom SDK model resolvers retain full mutable registries;
+neither credentials nor mutable model records are shared between requests.
+
 A native-login synthetic auth result can include optional `nativeAuth.display`
 metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.
 Use only non-secret facts reported by the native runtime. This display metadata

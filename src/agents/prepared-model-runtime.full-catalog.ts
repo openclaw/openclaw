@@ -412,12 +412,12 @@ export function createPreparedModelRuntimeSnapshot(
       pluginMetadataSnapshot,
     ),
     inlineProviderModels,
-    createStores: (publishedModels?: ReadonlyMap<string, readonly Model[]>) => {
+    createStores: (publishedModels, selectedModel) => {
       // Runtime keys and session extensions mutate per-run stores; parsed inputs stay shared.
       const authStorage = AuthStorage.inMemory(credentials);
       return {
         authStorage,
-        modelRegistry: templateModelRegistry.fork(authStorage, publishedModels),
+        modelRegistry: templateModelRegistry.fork(authStorage, publishedModels, selectedModel),
       };
     },
     routeModelResolutionMemo: new Map<string, Promise<Model>>(),

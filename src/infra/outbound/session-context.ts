@@ -24,11 +24,17 @@ export type OutboundSessionContext = {
    * delivery paths each have their own canonical value to forward; consult
    * the relevant runner.
    *
-   * Destination history treats this key as the producing conversation: a
-   * confirmed send back into it is not recorded again. Sends without a
+   * Unless transcriptProducerKey is supplied, destination history treats this
+   * key as the producing conversation: a confirmed send back into it is not
+   * recorded again. Sends without a
    * producing turn must leave it unset and use `policyKey` instead.
    */
   key?: string;
+  /**
+   * @internal Validated producing conversation when distinct from the hook/policy session.
+   * Used only by confirmed destination history; never changes hook or policy identity.
+   */
+  transcriptProducerKey?: string;
   /**
    * Session key used for policy resolution when delivery differs from the
    * control session. Used to look up silent-reply policy, send rate limits,
@@ -65,6 +71,8 @@ export type OutboundSessionContext = {
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
+  /** @internal Producer identity for confirmed destination history only. */
+  transcriptProducerSessionKey?: string | null;
   policySessionKey?: string | null;
   conversationType?: string | null;
   isGroup?: boolean | null;
@@ -77,6 +85,7 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
+  const transcriptProducerKey = normalizeOptionalString(params.transcriptProducerSessionKey);
   const deliveryRoute = parseSessionDeliveryRoute(policyKey ?? key);
   const declaredChatType = normalizeChatType(params.conversationType ?? undefined);
   const groupChatType =
@@ -99,6 +108,7 @@ export function buildOutboundSessionContext(params: {
     : explicitAgentId;
   const context: OutboundSessionContext = {
     ...(key ? { key } : {}),
+    ...(transcriptProducerKey ? { transcriptProducerKey } : {}),
     ...(policyKey ? { policyKey } : {}),
     ...(conversationType ? { conversationType } : {}),
     ...(conversationKind ? { conversationKind } : {}),

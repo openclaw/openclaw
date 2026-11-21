@@ -75,7 +75,8 @@ export async function commitConfirmedVisibleMessage(
   const storePath = resolveSessionStorePathCore(params.config.session?.store, { agentId });
   const toStoreKey = (requestKey: string) =>
     toAgentStoreSessionKey({ agentId, requestKey, mainKey: params.config.session?.mainKey });
-  const producerKey = params.producer?.key ? toStoreKey(params.producer.key) : undefined;
+  const producingSession = params.producer?.transcriptProducerKey ?? params.producer?.key;
+  const producerKey = producingSession ? toStoreKey(producingSession) : undefined;
   // A producer replying into its own conversation already wrote this turn.
   if (params.route && producerKey === toStoreKey(params.route.sessionKey)) {
     return skipped();
