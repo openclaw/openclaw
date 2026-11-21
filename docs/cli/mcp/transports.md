@@ -148,6 +148,12 @@ Set `oauth.identity: "per-requester"` when every authenticated sender should con
 }
 ```
 
+In authenticated Control UI chat, direct human turns use the verified browser
+profile for personal MCP sign-in. Each profile has its own credentials, including
+when profiles share a chat session. Channel sender IDs keep their existing meaning.
+Scheduled work and subagents do not inherit browser credentials. If several people
+steer the same turn, start a new personal request before using these tools.
+
 The per-requester flow is sender-driven:
 
 1. The sender calls a tool from the server before connecting an account.
