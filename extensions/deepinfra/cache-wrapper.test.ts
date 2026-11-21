@@ -32,13 +32,19 @@ const cachedText = (text: string) => ({
   cache_control: { type: "ephemeral" },
 });
 
-async function registeredWrapper(base: StreamFn, modelId: string, cacheRetention?: string) {
+async function registeredWrapper(
+  base: StreamFn,
+  modelId: string,
+  cacheRetention?: string,
+  thinkingLevel?: "off" | "high",
+) {
   const provider = await registerSingleProviderPlugin(deepinfraPlugin);
   const wrapped = provider.wrapStreamFn?.({
     provider: "deepinfra",
     modelId,
     streamFn: base,
     extraParams: { cacheRetention },
+    thinkingLevel,
   });
   if (!wrapped) {
     throw new Error("DeepInfra stream wrapper missing");
@@ -157,3 +163,31 @@ describe("registered DeepInfra cache wrapper", () => {
     expect(base.mock.calls[0]?.[2]?.cacheRetention).toBeUndefined();
   });
 });
+
+it.each([
+  ["nvidia/NVIDIA-Nemotron-3.5-Super-VL", "off", "openai-completions", false],
+  ["NVIDIA/nvidia-nemotron-3.5-super-vl", "off", "openai-completions", false],
+  ["nvidia/NVIDIA-Nemotron-3.5-Super-VL", "high", "openai-completions", undefined],
+  ["nvidia/NVIDIA-Nemotron-3.5-Super-VL", undefined, "openai-completions", undefined],
+  ["nvidia/Other-Nemotron", "off", "openai-completions", undefined],
+  ["nvidia/NVIDIA-Nemotron-3.5-Super-VL", "off", "anthropic-messages", undefined],
+] as const)(
+  "limits explicit reasoning off to %s / %s / %s",
+  async (modelId, thinkingLevel, api, enabled) => {
+    let captured: Record<string, unknown> = {};
+    const base: StreamFn = (model, _context, options) => {
+      captured = { untouched: "kept" };
+      options?.onPayload?.(captured, model);
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = await registeredWrapper(base, modelId, undefined, thinkingLevel);
+    void wrapped({ ...makeModel(modelId), api }, { messages: [] }, {});
+    expect(captured).toEqual(
+      enabled === false
+        ? { untouched: "kept", reasoning: { enabled: false } }
+        : thinkingLevel === "high"
+          ? { untouched: "kept", reasoning: { effort: "high" } }
+          : { untouched: "kept" },
+    );
+  },
+);
