@@ -133,7 +133,8 @@ export async function resolveCliRuntimeToolPolicy(input: {
     !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
     params.sessionEntry?.permissionMode !== undefined &&
     params.sessionEntry.permissionMode !== "full" &&
-    !ordinaryClaudeMediation;
+    !ordinaryClaudeMediation &&
+    (params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0);
   if (
     (params.trustedInternalHandoff ||
       senderRestricted ||
