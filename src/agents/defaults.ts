@@ -33,6 +33,7 @@ export function resolveDefaultModelMaxTokens(contextWindow?: number): number {
 export function createNativeModelOwnedRuntimeModel(params: {
   provider: string;
   modelId: string;
+  contextWindow?: number;
 }): ProviderRuntimeModel {
   return {
     provider: params.provider,
@@ -43,7 +44,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: DEFAULT_CONTEXT_TOKENS,
+    contextWindow: params.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_CONTEXT_TOKENS,
   };
 }
@@ -53,7 +54,7 @@ export function createNativeModelOwnedRuntimeModel(params: {
  * Native rows carry no host transport, so host model resolution cannot materialize them.
  */
 export function resolveNativeOwnedRuntimeModel(params: {
-  catalog: Pick<ModelCatalogSnapshot, "entries" | "routeVariants"> | undefined;
+  catalog: Pick<ModelCatalogSnapshot, "entries" | "routeVariants" | "staticEntries"> | undefined;
   provider: string;
   modelId: string;
   runtimeId: string | undefined;
@@ -62,9 +63,21 @@ export function resolveNativeOwnedRuntimeModel(params: {
   if (!catalog || !runtimeId || runtimeId === "openclaw") {
     return undefined;
   }
-  const owned = (entry: ModelCatalogSnapshot["entries"][number]) =>
-    entry.provider === provider && entry.id === modelId && entry.nativeRuntime === runtimeId;
-  return catalog.entries.some(owned) || catalog.routeVariants.some(owned)
-    ? createNativeModelOwnedRuntimeModel({ provider, modelId })
-    : undefined;
+  type Entry = ModelCatalogSnapshot["entries"][number];
+  const sameModel = (entry: Entry) => entry.provider === provider && entry.id === modelId;
+  const owned = (entry: Entry) => sameModel(entry) && entry.nativeRuntime === runtimeId;
+  const rows = [...catalog.entries, ...catalog.routeVariants];
+  const ownedRow = rows.find(owned);
+  if (!ownedRow) {
+    return undefined;
+  }
+  // Native rows rarely know their window; the provider's row for the same model does.
+  const windowOf = (entry: Entry | undefined) =>
+    entry?.contextWindowSource === "synthetic" ? undefined : entry?.contextWindow;
+  const donor = [...rows, ...(catalog.staticEntries ?? [])].find(
+    (entry) =>
+      sameModel(entry) && entry.nativeRuntime === undefined && windowOf(entry) !== undefined,
+  );
+  const contextWindow = windowOf(ownedRow) ?? windowOf(donor);
+  return createNativeModelOwnedRuntimeModel({ provider, modelId, contextWindow });
 }
