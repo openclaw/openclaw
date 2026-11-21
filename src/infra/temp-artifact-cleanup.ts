@@ -223,15 +223,20 @@ export async function maintainRetainedUpdateRuntimes(params: {
           let creatorExited = false;
           if (owner && owner.pidNamespace === (await readPidNamespace())) {
             const startTime = getFileLockProcessStartTime(owner.pid);
+            // An exited updater that its parent has not reaped still has a start time.
+            const dead = isPidDefinitelyDead(owner.pid);
             // This process's registration above already settled its own runtimes.
-            if (owner.pid !== process.pid && startTime !== null && startTime === owner.startTime) {
+            if (
+              owner.pid !== process.pid &&
+              !dead &&
+              startTime !== null &&
+              startTime === owner.startTime
+            ) {
               throw new Error(`the creating update (PID ${owner.pid}) is still running`);
             }
             // Accepted edge: a reboot that reuses both the PID and its start time.
             creatorExited =
-              owner.pid === process.pid ||
-              isPidDefinitelyDead(owner.pid) ||
-              (startTime !== null && owner.startTime !== null);
+              owner.pid === process.pid || dead || (startTime !== null && owner.startTime !== null);
           }
           const census = inspectOtherOpenClawProcesses(directory, { creatorExited });
           if ("error" in census) {

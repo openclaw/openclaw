@@ -68,3 +68,45 @@ it("reclaims a runtime by its recorded creator from another installation on a bu
     creator.kill("SIGKILL");
   }
 });
+
+it.runIf(process.platform === "linux")(
+  "reclaims the runtime of an exited updater that its parent has not reaped",
+  async () => {
+    const base = await fs.realpath(tempDirs.make("openclaw-retained-zombie-"));
+    vi.spyOn(os, "tmpdir").mockReturnValue(base);
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    // The shell's child exits; the process that replaced the shell never waits for it.
+    const parent = spawn("sh", ["-c", "sleep 0.1 & echo $!; exec sleep 60"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    try {
+      const [output] = await once(parent.stdout, "data");
+      const pid = Number(String(output).trim());
+      await vi.waitFor(async () =>
+        expect(await fs.readFile(`/proc/${pid}/status`, "utf8")).toMatch(/^State:\s+Z/m),
+      );
+      const directory = path.join(base, "openclaw-update-runtime-Zombie");
+      await fs.mkdir(directory);
+      const startTime = getFileLockProcessStartTime(pid);
+      expect(startTime).not.toBeNull();
+      await fs.writeFile(
+        path.join(directory, "owner.json"),
+        JSON.stringify({
+          name: "openclaw",
+          pid,
+          startTime,
+          pidNamespace: await fs.readlink("/proc/self/ns/pid"),
+        }),
+      );
+      expect(
+        await maintainRetainedUpdateRuntimes({
+          packageRoots: [path.join(base, "installation/openclaw")],
+          repair: true,
+          assertCurrent() {},
+        }),
+      ).toEqual([`Removed abandoned updater runtime: ${directory}`]);
+    } finally {
+      parent.kill("SIGKILL");
+    }
+  },
+);
