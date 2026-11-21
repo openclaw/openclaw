@@ -120,9 +120,16 @@ describe("hourly main CI admission", () => {
       steps: {
         diff_base: { outputs: { sha: baseSha } },
         guard_setup: { outputs: {}, outcome: "success" },
+        guard_ripgrep: { outputs: {}, outcome: "success" },
       },
     } as const;
     expect(evaluate(guards.if, context)).toBe(true);
+    expect(
+      evaluate(guards.if, {
+        ...context,
+        steps: { ...context.steps, guard_ripgrep: { outputs: {}, outcome: "failure" } },
+      }),
+    ).toBe(false);
     for (const name of ["BASE_SHA", "PROTOCOL_SINCE_BASE_SHA"]) {
       expect(evaluate(guards.env[name], context)).toBe(baseSha);
     }
@@ -130,6 +137,37 @@ describe("hourly main CI admission", () => {
       expect(evaluate(guards.if, { ...context, eventName })).toBe(false);
     }
     expect(evaluate(guards.if, { ...context, ciOnPush: "true" })).toBe(false);
+  });
+
+  it("runs shutdown and suppression regressions on every main push", () => {
+    const steps = ci.jobs["security-fast"].steps;
+    const setup = steps.find((step: { id?: string }) => step.id === "push_test_bun");
+    const proof = steps.find(
+      (step: { name?: string }) =>
+        step.name === "Check main push shutdown and suppression regressions",
+    );
+    expect(proof).toBeDefined();
+    expect(setup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
+    const context = {
+      eventName: "push",
+      failed: true,
+      steps: {
+        guard_setup: { outputs: {}, outcome: "success" },
+        push_test_bun: { outputs: {}, outcome: "success" },
+      },
+    } as const;
+    expect(evaluate(proof.if, context)).toBe(true);
+    expect(evaluate(proof.if, { ...context, ciOnPush: "true" })).toBe(true);
+    for (const override of [
+      { eventName: "schedule" as const },
+      { eventName: "pull_request" as const },
+      { ref: "refs/heads/topic" },
+      { cancelled: true },
+      { steps: { guard_setup: { outputs: {}, outcome: "failure" } } },
+      { steps: { ...context.steps, push_test_bun: { outputs: {}, outcome: "failure" } } },
+    ] as const) {
+      expect(evaluate(proof.if, { ...context, ...override })).toBe(false);
+    }
   });
 
   it("schedules only nonpublishing plugin previews with no last-commit path filter", () => {

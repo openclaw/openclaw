@@ -341,8 +341,7 @@ export const en = {
       quickstartKeepRunningQuestion: "Keep OpenClaw running in the background?",
       quickstartDashboard: "Dashboard: {url}",
       quickstartForeground: "Gateway is running in the foreground. Press Ctrl+C to stop.",
-      quickstartBackground:
-        "To keep the Gateway running in the background later: openclaw gateway install",
+      quickstartBackground: "To keep the Gateway running in the background later: {command}",
       quickstartReopen:
         "Run openclaw to open the TUI, or openclaw dashboard to reopen the web dashboard.",
       quickstartBrowserUnavailable:
@@ -492,6 +491,8 @@ export const en = {
       testAiProgress: "Testing AI access with a live completion…",
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
+      utilityOnlyNote: "Pick a provider for your agent's conversations, or Skip for now.",
+      utilityOnlyTitle: "Choose your agent's model",
       whatSetup: "What do you want to set up?",
       workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
       workspaceConflictNotice:
@@ -1136,6 +1137,8 @@ export const en = {
     channelsPrimer: {
       approveWith: "Approve with: {command}",
       docs: "Docs: {link}",
+      credentialStorage:
+        "Entering a supported credential saves it in the shared secret store. If you run the CLI while the Gateway is running, this requires local Gateway admin access. Without that access, use an existing secret reference where supported, or stop the Gateway before entering the credential.",
       inboundSafety:
         "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
       multiUserDm:

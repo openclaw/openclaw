@@ -2,7 +2,7 @@ import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
 
 /** Operator opt-in for development reload of edited bundled plugin code. */
-export const BUNDLED_PLUGIN_DEV_RELOAD_ENV = "OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS";
+const BUNDLED_PLUGIN_DEV_RELOAD_ENV = "OPENCLAW_DEV_RELOAD_BUNDLED_PLUGINS";
 
 export type BundledPluginDevReloadMode = { enabled: boolean; ignoredWarning?: string };
 

@@ -76,13 +76,13 @@ it("mounts an explicit private HOME without using the device folder for internal
     .mockResolvedValueOnce({ stdout: `${"a".repeat(64)}\n`, stderr: "" });
   await createNodeWorkerContainer(containerEngine("docker"), {
     ...launch,
-    homeDir: "/synthetic/private/session-home",
+    homeDir: '/synthetic/acme, "inc"/session-home',
   });
   expect(runExec).toHaveBeenLastCalledWith(
     expect.any(String),
     expect.arrayContaining([
-      "type=bind,source=/synthetic/private/session-home,target=/synthetic/private/session-home",
-      "HOME=/synthetic/private/session-home",
+      'type=bind,"source=/synthetic/acme, ""inc""/session-home","target=/synthetic/acme, ""inc""/session-home"',
+      'HOME=/synthetic/acme, "inc"/session-home',
       "type=bind,source=/synthetic/workspace,target=/synthetic/workspace",
     ]),
     expect.any(Object),

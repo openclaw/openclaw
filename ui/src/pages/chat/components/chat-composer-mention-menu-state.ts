@@ -1,5 +1,6 @@
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { createStore } from "solid-js";
+import { findMarkdownCodeRegions } from "../../../../../packages/markdown-core/src/markdown-code-regions.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -47,12 +48,7 @@ export function findMentionTarget(value: string, caret: number): MentionTarget |
   }
   const beforeCaret = value.slice(0, caret);
   const line = beforeCaret.slice(beforeCaret.lastIndexOf("\n") + 1);
-  // Code and quoted examples are text, never people-picker invocations.
-  if (
-    /^\s*>/u.test(line) ||
-    (beforeCaret.match(/```/gu)?.length ?? 0) % 2 !== 0 ||
-    (line.match(/`/gu)?.length ?? 0) % 2 !== 0
-  ) {
+  if (/^\s*>/u.test(line)) {
     return null;
   }
   // Spaces can separate name parts, but a space immediately after @ ends the
@@ -63,6 +59,13 @@ export function findMentionTarget(value: string, caret: number): MentionTarget |
   }
   const query = match[1] ?? "";
   const start = caret - query.length - 1;
+  // Unmatched inline backticks are prose, not a fence extending through the draft.
+  // Parse the full value so a closing delimiter after the caret still protects code.
+  if (
+    findMarkdownCodeRegions(value).some((region) => region.start <= start && start < region.end)
+  ) {
+    return null;
+  }
   let end = caret;
   // Replace the rest of the current word, not later words that may be ordinary prose.
   while (end < value.length && /[\p{L}\p{N}\p{M}_.-]/u.test(value[end] ?? "")) {

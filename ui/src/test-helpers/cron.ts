@@ -1,5 +1,5 @@
 import type { CronCompactJob, CronJob, CronJobsListResult, CronRunsResult } from "../api/types.ts";
-import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/state.ts";
+import { DEFAULT_CRON_FORM as defaultCronForm } from "../lib/cron/editor-state.ts";
 
 const emptyPage = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
 
@@ -66,6 +66,7 @@ export function compactCronJobFixture(job: CronJob): CronCompactJob {
     lastRunError: job.state.lastError ?? null,
     runningAtMs: job.state.runningAtMs,
     autoDisabled: job.state.autoDisabled,
+    admissionDeferred: job.state.admissionDeferred,
   };
 }
 

@@ -30,7 +30,7 @@ import { applyManagerRuntimeControls } from "./manager.runtime-controls.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import { isAcpOwnerRepairRequired } from "./manager.runtime-owner.js";
 import { prepareFreshManagerRuntimeHandleRetry } from "./manager.runtime-resume-state.js";
-import { consumeAcpTurnStream } from "./manager.turn-stream.js";
+import { consumeAcpTurnStream, createAcpTurnProgressReporter } from "./manager.turn-stream.js";
 import {
   ACP_TURN_TIMEOUT_DETAIL_CODE,
   awaitTurnWithTimeout,
@@ -457,6 +457,7 @@ export async function runManagerTurn(params: {
               };
               signal.addEventListener("abort", onTurnAborted, { once: true });
               const eventGate = { open: true };
+              const reportProgress = createAcpTurnProgressReporter(operation?.watchdog, signal);
               const turnPromise = consumeAcpTurnStream({
                 runtime,
                 source: composeSessionSourceAssertion([assertSignalAdmission], (assertSource) => {
@@ -505,12 +506,13 @@ export async function runManagerTurn(params: {
                     );
                   }
                 },
-                onOutputEvent: () => {
+                onOutputEvent: (event) => {
                   modelExecution?.signal.throwIfAborted();
                   if (!params.isCurrentActor()) {
                     return;
                   }
                   sawTurnOutput = true;
+                  reportProgress(event);
                 },
                 onEvent: async (event) => {
                   if (event.type === "done") {
@@ -570,9 +572,7 @@ export async function runManagerTurn(params: {
                   "ACP turn ended without a terminal done event.",
                 );
               }
-              params.recordTurnCompletion({
-                startedAt: turnStartedAt,
-              });
+              params.recordTurnCompletion({ startedAt: turnStartedAt });
               turnTerminal = true;
               if (params.ownsTurnTerminal) {
                 operation?.freezeAbort();

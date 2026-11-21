@@ -239,7 +239,7 @@ describe("openai completions stream", () => {
         makeCompletionsChunk({
           reasoning_details: [
             { type: "reasoning.text", text: "Need a tool." },
-            { type: "reasoning.text", text: " Let me analyze." },
+            { type: "reasoning.summary", summary: " Let me analyze." },
             { type: "text", text: "Do not leak this by default." },
           ],
           ...toolDelta('{"query":', "lookup", "call_1"),

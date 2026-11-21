@@ -184,7 +184,13 @@ export function UpdateRunView(props: {
               </pre>
             </details>
             <Show when={current().oracles.length}>
-              <ul class="update-run-view__oracles" aria-label={t("updates.run.verification")}>
+              <Show when={current().historicalVerificationLabel}>
+                {(label) => <strong>{label()}</strong>}
+              </Show>
+              <ul
+                class="update-run-view__oracles"
+                aria-label={current().historicalVerificationLabel ?? t("updates.run.verification")}
+              >
                 <For each={current().oracles}>
                   {(oracle) => (
                     <li
@@ -204,13 +210,7 @@ export function UpdateRunView(props: {
               </ul>
             </Show>
             <Show when={current().terminal}>
-              <section
-                class={[
-                  "update-run-view__report",
-                  { [`update-run-view__report--${props.run?.status}`]: !current().reconciled },
-                ]}
-                aria-label={t("updates.run.report")}
-              >
+              <section class="update-run-view__report" aria-label={t("updates.run.report")}>
                 <h4>
                   <ReportHeadline headline={current().report.headline} />
                 </h4>

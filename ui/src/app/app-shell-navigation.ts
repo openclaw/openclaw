@@ -1,4 +1,4 @@
-import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { isSettingsTakeover, type ShellNavigationIntent } from "../app-navigation.ts";
 import {
   isSessionRouteId,
   pluginSlugCandidate,
@@ -22,12 +22,20 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
+import { settingsParentTarget } from "../lib/settings-navigation.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
+import { isMobileNavLayout } from "./mobile-nav-layout.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
+import {
+  isNativeEmbedHost,
+  isNativeMobileHost,
+  isNativeWebChromeHost,
+} from "./native-web-chrome.ts";
+import type { NavDrawerCloseOptions } from "./navigation-surface.ts";
 
 export interface ShellNavigationHost {
   readonly context: ApplicationContext | undefined;
@@ -38,7 +46,7 @@ export interface ShellNavigationHost {
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
-  closeNavDrawer(options?: { restoreFocus?: boolean }): void;
+  closeNavDrawer(options?: NavDrawerCloseOptions): void;
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],
     agents?: ApplicationContext["agents"],
@@ -83,13 +91,27 @@ export class ShellNavigationOwner {
     );
   }
 
-  readonly navigate = (routeId: string, options?: ApplicationNavigationOptions): void => {
+  readonly navigate = (
+    routeId: string,
+    options?: ApplicationNavigationOptions,
+    intent?: ShellNavigationIntent,
+  ): void => {
     const context = this.host.context;
     if (!context || !isRouteId(routeId)) {
       return;
     }
-    // The new draft owns focus after it mounts; a drawer return must not reclaim it.
-    this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session" });
+    // On mobile web, entering a section reveals its list in the open drawer.
+    // Selecting a destination from that list still gets the usual dismissal.
+    if (
+      intent !== "sidebar-section" ||
+      !isMobileNavLayout() ||
+      isNativeWebChromeHost() ||
+      isNativeMobileHost() ||
+      isNativeEmbedHost()
+    ) {
+      // The new draft owns focus after it mounts; a drawer return must not reclaim it.
+      this.host.closeNavDrawer({ restoreFocus: routeId !== "new-session", finishMotion: true });
+    }
     context.navigate(
       routeId,
       isSessionRouteId(routeId) ? this.chatNavigationOptions(routeId, options) : options,
@@ -112,7 +134,11 @@ export class ShellNavigationOwner {
         return true;
       }
     }
-    return this.replaceChatWithCurrentSession();
+    // A failed session can recover its active identity; an unknown URL cannot
+    // establish that intent and must retain its not-found destination.
+    return isSessionRouteId(this.host.routeState.routeId)
+      ? this.replaceChatWithCurrentSession()
+      : true;
   }
 
   replaceChatWithCurrentSession(): boolean {
@@ -301,8 +327,19 @@ export class ShellNavigationOwner {
       this.host.ensureAgentsList(context.gateway.snapshot);
     }
     this.synchronizeSessionUrl();
-    if (routeState.routeId && !isSettingsNavigationRoute(routeState.routeId)) {
-      this.host.settingsSearchQuery = "";
+    if (
+      routeState.routeId &&
+      !isSettingsTakeover(
+        routeState.routeId,
+        context?.gateway.snapshot.hello?.controlUiTabs,
+        routeState.location,
+        context?.basePath,
+      )
+    ) {
+      // The embedded list is this search's home, so its results survive Back.
+      if (routeState.routeId !== "settings") {
+        this.host.settingsSearchQuery = "";
+      }
       this.host.lastWorkspaceLocation = {
         routeId: routeState.routeId,
         pathname: routeState.location?.pathname ?? "",
@@ -323,6 +360,20 @@ export class ShellNavigationOwner {
 
   openNewSession(agentId: string, target?: NewSessionTarget): void {
     this.navigate("new-session", { search: newSessionSearch(agentId, target) });
+  }
+
+  /** Escape: one level up from a subpage, out of Settings from a top-level section. */
+  leaveSettingsLevel(): void {
+    const { routeId, location } = this.host.routeState;
+    const basePath = this.host.context?.basePath ?? "";
+    const parent =
+      routeId && isRouteId(routeId) ? settingsParentTarget(routeId, location, basePath) : null;
+    if (parent) {
+      const { routeId: parentRoute, ...parentLocation } = parent;
+      this.navigate(parentRoute, parentLocation);
+      return;
+    }
+    this.exitSettings();
   }
 
   exitSettings(): void {

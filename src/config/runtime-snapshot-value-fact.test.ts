@@ -34,6 +34,13 @@ afterEach(() => {
 
 it.each<[string, Config, string, boolean]>([
   ["sidebar preferences", sidebar(), "config-presentation", false],
+  [
+    "browser profiles",
+    { browser: { profiles: { temporary: { cdpPort: 18801, color: "#123456" } } } },
+    "config-presentation",
+    false,
+  ],
+  ["authored browser profiles", { browser: { profiles: {} } }, "config-presentation", true],
   ["agent identity", identity(), "config-profiles", false],
   ["authored sidebar preferences", sidebar(), "config-presentation", true],
   ["authored agent identity", identity(), "config-profiles", true],

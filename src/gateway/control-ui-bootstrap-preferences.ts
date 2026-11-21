@@ -28,7 +28,14 @@ export async function prepareControlUiBootstrapPreferences(
       ? redactConfigObject(
           {
             ui: { prefs: config.ui?.prefs },
-            gateway: { publicOrigin: config.gateway?.publicOrigin },
+            gateway: {
+              publicOrigin: config.gateway?.publicOrigin,
+              controlUi: {
+                experimental: {
+                  templates: config.gateway?.controlUi?.experimental?.templates === true,
+                },
+              },
+            },
             messages: { queue: config.messages?.queue },
             tts: config.tts ? { maxTextLength: config.tts.maxTextLength } : null,
             tools: {

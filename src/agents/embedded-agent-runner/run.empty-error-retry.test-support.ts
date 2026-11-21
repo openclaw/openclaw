@@ -144,7 +144,14 @@ describe("runEmbeddedAgent silent-error retry", () => {
           ...emptyErrorAttempt("anthropic", "claude-opus-4-8"),
           terminal: { kind: "failed", source: "prompt", error },
           ...(recovered
-            ? { preflightRecovery: { handled: true, source: "mid-turn", route: "compact_only" } }
+            ? {
+                preflightRecovery: {
+                  handled: true,
+                  source: "mid-turn",
+                  route: "compact_only",
+                  pressure: "overflow",
+                },
+              }
             : {}),
         }),
       );

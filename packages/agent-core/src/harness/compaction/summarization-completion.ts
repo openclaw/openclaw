@@ -11,6 +11,7 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveAgentReasoningOption } from "../../reasoning.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
@@ -36,6 +37,7 @@ import {
   extractSummaryText,
   MAX_SUMMARY_INPUT_CHARS,
   serializeConversationWithinBudget,
+  type BoundedConversation,
 } from "./utils.js";
 
 // Margin for the chars-per-token heuristic and the provider's message framing.
@@ -78,6 +80,18 @@ export interface SummarizationCompletionParams {
 /** Runs one summarization completion and rejects failed or incomplete output. */
 export async function runSummarizationCompletion(
   params: SummarizationCompletionParams,
+): Promise<Result<string, CompactionError>> {
+  let messages: ReturnType<typeof convertToLlm> | undefined;
+  return await runSummarizationCompletionFromSource(params, (maxChars) => {
+    messages ??= convertToLlm(params.messages);
+    return serializeConversationWithinBudget(messages, maxChars);
+  });
+}
+
+/** @internal The host owns requests; a worker may render each budget from its captured source. */
+export async function runSummarizationCompletionFromSource(
+  params: Omit<SummarizationCompletionParams, "messages">,
+  serialize: (maxChars: number) => BoundedConversation | Promise<BoundedConversation>,
 ): Promise<Result<string, CompactionError>> {
   let instructions = "";
   if (params.previousSummary) {
@@ -127,11 +141,18 @@ export async function runSummarizationCompletion(
   if (fullBudget < 0) {
     return budgetError();
   }
-  const llmMessages = convertToLlm(params.messages);
   let conversationBudget = fullBudget;
   let response;
   for (let shrink = 0; ; shrink += 1) {
-    const conversation = serializeConversationWithinBudget(llmMessages, conversationBudget);
+    if (signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
+    const rendered = serialize(conversationBudget);
+    const conversation = isPromiseLike<BoundedConversation>(rendered) ? await rendered : rendered;
+    // Source work may await another thread; cancellation must win before a paid request.
+    if (signal?.aborted) {
+      return err(new CompactionError("aborted", `${params.errorLabel} aborted`));
+    }
     const sampled = conversation.omittedEntries > 0 || conversation.trimmedEntries > 0;
     // A history that fits is sent unchanged; only a sample needs the minimum room.
     if (sampled && conversationBudget < MIN_SUMMARY_INPUT_CHARS) {

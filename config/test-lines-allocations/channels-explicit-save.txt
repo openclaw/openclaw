@@ -1,4 +1,0 @@
-# Explicit Channel Save: conflict isolation, safe array patches, retained drafts,
-# interrupted-write reconciliation, and native confirmation/navigation behavior.
-# Duplicate helper and browser scenarios were consolidated before this allocation.
-692

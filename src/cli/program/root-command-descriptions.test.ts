@@ -15,7 +15,7 @@ import {
 import { registerSubCliByName, registerSubCliCommands } from "./register.subclis.js";
 import { getSubCliEntriesCore } from "./subcli-descriptors.js";
 
-const RESERVED_CATALOG_ROOTS = ["tool", "tools"];
+const RESERVED_CATALOG_ROOTS = ["tool"];
 const PLUGIN_CATALOG_PATHS = commandPaths(
   "browser extension | browser extension native-host | memory | memory search | memory status",
 );

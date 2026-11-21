@@ -178,3 +178,33 @@ describe.each(["", "/ui"])("moved Settings sections with base path %j", (basePat
     },
   );
 });
+
+it.each([false, true])(
+  "keeps the raw Settings loader fallback with native embed %s",
+  async (embedded) => {
+    vi.stubGlobal(
+      "window",
+      embedded
+        ? {
+            __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+          }
+        : {},
+    );
+    const origin = locationFromUrl("/ui/settings?keep=1#anchor");
+    const { history, replace } = memoryHistory(origin);
+    const router = routerFor(page("settings"), targetPage("chat"));
+    // SAFETY: Both routes have no data reads beyond the base path.
+    const context = { basePath: "/ui" } as ApplicationContext;
+    try {
+      await router.start(history, "/ui", context);
+      expect(history.location()).toEqual({
+        ...origin,
+        pathname: embedded ? "/ui/settings" : "/ui/chat",
+      });
+      expect(replace).toHaveBeenCalledTimes(embedded ? 0 : 1);
+    } finally {
+      router.stop();
+      vi.unstubAllGlobals();
+    }
+  },
+);

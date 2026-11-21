@@ -9,7 +9,11 @@ import { loginOpenAICodex } from "./openai-chatgpt-oauth-flow.runtime.js";
 import { runOpenAIOAuthTlsPreflight } from "./openai-chatgpt-oauth-preflight.runtime.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
+const callbackStillOpenMessage =
+  "Still waiting for the browser. Finish signing in there, or paste the redirect URL below.";
 const openAICodexOAuthOriginator = "openclaw";
+const callbackUnavailableMessage =
+  "OpenClaw could not use localhost:1455, so the browser cannot finish sign-in here. Sign in there, then paste the redirect URL from its address bar below.";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
 type OpenAICodexOAuthFailureCode = "callback_validation_failed" | "unsupported_region";
@@ -104,11 +108,7 @@ export async function loginOpenAICodexOAuth(params: {
 
   const spin = prompter.progress("Starting OAuth flow...");
   let progressActive = true;
-  const updateProgress = (message: string) => {
-    if (progressActive) {
-      spin.update(message);
-    }
-  };
+  let manualEntryOffered = false;
   const stopProgress = (message?: string) => {
     if (progressActive) {
       progressActive = false;
@@ -132,16 +132,16 @@ export async function loginOpenAICodexOAuth(params: {
       manualPromptSignal: manualPromptAbort.signal,
     });
     const promptForManualCode = () => onPrompt({ message: manualInputPromptMessage });
-    const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
-      updateProgress(progressMessage);
-      if (logMessage) {
-        runtime.log(logMessage);
-      }
-      stopProgress("Manual OAuth entry required");
+    const offerManualEntry = async (message: string) => {
+      stopProgress(message);
+      manualEntryOffered = true;
       return await promptForManualCode();
     };
 
-    const runLocalManualFallback = async () => {
+    const runLocalManualFallback = async (callback: { listening: boolean }) => {
+      if (!callback.listening) {
+        return await offerManualEntry(callbackUnavailableMessage);
+      }
       for (const delayMs of [localManualFallbackDelayMs, localManualFallbackGraceMs]) {
         const outcome = await raceWithTimeout(
           waitForLoginToSettle.then(
@@ -155,10 +155,8 @@ export async function loginOpenAICodexOAuth(params: {
           return await new Promise<string>(() => {});
         }
       }
-      return await switchToManualEntry(
-        "Browser callback did not finish. Paste the redirect URL to continue...",
-        `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
-      );
+      // The browser callback keeps racing this prompt, so sign-in may still finish on its own.
+      return await offerManualEntry(callbackStillOpenMessage);
     };
     const creds = await loginOpenAICodex({
       onAuth,
@@ -170,6 +168,11 @@ export async function loginOpenAICodexOAuth(params: {
       assertCurrent: params.assertCurrent,
     });
     stopProgress("OpenAI OAuth complete");
+    if (manualEntryOffered) {
+      // The progress line already ended at the offer; close the prompt before confirming.
+      manualPromptAbort.abort();
+      runtime.log("OpenAI OAuth complete");
+    }
     return creds ?? null;
   } catch (err) {
     stopProgress("OpenAI OAuth failed");

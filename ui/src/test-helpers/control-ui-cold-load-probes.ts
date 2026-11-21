@@ -488,7 +488,7 @@ function installColdLoadProbes(
           omittedEventHeaders++;
         }
         queued++;
-        const deliver = () => {
+        const dispatchFrame = () => {
           queued--;
           if (eventHeader) {
             Object.assign(eventHeader, {
@@ -530,13 +530,14 @@ function installColdLoadProbes(
           }
           lastActivity = performance.now();
         };
-        const eventDelivery = frame.type === "event" ? { ready: false, deliver } : undefined;
+        const eventDelivery =
+          frame.type === "event" ? { ready: false, deliver: dispatchFrame } : undefined;
         if (eventDelivery) {
           eventDeliveries.push(eventDelivery);
         }
         const deliverReady = () => {
           if (!eventDelivery) {
-            deliver();
+            dispatchFrame();
             return;
           }
           eventDelivery.ready = true;

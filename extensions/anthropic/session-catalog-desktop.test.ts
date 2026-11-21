@@ -45,7 +45,7 @@ describe("Claude Desktop overlay cache", () => {
       close: closeWatch,
     };
     createWatch.mockReset().mockReturnValue(watch);
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
   });
 
   afterEach(async () => {

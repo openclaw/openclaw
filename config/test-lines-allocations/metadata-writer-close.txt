@@ -1,2 +1,0 @@
-5
-# Retain the existing metadata fixture native-close regression with child-owned IPC shutdown.

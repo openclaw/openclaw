@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 
+// Read only on the requesting call's await chain; listeners never pause a request deadline.
 const requestBudget = new AsyncLocalStorage<{ pause: () => () => void }>();
 
 /** Startup is shared service work; only the requesting wait belongs to this deadline. */
@@ -43,9 +44,7 @@ export async function withTimeout<T>(
   };
   const arm = () => {
     startedAt = performance.now();
-    const timer = setTimeout(expire, remaining);
-    timer.unref?.();
-    return timer;
+    return setTimeout(expire, remaining).unref();
   };
   let timer = arm();
   const signal = upstreamSignal

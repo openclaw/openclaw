@@ -234,9 +234,7 @@ describe("SystemAgentChatEngine runtime", () => {
     expect(portStep.text).toContain(
       "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
     );
-    expect(portStep.text).toContain(
-      "sign in to the Control UI again with the new address or credential",
-    );
+    expect(portStep.text).toContain("sign in to OpenClaw again with the new address or credential");
     expect(portStep.text).toContain("Gateway port");
 
     expect(storageStep.sensitive).not.toBe(true);
@@ -463,7 +461,9 @@ describe("SystemAgentChatEngine runtime", () => {
       if (revisionConflict) {
         expect(stopped.text).toContain("configuration changed during channel setup");
         const [config, options] = mocks.writeWizardConfigFile.mock.calls[0] ?? [];
-        expect(config).toMatchObject({ channels: { telegram: { botToken: "123:abc" } } });
+        expect(config).toMatchObject({
+          channels: { telegram: { botToken: { source: "store", id: expect.any(String) } } },
+        });
         expect(options).toMatchObject({ baseHash: "base-hash" });
         expect(currentConfig).toEqual(changedConfig);
       } else if (phase === "write") {

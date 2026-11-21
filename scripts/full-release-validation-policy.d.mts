@@ -1,6 +1,13 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseRecord[];
+export function validateReleaseManifestAdvisoryJobs(
+  manifest: unknown,
+  options?: {
+    deferWaiverPolicy?: boolean;
+    waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[];
+  },
+): ReleaseRecord[];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
+export const GHOST_JOBS_ADVICE: string;
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
   comparison: unknown,
@@ -21,6 +28,13 @@ export function assertReleasePublicationKnownBudget(
 export function normalizeReleaseCoveragePolicy(
   input: ReleaseRecord,
 ): "npm-beta-v1" | "npm-stable-v1" | undefined;
+export function resolveReleaseQualificationScope(input: ReleaseRecord): {
+  coveragePolicy: "npm-beta-v1" | "npm-stable-v1" | undefined;
+  ciReleaseScope: string;
+  skipPackageTelegramE2e: boolean;
+  npmDistTag: string;
+  releaseCandidateBranch: string;
+};
 export function validateReleaseCoveragePolicyBinding(
   plan: ReleaseRecord | undefined,
   validationInputs?: ReleaseRecord,
@@ -71,6 +85,11 @@ export interface ReleaseChildSpec {
 }
 export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
+export function evidenceReadRetryDelay(
+  args: readonly string[],
+  error: unknown,
+  attempt: number,
+): number;
 export function isReleaseGhServerError(error: unknown): boolean;
 export function readReleaseJobListing<T>(
   readListing: (perPage: number, options: { smallerPageFallback: boolean }) => Promise<T>,
@@ -134,7 +153,12 @@ export function composeReleaseChildAttemptEvidence(input: {
 }): ReleaseRecord;
 
 export function releaseChildAdvisories(child: ReleaseRecord): ReleaseRecord[];
-export function terminalPolicyPass(child: ReleaseRecord, targetVersion?: string): boolean;
+export function terminalPolicyPass(
+  child: ReleaseRecord,
+  targetVersion?: string,
+  targetSha?: string,
+  waiverPolicy?: import("./lib/release-validation-waivers.mjs").ReleaseValidationWaiver[],
+): boolean;
 
 export function classifyReleaseSnapshot(input: ReleaseRecord): ReleaseStateArtifact;
 export function releasePlanGateFailures(gates: ReleaseRecord[]): ReleaseRecord[];
@@ -172,3 +196,16 @@ export function affectedActiveRunIds(
   blockers: ReleaseRecord[],
   cancelledRunIds?: Set<string>,
 ): string[];
+
+export function resolveAdmittedQualificationScope(
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+): ReturnType<typeof resolveReleaseQualificationScope> & {
+  releaseProfile: string;
+  runReleaseSoak: boolean;
+};
+export function qualificationChildDispatchInputs(
+  role: string,
+  admission: import("./release-qualification-admission.mjs").QualificationAdmission,
+  binding: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateBinding,
+  workflowSource: string,
+): Record<string, string>;

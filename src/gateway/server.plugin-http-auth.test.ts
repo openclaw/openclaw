@@ -93,7 +93,7 @@ describe("gateway plugin HTTP auth boundary", () => {
   test.each([
     ["preview", true, "GET", 200, 'content="OpenClaw dashboard"'],
     ["preview", false, "GET", 404, "Not Found"],
-    ["approval", true, "GET", 503, "Control UI assets not found"],
+    ["approval", true, "GET", 503, "Web app assets not found"],
     ["approval", true, "POST", 404, "Not Found"],
     ["approval", false, "GET", 404, "Not Found"],
   ] as const)(

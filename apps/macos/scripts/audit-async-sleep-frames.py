@@ -102,9 +102,30 @@ class Binary:
                 return address + relative, size
         raise Unsupported(f"descriptor {address:#x} has no file-backed segment")
 
-    def function(self, address, root):
+    def direct_branch(self, pc):
+        # Symbol names can occur at multiple addresses; decode B imm26 from the slice.
+        for vm, offset, length in self.segments:
+            if vm <= pc and pc + 4 <= vm + length:
+                word = struct.unpack_from("<I", self.data, self.base + offset + pc - vm)[0]
+                if word & 0xFC000000 != 0x14000000:
+                    raise Unsupported(f"invalid direct branch encoding at {pc:#x}")
+                displacement = word & 0x03FFFFFF
+                if displacement & 0x02000000:
+                    displacement -= 0x04000000
+                return pc + displacement * 4
+        raise Unsupported(f"branch {pc:#x} has no file-backed segment")
+
+    def function(self, address, root, tail_from=None):
         names = self.symbols.get(address, [])
-        matching = [name for name in names if name == root or re.fullmatch(re.escape(root) + r"T[QY]\d+_", name)]
+        if tail_from is None:
+            matching = [name for name in names if name == root or re.fullmatch(re.escape(root) + r"T[QY]\d+_", name)]
+        else:
+            # Only the matching Tgq -> Tg specialization and the same TY continuation.
+            sources = [name for name in self.symbols.get(tail_from, [])
+                       if re.fullmatch(re.escape(root) + r"TY\d+_", name)]
+            targets = [re.sub(r"Tgq(\d+)(TY\d+_)$", r"Tg\1\2", name) for name in sources
+                       if re.search(r"Tgq\d+TY\d+_$", name)]
+            matching = [name for name in names if name in targets]
         if len(matching) != 1:
             raise Unsupported(f"continuation {address:#x} is not a known sleep function: {names}")
         name = matching[0]
@@ -141,18 +162,18 @@ def audit(binary, entry, allocation, root):
     # Values are (region, offset): frame, child allocation, stack, or constant.
     # x22 is Swift's async context; a child context's first word is its parent.
     memory = {("frame", 8): ("return", 0)}
-    pending = [(entry, entry, {"x22": ("frame", 0), "sp": ("stack", 0)}, memory)]
+    pending = [(entry, entry, {"x22": ("frame", 0), "sp": ("stack", 0)}, memory, None)]
     visited = set()
     continuations = set()
     stores = {}
     steps = 0
 
-    def enqueue(pc, registers, slots):
-        pending.append((pc, pc, registers.copy(), slots.copy()))
+    def enqueue(pc, registers, slots, tail_from=None):
+        pending.append((pc, pc, registers.copy(), slots.copy(), tail_from))
 
     while pending:
-        start, pc, regs, slots = pending.pop()
-        end = binary.function(start, root)
+        start, pc, regs, slots, tail_from = pending.pop()
+        end = binary.function(start, root, tail_from)
         continuations.add(start)
         while pc < end:
             state = (pc, tuple(sorted(regs.items())), tuple(sorted(slots.items())))
@@ -250,7 +271,7 @@ def audit(binary, entry, allocation, root):
                 # Internal branches keep register state; do not reset x22.
                 if not start <= target < end:
                     raise Unsupported(f"conditional branch escapes function at {pc:#x}")
-                pending.append((start, target, regs.copy(), slots.copy()))
+                pending.append((start, target, regs.copy(), slots.copy(), tail_from))
             elif op in ("b", "br", "ret"):
                 if "symbol stub for: _swift_task_switch" in raw:
                     target = value("x0")
@@ -267,6 +288,9 @@ def audit(binary, entry, allocation, root):
                     callback = slots.get(shifted(context, 8))
                     if context and context[0].startswith("child:") and parent == ("frame", 0) and callback and callback[0] == "constant":
                         enqueue(callback[1], {"x22": context, "sp": ("stack", 0)}, slots)
+                    elif op == "b":
+                        # A direct tail continuation retains the original frame and all state.
+                        enqueue(binary.direct_branch(pc), regs, slots, start)
                     else:
                         raise Unsupported(f"unsupported async transfer at {pc:#x}: {raw}")
                 break

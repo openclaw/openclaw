@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -146,7 +146,13 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
             return box.y < 52 &&
               (box.right > viewportWidth - 138 ||
                 (box.x < titlebar.right && box.right > titlebar.left))
-              ? [button.getAttribute("aria-label") ?? button.textContent?.trim()]
+              ? [
+                  {
+                    label: button.getAttribute("aria-label") ?? button.textContent?.trim(),
+                    bounds: box.toJSON(),
+                    titlebar: titlebar.toJSON(),
+                  },
+                ]
               : [];
           });
         }, width),
@@ -154,6 +160,10 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
       .toEqual([]);
     for (const control of await controls.all()) {
       if (await control.isEnabled()) {
+        // Resting on a closed rail item opens its floating section peek, which stays open while
+        // the pointer is inside the sidebar. Start each trial click outside it so a slow click
+        // on a rail item cannot leave that peek covering the next header control.
+        await page.mouse.move(width - 1, 899);
         await control.click({ trial: true });
       }
     }
@@ -232,7 +242,12 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
   }
   await focusChatSidePanel(page);
   await assertChromeClear();
-  await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+  // New session lives in the Sessions panel header; open the panel when it is closed.
+  const create = page.locator(".sidebar-session-toolbar .sidebar-new-session");
+  if (!(await create.isVisible())) {
+    await page.locator('[data-navigation-view="sessions"]').click();
+  }
+  await create.click();
   await page.locator(".new-session-page__message").waitFor();
   await assertChromeClear();
   await page.evaluate(() =>
@@ -249,9 +264,11 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
     [".content", 50],
     [".settings-sidebar__header", 220],
   ] as const) {
-    const bounds = await page.locator(selector).boundingBox();
-    expect(bounds).not.toBeNull();
-    await drag(page, bounds!.x + x, bounds!.y + 26);
+    const bounds = await page.locator(selector).evaluate((element) => {
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + element.clientLeft, y: rect.top + element.clientTop };
+    });
+    await drag(page, bounds.x + x, bounds.y + 26);
   }
   await expect
     .poll(async () => (await actions()).filter((action) => action === "drag"))
@@ -276,6 +293,7 @@ async function alignsNativeHeaders(
   host: "web" | "macos" | "tauri-linux" | "tauri-macos",
 ) {
   const native = host !== "web";
+  const macNavigation = host === "macos";
   const macos = host === "macos" || host === "tauri-macos";
   if (host === "macos") {
     await installNativeWebChrome(page);
@@ -286,16 +304,14 @@ async function alignsNativeHeaders(
   await installChat(page, "Selectable transcript content.");
   await page.goto(`${suite.server.baseUrl}chat`);
   const row = page.locator(".sidebar-session-toolbar");
-  const collapse = row.getByRole("button", { name: "Collapse sidebar" });
+  const collapse = macNavigation
+    ? page.locator(".macos-titlebar-controls__sidebar")
+    : row.getByRole("button", { name: "Collapse sidebar" });
   await collapse.waitFor();
   expect(await collapse.getAttribute("aria-expanded")).toBe("true");
-  expect(await row.locator("a").count()).toBe(0);
-  expect(await row.getByRole("button", { name: /New (session|conversation)/ }).count()).toBe(0);
-  await page.mouse.move(600, 600);
-  const restingBackgrounds = await row
-    .locator("button.sidebar-session-toolbar__button")
-    .evaluateAll((buttons) => buttons.map((button) => getComputedStyle(button).backgroundColor));
-  expect(restingBackgrounds).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+  // The header's only link is New session, beside Filter & sort and Collapse.
+  expect(await row.locator("a").count()).toBe(1);
+  expect(await row.getByRole("link", { name: "New session", exact: true }).count()).toBe(1);
   const geometry = await row.evaluate((element) => {
     const box = (selector: string) =>
       document.querySelector(selector)!.getBoundingClientRect().toJSON();
@@ -306,7 +322,7 @@ async function alignsNativeHeaders(
       panelPadding: getComputedStyle(document.querySelector(".sidebar-shell")!).paddingTop,
     };
   });
-  if (native) {
+  if (native && !macNavigation) {
     expect(geometry).toMatchObject({ row: { y: 0, height: 52 }, panelPadding: "0px" });
     expect(geometry.title.y + geometry.title.height / 2).toBeCloseTo(26, 1);
     expect(geometry.title.x).toBe(macos ? 92 : 68);
@@ -314,88 +330,90 @@ async function alignsNativeHeaders(
     const history = page.locator(".macos-titlebar-controls");
     const [bar, content, title] = await Promise.all([
       history.boundingBox(),
-      page.locator(".content").boundingBox(),
+      page.locator(".content").evaluate((element) => {
+        const bounds = element.getBoundingClientRect();
+        return { x: bounds.left + element.clientLeft };
+      }),
       page.locator(".chat-pane__crumbs").first().boundingBox(),
     ]);
     expect(bar!.x).toBe(content!.x + 12);
     expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
   }
-  for (const panel of ["pages", "online"] as const) {
-    await page.locator(`[data-navigation-view="${panel}"]`).click();
-    const header = page.locator(".sidebar-panel-header");
-    const toggle = header.getByRole("button", { name: "Collapse sidebar" });
-    await toggle.waitFor();
-    const panelGeometry = await header.evaluate((element) => {
-      const title = element.firstElementChild!.getBoundingClientRect();
-      const collapseBounds = element
-        .querySelector(".sidebar-session-toolbar__collapse")!
-        .getBoundingClientRect();
-      const headerBounds = element.getBoundingClientRect();
-      return {
-        x: title.x,
-        y: headerBounds.y,
-        height: headerBounds.height,
-        center: title.y + title.height / 2,
-        collapseCenter: collapseBounds.y + collapseBounds.height / 2,
-        collapseRight: collapseBounds.right,
-        right: headerBounds.right,
-      };
-    });
-    expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
-    expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
+  // Measure the Users panel on Activity before Sessions returns to the chat.
+  await page.locator('[data-navigation-view="online"]').click();
+  await waitForControlUiRoute(page, { routeId: "activity" });
+  const header = page.locator(".sidebar-panel-header");
+  const toggle = macNavigation
+    ? page.locator(".macos-titlebar-controls__sidebar")
+    : header.getByRole("button", { name: "Collapse sidebar" });
+  await toggle.waitFor();
+  const panelGeometry = await header.evaluate((element) => {
+    const title = element.firstElementChild!.getBoundingClientRect();
+    const collapseBounds = element
+      .querySelector(".sidebar-session-toolbar__collapse")!
+      .getBoundingClientRect();
+    const headerBounds = element.getBoundingClientRect();
+    return {
+      x: title.x,
+      y: headerBounds.y,
+      height: headerBounds.height,
+      center: title.y + title.height / 2,
+      collapseCenter: collapseBounds.y + collapseBounds.height / 2,
+      collapseRight: collapseBounds.right,
+      right: headerBounds.right,
+    };
+  });
+  expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
+  expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
+  if (!macNavigation) {
     expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
     expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
-    // Empty header space must stay non-interactive so it can drag the window.
-    const dragGap = await header.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const controls = [...element.querySelectorAll("button")]
-        .map((button) => button.getBoundingClientRect())
-        .toSorted((a, b) => a.left - b.left);
-      let start = bounds.left;
-      let widest = { left: start, width: 0 };
-      for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
-        if (control.left - start > widest.width) {
-          widest = { left: start, width: control.left - start };
-        }
-        start = Math.max(start, control.right);
+  }
+  // Empty header space must stay non-interactive so it can drag the window.
+  const dragGap = await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const controls = [...element.querySelectorAll("button")]
+      .map((button) => button.getBoundingClientRect())
+      .toSorted((a, b) => a.left - b.left);
+    let start = bounds.left;
+    let widest = { left: start, width: 0 };
+    for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
+      if (control.left - start > widest.width) {
+        widest = { left: start, width: control.left - start };
       }
-      const hit = document.elementFromPoint(
-        widest.left + widest.width / 2,
-        bounds.top + bounds.height / 2,
-      );
-      return { width: widest.width, button: Boolean(hit?.closest("button")) };
-    });
-    expect(dragGap.width).toBeGreaterThanOrEqual(24);
-    expect(dragGap.button).toBe(false);
-    if (native) {
-      expect(panelGeometry.x).toBe(macos ? 92 : 68);
+      start = Math.max(start, control.right);
     }
-    await toggle.click();
+    const hit = document.elementFromPoint(
+      widest.left + widest.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    return { width: widest.width, button: Boolean(hit?.closest("button")) };
+  });
+  expect(dragGap.width).toBeGreaterThanOrEqual(24);
+  expect(dragGap.button).toBe(false);
+  if (native && !macNavigation) {
+    expect(panelGeometry.x).toBe(macos ? 92 : 68);
+  }
+  await toggle.click();
+  // Native shells reopen with their own control; on the web Sessions reopens the panel.
+  if (native) {
     await page
-      .locator(native ? ".shell-chrome-controls__nav-toggle" : `[data-navigation-view="${panel}"]`)
+      .locator(
+        macNavigation ? ".macos-titlebar-controls__sidebar" : ".shell-chrome-controls__nav-toggle",
+      )
       .click();
   }
   await page.locator('[data-navigation-view="sessions"]').click();
   await collapse.click();
   const cluster = page.locator(".shell-chrome-controls");
-  await expect.poll(() => cluster.isVisible()).toBe(native);
+  await expect.poll(() => cluster.isVisible()).toBe(native && !macNavigation);
   expect(await page.locator('[data-navigation-view][aria-pressed="true"]').count()).toBe(0);
   expect(
     await cluster
       .locator("button, a")
       .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
   ).toEqual(native ? ["Expand sidebar"] : []);
-  if (native) {
-    expect(
-      await cluster.locator("button").evaluate((button) => {
-        const style = getComputedStyle(button);
-        return {
-          border: style.borderTopWidth,
-          background: style.backgroundColor,
-          shadow: style.boxShadow,
-        };
-      }),
-    ).toEqual({ border: "0px", background: "rgba(0, 0, 0, 0)", shadow: "none" });
+  if (native && !macNavigation) {
     expect((await cluster.boundingBox())!.x).toBe(macos ? 92 : 64);
     await expect
       .poll(async () => {
@@ -414,7 +432,17 @@ async function alignsNativeHeaders(
       })
       .toBe(true);
   }
-  if (native) {
+  if (macNavigation) {
+    const toolbar = page.locator(".macos-titlebar-controls");
+    const [bar, rail, title] = await Promise.all([
+      toolbar.boundingBox(),
+      page.locator(".sidebar-rail").boundingBox(),
+      page.locator(".chat-pane__crumbs").first().boundingBox(),
+    ]);
+    expect(rail).not.toBeNull();
+    expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
+    await collapse.click();
+  } else if (native) {
     await cluster.getByRole("button", { name: "Expand sidebar" }).click();
   } else {
     await page.locator('[data-navigation-view="sessions"]').click();

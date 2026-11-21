@@ -15,37 +15,32 @@ import {
   pathForPluginSettings,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsLoadingSkeleton, SettingsPage } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsPage,
+  SettingsPageHeader,
+} from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { WizardLogin } from "../../components/wizard-login-controller.tsx";
-import { configSecretFields } from "../../lib/config/config-secret-fields.ts";
 import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import "./custom-elements.ts";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
   renderPluginRowMessage as PluginRowMessageView,
 } from "./plugin-row-message.tsx";
 import { PluginsHubHeader } from "./plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
-import {
-  pluginAdvancedSchema,
-  pluginConfigSchema,
-  pluginHostControlsSchema,
-} from "./settings-model.ts";
 import { PluginRetryError } from "./settings-retry-error.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { PluginSkillPreview, renderPluginSkillsSection } from "./skill-preview.tsx";
@@ -91,13 +86,24 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     props.page.read();
     return props.page;
   };
+  const installPaused = () => {
+    const update = page().context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
+  };
   const hasInventory = createMemo(() => page().state.result !== null);
+  const pluginSettingsLocation = (pluginId: string) => ({
+    pathname: pathForPluginSettings(pluginId, page().context.basePath),
+    // Settings returns to the Plugins workspace it was opened from.
+    search: "?view=settings&from=plugins",
+  });
   // The owner mutates in place; publish fresh props for each page revision.
   const discovery = createMemo(() => ({
     ...page().discovery.read(),
-    error: page().discovery.read().error ?? page().state.error,
   }));
-  const onOpenSkill = (request: PluginsSkillsReadParams) => void page().skillPreview.open(request);
+  const onOpenSkill = (
+    request: PluginsSkillsReadParams,
+    identity: { description?: string; publisher?: string },
+  ) => void page().skillPreview.open(request, identity);
   const actions = {
     openPluginSettings: (pluginId: string | null) => {
       page().context.navigate("plugin-settings", {
@@ -118,6 +124,12 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       });
     },
     selectInstalledDetailTab: (tab: InstalledPluginDetailTab) => {
+      const pluginId = page().state.detail?.pluginId;
+      // Plugin settings live in Settings; the Plugins workspace links there, never embeds them.
+      if (tab === "configuration" && page().surface === "discovery" && pluginId) {
+        page().context.navigate("plugin-settings", pluginSettingsLocation(pluginId));
+        return;
+      }
       page().setState({ installedDetailTab: tab });
       page().context.navigate(
         page().surface === "discovery" ? "plugins" : "plugin-settings",
@@ -146,8 +158,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return staticAsk ? () => void staticAsk() : undefined;
   });
   const configState = () => page().context.runtimeConfig.state;
-  const rawConfigSchema = createMemo(() => configState().configSchema);
-  const configAnalysis = createMemo(() => analyzeConfigSchema(rawConfigSchema()), { lazy: true });
   const detailPluginId = () => page().state.detail?.pluginId;
   const catalogId = () => page().state.catalogDetail?.id ?? "";
   const catalogInstallable = createMemo(() => {
@@ -164,8 +174,14 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     if (!staticCatalog || !version || !staticCatalog.detail.skills.length) {
       return undefined;
     }
-    const onOpen = (skillName: string) =>
-      onOpenSkill({ source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName });
+    const onOpen = (skill: { name: string; description?: string }) =>
+      onOpenSkill(
+        { source: "catalog", catalogId: staticCatalog.plugin.id, version, skillName: skill.name },
+        {
+          description: skill.description,
+          publisher: staticCatalog.detail.author?.handle ?? staticCatalog.plugin.catalog.author,
+        },
+      );
     return renderPluginSkillsSection(staticCatalog.detail.skills, onOpen);
   };
   const shared = createMemo(() => ({
@@ -191,6 +207,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     configValue: configState().configForm,
     configHints: configState().configUiHints,
     configSchemaLoading: configState().configSchemaLoading,
+    rawConfigSchema: configState().configSchema,
+    settingsContext: page().context,
     onIconError: (pluginId: string) => page().icons.installed.handleError(pluginId),
     onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) =>
       void page().consent.mutateInstalledPlugin(pluginId, enabled ? "enable" : "disable", rowKey),
@@ -198,7 +216,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     onConfigPatch: (path: Array<string | number>, value: unknown) =>
       page().settings.patch(path, value),
     onConfigRemove: (path: Array<string | number>) => page().settings.patch(path, undefined),
-    configSecretFields: configSecretFields(page().context),
     onConfigReload: page().reloadConfig,
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: () => void page().context.runtimeConfig.retry(),
@@ -210,7 +227,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
   }));
 
   function CatalogInventory() {
-    // The route owns first-load readiness; retain accepted inventory during refresh.
+    // Observe the page owner's read while retaining accepted inventory during refresh.
     const catalogRead = createMemo(() => props.page.catalogRead());
     const loading = () => {
       latest(catalogRead);
@@ -226,12 +243,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         loading={inventoryProps.loading}
         tab={page().settingsTab()}
         query={query()}
-        advancedSchema={
-          page().settingsTab() === "advanced" ? pluginAdvancedSchema(configAnalysis().schema) : null
-        }
-        configUnsupportedPaths={
-          page().settingsTab() === "advanced" ? configAnalysis().unsupportedPaths : []
-        }
         onTabChange={actions.selectSettingsTab}
         onQueryChange={setQuery}
         pluginHref={(pluginId) => pathForPluginSettings(pluginId, page().context.basePath)}
@@ -246,14 +257,16 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       () => components()?.skillDetails ?? components()?.skills.map((name) => ({ name })) ?? [],
     );
     const settings = () => page().state.installedDetailTab === "configuration";
-    const settingsLocation = () => pluginDetailLocation(page().routeData?.location, true);
+    const settingsLocation = () =>
+      page().surface === "discovery"
+        ? pluginSettingsLocation(detailProps.pluginId)
+        : pluginDetailLocation(page().routeData?.location, true);
     const overviewLocation = () => pluginDetailLocation(page().routeData?.location, false);
     return (
       <PluginDetailBoundary onRetry={() => void page().showDetails(detailProps.pluginId)}>
         <PluginSettingsDetail
           {...shared()}
           promptBusy={page().recommendedPrompts.pending}
-          configUnsupportedPaths={configAnalysis().unsupportedPaths}
           pluginId={detailProps.pluginId}
           installProgress={page().consent.getActiveInstall(pluginRowKey(detailProps.pluginId))}
           inspection={page().state.detail?.inspection ?? null}
@@ -284,23 +297,20 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }
           skillsSection={
             skills().length
-              ? renderPluginSkillsSection(skills(), (skillName) =>
-                  onOpenSkill({
-                    source: "installed",
-                    pluginId: detailProps.pluginId,
-                    skillName,
-                  }),
+              ? renderPluginSkillsSection(skills(), (skill) =>
+                  onOpenSkill(
+                    { source: "installed", pluginId: detailProps.pluginId, skillName: skill.name },
+                    {
+                      description: skill.description,
+                      publisher: page().state.detail?.catalog?.detail.author?.handle,
+                    },
+                  ),
                 )
               : !components()
                 ? catalogSkillsSection()
                 : undefined
           }
           settingsHref={`${settingsLocation().pathname ?? ""}${settingsLocation().search}`}
-          configSchema={pluginConfigSchema(configAnalysis().schema, detailProps.pluginId)}
-          hostControlsSchema={pluginHostControlsSchema(
-            configAnalysis().schema,
-            detailProps.pluginId,
-          )}
           backHref={
             settings()
               ? `${overviewLocation().pathname ?? ""}${overviewLocation().search}`
@@ -309,11 +319,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   page().context.basePath,
                 )
           }
-          backLabel={
-            page().surface === "discovery" || settingsParentRoute() === "plugins"
-              ? t("tabs.plugins")
-              : t("nav.settings")
-          }
+          backLabel={t("tabs.plugins")}
           tab={page().state.installedDetailTab}
           onBack={() => {
             if (settings()) {
@@ -348,10 +354,27 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           }}
         />
       )}
+      {page().surface !== "discovery" && !detailPluginId() && (
+        <SettingsPageHeader
+          registerHeading={page().registerRemovalHeading}
+          title={t("tabs.plugins")}
+          subtitle={t("pluginsPage.settingsDescription")}
+        />
+      )}
       <SettingsWorkspace>
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
-          <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-plugins">
+          <div {...pluginsHubPanel("plugins")}>
+            <Show when={page().state.catalogDetail && page().loading && !hasInventory()}>
+              <div class="muted" role="status">
+                {t("pluginsPage.loading")}
+              </div>
+            </Show>
+            <Show when={page().state.error}>
+              {(error) => (
+                <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />
+              )}
+            </Show>
             {page().state.catalogDetail ? (
               detailPluginId() && !page().consent.getActiveInstall(`install:${catalogId()}`) ? (
                 <InstalledDetail pluginId={detailPluginId()!} />
@@ -371,15 +394,20 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                     promptBlockedReason={page().recommendedPrompts.blockedReason()}
                     connected={page().gateway.connected}
                     skillsSection={catalogSkillsSection()}
+                    preview={page().state.catalogDetail?.preview}
                     result={page().state.catalogDetail?.result ?? null}
-                    read={page().detailRead}
+                    error={page().state.catalogDetail?.error}
                     backHref={pathForRoute("plugins", page().context.basePath)}
                     onBack={() => page().closeCatalogDetail()}
                     onRetry={() =>
                       void page().showCatalogDetail(page().state.catalogDetail?.id ?? null)
                     }
+                    installTitle={
+                      installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                    }
                     canInstall={
                       page().canMutate() &&
+                      !installPaused() &&
                       !page().state.messages[`install:${catalogId()}`]?.savedInstall &&
                       catalogInstallable()
                     }
@@ -412,7 +440,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   pluginIconUrls={page().state.iconUrls}
                   iconLoading={page().icons.catalog.isLoading}
                   pluginIconLoading={page().icons.installed.isLoading}
-                  canInstall={page().canMutate()}
+                  installTitle={
+                    installPaused() ? t("pluginsPage.installPausedByUpdate") : undefined
+                  }
+                  canInstall={page().canMutate() && !installPaused()}
                   installProgress={page().consent.read().installProgress}
                   inventory={page().state.result?.plugins}
                   entryHref={(id) => pathForPluginCatalogEntry(id, page().context.basePath)}
@@ -458,7 +489,10 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
           </Errored>
         )}
       </SettingsWorkspace>
-      <PluginSkillPreview preview={page().skillPreview} state={page().skillPreview.state} />
+      <PluginSkillPreview
+        preview={props.page.skillPreview}
+        state={props.page.skillPreview.read()}
+      />
       <WizardLogin
         controller={props.page.mcpLogin.dialog}
         signInIcon={

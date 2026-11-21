@@ -81,12 +81,6 @@ it.each([
 ])("parses directive arguments and leaves prose intact: %s", (body, expected) => {
   expect(parse(body)).toMatchObject(expected);
 });
-it("preserves prose after a thinking directive", () => {
-  const result = parse("/think about my deployment plan");
-  expect(result.rawThinkLevel).toBeUndefined();
-  expect(result.command).toBeUndefined();
-  expect(result.cleaned).toBe("about my deployment plan");
-});
 it.each([
   ["/fast ultrafast", "ultrafast", ""],
   ["/fast ultra", "ultra", ""],
@@ -113,10 +107,13 @@ it.each([
 });
 it.each([
   ["think", "think_hard", "thinkLevel", "low", ""],
+  ["think", "Extra  high do X", "thinkLevel", "xhigh", "do X"],
+  ["think", "extra highlight", "thinkLevel", undefined, "extra highlight"],
+  ["think", "about my deployment plan", "rawThinkLevel", undefined, "about my deployment plan"],
   ["reasoning", "0", "reasoningLevel", "off", ""],
   ["reasoning", "streaming", "reasoningLevel", "stream", ""],
   ["verbose", "3d printing tips", "verboseLevel", undefined, "3d printing tips"],
-] as const)("accepts digit/underscore aliases: /%s %s", (name, args, key, value, cleaned) => {
+] as const)("accepts level aliases and keeps prose: /%s %s", (name, args, key, value, cleaned) => {
   expect(parse("/" + name + " " + args, { command: { kind: "text", name } })).toMatchObject({
     [key]: value,
     cleaned,

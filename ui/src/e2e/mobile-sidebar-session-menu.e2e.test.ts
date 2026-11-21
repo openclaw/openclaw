@@ -1,5 +1,9 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -16,10 +20,12 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  requireRecord,
   sessionsListResponse,
   waitForMobileSidebarDrawerOpen,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { runActiveSessionRevealScenario } from "./sidebar-active-session-reveal.test-support.ts";
 import { seedSidebarSettings } from "./sidebar-contract.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -88,32 +94,58 @@ async function expectSessionGeometry(row: Locator, multiline = false) {
 async function expectTwoLineTitleSpace(
   browserSuite: ControlUiE2eSuite,
   pointer: "fine" | "touch" | "hybrid",
+  theme: "light" | "dark" = "dark",
 ) {
   await browserSuite.withPage(
-    { ...pageOptions(1280, 800, pointer === "touch"), reducedMotion: "reduce" },
+    { ...pageOptions(1280, 800, pointer === "touch"), colorScheme: theme },
     async ({ page }) => {
       const key = "agent:main:two-line";
+      const rootKey = `${key}-parent`;
+      const childKey = `${key}-child`;
+      const leafKey = `${key}-leaf`;
+      const siblingKey = `${key}-sibling`;
+      const otherLeafKey = `${key}-other-leaf`;
+      const plainKey = `${key}-plain`;
+      const plainChildKey = `${plainKey}-child`;
+      const plainSiblingKey = `${plainKey}-sibling`;
       await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
       await page.addInitScript(
-        ({ storage, gateway }) => {
+        ({ storage, gateway, theme: mode }) => {
           localStorage.setItem(`openclaw.control.currentGateway.v1:${gateway}`, gateway);
           localStorage.setItem(
             storage,
-            JSON.stringify({ navWidth: 320, sidebarAgentsMode: "chip" }),
+            JSON.stringify({ navWidth: 320, sidebarAgentsMode: "chip", themeMode: mode }),
           );
           localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
         },
         {
           storage: controlUiBundledSettingsStorageKey(browserSuite.server.baseUrl),
           gateway: controlUiBundledGatewayUrl(browserSuite.server.baseUrl),
+          theme,
         },
       );
       const preview = { unread: true, lastMessagePreview: "Ready for review" };
       await installMockGateway(page, {
-        sessions: [sessionRow(key, "Two-line session", 1, preview)],
+        sessions: [
+          sessionRow(key, "Two-line session", 1, preview),
+          sessionRow(rootKey, "Parent", 1, { ...preview, childSessions: [childKey, siblingKey] }),
+          sessionRow(childKey, "Child", 1, {
+            spawnedBy: rootKey,
+            childSessions: [leafKey, otherLeafKey],
+          }),
+          sessionRow(leafKey, "Leaf", 1, { spawnedBy: childKey }),
+          sessionRow(siblingKey, "Sibling", 1, { spawnedBy: rootKey }),
+          sessionRow(otherLeafKey, "Other leaf", 1, { spawnedBy: childKey }),
+          sessionRow(plainKey, "Mac app onboarding flow testing", 1, {
+            childSessions: [plainChildKey, plainSiblingKey],
+          }),
+          sessionRow(plainChildKey, "OAuth", 1, { spawnedBy: plainKey }),
+          sessionRow(plainSiblingKey, "Workboard", 1, { spawnedBy: plainKey }),
+        ],
       });
       await page.goto(controlUiSessionUrl(browserSuite.server.baseUrl, "agent:main:main"));
       await waitForSessionRosterHydration(page);
+      await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       const name = part(row, "name"),
         badge = row.locator(".sidebar-session-indicator .session-unread-dot");
@@ -146,15 +178,63 @@ async function expectTwoLineTitleSpace(
         }
       }
       if (pointer !== "fine") {
-        const pin = row.locator("[data-sidebar-session-pin]");
-        await expect.poll(() => actionOpacity(pin)).toBe("1");
+        const menu = row.locator("[data-sidebar-session-menu]");
+        await expect.poll(() => actionOpacity(menu)).toBe("1");
         const bounds = await box(row),
           center = bounds.y + bounds.height / 2;
         expect((await box(part(row, "subtitle"))).y).toBeGreaterThan(center);
-        for (const button of [pin, row.locator("[data-sidebar-session-archive]")]) {
-          const target = await box(button);
-          expect(Math.abs(target.y + target.height / 2 - center)).toBeLessThanOrEqual(1);
+        const target = await box(menu);
+        expect(Math.abs(target.y + target.height / 2 - center)).toBeLessThanOrEqual(1);
+      }
+      for (const [parentKey, descendantKey] of [
+        [rootKey, childKey],
+        [childKey, leafKey],
+        [plainKey, plainChildKey],
+      ] as const) {
+        const parent = page.locator(`[data-session-key="${parentKey}"]`);
+        const child = page.locator(`[data-session-key="${descendantKey}"]`);
+        const toggle = parent.locator("[data-child-session-toggle]");
+        await page.mouse.move(1100, 700);
+        await toggle.blur();
+        expect(await parent.evaluate((element) => element.matches(":hover, :focus-within"))).toBe(
+          false,
+        );
+        expect(await actionOpacity(toggle)).toBe("1");
+        expect(
+          await toggle.evaluate((element) => getComputedStyle(element).pointerEvents),
+        ).not.toBe("none");
+        expect(await toggle.locator(".sidebar-child-session-toggle__count").textContent()).toBe(
+          "2",
+        );
+        if (parentKey !== rootKey) {
+          expect(await parent.getAttribute("class")).toContain(
+            "sidebar-recent-session--single-line",
+          );
+          const title = await box(part(parent, "title-row"));
+          expect(title.x + title.width).toBeLessThanOrEqual((await box(toggle)).x);
+        } else {
+          expect(await parent.getAttribute("class")).not.toContain(
+            "sidebar-recent-session--single-line",
+          );
         }
+        await toggle.focus();
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+          await page.keyboard.press("Enter");
+        }
+        await child.waitFor();
+        await parent.hover();
+        if (parentKey !== rootKey) {
+          const title = await box(part(parent, "title-row"));
+          expect(title.x + title.width).toBeLessThanOrEqual((await box(toggle)).x);
+        }
+        const actions = await box(parent.locator(".session-row-actions"));
+        expect(actions.x + actions.width).toBeLessThanOrEqual((await box(toggle)).x);
+        await toggle.click();
+        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("false");
+        expect(await child.count()).toBe(0);
+        await page.keyboard.press("Enter");
+        await child.waitFor();
+        await expect.poll(() => toggle.getAttribute("aria-expanded")).toBe("true");
       }
       await page.evaluate(() =>
         document.documentElement.style.setProperty("--control-ui-text-scale", "1.4"),
@@ -182,16 +262,130 @@ const hybridSuite = createControlUiE2eSuite({
   },
 });
 hybridSuite.define(() => {
-  it("keeps built sidebar titles beside touch actions during hover and focus", async () => {
+  it("keeps built two-line titles and nested disclosure controls clear during hover and focus", async () => {
     await expectTwoLineTitleSpace(hybridSuite, "hybrid");
   });
 });
 
 suite.define(() => {
-  it.each(["fine", "touch"] as const)(
-    "keeps two-line sidebar titles beside their actions during hover and focus (%s)",
-    async (pointer) => {
-      await expectTwoLineTitleSpace(suite, pointer);
+  it.each([true, false])(
+    "keeps tablet session titles readable with nested actions (touch=%s)",
+    async (touch) => {
+      await suite.withPage(pageOptions(1024, 1366, touch), async ({ page }) => {
+        const parentKey = "agent:main:tablet-planning";
+        const childKey = "agent:main:tablet-research";
+        const leafKey = "agent:main:tablet-notes";
+        await seedSidebarSettings(page, suite.server.baseUrl, {
+          navWidth: 320,
+          sidebarAgentsMode: "chip",
+          themeMode: "dark",
+        });
+        await page.addInitScript(() =>
+          localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false"),
+        );
+        const gateway = await installMockGateway(page, {
+          sessionKey: parentKey,
+          sessions: [
+            sessionRow(parentKey, "Plan the next release", 3, { childSessions: [childKey] }),
+            sessionRow(childKey, "Investigate tablet navigation", 2, {
+              spawnedBy: parentKey,
+              childSessions: [leafKey],
+            }),
+            sessionRow(leafKey, "Summarize research notes", 1, { spawnedBy: childKey }),
+          ],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
+        await waitForSessionRosterHydration(page);
+        const parent = page.locator(`[data-session-key="${parentKey}"]`);
+        const child = page.locator(`[data-session-key="${childKey}"]`);
+        const leaf = page.locator(`[data-session-key="${leafKey}"]`);
+        for (const row of [parent, child]) {
+          const toggle = row.locator("[data-child-session-toggle]");
+          await toggle.waitFor();
+          if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+            await toggle.click();
+          }
+        }
+        await leaf.waitFor();
+        await evaluateControlUiContext(
+          page,
+          (context, key) =>
+            context.sessions.setPullRequestSummary(key, { numbers: [123], state: "open" }),
+          parentKey,
+        );
+        await page.mouse.move(1010, 1350);
+        await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".shell-nav"),
+            [part(parent, "name"), part(child, "name"), part(leaf, "name")],
+            { animations: "disabled" },
+          );
+          await writeFile(path.join(suite.artifactDir, `tablet-touch-${touch}.png`), frame.png);
+        }
+        for (const row of [parent, child, leaf]) {
+          const title = await box(part(row, "name"));
+          expect(title.width).toBeGreaterThan(100);
+          if (touch) {
+            expect(await row.locator("[data-sidebar-session-pin]").isVisible()).toBe(false);
+            expect(await row.locator("[data-sidebar-session-archive]").isVisible()).toBe(false);
+            const menu = row.locator("[data-sidebar-session-menu]");
+            const target = await box(menu);
+            expect(target.width).toBe(44);
+            expect(target.height).toBe(44);
+            expect(title.x + title.width).toBeLessThanOrEqual(target.x);
+            const toggle = row.locator("[data-child-session-toggle]");
+            if (await toggle.count()) {
+              expect(target.x + target.width).toBeLessThanOrEqual((await box(toggle)).x);
+            }
+          } else {
+            await row.hover();
+            await expect
+              .poll(() => actionOpacity(row.locator("[data-sidebar-session-archive]")))
+              .toBe("1");
+            expect(await row.locator("[data-sidebar-session-menu]").isVisible()).toBe(false);
+          }
+        }
+        if (touch) {
+          const menu = child.locator("[data-sidebar-session-menu]");
+          await menu.focus();
+          await page.keyboard.press("Enter");
+          await menuItem(page, "Archive session").waitFor();
+          await page.keyboard.press("Escape");
+          await parent.locator("[data-sidebar-session-menu]").tap();
+          await menuItem(page, "Pin session").waitFor();
+          await menuItem(page, "Archive session").click();
+          await page
+            .getByRole("button", { name: "Archive only this session", exact: true })
+            .click();
+          await expect
+            .poll(async () =>
+              (await gateway.getRequests("sessions.patch")).some((request) => {
+                const params = requireRecord(request.params);
+                return params.key === parentKey && params.archived === true;
+              }),
+            )
+            .toBe(true);
+        }
+      });
+    },
+  );
+
+  it("reveals the full active path after direct navigation and browser history", async () => {
+    await suite.withPage({ viewport: { width: 1440, height: 1000 } }, ({ page }) =>
+      runActiveSessionRevealScenario(page, suite.server.baseUrl),
+    );
+  });
+
+  it.each([
+    { pointer: "fine", theme: "light" },
+    { pointer: "fine", theme: "dark" },
+    { pointer: "touch", theme: "dark" },
+  ] as const)(
+    "keeps two-line titles and nested disclosure controls clear during hover and focus ($pointer, $theme)",
+    async ({ pointer, theme }) => {
+      await expectTwoLineTitleSpace(suite, pointer, theme);
     },
   );
 

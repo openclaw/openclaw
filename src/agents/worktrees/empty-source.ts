@@ -5,6 +5,7 @@ import { sha256Hex as sourceName } from "@openclaw/normalization-core/node-crypt
 import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -89,7 +90,7 @@ export async function isEmptyWorktreeSource(params: {
   return true;
 }
 
-/** Called under the managed-worktree allocation lease, including source publication. */
+/** Creation retains this session's empty-source lease through pending publication. */
 export async function ensureEmptyWorktreeSource(params: {
   env: NodeJS.ProcessEnv;
   ownerId: string;
@@ -166,13 +167,26 @@ export async function ensureEmptyWorktreeSource(params: {
   return sourceRoot;
 }
 
-/** Called under the allocation lease after failed creation or final snapshot expiry. */
+/** Serialize source deletion with creation without retaining global allocation custody. */
 export async function removeUnusedEmptyWorktreeSource(params: {
   env: NodeJS.ProcessEnv;
   record: Pick<ManagedWorktreeRecord, "repoRoot" | "ownerKind" | "ownerId"> & { id?: string };
   signal?: AbortSignal;
   commitGuard: () => void;
 }): Promise<void> {
+  if (params.record.ownerKind !== "session" || !params.record.ownerId) {
+    return;
+  }
+  // Creation holds source before checkout custody; retirement must not wait in reverse order.
+  return withWorktreeMutationLease(
+    { ...params, id: `empty-source:${params.record.ownerId}`, waitBudget: { remainingMs: 0 } },
+    (guard) => removeUnusedSource({ ...params, ...guard }),
+  );
+}
+
+async function removeUnusedSource(
+  params: Parameters<typeof removeUnusedEmptyWorktreeSource>[0],
+): Promise<void> {
   const { env, record, commitGuard } = params;
   const context = captureWorktreeRunEndContext(env);
   const sourceDirectory = sourceParent(context.environment);

@@ -69,6 +69,92 @@ async function expandGroups(page: Page, reply: string) {
 }
 
 suite.define(() => {
+  it("does not call a complete image-only result unavailable", async () => {
+    const imageResult = {
+      ...result,
+      toolName: "visual_snapshot",
+      content: [
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/RuoAAAAASUVORK5CYII=",
+        },
+      ],
+    };
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.history": prepareChatHistoryFixture([
+              { role: "user", content: "Inspect the image result.", timestamp },
+              {
+                role: "assistant",
+                timestamp: timestamp + 1,
+                content: [{ ...toolCall({ viewport: "desktop" }), name: "visual_snapshot" }],
+              },
+              imageResult,
+              { role: "assistant", content: "The image is ready.", timestamp: timestamp + 3 },
+            ]),
+            "chat.message.get": { ok: true, message: imageResult },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await expandGroups(page, "The image is ready.");
+        await page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first().click();
+        await page.locator('openclaw-chat-tool-card .chat-tool-row[aria-expanded="false"]').click();
+        await page
+          .getByRole("button", { name: "Open tool details in side panel", exact: true })
+          .click();
+        await gateway.waitForRequest("chat.message.get");
+        const panel = page.locator("openclaw-chat-tool-output");
+        await panel.locator('.chat-tool-output[aria-busy="false"]').waitFor();
+        expect(
+          await panel
+            .getByText("Full output unavailable. Only the captured output is shown.", {
+              exact: true,
+            })
+            .count(),
+        ).toBe(0);
+        expect(await panel.locator(".chat-tool-output__actions").count()).toBe(0);
+        await panel.getByText("Tool input", { exact: true }).click();
+        expect(await panel.textContent()).toContain("desktop");
+      },
+    );
+  });
+  it("keeps captured text and its warning when the full result is genuinely unavailable", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "chat.history": history,
+            "chat.message.get": { ok: false, unavailableReason: "oversized" },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        await expandGroups(page, "Output is ready for inspection.");
+        await page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first().click();
+        await page.getByRole("button", { name: "Show full output", exact: true }).click();
+        await gateway.waitForRequest("chat.message.get");
+        const panel = page.locator("openclaw-chat-tool-output");
+        const warning = panel.getByText(
+          "Full output unavailable. Only the captured output is shown.",
+          { exact: true },
+        );
+        await warning.waitFor();
+        expect(await panel.locator(".chat-tool-output__text").textContent()).toBe(
+          fullOutput.slice(0, 2_000),
+        );
+        expect(
+          await panel
+            .getByRole("button", { name: "Download available output", exact: true })
+            .isVisible(),
+        ).toBe(true);
+      },
+    );
+  });
+
   it("renders native Code Mode results without transport envelopes", async () => {
     const artifacts = captureUiProof
       ? createControlUiE2eArtifactDir("code-mode-output")
@@ -122,7 +208,7 @@ suite.define(() => {
         await row.click();
         await capture(page, artifacts, "01-expanded");
         expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain(
-          "run JavaScript",
+          "Ran a script",
         );
         const body = page.locator(".chat-tool-msg-body");
         expect(await body.locator(".chat-tool-card__outcome").textContent()).toBe("Completed");
@@ -164,7 +250,9 @@ suite.define(() => {
         });
         const expandOutput = async () => {
           await expandGroups(page, "Output is ready for inspection.");
-          const row = page.locator(".chat-tool-msg-summary", { hasText: "Capture command output" });
+          const row = page.locator(".chat-tool-msg-summary", {
+            hasText: "printf 'capture output'",
+          });
           await row.waitFor();
           if ((await row.getAttribute("aria-expanded")) !== "true") {
             await row.click();

@@ -9,8 +9,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { PluginManifestOnboardingScope } from "./manifest-types.js";
-import type { SecretInputMode } from "./provider-auth-types.js";
-import type { ProviderAuthOptionBag } from "./provider-external-auth.types.js";
+import type {
+  ProviderAuthOptionBag,
+  ProviderNonInteractiveApiKeyCredentialParams,
+  ProviderNonInteractiveApiKeyResult,
+  ProviderResolveNonInteractiveApiKeyParams,
+  SecretInputMode,
+} from "./provider-auth-types.js";
 import type { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 
 export type ProviderAuthProfile = {
@@ -116,29 +121,6 @@ export type ProviderAuthContext = {
   };
 };
 
-export type ProviderNonInteractiveApiKeyResult = {
-  key: string;
-  source: "profile" | "env" | "flag";
-  envVarName?: string;
-};
-
-export type ProviderResolveNonInteractiveApiKeyParams = {
-  provider: string;
-  flagValue?: string;
-  flagName: `--${string}`;
-  envVar: string;
-  envVarName?: string;
-  allowProfile?: boolean;
-  required?: boolean;
-};
-
-export type ProviderNonInteractiveApiKeyCredentialParams = {
-  provider: string;
-  resolved: ProviderNonInteractiveApiKeyResult;
-  email?: string;
-  metadata?: Record<string, string>;
-};
-
 export type ProviderAuthMethodNonInteractiveContext = {
   authChoice: string;
   config: OpenClawConfig;
@@ -207,6 +189,13 @@ export type ProviderAuthMethod = {
   wizard?: ProviderPluginWizardSetup;
   /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
   matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
+  /** Match a shared-store reconnect; defaults to matchesPersonalAccount when absent. */
+  matchesSharedAccount?: ProviderAuthMethod["matchesPersonalAccount"];
+  /** Whether shared login may replace an occupied generated profile ID when no reconnect matched. */
+  canReplaceGeneratedProfile?: (
     credential: AuthProfileCredential,
     existing: AuthProfileCredential,
   ) => boolean;

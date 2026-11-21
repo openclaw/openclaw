@@ -29,8 +29,9 @@ import * as registry from "./registry.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { resolveRepository, resolveRepositoryPaths } from "./repository-paths.js";
+import { IDLE_GC_MS } from "./retention.js";
 import { withWorktreeSources } from "./service-preparation.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import { ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -172,18 +173,22 @@ describe("ManagedWorktreeService canonical paths", () => {
 
     const queued = createDeferred();
     const release = createDeferred();
-    const allocate = allocation.withWorktreeAllocationLease;
+    const mutate = allocation.withWorktreeMutationLease;
     const admission = vi
-      .spyOn(allocation, "withWorktreeAllocationLease")
+      .spyOn(allocation, "withWorktreeMutationLease")
       .mockImplementationOnce(async (params, run) => {
         queued.resolve();
         await release.promise;
-        return await allocate(params, run);
+        return await mutate(params, run);
       });
     const restoring = service.restore({ id: created.id });
     try {
       await withinTest(
-        awaitGateBeforeSettlement(queued.promise, restoring, "restore never reached allocation"),
+        awaitGateBeforeSettlement(
+          queued.promise,
+          restoring,
+          "restore never reached checkout custody",
+        ),
         signal,
       );
       const removed = await service.remove({
@@ -356,7 +361,7 @@ describe("ManagedWorktreeService canonical paths", () => {
     await service.remove({ id: original.id, reason: "before-root-change" });
     worktreeRoot = path.join(root, "custom");
     const successor = await service.create({ ...owner, suggestedName: "same-title" });
-    expect(successor.name).toBe("same-title-2");
+    expect(successor.name).toMatch(/^same-title-[0-9a-f]{6}$/);
     expect(successor.path).toBe(path.join(worktreeRoot, successor.repoFingerprint, successor.name));
     const restored = await service.restore({ id: original.id });
     const unrelated = path.join(
@@ -368,7 +373,9 @@ describe("ManagedWorktreeService canonical paths", () => {
     await fs.mkdir(path.dirname(unrelated), { recursive: true });
     await fs.writeFile(unrelated, "unrelated data\n");
     for (const record of [restored, successor]) {
-      await updateRegistryWorktree(env, record.id, { lastActiveAt: Date.now() - IDLE_GC_MS - 1 });
+      await updateRegistryWorktree(env, record.id, {
+        lastActiveAt: Date.now() - IDLE_GC_MS - 3_600_001,
+      });
     }
 
     const result = await service.gc();
@@ -427,7 +434,7 @@ describe("ManagedWorktreeService canonical paths", () => {
       await git(repo, "remote", "remove", "origin");
     });
 
-    it("uses readable defaults and numbers colliding inferred names", async () => {
+    it("ends readable generated names with the start of the worktree ID", async () => {
       const fallback = await service.create({ repoRoot: repo, baseRef: "HEAD" });
       await create("release-planning");
       const second = await service.create({
@@ -435,17 +442,21 @@ describe("ManagedWorktreeService canonical paths", () => {
         suggestedName: "release-planning",
         baseRef: "HEAD",
       });
+      const idPrefix = (record: { id: string }) => record.id.replace(/-/g, "").slice(0, 6);
 
       expect(fallback.name).toMatch(
-        /^[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
+        /^[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)-[0-9a-f]{6}$/,
       );
-      expect(second.name).toBe("release-planning-2");
+      expect(fallback.name.endsWith(`-${idPrefix(fallback)}`)).toBe(true);
+      // An old branch with the bare title (local or on a remote) cannot collide.
+      expect(second.name).toBe(`release-planning-${idPrefix(second)}`);
+      expect(second.branch).toBe(`openclaw/${second.name}`);
     });
 
-    it("numbers inferred names around unmanaged Git and filesystem collisions", async () => {
+    it("keeps generated names clear of unmanaged branches and paths with the same title", async () => {
       const anchor = await create("anchor");
       await git(repo, "branch", "openclaw/release-planning");
-      await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning-2"));
+      await fs.mkdir(path.join(path.dirname(anchor.path), "release-planning"));
 
       const created = await service.create({
         repoRoot: repo,
@@ -453,7 +464,8 @@ describe("ManagedWorktreeService canonical paths", () => {
         baseRef: "HEAD",
       });
 
-      expect(created.name).toBe("release-planning-3");
+      expect(created.name).toMatch(/^release-planning-[0-9a-f]{6}$/);
+      expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     });
 
     it("reuses concurrent inferred names for the same owner", async ({ signal }) => {
@@ -496,7 +508,7 @@ describe("ManagedWorktreeService canonical paths", () => {
         const created = await withinTest(Promise.all(creations), signal);
 
         expect(created[0]?.id).toBe(created[1]?.id);
-        expect(created[0]?.name).toMatch(/^(?:first|second)-session-title$/);
+        expect(created[0]?.name).toMatch(/^(?:first|second)-session-title-[0-9a-f]{6}$/);
         expect(
           (await service.list()).filter((record) => record.ownerId === owner.ownerId),
         ).toHaveLength(1);
@@ -565,7 +577,7 @@ describe("ManagedWorktreeService canonical paths", () => {
       },
     );
 
-    it("serializes overlapping numeric suffix families", async () => {
+    it("keeps concurrent generated names distinct", async () => {
       await create("task");
 
       const created = await Promise.all([
@@ -575,8 +587,8 @@ describe("ManagedWorktreeService canonical paths", () => {
       const names = created.map((record) => record.name);
 
       expect(new Set(names).size).toBe(2);
-      expect(names).toContain("task-2");
-      expect(names.every((name) => /^task-(?:2-2|3|2)$/.test(name))).toBe(true);
+      expect(names[0]).toMatch(/^task-[0-9a-f]{6}$/);
+      expect(names[1]).toMatch(/^task-2-[0-9a-f]{6}$/);
     });
 
     async function addRegisteredWorktree(

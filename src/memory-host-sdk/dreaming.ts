@@ -10,7 +10,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { DoctorMemoryDreamingPayload } from "../../packages/gateway-protocol/src/doctor-memory.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
@@ -18,6 +17,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MemoryDreamingPhaseName } from "./dreaming-report-types.js";
 
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
@@ -65,98 +65,6 @@ export type MemoryDreamingStorageConfig = {
   separateReports: boolean;
 };
 
-export type DreamingArtifactsAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "dreaming-session-corpus-unreadable"
-    | "dreaming-session-corpus-self-ingested"
-    | "dreaming-session-ingestion-unreadable"
-    | "dreaming-diary-unreadable";
-  message: string;
-  fixable: boolean;
-};
-
-export type DreamingArtifactsAuditSummary = {
-  dreamsPath?: string;
-  sessionCorpusDir: string;
-  sessionCorpusFileCount: number;
-  suspiciousSessionCorpusFileCount: number;
-  suspiciousSessionCorpusLineCount: number;
-  sessionIngestionPath: string;
-  sessionIngestionExists: boolean;
-  issues: DreamingArtifactsAuditIssue[];
-};
-
-export type RepairDreamingArtifactsResult = {
-  changed: boolean;
-  archiveDir?: string;
-  archivedDreamsDiary: boolean;
-  archivedSessionCorpus: boolean;
-  archivedSessionIngestion: boolean;
-  archivedPaths: string[];
-  warnings: string[];
-};
-
-export type ShortTermAuditIssue = {
-  severity: "warn" | "error";
-  code:
-    | "recall-store-unreadable"
-    | "recall-store-empty"
-    | "recall-store-invalid"
-    | "recall-store-dangling"
-    | "recall-store-over-limit"
-    | "recall-lock-stale"
-    | "recall-lock-unreadable";
-  message: string;
-  fixable: boolean;
-};
-
-export type ShortTermAuditSummary<TConceptTagScripts = Record<string, unknown>> = {
-  storePath: string;
-  lockPath: string;
-  updatedAt?: string;
-  exists: boolean;
-  entryCount: number;
-  promotedCount: number;
-  spacedEntryCount: number;
-  conceptTaggedEntryCount: number;
-  conceptTagScripts?: TConceptTagScripts;
-  invalidEntryCount: number;
-  danglingEntryCount?: number;
-  issues: ShortTermAuditIssue[];
-};
-
-export type RepairShortTermPromotionArtifactsResult = {
-  changed: boolean;
-  removedInvalidEntries: number;
-  removedDanglingEntries?: number;
-  removedOverflowEntries?: number;
-  rewroteStore: boolean;
-  removedStaleLock: boolean;
-};
-
-export type ShortTermDreamingStatsEntry = DoctorMemoryDreamingPayload["shortTermEntries"][number];
-
-export type ShortTermDreamingStats = {
-  shortTermCount: number;
-  recallSignalCount: number;
-  dailySignalCount: number;
-  groundedSignalCount: number;
-  totalSignalCount: number;
-  phaseSignalCount: number;
-  lightPhaseHitCount: number;
-  remPhaseHitCount: number;
-  promotedTotal: number;
-  promotedToday: number;
-  storePath: string;
-  phaseSignalPath: string;
-  phaseSignalError?: string;
-  lastPromotedAt?: string;
-  shortTermEntries: ShortTermDreamingStatsEntry[];
-  signalEntries: ShortTermDreamingStatsEntry[];
-  promotedEntries: ShortTermDreamingStatsEntry[];
-};
-
 type MemoryLightDreamingConfig = {
   enabled: boolean;
   cron: string;
@@ -201,8 +109,6 @@ type MemoryRemDreamingConfig = {
   sources: MemoryRemDreamingSource[];
   execution: MemoryDreamingExecutionConfig;
 };
-
-export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
 type MemoryDreamingConfig = {
   enabled: boolean;
@@ -324,8 +230,16 @@ export function resolveMemoryDreamingPluginConfig(
   const plugins = asNullableRecord(root?.plugins);
   const entries = asNullableRecord(plugins?.entries);
   const pluginId = resolveMemoryDreamingPluginId(cfg);
-  const memoryPlugin = asNullableRecord(entries?.[pluginId]);
-  return asNullableRecord(memoryPlugin?.config) ?? undefined;
+  const pluginConfig = asNullableRecord(asNullableRecord(entries?.[pluginId])?.config);
+  if (pluginConfig?.dreaming !== undefined || pluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID) {
+    return pluginConfig ?? undefined;
+  }
+  // A slot owner without dreaming settings leaves the documented Memory Core settings in charge,
+  // so its explicit opt-out still stops the sidecar.
+  const engineConfig = asNullableRecord(
+    asNullableRecord(entries?.[DEFAULT_MEMORY_DREAMING_PLUGIN_ID])?.config,
+  );
+  return (engineConfig?.dreaming !== undefined ? engineConfig : pluginConfig) ?? undefined;
 }
 
 export function resolveMemoryDreamingConfig(params: {

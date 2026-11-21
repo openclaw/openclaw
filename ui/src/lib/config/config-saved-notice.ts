@@ -1,7 +1,7 @@
 import type { RuntimeConfigState } from "./config-state-model.ts";
 
 /** Matches the fade in `settings.css`; the notice leaves as its animation ends. */
-export const CONFIG_SAVED_NOTICE_MS = 2_000;
+const CONFIG_SAVED_NOTICE_MS = 2_000;
 
 /** Turns each completed write into a brief notice. Status alone stays "saved" long after one. */
 export function createConfigSavedNotice(state: RuntimeConfigState, publish: () => void) {

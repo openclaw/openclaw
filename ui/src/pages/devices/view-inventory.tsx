@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { PresenceEntry } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
@@ -33,7 +34,13 @@ import { CapabilityList } from "./capability-list.tsx";
 import { deviceDesktopEnvironment, DeviceEntryActions } from "./entry-actions.tsx";
 import { HostPressure, HostStats } from "./host-stats.tsx";
 import { PendingDeviceRows, PendingNode } from "./view-pending.tsx";
-import { CommandFact, DeviceFact, DeviceIdentityFacts, MetaLine } from "./view-shared.tsx";
+import {
+  CommandFact,
+  DeviceDisclosure,
+  DeviceFact,
+  DeviceIdentityFacts,
+  MetaLine,
+} from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
 registerEnglishCatalog(registerDevicesEnglish);
@@ -66,7 +73,9 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
         <button
           class="btn"
           title={
-            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+            props.connected && !props.canManagePairing
+              ? t("devices.readOnly.pairingRequiredTooltip")
+              : ""
           }
           disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
@@ -192,7 +201,11 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-type EntryWarning = { label: string; detail?: string };
+type EntryWarning = {
+  kind: "version" | "worker" | "wake" | "approval";
+  label: string;
+  detail?: string;
+};
 
 function entryWarnings(entry: DeviceInventoryEntry, gatewayVersion: string | null): EntryWarning[] {
   const warnings: EntryWarning[] = [];
@@ -200,24 +213,27 @@ function entryWarnings(entry: DeviceInventoryEntry, gatewayVersion: string | nul
   const nodeVersion = resolveNodeCoreVersion(entry);
   if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
     warnings.push({
+      kind: "version",
       label: t("devices.inventory.versionDrift"),
       detail: t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }),
     });
   }
   if (entry.node?.workerBundle?.status === "missing") {
     warnings.push({
+      kind: "worker",
       label: t("devices.inventory.workerMissing"),
       detail: t("devices.inventory.workerMissingTitle"),
     });
   }
   if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
     warnings.push({
+      kind: "wake",
       label: t("devices.inventory.manualWake"),
       detail: t("devices.inventory.manualWakeTitle"),
     });
   }
   if (isPendingNode(entry.node)) {
-    warnings.push({ label: t("devices.inventory.approvalNeeded") });
+    warnings.push({ kind: "approval", label: t("devices.inventory.approvalNeeded") });
   }
   return warnings;
 }
@@ -256,37 +272,6 @@ function formatInputRecency(lastInputSeconds: number): string {
   });
 }
 
-/** One expandable device row: status at a glance, everything else on demand. */
-function DeviceDisclosure(props: {
-  deviceId?: string;
-  name: string;
-  meta: readonly string[];
-  alerts?: JSX.Element;
-  status: JSX.Element;
-  children: JSX.Element;
-}) {
-  return (
-    <details class="device-entry" data-device-id={props.deviceId}>
-      <summary class="settings-row settings-row--nav device-entry__summary">
-        <span class="settings-row__text">
-          <span class="settings-row__title">{props.name}</span>
-          <span class="device-entry__line">
-            <MetaLine parts={props.meta} />
-            {props.alerts}
-          </span>
-        </span>
-        <span class="settings-row__control">
-          <span class="device-entry__status">{props.status}</span>
-          <span class="settings-row__chevron">
-            <Icon name="chevronDown" />
-          </span>
-        </span>
-      </summary>
-      <div class="device-entry__body">{props.children}</div>
-    </details>
-  );
-}
-
 function InventoryEntry(props: {
   entry: DeviceInventoryEntry;
   devices: DevicesProps;
@@ -304,6 +289,8 @@ function InventoryEntry(props: {
     deviceDesktopEnvironment(props.devices, `node:${props.entry.id}`),
   );
   const rowConnected = () => props.entry.node?.connected ?? props.entry.connected;
+  // OpenClaw ID membership owns these browsers; the Access page removes them.
+  const managedByOpenClawId = () => props.entry.device?.managedBy === "openclaw-id";
   const warnings = createMemo(() => entryWarnings(props.entry, props.devices.gatewayVersion));
   const tokens = createMemo(() => props.entry.device?.tokens ?? []);
   const tokenRoles = createMemo(() => new Set(tokens().map((token) => token.role)));
@@ -312,7 +299,9 @@ function InventoryEntry(props: {
   const showRoles = () => props.entry.roles.some((role) => !tokenRoles().has(role));
   const showScopes = () => props.entry.scopes.some((scope) => !tokenScopes().has(scope));
   const desktopUnavailable = () =>
-    !desktopEnvironment() && props.entry.node?.commands?.includes("desktop.stream");
+    props.devices.desktopEnvironments !== undefined &&
+    !desktopEnvironment() &&
+    props.entry.node?.commands?.includes("desktop.stream");
   const liveStats = () => (rowConnected() ? props.entry.node?.hostStats : undefined);
   const hasAlerts = () =>
     warnings().length > 0 || (liveStats() !== undefined && liveStats() !== null);
@@ -330,10 +319,10 @@ function InventoryEntry(props: {
       alerts={
         <Show when={hasAlerts()}>
           <span class="device-entry__alerts">
-            <For each={warnings()}>
+            <For each={warnings()} keyed={(warning) => warning.kind}>
               {(warning) => (
-                <span title={warning.detail}>
-                  <SettingsStatus kind={"warn"} label={warning.label} />
+                <span title={warning().detail}>
+                  <SettingsStatus kind={"warn"} label={warning().label} />
                 </span>
               )}
             </For>
@@ -355,11 +344,28 @@ function InventoryEntry(props: {
                 })
             : undefined
         }
-        onRemove={() => props.devices.onInventoryRemove(toRemovalRequest(props.entry))}
+        onRemove={
+          managedByOpenClawId()
+            ? undefined
+            : () => props.devices.onInventoryRemove(toRemovalRequest(props.entry))
+        }
       />
       <dl class="device-entry__facts">
-        <For each={warnings().filter((warning) => warning.detail)}>
-          {(warning) => <DeviceFact label={warning.label}>{warning.detail}</DeviceFact>}
+        <Show when={managedByOpenClawId()}>
+          <DeviceFact label={t("devices.inventory.openclawIdLabel")}>
+            {t("devices.inventory.openclawIdManaged")}{" "}
+            <a
+              href={`${pathForRoute("plugin", props.devices.basePath)}?${new URLSearchParams({ plugin: "openclaw-id-access", id: "access" })}`}
+            >
+              {t("devices.inventory.openclawIdOpen")}
+            </a>
+          </DeviceFact>
+        </Show>
+        <For
+          each={warnings().filter((warning) => warning.detail)}
+          keyed={(warning) => warning.kind}
+        >
+          {(warning) => <DeviceFact label={warning().label}>{warning().detail}</DeviceFact>}
         </For>
         <Show when={desktopUnavailable()}>
           <DeviceFact label={t("devices.inventory.desktop")}>
@@ -391,6 +397,7 @@ function InventoryEntry(props: {
                     device={{ id: props.entry.id, name: props.entry.name }}
                     tokenSummary={token()}
                     devices={props.devices}
+                    revocable={!managedByOpenClawId()}
                   />
                 )}
               </For>
@@ -399,12 +406,18 @@ function InventoryEntry(props: {
         </Show>
         <Show when={showRoles()}>
           <DeviceFact label={t("devices.inventory.rolesLabel")}>
-            {formatList(props.entry.roles)}
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.roles)}
+            </details>
           </DeviceFact>
         </Show>
         <Show when={showScopes()}>
           <DeviceFact label={t("devices.inventory.scopesLabel")}>
-            {formatList(props.entry.scopes)}
+            <details>
+              <summary>{t("devices.inventory.showDetails")}</summary>
+              {formatList(props.entry.scopes)}
+            </details>
           </DeviceFact>
         </Show>
         <Show when={(props.entry.node?.caps ?? []).length > 0}>
@@ -579,6 +592,7 @@ function TokenRow(props: {
   device: { id: string; name: string };
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
+  revocable: boolean;
 }) {
   const disabled = () =>
     props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
@@ -589,17 +603,29 @@ function TokenRow(props: {
         props.tokenSummary.lastUsedAtMs ??
         null,
     );
-    return [
-      props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "",
-      (props.tokenSummary.scopes ?? []).length > 0 ? formatList(props.tokenSummary.scopes) : "",
-      when,
-    ].filter(Boolean);
+    return [props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : "", when].filter(
+      Boolean,
+    );
   });
   return (
     <div class="device-token">
       <div class="device-token__text">
-        <span class="device-token__role">{props.tokenSummary.role}</span>
+        <span class="device-token__role">
+          {t(
+            props.tokenSummary.role === "node"
+              ? "devices.inventory.deviceToken"
+              : props.tokenSummary.role === "operator"
+                ? "devices.inventory.accessToken"
+                : "devices.inventory.token",
+          )}
+        </span>
         <MetaLine parts={detail()} />
+        <details>
+          <summary>{t("devices.inventory.showDetails")}</summary>
+          <MetaLine
+            parts={[props.tokenSummary.role, formatList(props.tokenSummary.scopes ?? [])]}
+          />
+        </details>
       </div>
       <div class="device-token__actions">
         <button
@@ -615,7 +641,7 @@ function TokenRow(props: {
         >
           {t("devices.inventory.rotate")}
         </button>
-        {props.tokenSummary.revokedAtMs ? undefined : (
+        {props.tokenSummary.revokedAtMs || !props.revocable ? undefined : (
           <button
             class="btn btn--sm danger"
             disabled={disabled()}

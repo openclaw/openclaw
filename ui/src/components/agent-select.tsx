@@ -13,6 +13,7 @@ import { Icon } from "./solid/icon.tsx";
 import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
 import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
 import "../styles/select-picker.css";
+import { MenuHeading } from "./solid/menu-heading.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
@@ -152,7 +153,7 @@ defineSolidBridge<AgentSelectProps>(
       menuClass: "oc-menu agent-select__menu",
       header: (
         <Show when={props.menuLabel}>
-          <div class="agent-select__menu-title">{props.menuLabel}</div>
+          <MenuHeading label={props.menuLabel} />
         </Show>
       ),
       trigger: (attributes: Accessor<JSX.ButtonHTMLAttributes<HTMLButtonElement>>) => (
@@ -198,6 +199,7 @@ defineSolidBridge<AgentSelectProps>(
               return props.disabled || props.options.length === 0;
             },
             searchable: true,
+            phoneSheet: true,
             // Agent menus have a fixed width; no offscreen sizing rows are needed.
             windowed: () => "",
             showOptionTooltips: false,
