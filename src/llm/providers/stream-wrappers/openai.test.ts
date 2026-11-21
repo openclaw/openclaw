@@ -3,7 +3,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn() }));
+const logger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), isEnabled: () => false }));
 
 vi.mock("../../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => logger,
