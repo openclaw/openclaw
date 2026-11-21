@@ -143,7 +143,17 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
   if (!hasOnlySupportedKeywords(schema, SUPPORTED_FORM_SCHEMA_KEYS)) {
-    return false;
+    // Provider model maps refine selected keys with patternProperties (e.g. bundled
+    // vLLM models); admit the keyword only where the existing editor can still render
+    // the node (named properties or an object-valued/true additionalProperties), so
+    // pattern-only maps keep their Raw-mode fallback instead of rendering empty.
+    if (!isRecord(schema.patternProperties) || !hasRenderableObjectStructure(schema)) {
+      return false;
+    }
+    const { patternProperties: _patternRefinements, ...withoutPatternRefinements } = schema;
+    if (!hasOnlySupportedKeywords(withoutPatternRefinements, SUPPORTED_FORM_SCHEMA_KEYS)) {
+      return false;
+    }
   }
   if (schema.not === undefined) {
     return true;
@@ -171,6 +181,14 @@ function hasOnlySupportedKeywords(schema: JsonSchema, supported: ReadonlySet<str
         normalizeSchemaNode({ type: "string", ...schema.propertyNames }, []).unsupportedPaths
           .length === 0),
   );
+}
+
+function hasRenderableObjectStructure(schema: JsonSchema): boolean {
+  // The map editor only enumerates dynamic entries from an object-valued (or `true`,
+  // normalized to `{}` here) additionalProperties. Named properties alone are not
+  // enough: pattern-defined entries would vanish from the form without a Raw notice.
+  const additional = schema.additionalProperties;
+  return additional === true || isRecord(additional);
 }
 
 function schemaAllowsNull(schema: JsonSchema): boolean {
