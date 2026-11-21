@@ -21,7 +21,8 @@ export async function resolveExecutableTrustPathFromEnv(
   }
 }
 
-async function resolveSkillBinTrustEntries(
+/** Resolves skill bin names to trusted executable paths on the given PATH. */
+export async function resolveSkillBinTrustEntries(
   bins: string[],
   pathEnv: string,
 ): Promise<SkillBinTrustEntry[]> {

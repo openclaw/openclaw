@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-server.js";
@@ -6,6 +7,7 @@ import type {
   DurableExecOptions,
   ExecHostCommandParams,
   ExecApprovalFollowupFactory,
+  ExecSkillScope,
 } from "./bash-tools.exec-types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
@@ -26,6 +28,10 @@ export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   maxOutput: number;
   pendingMaxOutput: number;
   cleanupMs?: number;
+  /** Runtime config used to resolve the agent's skill bins for autoAllowSkills. */
+  config?: OpenClawConfig;
+  /** Admitted run's skill scope, so autoAllowSkills trusts only its eligible skills' bins. */
+  skillScope?: ExecSkillScope;
 };
 
 /** Gateway allowlist outcome before command execution continues. */

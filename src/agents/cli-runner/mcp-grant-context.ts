@@ -129,6 +129,21 @@ function buildCliMcpChannelContext(
   };
 }
 
+/** The run's skill narrowing, so loopback exec trusts only the skills this session admitted. */
+function buildCliMcpAdmittedSkillScope(
+  skillsSnapshot: RunCliAgentParams["skillsSnapshot"],
+): McpLoopbackRequestContext["admittedSkillScope"] {
+  const skillFilter = skillsSnapshot?.skillFilter;
+  const skillOverrides = skillsSnapshot?.skillOverrides;
+  if (!skillFilter && !skillOverrides) {
+    return undefined;
+  }
+  return {
+    ...(skillFilter ? { skillFilter: [...skillFilter] } : {}),
+    ...(skillOverrides ? { skillOverrides: { ...skillOverrides } } : {}),
+  };
+}
+
 export function buildCliMcpGrantContext(params: {
   run: RunCliAgentParams;
   config: OpenClawConfig;
@@ -159,6 +174,7 @@ export function buildCliMcpGrantContext(params: {
     ? cloneExecElevatedDefaults(params.run.bashElevated)
     : undefined;
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
+  const admittedSkillScope = buildCliMcpAdmittedSkillScope(params.run.skillsSnapshot);
   const senderName = normalizeOptionalString(params.run.senderName);
   const senderUsername = normalizeOptionalString(params.run.senderUsername);
   const senderE164 = normalizeOptionalString(params.run.senderE164);
@@ -188,6 +204,7 @@ export function buildCliMcpGrantContext(params: {
     conversationId: params.run.conversationId,
     chatType: params.run.chatType,
     ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
+    ...(admittedSkillScope ? { admittedSkillScope } : {}),
     ...(params.run.conversationToolPolicy
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
       : {}),
