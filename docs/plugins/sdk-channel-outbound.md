@@ -148,6 +148,32 @@ retries. An already dispatched request may still settle after abort. Durable
 receipt alone does not authorize a reply. A crash between commit and notification
 can lose the notice.
 
+### Observe committed ingress failures
+
+Plugins can register `api.on("channel_ingress_failed", (event, context) => ...)`
+to observe a delivery failure after the native ingress owner has committed its
+dead-letter disposition. The event contains only `eventId`, `queueName`,
+`receivedAt`, and `attempts`; context contains the recorded `channelId` and
+`accountId`. Use that original tuple as the observation identity. No agent run
+has necessarily been admitted, so there is no fabricated `runId`, session owner,
+project, or successful-reply claim. Task text, raw errors, payloads, metadata,
+claim tokens, and transport destinations are not projected.
+
+This is an observation, not a claim/reply/replay capability or trusted project
+binding. Consumers must use their existing host admission and registered account
+ownership; unknown ownership or prior effect stays unknown. The existing
+`onDeadLetter` transport notice remains separate. Queue-policy drops do not emit
+this failure hook. Ordinary retries retain the same ingress identity and do not
+emit a terminal failure until the owner actually commits one.
+
+Delivery is best effort through the existing managed hook runner. Handler
+failure or closure does not retry the original event. A crash between the
+dead-letter commit and observation can lose the callback; recover through the
+existing account-scoped dead-letter inspection, not diagnostic trace attribution
+or a guessed run ID. This hook alone does not verify agent processing or a
+recipient-visible answer, provide durable subscriber recovery, or activate an
+automatic incident consumer.
+
 ### One turn, several durable claims
 
 A channel that answers several inbound events as one turn holds one durable

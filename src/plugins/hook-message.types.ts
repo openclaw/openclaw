@@ -211,8 +211,20 @@ export type PluginHookMessageSentEvent = {
   error?: string;
 };
 
+/** A committed pre-adoption failure; not evidence of agent execution or a reply. */
+export type PluginHookChannelIngressFailedEvent = {
+  eventId: string;
+  queueName: string;
+  receivedAt: number;
+  attempts: number;
+};
+
 /** Message operation contracts share their provider-event and delivery types. */
 export type PluginMessageHookHandlerMap = {
+  channel_ingress_failed: AsyncPluginHook<
+    PluginHookChannelIngressFailedEvent,
+    { channelId: string; accountId: string }
+  >;
   before_channel_ingress: AsyncPluginHook<
     PluginHookBeforeChannelIngressEvent,
     PluginHookBeforeChannelIngressContext,

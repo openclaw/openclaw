@@ -1013,6 +1013,7 @@ export function createHookRunner(
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
+    runChannelIngressFailed: bindVoidHook("channel_ingress_failed"),
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch", (ctx) => ctx.dispatchKind === "acp"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {
