@@ -86,6 +86,16 @@ openclaw-custodian-setup-card {
   justify-self: start;
 }
 
+.custodian-setup__automatic {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.custodian-setup .custodian-setup__automatic p {
+  color: var(--muted);
+}
+
 .custodian-setup__native-actions {
   padding-top: 12px;
   border-top: 1px solid var(--border);
