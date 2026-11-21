@@ -53,7 +53,6 @@ struct OnboardingOpenClawIDRenderTests {
                 claw: "studio-fixture", device: "Example Mac", code: "482 913", approvalURL: approval)),
             ("id-chat-approval", .chatAccess(claw: "studio-fixture", approvalURL: approval)),
             ("id-connected", .connected(claw: "studio-fixture")),
-            ("id-reachable", .reachable(hostname: "studio-fixture")),
         ]
         let dependencies = [
             "id-node-invitation": "real invitation/Discovery enrollment acceptance",
@@ -66,7 +65,6 @@ struct OnboardingOpenClawIDRenderTests {
             "id-compare-code": "#194201/#196445 enrollment wiring",
             "id-chat-approval": "member/operator enrollment",
             "id-connected": "#194201/#196445 enrollment wiring and member/operator enrollment",
-            "id-reachable": "owner signer/kit custody and native account callback",
         ]
         for (name, step) in cases {
             let dependency = try #require(dependencies[name])

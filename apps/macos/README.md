@@ -126,8 +126,10 @@ test proof as incomplete and requires the exact commit's `macos-swift` CI result
 The hosting question has two routes: **On this Mac** and **On another computer**.
 The remote finder reuses network discovery, trusted connection settings, and
 browser Gateway sign-in. Discovery advertisements never establish trust.
-Local setup retains the runtime and live inference gates, then offers optional
-OpenClaw ID setup before the final page. **Set up later** starts no Gateway.
+Local setup retains the runtime and live inference gates, then goes to the final
+page. It does not offer remote reach, because native enrollment for it is not
+implemented; turning on remote access stays an explicit Dashboard account-menu
+action after setup. **Set up later** starts no Gateway.
 
 Native OpenClaw ID enrollment is not implemented in this build. The production
 `OnboardingOpenClawIDService` reports that limitation; it cannot report a linked

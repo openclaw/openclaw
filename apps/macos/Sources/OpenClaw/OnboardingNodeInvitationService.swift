@@ -77,7 +77,6 @@ final class OnboardingNodeInvitationService: OnboardingOpenClawIDService {
         switch intent {
         case .joinNode: return .nodeInvitation
         case .connect: return .signIn
-        case .makeReachable: throw CocoaError(.featureUnsupported)
         }
     }
 

@@ -7,7 +7,7 @@ struct OnboardingOpenClawIDTests {
     @Test func `main build cannot claim an unbacked enrollment succeeded`() {
         let model = OnboardingOpenClawIDModel(service: UnavailableOnboardingOpenClawIDService())
         #expect(model.unavailableReason != nil)
-        #expect(model.begin(.makeReachable) == nil)
+        #expect(model.begin(.connect) == nil)
         #expect(model.perform(.confirmRecoveryKit) == nil)
         #expect(model.step == .signIn)
         #expect(!model.busy)

@@ -18,7 +18,7 @@ extension OnboardingOpenClawIDService {
     }
 }
 
-enum OnboardingOpenClawIDIntent { case makeReachable, connect, joinNode }
+enum OnboardingOpenClawIDIntent { case connect, joinNode }
 
 enum OnboardingOpenClawIDAction {
     case signIn, switchAccount, selectClaw(String), saveRecoveryKit, confirmRecoveryKit, requestNode, checkApproval,
@@ -52,7 +52,6 @@ enum OnboardingOpenClawIDStep: Equatable {
     case compareCode(claw: String, device: String, code: String, approvalURL: URL?)
     case chatAccess(claw: String, approvalURL: URL?)
     case connected(claw: String)
-    case reachable(hostname: String)
     /// The OpenClaw ID sign-in window is open.
     case signingIn
     /// The owner picks how this Mac becomes their device.

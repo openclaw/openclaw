@@ -712,7 +712,6 @@ struct OnboardingView: View {
     let cliPageIndex = 2
     let aiPageIndex = 3
     let findPageIndex = 4
-    let reachabilityPageIndex = 5
     let readyPageIndex = 9
 
     /// The active page is scrollable on short screens. Taller windows donate all
@@ -724,15 +723,16 @@ struct OnboardingView: View {
     static func pageOrder(
         for mode: AppState.ConnectionMode,
         requiresCLIInstall: Bool,
-        joinedClaw: Bool = false,
-        openClawIDEnabled: Bool = MacOpenClawIDFeature.isEnabled) -> [Int]
+        joinedClaw: Bool = false) -> [Int]
     {
         // The OpenClaw ID claw owns its AI setup, which needs operator.admin a member key does
         // not hold; there is no Gateway to find either.
         if mode == .remote, joinedClaw { return [0, 1, 9] }
         return switch mode {
         case .local:
-            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]) + (openClawIDEnabled ? [5, 9] : [9])
+            // No native step offers remote reach: its enrollment is not implemented. Turning on
+            // remote access stays an explicit Dashboard action after local setup.
+            requiresCLIInstall ? [0, 1, 2, 3, 9] : [0, 1, 3, 9]
         case .remote:
             [0, 1, 4, 3, 9]
         case .unconfigured:
@@ -802,8 +802,7 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String {
-        if self.activePageIndex == self.reachabilityPageIndex { return "Not now" }
-        return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
+        self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
     var isCLIBlocking: Bool {

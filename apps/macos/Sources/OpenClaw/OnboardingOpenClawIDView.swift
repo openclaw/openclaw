@@ -1,36 +1,5 @@
 import SwiftUI
 
-struct OnboardingReachabilityContent: View {
-    let unavailableReason: String?
-    let signIn: () -> Void
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Text("Reach it from anywhere?").font(.largeTitle.weight(.semibold))
-            Text("Use OpenClaw ID to reach this Mac’s assistant from your other devices, without a VPN.")
-                .foregroundStyle(.secondary).multilineTextAlignment(.center)
-            VStack(alignment: .leading, spacing: 18) {
-                Label("Keep your assistant on this Mac", systemImage: "desktopcomputer")
-                Label("Approve each device that connects", systemImage: "checkmark.shield")
-                Label("Save a recovery kit that only you hold", systemImage: "key")
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(20)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
-            Button("Sign in with OpenClaw ID", action: self.signIn)
-                .buttonStyle(.borderedProminent)
-                .disabled(self.unavailableReason != nil)
-            if let unavailableReason {
-                Text(unavailableReason).font(.callout).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            Text("Optional. Choose Not now to finish setup on this Mac.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: 520)
-    }
-}
-
 struct OnboardingOpenClawIDView: View {
     @Bindable var model: OnboardingOpenClawIDModel
     var onClose: (() -> Void)?
@@ -204,9 +173,6 @@ struct OnboardingOpenClawIDContent: View {
                 "Chat connected",
                 detail: "Your separately approved operator access is ready.",
                 icon: "checkmark.circle")
-        case let .reachable(hostname):
-            self.heading("You’re all set!", subtitle: "Reachable at \(hostname).")
-            self.row("Recovery kit saved", detail: "Keep it safe. New devices still need your approval.", icon: "key")
         case .signingIn:
             self.heading("Finish signing in", subtitle: "Continue in the OpenClaw ID window.")
             ProgressView().controlSize(.large)

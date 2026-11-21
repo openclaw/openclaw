@@ -401,7 +401,6 @@ extension OnboardingView {
         switch pageIndex {
         case self.connectionPageIndex: "Where should your assistant run?"
         case self.findPageIndex: "Find your OpenClaw"
-        case self.reachabilityPageIndex: "Reach it from anywhere?"
         case self.cliPageIndex: "Getting things ready"
         case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
             ? "Connect your AI" : "Authenticate with your Gateway"
