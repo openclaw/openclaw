@@ -21,6 +21,8 @@ const wrapper = (payload: string) => direct(`sh -c '${payload}'`, ["sh", "-c", p
 
 it.each([
   { command: "$(whoami) --help", reason: "dynamic-executable" },
+  { command: "ba\\\nsh -c id", reason: "line-continuation" },
+  { command: 'echo "a\\\nb"', reason: "line-continuation" },
   { command: "cat <<EOF\nhello\nEOF", reason: "heredoc" },
   { command: "cat <(echo ok)", reason: "process-substitution" },
   { command: "myfunc(){ echo pwn; }; myfunc", reason: "function-definition" },
