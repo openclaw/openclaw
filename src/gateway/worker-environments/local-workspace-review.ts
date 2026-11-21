@@ -34,11 +34,15 @@ export async function readLocalWorkspaceReviewBase(params: {
   ) {
     throw new Error("Local workspace review binding belongs to another session incarnation");
   }
-  const { worktree, assertCurrent } = await resolveSessionWorktree({
+  const prepared = await resolveSessionWorktree({
     binding,
     sessionKey: params.sessionKey,
     assertCurrent: params.assertCurrent,
   });
+  if (!prepared) {
+    return undefined;
+  }
+  const { worktree, assertCurrent } = prepared;
   assertCurrent();
   if (!isPathInside(worktree.path, params.cwd)) {
     throw new Error("Local workspace review owner changed");

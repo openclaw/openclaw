@@ -133,6 +133,7 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
+  let preparedWorktreePath: string | undefined;
   if (params.sessionKey?.trim()) {
     const entry = await readSessionEntryReadOnlyInWorker(
       {
@@ -145,12 +146,13 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       assertCurrent,
     );
     if (entry?.archivedAt === undefined && entry?.worktree) {
-      await resolveSessionWorktree({
+      const prepared = await resolveSessionWorktree({
         binding: entry.worktree,
         sessionKey,
         assertCurrent,
         restore: { signal: params.abortSignal, runId: params.runId },
       });
+      preparedWorktreePath = prepared?.worktree.path;
     }
   }
   const prepareWorkspace = async (
@@ -164,7 +166,9 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
         assertCurrent();
       }
       phases.mark("attempt.setup.workspace.mkdir");
-      await fs.mkdir(resolvedWorkspace, { recursive: true });
+      if (resolvedWorkspace !== preparedWorktreePath) {
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+      }
       assertCurrent();
       phases.mark("attempt.setup.workspace.sandbox");
       const sandboxRuntime = sandboxRuntimeStatus?.sandboxed

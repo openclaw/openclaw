@@ -387,7 +387,9 @@ export async function prepareAgentCommandExecution(
           sessionKey,
           assertCurrent: assertPreparationCurrent,
           restore: { signal: abortSignal, runId: opts.runId?.trim() || sessionId },
-        }).then(({ worktree, context }) => ({ record: worktree, context }))
+        }).then((prepared) =>
+          prepared ? { record: prepared.worktree, context: prepared.context } : undefined,
+        )
       : await resolveWorktreeForPath({
           sessionEntry: sessionEntryRaw,
           candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],

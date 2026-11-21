@@ -61,7 +61,7 @@ it.each([
         snapshotRef: "refs/openclaw/snapshots/unavailable",
       });
     } else if (scenario === "conflict") {
-      await fs.mkdir(record.path);
+      await fs.mkdir(record.path, { recursive: true });
       await fs.writeFile(path.join(record.path, "other.txt"), "another checkout's files\n");
     }
     using restore = vi.spyOn(checkout, "materializeManagedWorktree");

@@ -3,6 +3,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { captureAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { WorktreeRestoreError } from "./errors.js";
 import { worktreePathExists, WORKTREE_CHECKOUT_TIMEOUT_MS } from "./git.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
@@ -40,17 +41,26 @@ export async function resolveSessionWorktree(params: {
 }) {
   const { binding, sessionKey } = params;
   const context = captureWorktreeRunEndContext(process.env);
-  const accept = captureWorktreeRegistryReadGuard(
-    context,
-    params.restore ? "session-owner" : "lifecycle",
-  );
+  const accept = params.restore
+    ? undefined
+    : captureWorktreeRegistryReadGuard(context, "lifecycle");
   let worktree = await readRegistryWorktree(context, binding.id);
-  const assertOwner = accept(worktree);
-  const assertCurrent = composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
-    assertSource();
-    assertOwner();
-  });
+  const assertOwner = accept?.(worktree);
+  const assertCurrent = assertOwner
+    ? composeSessionSourceAssertion([params.assertCurrent], (assertSource) => {
+        assertSource();
+        assertOwner();
+      })
+    : params.assertCurrent;
   assertCurrent();
+  if (!worktree && params.restore) {
+    const readiness = captureAgentWorkspaceReadiness(sessionKey);
+    if (readiness?.isReady?.() === false) {
+      // The admitted creation owns this unpublished checkout and gates workspace effects.
+      readiness.assertCurrent();
+      return undefined;
+    }
+  }
   if (
     worktree &&
     (worktree.ownerKind !== "session" ||
