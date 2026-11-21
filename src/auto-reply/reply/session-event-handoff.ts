@@ -1,4 +1,3 @@
-import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
@@ -69,7 +68,12 @@ import {
   intersectSessionEventToolsAllow,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
-import { resolveSessionEventTerminalOutcome } from "./session-event-terminal.js";
+import {
+  createSessionEventReadmission,
+  prepareSessionEventReadmission,
+  resolveSessionEventTerminalOutcome,
+  type SessionEventReadmission,
+} from "./session-event-terminal.js";
 
 export { assertSessionEventTargetCurrent, captureSessionEventTargetForHost };
 export { combineSessionEventTargetsForHost } from "./session-event-target.js";
@@ -88,14 +92,15 @@ export function enqueueSessionEventForHost(
   text: string,
   options: SessionEventOptions,
 ): SessionEventReceipt {
-  return enqueueSessionEventAttempt(text, options, 0);
+  return enqueueSessionEventAttempt(text, options, createSessionEventReadmission());
 }
 
 function enqueueSessionEventAttempt(
   text: string,
   { assertAcceptanceCurrent, ...options }: SessionEventOptions,
-  readmissionAttempt: number,
+  retry: SessionEventReadmission,
 ): SessionEventReceipt {
+  const readmissionAttempt = retry.attempt;
   options.assertCurrent?.();
   options.expectedTarget?.assertCurrent?.();
   const { cfg, agentId, sessionKey, env, storePath, operatorAuthority } = prepareSessionEventInput(
@@ -313,34 +318,31 @@ function enqueueSessionEventAttempt(
     }
     settlement = "settling";
     const complete = async () => {
+      let inputSettled = true;
       try {
         inputRecorder?.finishPendingInput?.("cancelled");
         await inputRecorder?.waitForPendingInputSettlement?.();
       } catch (error) {
+        inputSettled = false;
         failure ??= error instanceof Error ? error : String(error);
       }
       // Submitting custody ends at the first acceptance; a pre-acceptance re-admission
       // carries the still-live assertion so revoked ingress rejects the retry.
       const pendingAcceptanceAssertion = accepted ? undefined : acceptanceAssertion;
       acceptanceAssertion = undefined;
-      // Producers never retry, so a policy publication that rejected an unstarted
-      // occurrence re-admits it under the current policy instead of destroying it.
-      // Stop, abort and abandonment still settle terminally.
-      const retainForConfigChange = () =>
-        configPolicy.changed && !started && !deliveryAttempted && !signal.aborted && !abandoned;
-      const attempt = readmissionAttempt;
-      if (retainForConfigChange() && configPolicy.canReadmit(attempt)) {
-        // Reuse this occurrence's bounded readmission, yielding before fresh authority.
-        await delay(100 * 2 ** readmissionAttempt, undefined, { signal }).catch(
-          (error: unknown) => {
-            if (!signal.aborted) {
-              throw error;
-            }
-          },
-        );
-      }
+      const nextReadmission = await prepareSessionEventReadmission(retry, signal, () => ({
+        source: options.source,
+        failure,
+        configPolicy,
+        inputSettled,
+        accepted,
+        adopted,
+        started,
+        conversationResultCommitted,
+        delivery: { delivered, deliveryAttempted, deliveryAmbiguous },
+        abandoned,
+      }));
       settlement = "finished";
-      const canReadmit = retainForConfigChange() && configPolicy.canReadmit(attempt);
       const terminal = resolveSessionEventTerminalOutcome({
         operation,
         signal,
@@ -350,7 +352,7 @@ function enqueueSessionEventAttempt(
       });
       ({ failure, terminalOutcome } = terminal);
       const { status } = terminal;
-      if (status === "failed" && !canReadmit) {
+      if (status === "failed" && !nextReadmission) {
         log.error("session event execution failed", {
           source: options.source,
           agentId,
@@ -361,7 +363,7 @@ function enqueueSessionEventAttempt(
       }
       signal.removeEventListener("abort", onAbort);
       generationLease?.release();
-      if (canReadmit) {
+      if (nextReadmission) {
         // Passive custody survives only until some attempt adopts the occurrence.
         const preservePassive =
           options.preserveOccurrenceOnRejection && !adopted ? true : undefined;
@@ -379,7 +381,7 @@ function enqueueSessionEventAttempt(
               occurrences,
               preserveOccurrenceOnRejection: preservePassive,
             },
-            attempt + 1,
+            nextReadmission,
           );
         } catch (error) {
           if (!preservePassive) {
