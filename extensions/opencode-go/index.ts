@@ -103,8 +103,9 @@ export default defineSingleProviderPluginEntry({
         wizard: {
           choiceId: "opencode-go-console",
           choiceLabel: "OpenCode Go (browser sign-in)",
+          choiceHint: "Sign in in your browser and pick a Console workspace with Go",
           groupId: "opencode",
-          groupLabel: "OpenCode",
+          groupLabel: "OpenCode Go",
           groupHint: "Browser sign-in or shared Zen + Go API key",
         },
         run: signInWithOpencodeConsole,
