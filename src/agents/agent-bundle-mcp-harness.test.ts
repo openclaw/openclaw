@@ -75,7 +75,11 @@ import {
   materializeRequesterScopedMcpToolsForHarnessRunCore,
   materializeStaticMcpToolsForHarnessRunCore,
 } from "./agent-bundle-mcp-harness.js";
-import { makeConnectRuntime, makeRuntime } from "./agent-bundle-mcp-harness.test-support.js";
+import {
+  makeConnectRuntime,
+  makeMixedAuthConnectRuntime,
+  makeRuntime,
+} from "./agent-bundle-mcp-harness.test-support.js";
 
 function staticTools(
   sessionId: string,
@@ -504,6 +508,50 @@ afterEach(() => {
 });
 
 describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
+  it("advertises an unauthenticated server's connect tool alongside an already-authenticated server's tools", async () => {
+    readCredentialsStatus.mockResolvedValue([
+      { state: "authorized" },
+      { state: "unauthenticated" },
+    ]);
+    mocks.resolveRuntime.mockImplementation(async (params) =>
+      makeMixedAuthConnectRuntime({
+        sessionId: params.sessionId,
+        requesterSenderId: params.requesterSenderId ?? "alice",
+        publicOrigin: "https://gateway.example",
+      }),
+    );
+    const result = await materializeRequesterScopedMcpToolsForHarnessRunCore({
+      sessionId: "session-mixed-auth",
+      workspaceDir: "/workspace",
+      requesterSenderId: "alice",
+      messageChannel: "telegram",
+      agentAccountId: "bot",
+      cfg: {
+        gateway: { publicOrigin: "https://gateway.example" },
+        mcp: {
+          servers: {
+            "user-mail": {
+              url: "https://mcp.example/user-mail",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+            calendar: {
+              url: "https://mcp.example/rpc",
+              auth: "oauth",
+              oauth: { identity: "per-requester" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result?.tools.map((tool) => tool.name)).toEqual([
+      "calendar__connect",
+      "user-mail__inbox",
+    ]);
+    await result!.dispose();
+  });
+
   it("returns undefined before any requester resolves", async () => {
     const result = await requesterTools("session-empty", { requesterSenderId: "guest" });
     expect(result).toBeUndefined();
