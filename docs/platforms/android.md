@@ -103,6 +103,18 @@ until they are ready. Send remains disabled during preparation. **Queuing messag
 covers local send admission; the message's outbox status then shows delivery or
 any failure. Offline messages still use the durable queue.
 
+Choose attachments within these Android composer limits (sizes are decoded bytes):
+
+- Documents and audio: up to 8 MiB per file.
+- Video: up to 20 MiB per file.
+- Each message: up to 8 attachments, with at most 20 MiB combined. All non-video
+  attachments, including images, share an 8 MiB combined budget within that message.
+
+The per-Gateway offline queue budget does not raise these per-message limits.
+If a file cannot be staged, try a smaller file or split the
+attachments across messages. A file within the size limit must still be a supported
+type, and Gateway transport limits can reject it separately.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.
