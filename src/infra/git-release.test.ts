@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import * as gatewayOwner from "./gateway-owner-lease.js";
@@ -69,17 +69,24 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         state: "live",
         expired: false,
       } as const;
+      const successor = { ...incumbent, owner: "after", pid: 2345 };
+      const unchanged = { status: "unverified", incumbentPid: incumbent.pid };
       const options = {
         serviceEnv: {},
         gatewayPort: incumbent.port,
         allowGitReleaseRestartSignal: true,
       };
+      const unreadable = () => {
+        throw new Error("owner lease temporarily unavailable");
+      };
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
       afterEach(() => {
         vi.restoreAllMocks();
         vi.useRealTimers();
       });
       it("does not verify the incumbent while the restart is deferred for active work", async () => {
-        vi.useFakeTimers();
         const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
         const start = performance.now();
         owner.mockReturnValueOnce({ ...incumbent, state: "unknown", startedAt: null });
@@ -91,10 +98,7 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           owner.mockReturnValue({ ...incumbent, externalRestartReceipt: "new-receipt" });
           setTimeout(() => {
             owner.mockReturnValue(undefined);
-            setTimeout(
-              () => owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 }),
-              2_000,
-            );
+            setTimeout(() => owner.mockReturnValue(successor), 2_000);
           }, resolveGatewayRestartDeferralTimeoutMs());
           return true;
         });
@@ -112,7 +116,6 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
       it.each([undefined, "earlier-receipt"])(
         "does not extend the wait on delivery alone (prior receipt: %s)",
         async (prior) => {
-          vi.useFakeTimers();
           vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
             ...incumbent,
             externalRestartReceipt: prior,
@@ -120,17 +123,13 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           const kill = vi.spyOn(process, "kill").mockReturnValue(true);
           const wait = waitForGitReleaseSuccessor(options);
           await vi.advanceTimersByTimeAsync(90_000);
-          await expect(wait).resolves.toEqual({
-            status: "unverified",
-            incumbentPid: incumbent.pid,
-          });
+          await expect(wait).resolves.toEqual(unchanged);
           expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         },
       );
       it.each([true, false])(
         "keeps observing until the original deadline after SIGUSR2 gets ESRCH (successor arrives: %s)",
         async (successorArrives) => {
-          vi.useFakeTimers();
           const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
           const kill = vi.spyOn(process, "kill").mockImplementation(() => {
             throw Object.assign(new Error("process exited"), { code: "ESRCH" });
@@ -143,19 +142,16 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
           await vi.advanceTimersByTimeAsync(54_000);
           expect(finished).not.toHaveBeenCalled();
           if (successorArrives) {
-            owner.mockReturnValue({ ...incumbent, owner: "after", pid: 2345 });
+            owner.mockReturnValue(successor);
           }
           await vi.advanceTimersByTimeAsync(1_000);
           expect(finished).toHaveBeenCalledExactlyOnceWith(
-            successorArrives
-              ? { status: "changed" }
-              : { status: "unverified", incumbentPid: incumbent.pid },
+            successorArrives ? { status: "changed" } : unchanged,
           );
           expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
         },
       );
       it("does not signal or spend the deferral budget when external restarts are disabled", async () => {
-        vi.useFakeTimers();
         const owner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
         const kill = vi.spyOn(process, "kill").mockReturnValue(true);
         const wait = waitForGitReleaseSuccessor({
@@ -168,19 +164,65 @@ describe.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
         await expect(wait).resolves.toEqual({ status: "changed" });
         expect(kill).not.toHaveBeenCalled();
       });
-      it("honors command-scope cancellation without an explicit update deadline", async () => {
-        vi.useFakeTimers();
-        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue(incumbent);
+      it.each(["listeningAt", "heartbeatAt"] as const)(
+        "recovers an incumbent whose %s predates an unreadable first poll",
+        async (timestamp) => {
+          const started = Date.now();
+          const owner = vi
+            .spyOn(gatewayOwner, "readGatewayOwnerLease")
+            .mockImplementation(unreadable);
+          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+          const wait = waitForGitReleaseSuccessor(options);
+          await vi.advanceTimersByTimeAsync(10_000);
+          owner.mockReturnValue({
+            ...incumbent,
+            heartbeatAt: Date.now(),
+            [timestamp]: started - 1,
+          });
+          await vi.advanceTimersByTimeAsync(25_000);
+          expect(kill).toHaveBeenCalledExactlyOnceWith(incumbent.pid, "SIGUSR2");
+          owner.mockReturnValue(successor);
+          await vi.advanceTimersByTimeAsync(1_000);
+          await expect(wait).resolves.toEqual({ status: "changed" });
+        },
+      );
+      it.each([
+        ["unreadable", unreadable],
+        ["new owner", (start: number) => ({ ...incumbent, listeningAt: start + 1 })],
+        ["same millisecond", (start: number) => ({ ...incumbent, heartbeatAt: start })],
+        [
+          "wrong port",
+          (start: number) => ({ ...incumbent, port: incumbent.port + 1, listeningAt: start - 1 }),
+        ],
+        ["no timestamps", () => incumbent],
+      ] as const)(
+        "observes only to the original deadline if the initial incumbent cannot be established: %s",
+        async (_scenario, read) => {
+          const started = Date.now();
+          vi.spyOn(gatewayOwner, "readGatewayOwnerLease")
+            .mockImplementation(() => read(started))
+            .mockImplementationOnce(unreadable);
+          const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+          const finished = vi.fn();
+          void waitForGitReleaseSuccessor(options).then(finished);
+          await vi.advanceTimersByTimeAsync(89_000);
+          expect(finished).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(finished).toHaveBeenCalledExactlyOnceWith({ status: "unverified" });
+          expect(kill).not.toHaveBeenCalled();
+        },
+      );
+      it("honors command-scope cancellation while the initial owner lease remains unreadable", async () => {
+        vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockImplementation(unreadable);
         const kill = vi.spyOn(process, "kill").mockReturnValue(true);
         const controller = new AbortController();
         const wait = withCommandProcessScope(
           () => waitForGitReleaseSuccessor(options),
           controller.signal,
         );
-        const rejection = expect(wait).rejects.toThrow();
         await vi.advanceTimersByTimeAsync(1_000);
         controller.abort();
-        await rejection;
+        await expect(wait).rejects.toThrow();
         expect(kill).not.toHaveBeenCalled();
       });
     });

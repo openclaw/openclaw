@@ -392,15 +392,15 @@ export async function waitForGitReleaseSuccessor(params: {
       return null; // Unreadable is not the same as a confirmed absent lease.
     }
   };
-  const incumbent = readOwner();
+  const start = performance.now();
+  const waitStartedAtMs = Date.now();
+  let incumbent = readOwner();
   if (incumbent === undefined || incumbent?.state === "dead") {
     return { status: "no-incumbent" };
   }
-  if (!incumbent || incumbent.port !== params.gatewayPort) {
+  if (incumbent && incumbent.port !== params.gatewayPort) {
     return { status: "unverified" };
   }
-  const unverified = { status: "unverified", incumbentPid: incumbent.pid } as const;
-  const start = performance.now();
   const signalAt = start + 35_000; // The watcher normally checks the installation every 30s.
   let until = start + 90_000; // Old residents do not publish a receipt.
   let sentAt: number | undefined;
@@ -409,10 +409,26 @@ export async function waitForGitReleaseSuccessor(params: {
   while (performance.now() < until) {
     await sleep(Math.min(1_000, until - performance.now()), signal);
     const current = readOwner();
+    if (current === undefined || current?.state === "dead") {
+      // Supervised replacement normally has a gap between leases. Never nudge the
+      // departed owner, but keep looking for its successor within the same budget.
+      maySignal = false;
+      continue;
+    }
+    if (!current || current.port !== params.gatewayPort) {
+      continue;
+    }
+    if (!incumbent) {
+      // After an unreadable first poll, only a lease that demonstrably predates
+      // the wait can identify the incumbent. A new arrival is not ours to signal.
+      const observedAt = current.listeningAt ?? current.heartbeatAt;
+      if (observedAt === undefined || observedAt >= waitStartedAtMs) {
+        continue;
+      }
+      incumbent = current;
+    }
     if (
-      current &&
       current.state === "live" &&
-      current.port === params.gatewayPort &&
       current.owner !== incumbent.owner &&
       (current.pid !== incumbent.pid ||
         (current.startedAt !== null &&
@@ -421,18 +437,10 @@ export async function waitForGitReleaseSuccessor(params: {
     ) {
       return { status: "changed" };
     }
-    if (current === undefined || current?.state === "dead") {
-      // Supervised replacement normally has a gap between leases. Never nudge the
-      // departed owner, but keep looking for its successor within the same budget.
-      maySignal = false;
-      continue;
-    }
     const now = performance.now();
     if (
-      !current ||
       current.state !== "live" ||
       current.pid !== incumbent.pid ||
-      current.port !== incumbent.port ||
       current.owner !== incumbent.owner ||
       (incumbent.startedAt !== null && current.startedAt !== incumbent.startedAt)
     ) {
@@ -447,7 +455,7 @@ export async function waitForGitReleaseSuccessor(params: {
         process.kill(incumbent.pid, "SIGUSR2");
       } catch (error) {
         if (!hasErrnoCode(error, "ESRCH")) {
-          return unverified;
+          break;
         }
         // The incumbent exited after the lease read. Observe replacement without retrying.
         maySignal = false;
@@ -465,5 +473,7 @@ export async function waitForGitReleaseSuccessor(params: {
         sentAt + resolveGatewayRestartDeferralTimeoutMs() + GATEWAY_RESTART_REPLACEMENT_TIMEOUT_MS;
     }
   }
-  return unverified;
+  return incumbent
+    ? { status: "unverified", incumbentPid: incumbent.pid }
+    : { status: "unverified" };
 }

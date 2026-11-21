@@ -744,6 +744,9 @@ it("ends a verified Git release's trial without the release's own settlement", a
   await expect(fs.access(trial)).rejects.toThrow();
 });
 
+const changedPlugins = () => ({
+  plugins: createPostCorePluginUpdateResult({ status: "ok", changed: true }),
+});
 async function gitReleaseRestart() {
   const trial = await gitTrial();
   const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
@@ -755,8 +758,9 @@ async function gitReleaseRestart() {
   result.before = candidate;
   result.after = candidate;
   const onVerified = vi.fn();
-  const verify = () =>
+  const verify = (gitReleaseRestartMode?: RestartParams["gitReleaseRestartMode"]) =>
     restartGateway({
+      gitReleaseRestartMode,
       opts: withRun("release-handoff"),
       timeoutMs: 60_000,
       onVerified,
@@ -770,45 +774,56 @@ async function gitReleaseRestart() {
   return { service, incumbent, successor, onVerified, verify, trial };
 }
 
+it("restarts a release through the admitted native service instead of sending a signal", async () => {
+  const { verify, incumbent, onVerified } = await gitReleaseRestart();
+  restart.readGatewayOwnerLease.mockReturnValue(incumbent);
+  restart.callGateway.mockImplementation(healthResponse(candidate.version, candidate.buildId));
+  expect(await verify("native")).toBe("ok");
+  expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+    expect.anything(),
+    "restart",
+  );
+  expect(onVerified).toHaveBeenCalledOnce();
+});
+
 it.each([
-  ["no incumbent", "ok"],
-  ["same build", "readiness-pending"],
-  ["plugin restart", "readiness-pending"],
-  ["distinct target", "ok"],
-  ["wrong build", "restart-health-failed"],
-] as const)("verifies a switched Git release: %s", async (scenario, expected) => {
+  ["absent", "distinct", false, "ok"],
+  ["absent", "same", true, "readiness-pending"],
+  ["live", "same", false, "readiness-pending"],
+  ["live", "distinct", true, "readiness-pending"],
+  ["live", "distinct", false, "ok"],
+  ["live", "wrong", false, "restart-health-failed"],
+] as const)("Git release: %s owner, %s build, plugins=%s", async (owner, target, changed, want) => {
   const { incumbent, onVerified, verify, trial } = await gitReleaseRestart();
-  if (scenario !== "no incumbent") {
+  if (owner === "live") {
     restart.readGatewayOwnerLease.mockReturnValue(incumbent);
   }
-  if (scenario !== "same build") {
+  if (target !== "same") {
     result.before = { ...candidate, buildId: "old-build" };
   }
-  if (scenario === "plugin restart") {
-    result.postUpdate = {
-      plugins: createPostCorePluginUpdateResult({ status: "ok", changed: true }),
-    };
+  if (changed) {
+    result.postUpdate = changedPlugins();
   }
-  const build = scenario === "wrong build" ? "old-build" : candidate.buildId;
+  const build = target === "wrong" ? "old-build" : candidate.buildId;
   restart.callGateway.mockImplementation(healthResponse(candidate.version, build));
   const outcome = await verify();
   expect(restart.readGatewayOwnerLease).toHaveBeenCalledWith(
     expect.objectContaining({ current: true }),
   );
-  expect(outcome).toBe(expected);
+  expect(outcome).toBe(want);
   expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
-  expect(onVerified).toHaveBeenCalledTimes(expected === "ok" ? 1 : 0);
+  expect(onVerified).toHaveBeenCalledTimes(want === "ok" ? 1 : 0);
   expect(vi.mocked(recordUpdateRunVerification).mock.lastCall?.[1]).toMatchObject({
     pid: running.pid,
     runningBuildId: build,
-    versionMatch: scenario !== "wrong build",
-    readyz: scenario !== "wrong build",
-    settled: expected === "ok",
+    versionMatch: target !== "wrong",
+    readyz: target !== "wrong",
+    settled: want === "ok",
   });
-  if (expected === "readiness-pending") {
+  if (want === "readiness-pending") {
     expect(result.steps.at(-1)?.advisory?.message).toContain("restart remains unverified");
   }
-  if (expected !== "ok") {
+  if (want !== "ok") {
     await fs.access(trial);
   }
 });
@@ -824,9 +839,7 @@ it.each([
   "verifies a late Git plugin restart only for the new serving owner: %s",
   async (state) => {
     const { service, incumbent, successor, onVerified, verify, trial } = await gitReleaseRestart();
-    result.postUpdate = {
-      plugins: createPostCorePluginUpdateResult({ status: "ok", changed: true }),
-    };
+    result.postUpdate = changedPlugins();
     if (state === "missing candidate build") {
       result.after = { version: candidate.version };
     }
@@ -870,16 +883,24 @@ it.each([
   },
 );
 
-it.each(["stopped after handoff", "stopped without successor", "unknown service"])(
-  "recovers a switched Git release only after confirmed stop: %s",
-  async (scenario) => {
+it.each([
+  ["changed", "stopped"],
+  ["incumbent", "stopped"],
+  ["absent", "stopped"],
+  ["absent", "unknown"],
+  ["incumbent", "unknown"],
+] as const)(
+  "recovers a switched Git release only after confirmed stop: owner=%s, service=%s",
+  async (owner, status) => {
     const { service, incumbent, successor, onVerified, verify } = await gitReleaseRestart();
-    restart.readGatewayOwnerLease.mockReturnValueOnce(incumbent);
-    if (scenario === "stopped after handoff") {
+    if (owner !== "absent") {
+      restart.readGatewayOwnerLease.mockReturnValueOnce(incumbent);
+    }
+    if (owner === "changed") {
       restart.readGatewayOwnerLease.mockReturnValueOnce(successor);
     }
-    const stopped = scenario !== "unknown service";
-    vi.mocked(service.readRuntime).mockResolvedValue({ status: stopped ? "stopped" : "unknown" });
+    const stopped = status === "stopped";
+    vi.mocked(service.readRuntime).mockResolvedValue({ status });
     restart.inspectPortUsage.mockImplementation(async (port) => restart.portUsage([], { port }));
     if (stopped) {
       vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {

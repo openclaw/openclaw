@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import * as handoff from "./update-command-handoff.js";
 import { prepareUpdateRestart } from "./update-command-restart-context.js";
 import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
@@ -35,7 +36,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function prepare(input: Partial<Parameters<typeof prepareUpdateRestart>[0]>) {
+function prepare(
+  input: Partial<Parameters<typeof prepareUpdateRestart>[0]>,
+  snapshot = createTestConfigSnapshot({}, {}, "/managed/state/openclaw.json"),
+) {
   return prepareUpdateRestart(
     {
       root: "/installed",
@@ -45,7 +49,7 @@ function prepare(input: Partial<Parameters<typeof prepareUpdateRestart>[0]>) {
       assertCurrent: () => {},
       ...input,
     },
-    createTestConfigSnapshot({}, {}, "/managed/state/openclaw.json"),
+    snapshot,
   );
 }
 
@@ -69,38 +73,19 @@ describe("prepareUpdateRestart", () => {
         fingerprint: "unit",
         refreshDefinition: false,
       });
-      const membership = vi.spyOn(handoff, "gatewayMaintenanceBlock").mockReturnValue(
-        caller === "inside"
-          ? {
-              message: "in service",
-              failureFacts: [
-                {
-                  check: "managed-service-preflight",
-                  code: "inside-gateway-service",
-                  message: "in service",
-                },
-              ],
-            }
-          : undefined,
-      );
-      try {
-        const config = createTestConfigSnapshot({ commands: { restart: false } });
-        const prepared = await prepareUpdateRestart(
-          {
-            root: "/installed",
-            result: { status: "ok", mode: "git", steps: [], durationMs: 0 },
-            shouldRestart: true,
-            updateStepTimeoutMs: 1000,
-            assertCurrent: () => {},
-          },
-          { ...config, valid: caller !== "invalid config" },
+      using membership = vi
+        .spyOn(handoff, "gatewayMaintenanceBlock")
+        .mockReturnValue(
+          caller === "inside" ? createUpdatePreflightFailure("inside-gateway-service") : undefined,
         );
-        expect(prepared.gitReleaseRestartMode).toBe(caller === "outside" ? "native" : "observe");
-        if (caller === "outside" || caller === "inside") {
-          expect(membership).toHaveBeenCalledWith(state, "/installed");
-        }
-      } finally {
-        membership.mockRestore();
+      const snapshot = createTestConfigSnapshot({ commands: { restart: false } });
+      const prepared = await prepare(
+        { result: { status: "ok", mode: "git", steps: [], durationMs: 0 } },
+        { ...snapshot, valid: caller !== "invalid config" },
+      );
+      expect(prepared.gitReleaseRestartMode).toBe(caller === "outside" ? "native" : "observe");
+      if (caller === "outside" || caller === "inside") {
+        expect(membership).toHaveBeenCalledWith(state, "/installed");
       }
     },
   );

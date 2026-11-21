@@ -674,53 +674,6 @@ describe("maybeRestartService", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "uses the admitted native restart for a Git release when cooperative signals are disabled",
-    async () => {
-      const prefix = tempDirs.make("native-git-release-");
-      const slot = path.join(prefix, "openclaw");
-      await fs.mkdir(path.join(prefix, "releases", "target", "openclaw"), { recursive: true });
-      await fs.symlink("releases/target/openclaw", slot);
-      const handoff = vi
-        .spyOn(await import("../../infra/git-release.js"), "waitForGitReleaseSuccessor")
-        .mockResolvedValue({ status: "unverified", incumbentPid: 8000 });
-      try {
-        const result: UpdateRunResult = {
-          status: "ok",
-          mode: "git",
-          root: slot,
-          before: gateway,
-          after: gateway,
-          steps: [],
-          durationMs: 0,
-        };
-        const outcome = await maybeRestartService({
-          shouldRestart: true,
-          result,
-          opts: { json: true, run },
-          serviceUpdateVerdict: {
-            kind: "owned",
-            root: slot,
-            fingerprint: "fixture",
-            refreshDefinition: false,
-          },
-          gitReleaseRestartMode: "native",
-          refreshServiceEnv: false,
-          gatewayPort: 18789,
-          timeoutMs: 1000,
-        });
-        expect(mocks.runUpdatedInstallGatewayCommand).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ result }),
-          "restart",
-        );
-        expect(handoff).not.toHaveBeenCalled();
-        expect(outcome).toBe("ok");
-      } finally {
-        handoff.mockRestore();
-      }
-    },
-  );
-
   it("does not infer activation from an unverified restart when the expected Git build is never observed", async () => {
     mocks.runUpdatedInstallGatewayCommand.mockResolvedValueOnce("unverified");
     mocks.waitForGatewayHealthyRestart.mockResolvedValue({

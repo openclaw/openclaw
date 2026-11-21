@@ -475,14 +475,15 @@ export async function maybeRestartService(
     assertCurrent();
     const outcome = await verifyRestartedGateway(expectedVersion, expectedGatewayBuildId, {
       requireRunningService: true,
-      recoverHealth: handoff.status === "no-incumbent",
+      // A missing owner row proves neither turnover nor that the service stopped.
+      recoverHealth: false,
       unverifiedGitHandoff:
-        handoff.status === "unverified" ? { ...handoff, waitStartedAtMs } : undefined,
+        handoff.status === "changed" ? undefined : { ...handoff, waitStartedAtMs },
     });
     if (outcome) {
       return outcome;
     }
-    if (handoff.status !== "no-incumbent" && !lastVerification?.serviceStoppedFree) {
+    if (!lastVerification?.serviceStoppedFree) {
       return await failed("restart-health-failed");
     }
   }
