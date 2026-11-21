@@ -1453,6 +1453,10 @@ Older running Gateways, including 2026.9.6, can still fail their first shutdown
 with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
 candidate cannot change code already running in that process. Start the updated
 Gateway with its installation owner if the old process exits without restarting.
+The retained shutdown code includes restart-marker persistence and subagent
+settlement. Running 2026.11.5 and 2026.11.6 Gateways load both only at shutdown,
+so after an in-place replacement such as `openclaw update --no-restart` they can
+fail that shutdown without recording which interrupted sessions to resume.
 
 When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
