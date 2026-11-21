@@ -16,14 +16,20 @@ export function createCarrierApi(
   const provider = name.toLowerCase();
   const headers = { Authorization: authorization };
   const allowedHostnames = [new URL(baseUrl).hostname];
+  /**
+   * Send `body` to `endpoint` (appended to the carrier base URL) with the carrier credentials
+   * and resolve with the parsed JSON response. `params` overrides the method (POST by default),
+   * allows a 404, or replaces the default request timeout. Rejects on carrier API errors.
+   */
   const request = <T = unknown>(
     endpoint: string,
     body: ApiRequest["body"],
-    params?: Partial<Pick<ApiRequest, "method" | "allowNotFound">>,
+    params?: Partial<Pick<ApiRequest, "method" | "allowNotFound" | "timeoutMs">>,
   ): Promise<T> =>
     guardedJsonApiRequest<T>({
       method: params?.method ?? "POST",
       allowNotFound: params?.allowNotFound,
+      timeoutMs: params?.timeoutMs,
       body,
       url: `${baseUrl}${endpoint}`,
       headers: { ...headers, "Content-Type": options.contentType ?? "application/json" },

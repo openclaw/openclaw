@@ -67,6 +67,21 @@
       "label": "Telnyx Public Key",
       "sensitive": true
     },
+    "telnyx.noiseSuppression.direction": {
+      "label": "Telnyx Noise Suppression Direction",
+      "help": "Telnyx audio to denoise on inbound realtime calls: outbound (audio from the caller, which the realtime model hears), inbound (audio played to the caller), or both. Remove telnyx.noiseSuppression to turn it off.",
+      "advanced": true
+    },
+    "telnyx.noiseSuppression.engine": {
+      "label": "Telnyx Noise Suppression Engine",
+      "help": "Uses the Telnyx default engine when unset. Krisp with the krisp-viva-tel-lite model isolates the caller's voice from background speech.",
+      "advanced": true
+    },
+    "telnyx.noiseSuppression.engineConfig": {
+      "label": "Telnyx Noise Suppression Engine Config",
+      "help": "Engine-specific tuning sent as noise_suppression_engine_config: model and suppressionLevel (Krisp), attenuationLimit and mode (DeepFilterNet), enhancementLevel and voiceGain (AiCoustics). Requires engine.",
+      "advanced": true
+    },
     "twilio.accountSid": {
       "label": "Twilio Account SID"
     },
@@ -370,6 +385,34 @@
           },
           "publicKey": {
             "type": "string"
+          },
+          "noiseSuppression": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "type": "string",
+                "enum": ["inbound", "outbound", "both"]
+              },
+              "engine": {
+                "type": "string",
+                "enum": ["Denoiser", "DeepFilterNet", "Krisp", "AiCoustics"]
+              },
+              "engineConfig": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "model": { "type": "string", "minLength": 1 },
+                  "suppressionLevel": { "type": "number", "minimum": 0, "maximum": 100 },
+                  "attenuationLimit": { "type": "integer", "minimum": 0, "maximum": 100 },
+                  "mode": { "type": "string", "enum": ["standard", "advanced"] },
+                  "enhancementLevel": { "type": "number", "minimum": 0, "maximum": 1 },
+                  "voiceGain": { "type": "number", "minimum": 0.1, "maximum": 4 }
+                }
+              }
+            },
+            "required": ["direction"],
+            "dependencies": { "engineConfig": ["engine"] }
           }
         }
       },

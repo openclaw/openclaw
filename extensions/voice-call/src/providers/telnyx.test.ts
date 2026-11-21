@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { fetchWithSsrFGuard } from "../../api.js";
+import type { TelnyxConfig } from "../config.js";
 import type { WebhookContext } from "../types.js";
 import { TelnyxProvider } from "./telnyx.js";
 
@@ -17,6 +19,7 @@ vi.mock("../../api.js", () => ({
 
 afterEach(() => {
   apiMocks.fetchWithSsrFGuard.mockReset();
+  vi.restoreAllMocks();
 });
 
 function createCtx(params?: Partial<WebhookContext>): WebhookContext {
@@ -261,5 +264,214 @@ describe("TelnyxProvider Media Streaming (PCMU)", () => {
     const body = JSON.parse(request.init?.body as string) as { voice?: string };
     expect(body.voice).toBe("Telnyx.Qwen3TTS.12345678-1234-1234-1234-123456789abc");
     expect(release).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("TelnyxProvider noise suppression", () => {
+  const ACTIONS = "https://api.telnyx.com/v2/calls/call-control-1/actions";
+  const STREAM_URL = "wss://example.test/voice/stream/realtime/token-xyz";
+  // Wire order of the inline stream fields; streaming_start must reuse them unchanged.
+  const STREAM_FIELDS = {
+    stream_url: STREAM_URL,
+    stream_track: "inbound_track",
+    stream_codec: "PCMU",
+    stream_bidirectional_mode: "rtp",
+    stream_bidirectional_codec: "PCMU",
+    stream_bidirectional_sampling_rate: 8000,
+    stream_bidirectional_target_legs: "self",
+    stream_auth_token: "token-xyz",
+  };
+  const STREAMING_ANSWER = {
+    callId: "call-1",
+    providerCallId: "call-control-1",
+    streamUrl: STREAM_URL,
+    streamAuthToken: "token-xyz",
+  };
+  const request = (action: string, body: Record<string, unknown>) => ({
+    url: `${ACTIONS}/${action}`,
+    body: JSON.stringify({ command_id: `openclaw-${action.split("_")[0]}-call-1`, ...body }),
+  });
+  const ANSWER = request("answer", {});
+  const STREAMING_START = request("streaming_start", STREAM_FIELDS);
+  const ok = () => new Response(JSON.stringify({ data: {} }), { status: 200 });
+  const withSuppression = (noiseSuppression: TelnyxConfig["noiseSuppression"]) =>
+    new TelnyxProvider({ ...PROVIDER_CONFIG, noiseSuppression });
+
+  /** Answer every Telnyx request with a 200 unless `fail` supplies a response or error. */
+  function mockTelnyxApi(fail?: (url: string) => Response | Error | undefined) {
+    apiMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
+      const failure = fail?.(url);
+      if (failure instanceof Error) {
+        throw failure;
+      }
+      return { response: failure ?? ok(), finalUrl: url, release: vi.fn(async () => {}) };
+    });
+  }
+
+  /** URL and raw body of every mocked Telnyx request, in call order. */
+  const readRequests = () =>
+    apiMocks.fetchWithSsrFGuard.mock.calls.map(([{ url, init }]) => ({
+      url,
+      body: (init as { body?: unknown } | undefined)?.body,
+    }));
+
+  it.each([
+    {
+      name: "answers calls without media streaming normally",
+      noiseSuppression: { direction: "both" },
+      input: { callId: "call-1", providerCallId: "call-control-1" },
+      requests: [ANSWER],
+    },
+    {
+      name: "starts the Telnyx default engine between the answer and the stream",
+      noiseSuppression: { direction: "both" },
+      input: STREAMING_ANSWER,
+      requests: [ANSWER, request("suppression_start", { direction: "both" }), STREAMING_START],
+    },
+    {
+      name: "maps AiCoustics tuning to Telnyx field names",
+      noiseSuppression: {
+        direction: "inbound",
+        engine: "AiCoustics",
+        engineConfig: { enhancementLevel: 0.8, voiceGain: 1.5 },
+      },
+      input: STREAMING_ANSWER,
+      requests: [
+        ANSWER,
+        request("suppression_start", {
+          direction: "inbound",
+          noise_suppression_engine: "AiCoustics",
+          noise_suppression_engine_config: { enhancement_level: 0.8, voice_gain: 1.5 },
+        }),
+        STREAMING_START,
+      ],
+    },
+  ] as const)("$name", async ({ noiseSuppression, input, requests }) => {
+    mockTelnyxApi();
+    await withSuppression(noiseSuppression).answerCall(input);
+    expect(readRequests()).toEqual(requests);
+  });
+
+  it("waits for suppression_start to settle, bounded inside the stream token lifetime", async () => {
+    const response = createDeferred<Response>();
+    const suppressionRequested = createDeferred<void>();
+    let settled = false;
+    let streamedBeforeSettle = false;
+    apiMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }) => {
+      streamedBeforeSettle ||= url.endsWith("/streaming_start") && !settled;
+      if (url.endsWith("/suppression_start")) {
+        suppressionRequested.resolve();
+      }
+      return {
+        response: url.endsWith("/suppression_start") ? await response.promise : ok(),
+        finalUrl: url,
+        release: vi.fn(async () => {}),
+      };
+    });
+
+    const answered = withSuppression({ direction: "outbound" }).answerCall(STREAMING_ANSWER);
+    await suppressionRequested.promise;
+    settled = true;
+    response.resolve(ok());
+    await answered;
+
+    expect(streamedBeforeSettle).toBe(false);
+
+    expect(
+      apiMocks.fetchWithSsrFGuard.mock.calls.map(([call]) => [
+        call.url,
+        (call as { timeoutMs?: number }).timeoutMs,
+      ]),
+    ).toEqual([
+      [ANSWER.url, 30_000],
+      [`${ACTIONS}/suppression_start`, 5_000],
+      [STREAMING_START.url, 30_000],
+    ]);
+  });
+
+  it("still starts streaming after a network error from suppression_start", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockTelnyxApi((url) =>
+      url.endsWith("/suppression_start") ? new Error("socket hang up") : undefined,
+    );
+
+    await expect(
+      withSuppression({ direction: "outbound" }).answerCall(STREAMING_ANSWER),
+    ).resolves.toBeUndefined();
+
+    expect(readRequests().map(({ url }) => url)).toEqual([
+      ANSWER.url,
+      `${ACTIONS}/suppression_start`,
+      STREAMING_START.url,
+    ]);
+    expect(readRequests()[2]).toEqual(STREAMING_START);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Noise suppression failed to start for call call-1"),
+    );
+    expect(warn.mock.calls[0]?.[0]).toContain("socket hang up");
+  });
+
+  it.each([
+    {
+      name: "hangs up when the stream-less answer fails",
+      noiseSuppression: { direction: "outbound" },
+      hangup: true,
+    },
+    {
+      name: "leaves a failed inline-stream answer to the caller",
+      noiseSuppression: undefined,
+      hangup: false,
+    },
+  ] as const)("$name", async ({ noiseSuppression, hangup }) => {
+    mockTelnyxApi((url) => (url.endsWith("/answer") ? new Error("socket hang up") : undefined));
+
+    await expect(withSuppression(noiseSuppression).answerCall(STREAMING_ANSWER)).rejects.toThrow(
+      "socket hang up",
+    );
+    expect(readRequests().map(({ url }) => url)).toEqual(
+      hangup ? [ANSWER.url, `${ACTIONS}/hangup`] : [ANSWER.url],
+    );
+  });
+
+  it("hangs up when streaming cannot start after the answer, even if that hangup fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mockTelnyxApi((url) =>
+      url.endsWith("/streaming_start")
+        ? new Response("upstream unavailable", { status: 503 })
+        : url.endsWith("/hangup")
+          ? new Error("hangup refused")
+          : undefined,
+    );
+
+    await expect(
+      withSuppression({ direction: "outbound" }).answerCall(STREAMING_ANSWER),
+    ).rejects.toThrow(
+      "call answered but Telnyx streaming_start failed; hanging up: Telnyx API error: 503 upstream unavailable",
+    );
+    expect(readRequests().map(({ url }) => url)).toEqual([
+      ANSWER.url,
+      `${ACTIONS}/suppression_start`,
+      STREAMING_START.url,
+      `${ACTIONS}/hangup`,
+    ]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("hangup refused"));
+  });
+
+  it("leaves outbound dial requests unchanged", async () => {
+    mockResponse({ call_control_id: "call-control-1" });
+
+    await withSuppression({ direction: "outbound" }).initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.test/voice/webhook",
+      streamUrl: STREAM_URL,
+      streamAuthToken: "token-xyz",
+    });
+
+    expect(apiMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(requireFetchRequest().init?.body as string) as Record<string, unknown>;
+    expect(body).toEqual({ ...body, connection_id: "CONN456", ...STREAM_FIELDS });
+    expect(JSON.stringify(body)).not.toContain("noise");
   });
 });
