@@ -21,6 +21,7 @@ import {
   renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
+  renderMalformedToolCallFailureCopy,
   renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
@@ -338,6 +339,10 @@ export function formatUserFacingAssistantErrorText(
   const modelLoadCopy = renderModelLoadFailureCopy(msg);
   if (modelLoadCopy) {
     return modelLoadCopy;
+  }
+  const malformedToolCallCopy = renderMalformedToolCallFailureCopy(msg);
+  if (malformedToolCallCopy) {
+    return malformedToolCallCopy;
   }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);
