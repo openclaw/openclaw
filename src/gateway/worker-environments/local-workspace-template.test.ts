@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +10,7 @@ import { createCopyWorktreeBackend } from "../../agents/worktrees/filesystem-bac
 import { requireGit } from "../../agents/worktrees/git.js";
 import { listTemplatesAsync } from "../../agents/worktrees/template-registry-async.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { prewarmLocalWorkspaceTemplates } from "./local-workspace-prewarm.js";
@@ -89,8 +89,8 @@ async function checkClones(signal: AbortSignal, check: (checkout: string) => Pro
 }
 
 beforeAll(async () => {
-  vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
-  vi.stubEnv("GIT_CONFIG_SYSTEM", os.devNull);
+  vi.stubEnv("GIT_CONFIG_GLOBAL", gitNullConfigPath());
+  vi.stubEnv("GIT_CONFIG_SYSTEM", gitNullConfigPath());
   const root = directories.make("openclaw-dependency-template-");
   source = path.join(root, "source");
   env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
