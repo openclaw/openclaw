@@ -31,7 +31,6 @@ type JsonContainer = {
   end: number;
   children: JsonContainer[];
   eligible: boolean;
-  invalid: boolean;
   valid: boolean;
   quote?: QuoteState;
 };
@@ -214,9 +213,6 @@ function extractStrictJsonFragments(
         atLineStart,
         activeOpeners,
       );
-      if (transition === "invalidated") {
-        parent!.invalid = true;
-      }
       if (transition === "consumed" || transition === "invalidated") continue;
     }
     if (char === '"') {
@@ -230,7 +226,6 @@ function extractStrictJsonFragments(
         end: -1,
         children: [],
         eligible: selected && (selectedDepth === 0 || (!!opts.recoverAtLineStart && atLineStart)),
-        invalid: false,
         valid: false,
       };
       (parent ? parent.children : roots).push(node);
@@ -243,16 +238,16 @@ function extractStrictJsonFragments(
       // A stray closer cannot release its enclosing warning. Counts avoid
       // rescanning that same ancestry for each repeated unmatched closer.
       if (activeOpeners[opener] === 0) {
-        const parent = stack.at(-1);
-        if (parent) parent.invalid = true;
         continue;
       }
       while (stack.at(-1)!.opener !== opener) {
-        pop().invalid = true;
+        pop();
       }
       const closed = pop();
       closed.end = index;
-      closed.valid = !closed.invalid && validEnds.get(closed.start) === index;
+      // Framing can expose string-interior closers. Once boundaries match,
+      // original syntax alone admits the record, including valid parents.
+      closed.valid = validEnds.get(closed.start) === index;
     }
   }
   const fragments: BalancedJsonFragment[] = [];
