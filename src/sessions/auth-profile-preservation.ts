@@ -97,6 +97,28 @@ export function shouldPreserveUnavailableSessionAuthProfileOverride(
   );
 }
 
+/** Checks the session's pinned auth profile against a selected model's provider auth config. */
+export function shouldPreserveSessionAuthProfileForSelection(
+  params: Omit<SessionAuthProfilePreservationParams, "provider"> & {
+    selection: { provider: string; model: string };
+  },
+): boolean {
+  return shouldPreserveSessionAuthProfileOverride({
+    cfg: resolveModelProviderAuthConfig({
+      config: params.cfg,
+      provider: params.selection.provider,
+      modelId: params.selection.model,
+      metadataSnapshot: params.metadataSnapshot,
+    }),
+    agentDir: params.agentDir,
+    entry: params.entry,
+    currentProvider: params.currentProvider,
+    provider: params.selection.provider,
+    recordedProvider: params.recordedProvider,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+  });
+}
+
 /** Applies a user model selection without dropping a compatible pinned auth profile. */
 export function applyModelOverrideWithAuthProfileCompatibility(
   params: Omit<SessionAuthProfilePreservationParams, "provider"> &
@@ -111,20 +133,6 @@ export function applyModelOverrideWithAuthProfileCompatibility(
     explicitDefaultSelection: params.explicitDefaultSelection,
     markLiveSwitchPending: params.markLiveSwitchPending,
     preserveAuthProfileOverride:
-      !params.profileOverride &&
-      shouldPreserveSessionAuthProfileOverride({
-        cfg: resolveModelProviderAuthConfig({
-          config: params.cfg,
-          provider: params.selection.provider,
-          modelId: params.selection.model,
-          metadataSnapshot: params.metadataSnapshot,
-        }),
-        agentDir: params.agentDir,
-        entry: params.entry,
-        currentProvider: params.currentProvider,
-        provider: params.selection.provider,
-        recordedProvider: params.recordedProvider,
-        ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
-      }),
+      !params.profileOverride && shouldPreserveSessionAuthProfileForSelection(params),
   });
 }

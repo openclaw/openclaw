@@ -35,6 +35,144 @@ function select(overrides: Partial<ApplySessionModelSelectionParams>) {
 
 beforeAll(() => prepareSharedAuthStoreOwnership());
 
+it.each([false, true])(
+  "shared auth gate rejects unauthenticated picker selections only when enforced=%s",
+  async (enforced) => {
+    const modelCatalog = [
+      { provider: "fixture", id: "automatic", name: "Automatic" },
+      { provider: "fixture", id: "manual", name: "Manual" },
+    ];
+    const params = createFixtureParams(
+      modelCatalog,
+      { model: "fixture/automatic" },
+      {
+        request: createRequest("fixture", "manual"),
+        ...(enforced
+          ? {
+              authReadinessMenu: {
+                modelNames: new Map([["fixture/manual", "Manual"]]),
+                byProvider: new Map(),
+                modelReadiness: new Map([
+                  [
+                    "fixture/manual",
+                    { availability: false, unavailableReason: "missing-auth" as const },
+                  ],
+                ]),
+                loginProviders: new Set(["fixture"]),
+              },
+            }
+          : {}),
+      },
+    );
+    const overrideBefore = params.sessionEntry.modelOverride;
+    const result = await applySessionModelSelection(params);
+    if (enforced) {
+      expect(result).toMatchObject({ status: "rejected", reason: "auth" });
+      expect(params.sessionEntry.modelOverride).toBe(overrideBefore);
+    } else {
+      expect(result.status).toBe("applied");
+    }
+  },
+);
+
+it.each(["worker", "gateway", "optional", "account"] as const)(
+  "shared auth gate defers Gateway readiness only to required worker inference (%s)",
+  async (inference) => {
+    const modelCatalog = [
+      { provider: "fixture", id: "automatic", name: "Automatic" },
+      { provider: "fixture", id: "manual", name: "Manual" },
+    ];
+    const params = createFixtureParams(
+      modelCatalog,
+      { model: "fixture/automatic" },
+      {
+        request: createRequest(
+          "fixture",
+          "manual",
+          inference === "account" ? { profileOverride: "fixture:pinned" } : {},
+        ),
+        authReadinessMenu: {
+          modelNames: new Map([["fixture/manual", "Manual"]]),
+          byProvider: new Map(),
+          modelReadiness: new Map([
+            ["fixture/manual", { availability: undefined, unavailableReason: "missing-auth" }],
+          ]),
+          loginProviders: new Set(["fixture"]),
+        },
+      },
+    );
+    params.cfg = {
+      ...params.cfg,
+      cloudWorkers: {
+        ...(inference !== "optional" ? { requiredProfile: "node" } : {}),
+        profiles: {
+          node: {
+            provider: "device",
+            settings: {
+              device: "node-b",
+              inference: inference === "gateway" ? "gateway" : "worker",
+            },
+          },
+        },
+      },
+    };
+    const result = await applySessionModelSelection(params);
+    if (inference === "worker") {
+      expect(result.status).toBe("applied");
+    } else {
+      expect(result).toMatchObject({ status: "rejected", reason: "auth" });
+    }
+  },
+);
+
+it.each([
+  { pin: "anthropic:work", provider: "anthropic", model: "claude-work", expected: "applied" },
+  { pin: "fixture:pinned", provider: "fixture", model: "automatic", expected: "rejected" },
+] as const)(
+  "shared auth gate judges only the account pin that survives selection ($pin)",
+  async ({ pin, provider, model, expected }) => {
+    const modelCatalog = [
+      { provider: "fixture", id: "automatic", name: "Automatic" },
+      { provider: "fixture", id: "manual", name: "Manual" },
+    ];
+    const params = createFixtureParams(
+      modelCatalog,
+      { model: "fixture/automatic" },
+      {
+        currentProvider: provider,
+        currentModel: model,
+        sessionEntry: createEntry({
+          providerOverride: provider,
+          modelOverride: model,
+          authProfileOverride: pin,
+        }),
+        authReadinessMenu: {
+          modelNames: new Map([["fixture/manual", "Manual"]]),
+          byProvider: new Map(),
+          modelReadiness: new Map([
+            ["fixture/manual", { availability: undefined, unavailableReason: "missing-auth" }],
+          ]),
+          loginProviders: new Set(["fixture"]),
+        },
+      },
+    );
+    params.cfg = {
+      ...params.cfg,
+      cloudWorkers: {
+        requiredProfile: "node",
+        profiles: {
+          node: { provider: "device", settings: { device: "node-b", inference: "worker" } },
+        },
+      },
+    };
+    const result = await applySessionModelSelection(params);
+    expect(result.status).toBe(expected);
+    if (expected === "rejected") {
+      expect(result).toMatchObject({ reason: "auth" });
+    }
+  },
+);
+
 it.each([false, true])("uses configured default only with reset intent=%s", async (reset) => {
   const params = createFixtureParams(
     ["automatic", "manual"].map((id) => ({ provider: "fixture", id, name: id })),

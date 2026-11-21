@@ -408,6 +408,101 @@ describe("Telegram model callback loopback", () => {
     );
   });
 
+  it("keeps the current model and shows sign-in steps when the tapped model needs auth", async () => {
+    const stateDir = sessionDirs.make();
+    let sentMessage: Record<string, unknown> | undefined;
+    await withApi(
+      (method, payload, response) => {
+        if (method === "sendMessage") {
+          sentMessage = telegramMessage(88, {
+            text: payload.text,
+            reply_markup: payload.reply_markup as Record<string, unknown> | undefined,
+          });
+          sendJson(response, sentMessage);
+        } else if (method === "answerCallbackQuery") {
+          sendJson(response, true);
+        } else if (method === "editMessageText") {
+          sendJson(response, {
+            ...sentMessage,
+            text: payload.text,
+            reply_markup: payload.reply_markup,
+          });
+        } else {
+          sendError(response, 404, method);
+        }
+      },
+      async (apiRoot, requests) => {
+        const storePath = join(stateDir, "sessions.json");
+        const { config, bot } = configureRouter(apiRoot, storePath, []);
+        callbackMocks.buildModelsProviderData.mockImplementation(async () => ({
+          byProvider: new Map([
+            ["anthropic", new Set(["claude-opus-4-6"])],
+            [PROVIDER, new Set([MODEL])],
+          ]),
+          providers: ["anthropic", PROVIDER],
+          resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
+          modelNames: new Map<string, string>(),
+          modelCatalog: [
+            {
+              provider: PROVIDER,
+              id: MODEL,
+              name: MODEL,
+              api: "ollama",
+              contextWindow: 32_768,
+              reasoning: true,
+            },
+          ],
+          modelMenu: {
+            modelNames: new Map<string, string>(),
+            byProvider: new Map([[PROVIDER, { available: 0, notice: "" }]]),
+            modelReadiness: new Map([
+              [
+                `${PROVIDER}/${MODEL}`,
+                { availability: false, unavailableReason: "missing-auth" as const },
+              ],
+            ]),
+            loginProviders: new Set([PROVIDER]),
+            providerLogins: new Map([[PROVIDER, { methodId: "api-key", label: "API key" }]]),
+          },
+        }));
+        await sendMessageTelegram(String(CHAT_ID), "Select a model:", {
+          cfg: config,
+          token: TOKEN,
+          buttons: modelButtons(),
+        });
+        const callbackData = (
+          sentMessage?.reply_markup as {
+            inline_keyboard?: Array<Array<{ callback_data?: string }>>;
+          }
+        )?.inline_keyboard?.[0]?.[0]?.callback_data;
+        if (!sentMessage) {
+          throw new Error("Expected the sent model keyboard message");
+        }
+        await tapModel(bot, callbackData, sentMessage);
+
+        const rawEditText = requests.at(-1)?.payload.text;
+        const editText = typeof rawEditText === "string" ? rawEditText : "";
+        expect(editText).toContain("Model not changed");
+        expect(editText).toContain(`${PROVIDER}/${MODEL}`);
+        expect(editText).toContain(`openclaw models auth login --provider ${PROVIDER}`);
+        expect(editText).toContain("Your current model is unchanged");
+        expect(editText).not.toContain("✅");
+        const keyboard = (
+          requests.at(-1)?.payload.reply_markup as {
+            inline_keyboard?: Array<Array<{ text?: string; callback_data?: string }>>;
+          }
+        )?.inline_keyboard;
+        expect(keyboard?.[0]?.[0]).toMatchObject({
+          text: expect.stringContaining("Sign in"),
+          callback_data: `tgcmd:/login ${PROVIDER}`,
+        });
+        expect(
+          (await listSessionEntriesAsync({ agentId: "main", storePath }))[0]?.entry.modelOverride,
+        ).toBeUndefined();
+      },
+    );
+  });
+
   it("clears stale buttons through the live router when a media callback message can't be edited or deleted", async () => {
     const stateDir = sessionDirs.make();
     const mediaMessage = telegramMessage(99, { caption: "Select a model:" });

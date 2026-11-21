@@ -11,9 +11,10 @@ import {
   renderAssistantFormatFailureCopy,
 } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReason } from "./classify.js";
+import { resolveProviderAwareRequestFailureCopy } from "./provider-auth-user-copy.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
 import { resolveRetryAfterMs } from "./retry-evidence.js";
-import { renderRateLimitResetCopy, resolveProviderRequestFailureCopy } from "./user-copy.js";
+import { renderRateLimitResetCopy } from "./user-copy.js";
 
 export function resolveReplyFailoverFacts(
   error: unknown,
@@ -67,13 +68,14 @@ export function resolveReplyFailoverFacts(
         : transportCopy
           ? `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
           : undefined),
-    providerRequestError: resolveProviderRequestFailureCopy({
+    providerRequestError: resolveProviderAwareRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
         status,
         message: rawError,
       }),
       status,
+      provider: described.provider,
       code: described.code,
     }),
   };
