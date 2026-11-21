@@ -1,13 +1,13 @@
 import { randomBytes } from "node:crypto";
 import { MessageFlags, type APIAllowedMentions, type APIEmbed } from "discord-api-types/v10";
+import { Embed } from "./internal/embeds.js";
 import {
-  Embed,
   hasDiscordV2Components,
   serializePayload,
   type MessagePayloadFile,
   type MessagePayloadObject,
   type TopLevelComponents,
-} from "./internal/discord.js";
+} from "./internal/payload.js";
 
 export { stripUndefinedFields } from "./internal/undefined-fields.js";
 

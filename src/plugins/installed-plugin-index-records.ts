@@ -7,7 +7,7 @@ import {
   type InstalledPluginIndexWriteReceipt,
 } from "./installed-plugin-index-store-write.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
-import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
+import type { PluginMetadataLeaseContext } from "./plugin-lifecycle-lease.js";
 export { recordPluginInstallInRecords } from "./installs.js";
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -35,7 +35,7 @@ type InstalledPluginIndexRecordRefreshOptions = InstalledPluginIndexRecordStoreO
 export async function writePersistedInstalledPluginIndexInstallRecordsWithLease(
   records: Record<string, PluginInstallRecord>,
   options: InstalledPluginIndexRecordRefreshOptions & {
-    lease: PluginLifecycleLeaseContext;
+    lease: PluginMetadataLeaseContext;
     assertCurrent?: () => void;
     onAcknowledged?: (receipt: InstalledPluginIndexWriteReceipt) => void;
   },

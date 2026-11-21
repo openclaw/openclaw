@@ -13,7 +13,6 @@ export function getUrbitContext(url: string, ship?: string) {
   }
   return {
     baseUrl: validated.baseUrl,
-    hostname: validated.hostname,
     ship: (
       ship?.replace(/^~/, "") ??
       validated.hostname.split(".")[0] ??

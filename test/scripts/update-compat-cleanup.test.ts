@@ -1,33 +1,27 @@
 import fs from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
 import {
   listUpdateCompatibilityChunkPaths,
   recordUpdateCompatibilityRelease,
   writeUpdateCompatibilityChunks,
 } from "../../scripts/lib/update-compat-chunks.mts";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
 it("keeps the 10.1 updater's pending cleanup ahead of shared-state shutdown after replacement", async () => {
   const root = createTempDir("update-compat-cleanup-");
-  const dist = path.join(root, "dist");
-  fs.mkdirSync(dist);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "openclaw", version: "2026.10.1", type: "module" }),
-  );
-  fs.writeFileSync(
-    path.join(dist, "build-info.json"),
-    JSON.stringify({ version: "2026.10.1", buildId: "fixture", commit: "0".repeat(40) }),
-  );
-  const write = (file: string, source: string) => fs.writeFileSync(path.join(dist, file), source);
-  const load = (file: string) => import(pathToFileURL(path.join(dist, file)).href);
+  const files = fixtureFiles(root);
+  const { write, load, file } = fixtureFiles(files.file("dist"));
+  files.json("package.json", { name: "openclaw", version: "2026.10.1", type: "module" });
+  files.json("dist/build-info.json", {
+    version: "2026.10.1",
+    buildId: "fixture",
+    commit: "0".repeat(40),
+  });
   write("observe.mjs", "export const entered = Promise.withResolvers();");
-  // These URLs and export aliases are the published 10.1 ABI. Its run-main
-  // preloads the queue owner, but its cleanup scope first loads the facade at exit.
+  // Published 10.1 ABI: the queue is preloaded, but the facade first loads at exit.
   write(
     "runtime-cleanup-Dowg583v.mjs",
     `
@@ -73,17 +67,17 @@ it("keeps the 10.1 updater's pending cleanup ahead of shared-state shutdown afte
   const { command } = await load("scope.mjs");
   const { entered } = await load("observe.mjs");
   const pending = Promise.withResolvers<void>();
-  let disposed = false;
-  let closed = false;
+  const events: string[] = [];
   retain(
     pending.promise.then(() => {
-      disposed = true;
+      events.push("disposed");
     }),
   );
   const updating = command(
     async () => {
-      fs.unlinkSync(path.join(dist, "runtime-cleanup-Dowg583v.mjs"));
-      fs.unlinkSync(path.join(dist, "runtime-cleanup-DlrF_x2c.mjs"));
+      for (const name of ["runtime-cleanup-Dowg583v.mjs", "runtime-cleanup-DlrF_x2c.mjs"]) {
+        fs.unlinkSync(file(name));
+      }
       write(
         "current.mjs",
         `
@@ -96,20 +90,19 @@ it("keeps the 10.1 updater's pending cleanup ahead of shared-state shutdown afte
       export { runCliDisposerAfterPending as cleanup };
     `,
       );
-      writeUpdateCompatibilityChunks({ distDir: dist, sourceDir: root, inventory });
+      writeUpdateCompatibilityChunks({ distDir: files.file("dist"), sourceDir: root, inventory });
       return "updated";
     },
     async () => {
-      closed = true;
+      events.push("closed");
     },
   );
   try {
     await Promise.race([entered.promise, updating]);
-    expect(closed).toBe(false);
+    expect(events).toEqual([]);
     pending.resolve();
     expect(await updating).toBe("updated");
-    expect(disposed).toBe(true);
-    expect(closed).toBe(true);
+    expect(events).toEqual(["disposed", "closed"]);
     // Postinstall's output inventory must retain the resolver-visible owner too.
     expect(listUpdateCompatibilityChunkPaths(inventory)).toContain("runtime-cleanup-Dowg583v.mjs");
   } finally {

@@ -33,7 +33,6 @@ export function environmentIssueFact(
 function environmentLifecycleFact(params: {
   environment: DraftEnvironment | undefined;
   connected: boolean;
-  nowMs: number;
 }): string | undefined {
   if (params.connected) {
     return undefined;
@@ -44,7 +43,7 @@ function environmentLifecycleFact(params: {
   }
   if (environment.lastDisconnectedAtMs !== undefined) {
     const duration =
-      formatDurationCompact(Math.max(0, params.nowMs - environment.lastDisconnectedAtMs)) ??
+      formatDurationCompact(Math.max(0, Date.now() - environment.lastDisconnectedAtMs)) ??
       t("common.justNow");
     return t("newSession.offlineFor", { duration });
   }
@@ -56,12 +55,11 @@ function environmentLifecycleFact(params: {
 
 export function environmentMenuFacts(
   environment: DraftEnvironment | undefined,
-  options: { connected?: boolean; nowMs?: number } = {},
+  options: { connected?: boolean } = {},
 ): string[] {
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
-    nowMs: options.nowMs ?? Date.now(),
   });
   const priorityFact = environmentIssueFact(environment) ?? lifecycle;
   const facts = priorityFact ? [priorityFact] : [];

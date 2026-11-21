@@ -54,8 +54,10 @@ for agent-scoped connections and simply does not hand it to the native home. Use
 `openclaw models auth list --provider openai` to inspect stored profiles and
 `openclaw models auth logout <profileId> --yes` to remove one you no longer want.
 
-Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
-archive, and restore native threads. Fork a thread to continue it in
+The session retains the `codex_threads` declaration across owner and completion
+turns; only owner-authorized calls can list, search, read, fork, rename, archive,
+or restore native threads. Native plugin discovery and supervision tools keep
+the same declaration and execution boundary. Fork a thread to continue it in
 OpenClaw; the fork attaches to the current OpenClaw session and remains readable
 by ID from other native Codex clients. It appears in native thread lists after
 its first user turn. Archiving requires explicit

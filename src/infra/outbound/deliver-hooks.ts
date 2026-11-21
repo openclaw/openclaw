@@ -5,7 +5,6 @@ import {
   markReplyDispatchBeforeDeliverDeadlineOwned,
   type ReplyDispatchBeforeDeliver,
 } from "../../auto-reply/reply/reply-dispatcher.js";
-// Applies outbound hooks and shapes stable delivery outcomes/errors.
 import { runReplyPayloadSendingHook } from "../../auto-reply/reply/reply-payload-sending-hook.js";
 import { consumeReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";

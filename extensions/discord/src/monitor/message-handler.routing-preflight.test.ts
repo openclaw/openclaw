@@ -259,7 +259,6 @@ it.each(["plugin", "configured", "ignored-stale", "derived", "dm"])(
     expect(await settled).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
     expect(read).toHaveBeenCalledWith(expect.objectContaining(conversation));
     expect(adopted).not.toHaveBeenCalled();
-    expect(existsSync(mainWorkspace)).toBe(false);
-    expect(existsSync(workWorkspace)).toBe(false);
+    expect([mainWorkspace, workWorkspace].map(existsSync)).toEqual([false, false]);
   },
 );

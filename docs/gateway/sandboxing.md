@@ -76,6 +76,8 @@ Debugging:
 
 Each agent can override sandbox + tools: `agents.entries.*.sandbox` and `agents.entries.*.tools` (plus `agents.entries.*.tools.sandbox.tools` for sandbox tool policy). See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for precedence.
 
+Core Goal controls (`get_goal`, `create_goal`, and `update_goal`) are included in the default sandbox tool allowlist. They operate on the current session’s OpenClaw Goal; explicit denies and custom allowlists still apply.
+
 ### Managed GitHub identity
 
 Publication-eligible managed sessions can use `github_publish` under the default sandbox tool policy to publish their own session branch through the Gateway. Publication credentials stay on the Gateway; the credential opt-in below is unnecessary for this route. Explicit tool denies and restrictive custom allowlists still apply. See [GitHub publication](/gateway/config-tools/github-identity).
@@ -120,3 +122,13 @@ with the opt-in enabled. See [GitHub identity](/gateway/config-tools/github-iden
 - [Security](/gateway/security)
 - [`openclaw sandbox`](/cli/sandbox) — manage sandbox runtimes and inspect the effective sandbox policy
 - [Cloud Workers](/gateway/cloud-workers) — dispatching session work to throwaway cloud machines; its managed workspace is not an OS sandbox
+
+### Inaccessible generated-skills mountpoint
+
+If sandbox preparation reports `Cannot prepare sandbox skills mountpoint`, check
+ownership and ACLs on the named host path and its parent directories. Older
+Docker or Podman containers may have left `.openclaw/sandbox-skills` owned by
+root. The gateway user needs directory search (execute) access through every
+parent and write access where the scaffold is created. Have the workspace owner
+or administrator correct those permissions, then retry. OpenClaw does not change
+ownership or bypass the filesystem boundary to recover from this error.

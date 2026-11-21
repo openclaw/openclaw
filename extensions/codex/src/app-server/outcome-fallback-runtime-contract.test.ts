@@ -7,7 +7,7 @@ import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-
 import {
   createContractRunResult,
   openFileBackedSessionManagerForTest,
-  OUTCOME_FALLBACK_RUNTIME_CONTRACT,
+  OUTCOME_FALLBACK_RUNTIME_CONTRACT as contract,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,32 +26,27 @@ type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNoti
 type ProjectedAttemptResult = ReturnType<CodexAppServerEventProjector["buildResult"]>;
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
 
-async function createParams(): Promise<EmbeddedRunAttemptParams> {
+async function createProjector() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
   openFileBackedSessionManagerForTest(sessionFile);
-  return {
-    prompt: OUTCOME_FALLBACK_RUNTIME_CONTRACT.prompt,
-    sessionId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionId,
-    sessionKey: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionKey,
+  const params = {
+    prompt: contract.prompt,
+    sessionId: contract.sessionId,
+    sessionKey: contract.sessionKey,
     sessionFile,
     workspaceDir: tempDir,
-    runId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.runId,
+    runId: contract.runId,
     provider: "codex",
-    modelId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+    modelId: contract.primaryModel,
     model: createCodexTestModel("codex"),
     thinkLevel: "medium",
   } as EmbeddedRunAttemptParams;
+  return new CodexAppServerEventProjector(params, THREAD_ID, TURN_ID);
 }
 
-async function createProjector(): Promise<CodexAppServerEventProjector> {
-  return new CodexAppServerEventProjector(await createParams(), THREAD_ID, TURN_ID);
-}
-
-function buildToolTelemetry(
-  overrides: Partial<CodexAppServerToolTelemetry> = {},
-): CodexAppServerToolTelemetry {
+function buildToolTelemetry(): CodexAppServerToolTelemetry {
   return {
     didSendViaMessagingTool: false,
     messagingToolSentTexts: [],
@@ -59,7 +54,6 @@ function buildToolTelemetry(
     messagingToolSentTargets: [],
     toolMediaUrls: [],
     toolAudioAsVoice: false,
-    ...overrides,
   };
 }
 
@@ -73,6 +67,14 @@ function forCurrentTurn(
   } as CodexServerNotification);
 }
 
+async function complete(projector: CodexAppServerEventProjector, items: readonly unknown[] = []) {
+  await projector.handleNotification(
+    forCurrentTurn("turn/completed", {
+      turn: { id: TURN_ID, status: "completed", items },
+    }),
+  );
+}
+
 function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   const preparedTerminalReply = expectDefined(
     result.preparedTerminalReply,
@@ -81,7 +83,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   const finalAssistantText = preparedTerminalReply.text;
   return classifyEmbeddedAgentRunResultForModelFallback({
     provider: "codex",
-    model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+    model: contract.primaryModel,
     result: createContractRunResult({
       ...result,
       meta: {
@@ -119,14 +121,14 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       expectedCode: "reasoning_only_result",
       notification: forCurrentTurn("item/reasoning/textDelta", {
         itemId: "reasoning-1",
-        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
+        delta: contract.reasoningOnlyText,
       }),
       items: [
         {
           type: "reasoning",
           id: "reasoning-1",
           summary: [],
-          content: [OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText],
+          content: [contract.reasoningOnlyText],
         },
       ],
     },
@@ -136,18 +138,16 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       expectedCode: "planning_only_result",
       notification: forCurrentTurn("item/plan/delta", {
         itemId: "plan-1",
-        delta: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText,
+        delta: contract.planningOnlyText,
       }),
-      items: [
-        { type: "plan", id: "plan-1", text: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText },
-      ],
+      items: [{ type: "plan", id: "plan-1", text: contract.planningOnlyText }],
     },
     {
       name: "structured planning-only",
       classification: "planning-only",
       expectedCode: "planning_only_result",
       notification: forCurrentTurn("turn/plan/updated", {
-        plan: [{ step: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText, status: "pending" }],
+        plan: [{ step: contract.planningOnlyText, status: "pending" }],
       }),
       items: [],
     },
@@ -158,11 +158,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
       if (notification) {
         await projector.handleNotification(notification);
       }
-      await projector.handleNotification(
-        forCurrentTurn("turn/completed", {
-          turn: { id: TURN_ID, status: "completed", items },
-        }),
-      );
+      await complete(projector, items);
       const result = projector.buildResult(buildToolTelemetry());
 
       expect(result.assistantTexts).toStrictEqual([]);
@@ -179,37 +175,34 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         if (reasoningMessage?.role !== "assistant") {
           throw new Error("expected Codex reasoning mirror assistant message");
         }
-        expect(reasoningMessage).toMatchObject({
-          __openclaw: { mirrorIdentity: `${TURN_ID}:reasoning` },
-          api: "openai-chatgpt-responses",
-          provider: "codex",
-          model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-          stopReason: "stop",
-        });
-        expect(reasoningMessage.content).toStrictEqual([
-          {
-            type: "thinking",
-            thinking: OUTCOME_FALLBACK_RUNTIME_CONTRACT.reasoningOnlyText,
-          },
-        ]);
-        expect(reasoningMessage.usage).toStrictEqual({
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        });
+        expect(reasoningMessage).toStrictEqual(
+          expect.objectContaining({
+            __openclaw: expect.objectContaining({
+              mirrorIdentity: `${TURN_ID}:reasoning:reasoning-1`,
+            }),
+            api: "openai-chatgpt-responses",
+            provider: "codex",
+            model: contract.primaryModel,
+            stopReason: "stop",
+            content: [{ type: "thinking", thinking: contract.reasoningOnlyText }],
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          }),
+        );
         expect(typeof reasoningMessage.timestamp).toBe("number");
         expect(reasoningMessage.timestamp).toBeGreaterThan(0);
       }
       expect(result.agentHarnessResultClassification).toBe(classification);
-      const projected = classifyProjectedAttemptResult(result);
-      if (!projected || !("reason" in projected)) {
-        throw new Error("expected format fallback projection");
-      }
-      expect(projected.reason).toBe("format");
-      expect(projected.code).toBe(expectedCode);
+      expect(classifyProjectedAttemptResult(result)).toMatchObject({
+        reason: "format",
+        code: expectedCode,
+      });
     },
   );
 
@@ -221,15 +214,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         delta: "NO_REPLY",
       }),
     );
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "completed",
-          items: [{ type: "agentMessage", id: "msg-1", text: "NO_REPLY" }],
-        },
-      }),
-    );
+    await complete(projector, [{ type: "agentMessage", id: "msg-1", text: "NO_REPLY" }]);
 
     const result = projector.buildResult(buildToolTelemetry());
 
@@ -245,12 +230,11 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
   it("keeps tool side effects classified as non-fallback terminal outcomes", async () => {
     const projector = await createProjector();
-    const result = projector.buildResult(
-      buildToolTelemetry({
-        didSendViaMessagingTool: true,
-        messagingToolSentTexts: ["sent out of band"],
-      }),
-    );
+    const result = projector.buildResult({
+      ...buildToolTelemetry(),
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["sent out of band"],
+    });
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.didSendViaMessagingTool).toBe(true);
@@ -304,11 +288,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         sideEffectEvidence: response.sideEffectEvidence === true,
         contentItems: response.contentItems,
       });
-      await projector.handleNotification(
-        forCurrentTurn("turn/completed", {
-          turn: { id: TURN_ID, status: "completed", items: [] },
-        }),
-      );
+      await complete(projector);
 
       const result = projector.buildResult(bridge.telemetry);
 

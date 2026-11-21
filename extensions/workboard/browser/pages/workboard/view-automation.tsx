@@ -1,13 +1,14 @@
 /** @jsxImportSource @solidjs/web */
 import type { CronJob } from "@openclaw/gateway-protocol";
 import type { WorkboardMetadata } from "@openclaw/workboard-contract";
-import { Show, createEffect } from "solid-js";
+import { Show, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.tsx";
 import { workboardHost } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDurationCompact } from "../../lib/format.ts";
+import { listen } from "../../lib/listener.ts";
 import { automationNextRunTime } from "./view-card-time.tsx";
 import { formatUpdatedTime, type BoardAutomationState } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
@@ -147,7 +148,9 @@ function BoardAutomationHeadingContent(props: {
                 <dt>{t("workboard.automationState")}</dt>
                 <dd>
                   {t(
-                    loaded().enabled ? "workboard.automationEnabled" : "workboard.automationPaused",
+                    loaded().enabled
+                      ? "workboard.automationEnabled"
+                      : "workboard.automationDisabled",
                   )}
                 </dd>
                 <dt>{t("workboard.automationFrequency")}</dt>
@@ -165,7 +168,9 @@ function BoardAutomationHeadingContent(props: {
               </dl>
             </div>
             <span class="workboard-heading__automation-meta">
-              <span>{loaded().enabled ? updated(loaded()) : t("workboard.automationPaused")}</span>
+              <span>
+                {loaded().enabled ? updated(loaded()) : t("workboard.automationDisabled")}
+              </span>
               <Show when={loaded().enabled && loaded().state.nextRunAtMs}>
                 {(nextRun) => (
                   <span class="workboard-heading__automation-next-run">
@@ -235,7 +240,7 @@ function BoardAutomationContent(props: {
                 <strong>{loaded().displayName ?? loaded().name}</strong>
                 <span>{automationSchedule(loaded())}</span>
                 {!loaded().enabled ? (
-                  <small>{t("workboard.automationPaused")}</small>
+                  <small>{t("workboard.automationDisabled")}</small>
                 ) : loaded().schedule.kind === "event" ? (
                   <small>{t("workboard.automationWaitingForEvent")}</small>
                 ) : loaded().state.nextRunAtMs ? (
@@ -269,17 +274,8 @@ function BoardAutomationLink(props: {
   onNavigate?: (event: MouseEvent) => void;
 }) {
   let link!: HTMLAnchorElement;
-  createEffect(
-    () => props.onNavigate,
-    (navigate) => {
-      if (!navigate) {
-        return undefined;
-      }
-      // Navigation admission must precede native listeners and the browser's default action.
-      link.addEventListener("click", navigate);
-      return () => link.removeEventListener("click", navigate);
-    },
-  );
+  // Navigation admission must precede native listeners and the browser's default action.
+  onSettled(() => listen(link, "click", (event) => props.onNavigate?.(event)));
   return (
     <a
       ref={(element) => {

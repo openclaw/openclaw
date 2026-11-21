@@ -3,6 +3,7 @@ import {
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { readAutomationToolCreation } from "../chat/automation-job-result.js";
 import { extractCanvasFromDetails, extractCanvasFromText } from "../chat/canvas-render.js";
 import { isToolCallContentType, isToolResultContentType } from "../chat/tool-content.js";
 import {
@@ -10,6 +11,7 @@ import {
   normalizeToolApprovalReview,
 } from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
+import { projectPluginInlineView } from "./chat-display-projection.inline-view.js";
 
 function isDisplayRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
@@ -36,12 +38,22 @@ export function isToolResultHistoryBlockType(type: unknown): boolean {
 export function projectToolResultDetails(
   details: unknown,
   maxChars: number,
+  invocation: Record<string, unknown> = {},
 ): { details: Record<string, unknown> | undefined; truncated: boolean } {
   const record = readRecord(details);
   if (!record) {
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const name = invocation.toolName ?? invocation.name;
+  const event = invocation.isError === false ? readAutomationToolCreation(name, record) : undefined;
+  if (event) {
+    projected.automationCreation = event;
+  }
+  const inline = projectPluginInlineView(record, invocation);
+  if (inline) {
+    projected.pluginView = inline;
+  }
   const browserTab = readRecord(record.browserTab);
   // A partial or shortened address can select a different browser. Only display
   // text may be truncated; route identifiers must survive projection unchanged.

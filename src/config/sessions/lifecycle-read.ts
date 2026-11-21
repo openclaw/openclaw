@@ -39,10 +39,9 @@ export async function resolveSessionLifecycleTimestampsAsync(
   },
 ): Promise<SessionLifecycleTimestamps> {
   params.signal?.throwIfAborted();
-  const entry = params.entry && { ...params.entry };
+  const { entry } = params;
   const timestamps = resolveSessionLifecycleTimestampsWithHeader({
     ...params,
-    entry,
     readHeader: () => undefined,
   });
   const sessionId = entry?.sessionId?.trim();
@@ -57,7 +56,6 @@ export async function resolveSessionLifecycleTimestampsAsync(
     ({ header }) => {
       accepted = resolveSessionLifecycleTimestampsWithHeader({
         ...params,
-        entry,
         readHeader: () => header,
       });
     },

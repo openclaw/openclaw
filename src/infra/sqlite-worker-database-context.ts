@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "./sql-connection.js";
 
 export type SqliteWorkerDatabaseContext = {
-  database: DatabaseSync;
+  database: EngineConnection;
   databasePath: string;
   admit(stage: "transaction" | "commit"): void;
 };

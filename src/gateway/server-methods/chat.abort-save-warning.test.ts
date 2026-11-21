@@ -1,10 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 // Preserve registry mocks before the cancellation entrypoints load.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
-import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
-import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
@@ -12,14 +12,12 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
 } from "./chat-abort-handler.js";
-import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   createAbortTestRunState,
@@ -64,31 +62,23 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
 });
 
 const fixture = useChatAbortRegistryFixture();
-const abortSession = sessionAbortHandlers["sessions.abort"];
-if (!abortSession) {
-  throw new Error("sessions.abort handler is not registered");
-}
+const abortSession = expectDefined(sessionAbortHandlers["sessions.abort"], "sessions.abort");
 
 async function queueCollector(sessionKey: string, groupId: string, runId: string) {
-  enqueueSwarmRun({
+  fixture.queueRun({
     groupId,
     runId,
     start: vi.fn(async () => {}),
     activeRunIds: ["occupied-slot"],
-    maxConcurrent: 1,
-    onStartFailure: () => true,
   });
-  await registerSubagentRun({
+  await fixture.registerRun({
     runId,
     childSessionKey: sessionKey,
     childAgentId: "main",
     sessionEntry: loadSessionEntry({ agentId: "main", sessionKey }),
     requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
     requesterDisplayKey: "main",
     task: "queued collector",
-    cleanup: "keep",
-    collect: true,
     queued: true,
     expectsCompletionMessage: false,
   });
@@ -118,6 +108,8 @@ it.each([false, true])(
       resolveSessionTargetForRunId: () => undefined,
       captureSessionCancellation: () => ({
         runIds: ["worker-run"],
+        settled: Promise.resolve(),
+        executing: false,
         cancel: (control) => {
           control?.assertCurrent?.();
           control?.onCancelled?.("worker-run");
@@ -129,7 +121,7 @@ it.each([false, true])(
     const context = createChatAbortContext({
       getRuntimeConfig,
       workerEnvironmentService: service,
-      chatAbortControllers: new Map([["worker-run", active]]),
+      sources: [["worker-run", active]],
     });
     const kill = vi
       .spyOn(subagentKill, "killSubagentRunAdmin")
@@ -158,7 +150,7 @@ it.each([false, true])(
       } else {
         await expect(pending).rejects.toBe(workerFailure);
       }
-      expect(active.controller.signal.aborted).toBe(true);
+      expect(active.input.abortSignal.aborted).toBe(true);
       expect(kill).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -172,7 +164,6 @@ it.each([
   "session",
   "stop",
   "stop-revoked",
-  "stop-leaf",
   "sessions",
   "queued",
   "terminal",
@@ -189,27 +180,24 @@ it.each([
     updatedAt: Date.now(),
   });
   const runId = "run-save-failure";
-  const active: ChatAbortControllerEntry = createActiveRun(scope.sessionKey, scope);
+  const active: RpcSourceRef = createActiveRun(scope.sessionKey, scope);
   const refusal = new SessionMutationAuthorizationChangedError({
     code: "FORBIDDEN",
     message: "terminal authority changed",
     details: { reason: "fixture-revocation" },
   });
   const assertCurrent = () => {
-    if (active.controller.signal.aborted) {
+    if (active.input.abortSignal.aborted) {
       if (route === "stop-revoked") {
         throw refusal;
-      }
-      if (route === "stop-leaf") {
-        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
       }
     }
   };
   const terminalFailure = route === "terminal" || route === "revoked";
   if (terminalFailure) {
     const error = route === "revoked" ? refusal : new Error("terminal write failed");
-    active.projectSessionTerminalPersistence = Promise.reject(error);
-    void active.projectSessionTerminalPersistence.catch(() => {});
+    active.adapter.projectSessionTerminalPersistence = Promise.reject(error);
+    void active.adapter.projectSessionTerminalPersistence.catch(() => {});
   }
   if (route === "queued") {
     await queueCollector(scope.sessionKey, "save-warning", "queued-save-warning");
@@ -218,12 +206,12 @@ it.each([
   const context = createChatAbortContext({
     getRuntimeConfig,
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatAbortControllers: new Map([[runId, active]]),
+    sources: [[runId, active]],
     chatRunState: createAbortTestRunState([[runId, { buffer: "Already streamed reply" }]]),
   });
   const pending = invokeChatAbortHandler({
     handler:
-      route === "stop" || route === "stop-revoked" || route === "stop-leaf"
+      route === "stop" || route === "stop-revoked"
         ? (options) =>
             handleDirectExternalChatSend({
               ...options,
@@ -253,13 +241,6 @@ it.each([
         error: { code: "FORBIDDEN", details: { reason: "fixture-revocation" } },
       });
     }
-  } else if (route === "stop-leaf") {
-    await pending;
-    expect(respond.mock.lastCall?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-      message: expect.stringContaining("could not be saved to history"),
-    });
   } else {
     await pending;
     expect(respond.mock.lastCall?.[2]).toBeUndefined();
@@ -268,10 +249,8 @@ it.each([
       warning: expect.stringContaining("could not be saved to history"),
     });
   }
-  expect(active.controller.signal.aborted).toBe(true);
-  expect(context.logGateway.warn).toHaveBeenCalledWith(
-    expect.stringContaining("fixture transcript write failed"),
-  );
+  expect(active.input.abortSignal.aborted).toBe(true);
+
   expect(await loadTranscriptEvents(scope)).not.toContainEqual(
     expect.objectContaining({
       message: expect.objectContaining({ idempotencyKey: "run-save-failure:assistant" }),

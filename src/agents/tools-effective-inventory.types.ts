@@ -3,10 +3,11 @@
  * Shared by agent/session tool inventory resolvers and UI/API callers that
  * present enabled tools grouped by source.
  */
-import type { ToolsEffectiveEntry } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
+import type { ReplyToMode } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ResolvedConversationCapabilityProfile } from "./conversation-capability-profile.js";
+import type { SandboxToolPolicy } from "./sandbox/types.js";
 
 export type {
   ToolsEffectiveEntry as EffectiveToolInventoryEntry,
@@ -15,12 +16,11 @@ export type {
   ToolsEffectiveResult as EffectiveToolInventoryResult,
 } from "../../packages/gateway-protocol/src/schema/tools-catalog.js";
 
-export type EffectiveToolSource = ToolsEffectiveEntry["source"];
-
 /** Inputs for resolving the effective tool inventory in a session/runtime context. */
 export type ResolveEffectiveToolInventoryParams = {
   cfg: OpenClawConfig;
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
+  sandboxToolPolicy?: SandboxToolPolicy;
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -34,6 +34,8 @@ export type ResolveEffectiveToolInventoryParams = {
   accountId?: string | null;
   modelProvider?: string;
   modelId?: string;
+  /** Selected next-turn runtime, distinct from the last run's harness. */
+  agentRuntime?: string;
   modelApi?: string | null;
   runtimeModel?: ProviderRuntimeModel;
   currentChannelId?: string;
@@ -42,8 +44,10 @@ export type ResolveEffectiveToolInventoryParams = {
   groupId?: string | null;
   groupChannel?: string | null;
   groupSpace?: string | null;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   webSearchEnabled?: boolean;
+  /** Brokered GitHub tool listing; invocation still checks current authority. */
+  githubPublicationAvailable?: boolean;
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;

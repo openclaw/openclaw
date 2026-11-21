@@ -50,9 +50,16 @@ for (const mode of ["chip", "roster"] as const) {
     expect(home.subagentSummary?.runningChildCount).toBe(1);
     expect(home.childLoadParentKeys).toContain(key);
     expect(home.children?.map((row) => row.key)).toContain("agent:main:child");
-    expect(sidebar.querySelector('[data-session-key="agent:main:child"]')?.textContent).toContain(
-      "Child conversation",
-    );
+    if (mode === "chip") {
+      expect(sidebar.querySelector('[data-session-key="agent:main:child"]')?.textContent).toContain(
+        "Child conversation",
+      );
+    } else {
+      expect(sidebar.querySelector('[data-session-key="agent:main:child"]')).toBeNull();
+      expect(
+        sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__row'),
+      ).not.toBeNull();
+    }
     sidebar
       .querySelector<HTMLButtonElement>(
         ".sidebar-agent-card__main, .sidebar-workspace-header__main",

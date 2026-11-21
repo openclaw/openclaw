@@ -1,6 +1,7 @@
 import { DuplicateAgentError } from "../agents/agent-create-error.js";
 import { AuthProfileStoreUnreadableError } from "../agents/auth-profiles/store-unreadable-error.js";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SandboxStateOwnerRequiredError } from "../agents/sandbox/state-owner-path.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import {
   SessionWorktreeLifecycleError,
@@ -23,7 +24,8 @@ import {
 } from "../config/sessions/session-transcript-writer-claim-error.js";
 import { ModelAccountConnectAuthorityError } from "../gateway/model-account-connect-errors.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner-errors.js";
+import { SqliteJsonlReadBudgetExceededError } from "../infra/sqlite-jsonl-budget-error.js";
 import {
   SqliteCoordinatorError,
   OpenClawStateExternalOwnershipError,
@@ -55,6 +57,7 @@ const MESSAGE_ONLY_ERRORS = {
   coordinator: SqliteCoordinatorError,
   ownership: OpenClawStateOwnershipError,
   "newer-schema": SqliteSchemaVersionError,
+  "jsonl-read-budget": SqliteJsonlReadBudgetExceededError,
   "range-error": RangeError,
   "syntax-error": SyntaxError,
   "type-error": TypeError,
@@ -69,6 +72,9 @@ function isMessageOnlyErrorIdentity(node: { type?: unknown }): node is MessageOn
 export type ErrorIdentity = ReturnType<typeof identifyError>;
 
 export function identifyError(error: Error) {
+  if (error instanceof SandboxStateOwnerRequiredError) {
+    return { type: "sandbox-state-owner-required" as const };
+  }
   if (error instanceof AuthProfileStoreUnreadableError) {
     return { type: "auth-profile-store-unreadable" as const, databasePath: error.databasePath };
   }
@@ -167,7 +173,7 @@ export function identifyError(error: Error) {
     return { type: "state-owner-contention" as const, databasePath: error.databasePath };
   }
   if (error instanceof OpenClawStateLeaseError) {
-    return { type: "state-lease" as const, leaseCode: error.code };
+    return { type: "state-lease" as const, leaseCode: error.code, leaseLoss: error.loss };
   }
   if (error instanceof OpenClawStateOwnershipMetadataError) {
     return { type: "ownership-metadata" as const, databasePath: error.databasePath };
@@ -205,16 +211,14 @@ export function identifyError(error: Error) {
   }
   return { type: error instanceof AggregateError ? ("aggregate" as const) : ("error" as const) };
 }
-function unreachableErrorNode(node: never): never {
-  throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
-}
-
 export function createError(node: ErrorIdentity & { message: string }): Error {
   if (isMessageOnlyErrorIdentity(node)) {
     const ErrorType = MESSAGE_ONLY_ERRORS[node.type];
     return new ErrorType(node.message);
   }
   switch (node.type) {
+    case "sandbox-state-owner-required":
+      return new SandboxStateOwnerRequiredError();
     case "session-worktree-owner-mismatch":
       return new SessionWorktreeLifecycleError(node.message, "owner-mismatch");
     case "worktree-removal-contention":
@@ -269,16 +273,16 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
         ...(node.path === undefined ? {} : { path: node.path }),
       });
     case "state-lease":
-      return new OpenClawStateLeaseError(node.message, { code: node.leaseCode });
+      return new OpenClawStateLeaseError(node.message, {
+        code: node.leaseCode,
+        loss: node.leaseLoss,
+      });
     case "maintenance":
       return new StartupMaintenanceRequiredError(node.kind, node.message);
     case "state-migration":
       return new OpenClawStateDatabaseSchemaMigrationRequiredError(node.kind, node.pathname);
     case "agent-media-migration":
-      return new OpenClawAgentDatabaseMediaMigrationRequiredError(
-        node.pathname,
-        node.schemaVersion,
-      );
+      break;
   }
-  return unreachableErrorNode(node);
+  return new OpenClawAgentDatabaseMediaMigrationRequiredError(node.pathname, node.schemaVersion);
 }

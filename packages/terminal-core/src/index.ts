@@ -1,5 +1,3 @@
-// Public barrel for shared terminal formatting helpers.
-
 export * from "./ansi.js";
 export * from "./decorative-emoji.js";
 export * from "./health-style.js";

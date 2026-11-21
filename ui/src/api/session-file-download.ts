@@ -3,23 +3,23 @@ import type {
   SessionsFilesDownloadResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeBasePath } from "../app-route-paths.ts";
-import { isSameOriginGateway } from "../app/gateway-control-ui-reload.ts";
-import { isHttpArtifactDownloadUrl } from "./artifact-download.ts";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
+import { t } from "../i18n/index.ts";
+import { isHttpArtifactDownloadUrl } from "./artifact-download-url.ts";
 import type { GatewayBrowserClient } from "./gateway.ts";
-
-type FileDownloadHost = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
-  connectionEpoch: number;
-  sessionKey: string;
-  resourceBasePath?: string;
-};
 
 export type SessionFileDownload = Pick<SessionsFilesDownloadResult, "url" | "filename">;
 
 /** Files chooses and authorizes the bytes; the browser never converts a preview into a download. */
+// Download UI callers own registration of the lazy file-preview catalog.
 export async function downloadSessionFile(
-  state: FileDownloadHost,
+  state: {
+    client: GatewayBrowserClient | null;
+    connected: boolean;
+    connectionEpoch: number;
+    sessionKey: string;
+    resourceBasePath?: string;
+  },
   params: SessionsFilesDownloadParams,
   signal: AbortSignal,
 ): Promise<SessionFileDownload | null> {
@@ -33,19 +33,20 @@ export async function downloadSessionFile(
   if (!client || !current()) {
     return null;
   }
-  if (!isSameOriginGateway(client.gatewayUrl)) {
-    throw new Error("File downloads require a same-origin Gateway connection.");
+  if (!hasSameOriginGatewayTransport(client.gatewayUrl)) {
+    throw new Error(t("chat.detailPanel.sameOrigin"));
   }
   const result = await client.request<SessionsFilesDownloadResult>(
     "sessions.files.download",
     params,
+    { signal },
   );
   if (!current()) {
     return null;
   }
   const url = normalizeBasePath(resourceBasePath ?? "") + result.url;
   if (!isHttpArtifactDownloadUrl(url, resourceBasePath)) {
-    throw new Error("Invalid file download URL");
+    throw new Error(t("chat.detailPanel.invalidUrl"));
   }
   return { url, filename: result.filename };
 }

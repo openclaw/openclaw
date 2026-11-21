@@ -1,5 +1,6 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi, type MockInstance } from "vitest";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -12,8 +13,18 @@ import {
 import { startSlowRequestDiagnostics } from "./slow-request-diagnostics.js";
 
 let previousDiagnostics: boolean;
+let clock = 0;
+let now: MockInstance<() => number>;
+const log = { isEnabled: vi.fn(() => true), warn: vi.fn() };
+const start = (phase = "setup", details?: () => Record<string, unknown>, operation = "test") =>
+  startSlowRequestDiagnostics(log, "slow request", operation, phase, details);
 beforeEach(() => {
   previousDiagnostics = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
+  clock = 0;
+  log.isEnabled.mockReset().mockReturnValue(true);
+  log.warn.mockReset();
+  now = vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 afterEach(() => {
   setDiagnosticsEnabledForProcess(previousDiagnostics);
@@ -22,11 +33,9 @@ afterEach(() => {
 
 test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s", (mode) => {
   setDiagnosticsEnabledForProcess(mode !== "disabled");
-  let clock = 0;
-  const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const log = { isEnabled: () => mode !== "muted", warn: vi.fn() };
+  log.isEnabled.mockReturnValue(mode !== "muted");
   {
-    using diagnostics = startSlowRequestDiagnostics(log, "slow request", "test", "setup");
+    using diagnostics = start();
     expect(Boolean(diagnostics)).toBe(mode !== "disabled" && mode !== "muted");
     clock = mode === "slow" ? 1_000 : 999.9;
   }
@@ -36,35 +45,60 @@ test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s",
   }
 });
 
-test("failed requests sum repeated waits and keep their trace even when the sink throws", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
+test("failed requests sum bounded nested waits and keep their trace when the sink throws", () => {
   const trace = createDiagnosticTraceContext();
-  const warn = vi.fn(() => {
+  log.warn.mockImplementation(() => {
     expect(getActiveDiagnosticTraceContext()).toBe(trace);
     throw new Error("sink failed");
   });
   const failure = new Error("request failed");
   expect(() => {
     using diagnostics = runWithDiagnosticTraceContext(trace, () =>
-      startSlowRequestDiagnostics<string>(
-        { isEnabled: () => true, warn },
+      startSlowRequestDiagnostics<"accessFacts" | "projectionReadiness">(
+        log,
         "slow request",
         "test",
         "accessFacts",
+        undefined,
+        ["rows"],
       ),
     );
+    expect(diagnostics?.observeSpan("private-session-key")).toBeUndefined();
+    const rows = diagnostics?.observeSpan("rows");
     clock = 600;
+    rows?.();
     diagnostics?.mark("projectionReadiness");
     clock = 800;
     diagnostics?.mark("accessFacts");
     clock = 1_200;
     throw failure;
   }).toThrow(failure);
-  expect(warn).toHaveBeenCalledExactlyOnceWith("slow request", {
+  expect(log.warn).toHaveBeenCalledExactlyOnceWith("slow request", {
     operation: "test",
     elapsedMs: 1_200,
-    phaseDurationsMs: { accessFacts: 1_000, projectionReadiness: 200 },
+    phaseDurationsMs: { accessFacts: 1_000, projectionReadiness: 200, "detail.rows": 600 },
   });
+});
+
+test("subscribers can measure fast stages without enabling logs or exposing request details", () => {
+  setDiagnosticsEnabledForProcess(false);
+  const events: unknown[] = [];
+  const listener = (event: unknown) => events.push(event);
+  const stages = channel("openclaw.gateway.request.stages");
+  const details = vi.fn(() => ({ sessionKey: "private" }));
+  log.isEnabled.mockReturnValue(false);
+  stages.subscribe(listener);
+  try {
+    using timing = start("resolve", details, "sessions.diff");
+    clock = 2;
+    timing?.mark("git");
+    clock = 7;
+  } finally {
+    stages.unsubscribe(listener);
+  }
+  expect(events).toEqual([
+    { operation: "sessions.diff", elapsedMs: 7, phaseDurationsMs: { resolve: 2, git: 5 } },
+  ]);
+  expect(details).not.toHaveBeenCalled();
+  expect(log.warn).not.toHaveBeenCalled();
 });

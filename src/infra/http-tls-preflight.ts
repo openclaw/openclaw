@@ -1,7 +1,7 @@
-import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { cancelUnreadResponseBody } from "./http-response-body.js";
+import { inspectTlsCertificateError } from "./tls-certificate-errors.js";
 
 export type HttpTlsPreflightResult =
   | { ok: true }

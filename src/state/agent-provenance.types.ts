@@ -1,4 +1,4 @@
-export type AgentCreatedVia = "operator" | "agent" | "claw";
+export type AgentCreatedVia = "operator" | "agent" | "template";
 
 export type AgentProvenance = {
   agentId: string;

@@ -63,7 +63,6 @@ struct StatusMenuDescriptorTests {
     @Test func `paused menu preserves cached sessions and available actions`() {
         let descriptor = StatusMenuDescriptor.build(from: StatusMenuDescriptor.Snapshot(
             isPaused: true,
-            voiceWakeSupported: false,
             sessions: [Self.session("main")],
             now: Self.referenceDate))
 

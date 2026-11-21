@@ -1,6 +1,7 @@
 import { addAbortListener } from "node:events";
 import net from "node:net";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
 const JSONL_SOCKET_MAX_LINE_BYTES = 16 * 1024 * 1024;
@@ -12,6 +13,8 @@ type JsonlSocketRequest<T> = {
   onTimeout?: () => T;
   onResponseLost?: () => T;
   signal?: AbortSignal;
+  beforeSend?: () => void;
+  maxResponseLineBytes?: number;
   accept: (msg: unknown) => T | null | undefined;
 };
 
@@ -21,7 +24,7 @@ type JsonlSocketRequest<T> = {
 export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Promise<T | null> {
   const { socketPath, requestLine, accept, signal } = params;
   const timeoutMs = params.timeoutMs === 0 ? 0 : resolveTimerTimeoutMs(params.timeoutMs, 1);
-  return await new Promise((resolve) => {
+  return await new Promise((resolve, reject) => {
     const client = new net.Socket();
     let settled = false;
     let requestSent = false;
@@ -31,20 +34,33 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
     const lineChunks: Buffer[] = [];
     let lineBytes = 0;
 
-    const finish = (value: T | null) => {
+    const cleanup = () => {
       if (settled) {
-        return;
+        return false;
       }
       settled = true;
       clearNodeTimeout(timer);
       abortListener?.[Symbol.dispose]();
       client.destroy();
-      resolve(value);
+      return true;
+    };
+    const finish = (value: T | null) => {
+      if (cleanup()) {
+        resolve(value);
+      }
+    };
+    const fail = (error: unknown) => {
+      if (cleanup()) {
+        reject(toErrorObject(error, "Socket request failed before sending."));
+      }
     };
 
     const finishPeerLoss = () => finish(requestSent ? (params.onResponseLost?.() ?? null) : null);
     const appendLineChunk = (chunk: Buffer): boolean => {
-      if (lineBytes + chunk.byteLength > JSONL_SOCKET_MAX_LINE_BYTES) {
+      if (
+        lineBytes + chunk.byteLength >
+        (params.maxResponseLineBytes ?? JSONL_SOCKET_MAX_LINE_BYTES)
+      ) {
         finishPeerLoss();
         return false;
       }
@@ -73,10 +89,20 @@ export async function requestJsonlSocket<T>(params: JsonlSocketRequest<T>): Prom
     client.on("end", finishPeerLoss);
     client.on("close", finishPeerLoss);
     client.connect(socketPath, () => {
-      if (!settled) {
-        requestSent = true;
-        client.end(`${requestLine}\n`);
+      if (settled) {
+        return;
       }
+      try {
+        params.beforeSend?.();
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      if (settled) {
+        return;
+      }
+      requestSent = true;
+      client.end(`${requestLine}\n`);
     });
     client.on("data", (data: Buffer) => {
       let offset = 0;

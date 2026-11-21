@@ -4,7 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const TALK_VOICE_CHANGE_TIMEOUT_MS = 60_000;
+export { TALK_VOICE_CHANGE_TIMEOUT_MS } from "../talk-voice-limits.js";
 
 const target = {
   sessionKey: Type.Optional(NonEmptyString),

@@ -459,25 +459,19 @@ export async function getMatrixVerificationStatus(
   opts: MatrixActionClientOpts & { includeRecoveryKey?: boolean } = {},
 ) {
   const readiness = opts.readiness ?? "prepared";
-  return await withResolvedActionClient(
-    { ...opts, readiness: "none" },
-    async (client) => {
-      const preflight = await readMatrixVerificationStatus(client, opts);
-      if (readiness === "none" || preflight.serverDeviceKnown === false) {
-        return preflight;
-      }
-      if (readiness === "started") {
-        await client.start();
-      } else {
-        await client.prepareForOneOff();
-      }
-      await client.refreshOwnDeviceKeys();
-      return await readMatrixVerificationStatus(client, opts);
-    },
-    // Even a diagnostic read may initialize Rust crypto and mutate its store.
-    // A normal close must publish that state and clear durable refusal.
-    "persist",
-  );
+  return await withResolvedActionClient({ ...opts, readiness: "none" }, async (client) => {
+    const preflight = await readMatrixVerificationStatus(client, opts);
+    if (readiness === "none" || preflight.serverDeviceKnown === false) {
+      return preflight;
+    }
+    if (readiness === "started") {
+      await client.start();
+    } else {
+      await client.prepareForOneOff();
+    }
+    await client.refreshOwnDeviceKeys();
+    return await readMatrixVerificationStatus(client, opts);
+  });
 }
 
 async function readMatrixVerificationStatus(

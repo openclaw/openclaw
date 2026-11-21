@@ -1,13 +1,15 @@
 import {
-  ErrorCode,
-  McpError,
+  ProtocolErrorCode,
+  ProtocolError,
   type CallToolResult,
   type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
-import type {
-  JsonSchemaValidator,
-  jsonSchemaValidator,
-} from "@modelcontextprotocol/sdk/validation/types.js";
+  type JsonSchemaValidator,
+  type jsonSchemaValidator,
+} from "@modelcontextprotocol/client";
+import {
+  publishRuntimeToolInputSchema,
+  wasToolSchemaTruncated,
+} from "@openclaw/ai/internal/tool-schema";
 
 type McpToolResultValidator = (result: CallToolResult) => void;
 
@@ -57,6 +59,18 @@ export function normalizeMcpToolCatalog(
       excludedTools.push(tool);
       continue;
     }
+    const input = publishRuntimeToolInputSchema(tool.inputSchema, "inputSchema");
+    if (input.violations.length === 0 && !wasToolSchemaTruncated(input.schema)) {
+      // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+      tool.inputSchema = input.schema as Tool["inputSchema"];
+    }
+    if (tool.outputSchema) {
+      const output = publishRuntimeToolInputSchema(tool.outputSchema, "outputSchema");
+      if (output.violations.length === 0 && !wasToolSchemaTruncated(output.schema)) {
+        // SAFETY: the publisher preserves the admitted MCP object-schema contract.
+        tool.outputSchema = output.schema as Tool["outputSchema"];
+      }
+    }
     if (disposition === "include") {
       included.push(tool);
       if (tool.outputSchema) {
@@ -64,19 +78,19 @@ export function normalizeMcpToolCatalog(
           tool.outputSchema,
         );
         resultValidators.set(toolName, (result) => {
-          if (result.structuredContent === undefined && result.isError !== true) {
-            throw new McpError(
-              ErrorCode.InvalidRequest,
+          if (result.isError === true) {
+            return;
+          }
+          if (result.structuredContent === undefined) {
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidRequest,
               `Tool ${toolName} has an output schema but did not return structured content`,
             );
           }
-          if (result.structuredContent === undefined) {
-            return;
-          }
           const validation = validator(result.structuredContent);
           if (!validation.valid) {
-            throw new McpError(
-              ErrorCode.InvalidParams,
+            throw new ProtocolError(
+              ProtocolErrorCode.InvalidParams,
               `Structured content does not match the tool's output schema: ${validation.errorMessage}`,
             );
           }

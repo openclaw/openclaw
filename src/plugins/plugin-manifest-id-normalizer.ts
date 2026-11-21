@@ -3,7 +3,6 @@ import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
   return [
-    plugin.id,
     ...(plugin.providers ?? []),
     ...(plugin.channels ?? []),
     ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),

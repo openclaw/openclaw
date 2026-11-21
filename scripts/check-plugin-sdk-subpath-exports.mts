@@ -2,8 +2,8 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { API } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { API } from "typescript/sync";
 import { normalizeRepoPath } from "./lib/guard-inventory-utils.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {

@@ -5,19 +5,38 @@ import { createCarrierApi } from "../shared/carrier-api.js";
 import { requireSupportedTwilioApiHostname } from "../twilio-region.js";
 
 export class TwilioApiError extends Error {
-  readonly httpStatus: number;
-  readonly responseText: string;
   readonly twilioCode?: number;
+  readonly moreInfo?: string;
 
   constructor(httpStatus: number, responseText: string) {
     const parsed = asNullableObjectRecord(safeParseJson<unknown>(responseText));
     const detail = typeof parsed?.message === "string" ? parsed.message : responseText;
-    super(`Twilio API error: ${httpStatus} ${detail}`);
+    const twilioCode = typeof parsed?.code === "number" ? parsed.code : undefined;
+    const moreInfo =
+      typeof parsed?.more_info === "string" && parsed.more_info.startsWith("https://")
+        ? parsed.more_info
+        : undefined;
+    super(
+      `Twilio API error: ${httpStatus} ${detail}${formatTwilioErrorReference(twilioCode, moreInfo)}`,
+    );
     this.name = "TwilioApiError";
-    this.httpStatus = httpStatus;
-    this.responseText = responseText;
-    this.twilioCode = typeof parsed?.code === "number" ? parsed.code : undefined;
+    this.twilioCode = twilioCode;
+    this.moreInfo = moreInfo;
   }
+}
+
+/**
+ * Twilio's message alone is often ambiguous ("Account not allowed to call ..." covers trial
+ * accounts, geo permissions and missing business profiles); the code and docs link tell them apart.
+ */
+function formatTwilioErrorReference(
+  code: number | undefined,
+  moreInfo: string | undefined,
+): string {
+  if (code === undefined) {
+    return "";
+  }
+  return moreInfo ? ` (Twilio error ${code}: ${moreInfo})` : ` (Twilio error ${code})`;
 }
 
 export function createTwilioApi(params: {

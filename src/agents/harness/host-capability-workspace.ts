@@ -37,6 +37,22 @@ const nativeWorkspaceToolNames: Readonly<Record<string, string>> = {
   glob: "find",
 };
 
+/** Preserve omission and fence retained local-workspace preparation at both boundaries. */
+export function bindHostContinuationRetryCount(
+  prepare: AgentHarnessHostCapabilities["prepareContinuationRetryCount"],
+  assertActive: () => void,
+): Pick<AgentHarnessHostCapabilities, "prepareContinuationRetryCount"> {
+  return prepare
+    ? {
+        prepareContinuationRetryCount: (workspace) => {
+          assertActive();
+          prepare(workspace);
+          assertActive();
+        },
+      }
+    : {};
+}
+
 function isWorkspaceToolName(name: string): boolean {
   const normalized = normalizeToolPolicyName(name);
   return workspaceToolNames.has(nativeWorkspaceToolNames[normalized] ?? normalized);

@@ -5,6 +5,8 @@ import { createKernelStores } from "./test/sqlite-kernel.js";
 import { sqliteOnly as test } from "./test/sqlite-only.js";
 import { createWorkboardSqliteTestHarness } from "./test/sqlite-store.js";
 
+const setup = () => createWorkboardSqliteTestHarness({ createStores: createKernelStores });
+
 function observeReads(onRows: (sql: string, rows: Record<string, unknown>[]) => void) {
   // eslint-disable-next-line @typescript-eslint/unbound-method -- Retain native methods for the same receiver.
   const all = StatementSync.prototype.all;
@@ -43,6 +45,29 @@ function observeReads(onRows: (sql: string, rows: Record<string, unknown>[]) => 
   };
 }
 
+async function captureRead<T>(
+  read: () => Promise<T>,
+  onRows?: (sql: string, rows: Record<string, unknown>[]) => void,
+) {
+  const ids: unknown[] = [];
+  let queries = 0;
+  let rowCount = 0;
+  const restore = observeReads((sql, rows) => {
+    ids.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
+    if (/^select\b/iu.test(sql) && /\bfrom "?workboard_/iu.test(sql)) {
+      queries++;
+      rowCount += rows.length;
+    }
+    onRows?.(sql, rows);
+  });
+  try {
+    const value = await read();
+    return { value, ids, queries, rowCount };
+  } finally {
+    restore();
+  }
+}
+
 function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): WorkboardCard {
   return {
     id,
@@ -61,13 +86,11 @@ function fixtureCard(id: string, overrides: Partial<WorkboardCard> = {}): Workbo
 
 describe("Workboard context and session-scoped reads", () => {
   test("normalizes structural session casing without hydrating colliding opaque identities", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
+    const { store, stores, dbPath } = setup();
     const cases = [
       {
         kind: "direct",
-        stored: "Agent:Main:Matrix:Channel:!Room:example.org",
+        stored: " Agent:Main:Matrix:Channel:!Room:example.org ",
         key: "agent:main:matrix:channel:!Room:example.org",
         other: "agent:main:matrix:channel:!room:example.org",
       },
@@ -118,6 +141,7 @@ describe("Workboard context and session-scoped reads", () => {
           ? { sessionKey }
           : scenario.kind === "execution"
             ? {
+                sessionKey: "another-session",
                 execution: {
                   id,
                   kind: "agent-session" as const,
@@ -142,89 +166,22 @@ describe("Workboard context and session-scoped reads", () => {
     raw
       .prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id LIKE '%-collision'")
       .run();
-    const hydratedIds: unknown[] = [];
-    const restore = observeReads((_sql, rows) => {
-      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-    });
-    try {
+    const { ids } = await captureRead(async () => {
       for (const scenario of cases) {
         expect(
           (await store.listCards(undefined, scenario.key)).cards.map((card) => card.id),
         ).toEqual([`${scenario.kind}-selected`]);
       }
-      expect(new Set(hydratedIds)).toEqual(
-        new Set(cases.map((scenario) => `${scenario.kind}-selected`)),
-      );
-    } finally {
-      restore();
-    }
-  });
-
-  test("selects session links before hydrating unrelated card history", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
     });
-    const sessionKey = "agent:main:chat";
-    const cards = [
-      fixtureCard("direct", { sessionKey: " Agent:Main:Chat " }),
-      fixtureCard("execution", {
-        sessionKey: "another-session",
-        execution: {
-          id: "execution",
-          kind: "agent-session",
-          mode: "autonomous",
-          status: "done",
-          sessionKey,
-          startedAt: 1,
-          updatedAt: 2,
-        },
-      }),
-      fixtureCard("attempt", {
-        metadata: { attempts: [{ id: "attempt", status: "succeeded", startedAt: 1, sessionKey }] },
-      }),
-      fixtureCard("event", { events: [{ id: "event", kind: "created", at: 1, sessionKey }] }),
-      fixtureCard("unrelated", { notes: "Unrelated history".repeat(10_000) }),
-      fixtureCard("opaque", { sessionKey: "agent:main:matrix:channel:!Room:example.org" }),
-    ];
-    for (const card of cards) {
-      await stores.cards.register(card.id, { version: 1, card });
-    }
-    using raw = new DatabaseSync(dbPath);
-    raw.prepare("UPDATE workboard_cards SET automation_json = '{' WHERE id = 'unrelated'").run();
-    const hydratedIds: unknown[] = [];
-    const restore = observeReads((_sql, rows) => {
-      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-    });
-    try {
-      const result = await store.listCards(undefined, sessionKey);
-      expect(result.cards.map((card) => card.id).toSorted()).toEqual([
-        "attempt",
-        "direct",
-        "event",
-        "execution",
-      ]);
-      expect(new Set(hydratedIds)).toEqual(new Set(["attempt", "direct", "event", "execution"]));
-      expect(JSON.stringify(result).length).toBeLessThan(10_000);
-      expect((await store.listCards("other", sessionKey)).cards).toEqual([]);
-      expect(
-        (await store.listCards(undefined, "agent:main:matrix:channel:!room:example.org")).cards,
-      ).toEqual([]);
-      expect(
-        (await store.listCards(undefined, "agent:main:matrix:channel:!Room:example.org")).cards.map(
-          (card) => card.id,
-        ),
-      ).toEqual(["opaque"]);
-      await expect(store.listCards(undefined)).rejects.toThrow(SyntaxError);
-    } finally {
-      restore();
-    }
+    expect(new Set(ids)).toEqual(new Set(cases.map((scenario) => `${scenario.kind}-selected`)));
+    expect((await store.listCards("other", cases[0]!.key)).cards).toEqual([]);
+    expect((await store.listCards(undefined, "missing-session")).cards).toEqual([]);
+    await expect(store.listCards(undefined)).rejects.toThrow(SyntaxError);
   });
 
   // Intercepts native SQLite statements and edits the underlying file mid-read.
   test("hydrates only the completed parents and recent assignee work included in context", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
+    const { store, stores, dbPath } = setup();
     const parents = Array.from({ length: 8 }, (_, index) =>
       fixtureCard(`parent-${index}`, {
         metadata: { automation: { boardId: "other", summary: `Parent result ${index}` } },
@@ -273,24 +230,19 @@ describe("Workboard context and session-scoped reads", () => {
     for (const card of [...parents, unfinished, ...siblings, current]) {
       await stores.cards.register(card.id, { version: 1, card });
     }
-    const hydratedIds: unknown[] = [];
     using raw = new DatabaseSync(dbPath);
     let changedParent = false;
-    const restore = observeReads((_sql, rows) => {
-      hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-      if (!changedParent && rows.some((row) => row.id === parents[7]!.id)) {
-        changedParent = true;
-        raw
-          .prepare("UPDATE workboard_cards SET status = 'review' WHERE id = ?")
-          .run(parents[7]!.id);
-      }
-    });
-    let context: string;
-    try {
-      context = await store.buildWorkerContext(current.id);
-    } finally {
-      restore();
-    }
+    const { value: context, ids } = await captureRead(
+      () => store.buildWorkerContext(current.id),
+      (_sql, rows) => {
+        if (!changedParent && rows.some((row) => row.id === parents[7]!.id)) {
+          changedParent = true;
+          raw
+            .prepare("UPDATE workboard_cards SET status = 'review' WHERE id = ?")
+            .run(parents[7]!.id);
+        }
+      },
+    );
     const selectedParents = parents.slice(2);
     const selectedSiblings = [
       "sibling-newest",
@@ -313,19 +265,17 @@ describe("Workboard context and session-scoped reads", () => {
         ...selectedSiblings.map((id) => `- ${id} ${id}: ${id} result`),
       ].join("\n"),
     );
-    expect(new Set(hydratedIds)).toEqual(
+    expect(new Set(ids)).toEqual(
       new Set([current.id, ...selectedParents.map((parent) => parent.id), ...selectedSiblings]),
     );
-    expect(hydratedIds.length).toBeLessThanOrEqual(12);
+    expect(ids.length).toBeLessThanOrEqual(12);
     expect(changedParent).toBe(true);
     await expect(store.get(parents[7]!.id)).resolves.toMatchObject({ status: "review" });
   });
 
   // Injects legacy rows and counts reads through native SQLite handles.
   test("scopes session capture while preserving existing IDs, match preference, and execution fallback", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
+    const { store, stores, dbPath } = setup();
     const cases: Array<{
       name: string;
       left: Partial<WorkboardCard>;
@@ -369,9 +319,7 @@ describe("Workboard context and session-scoped reads", () => {
       execution: execution("shadowed-session"),
     });
     const nullFallback = fixtureCard("null-fallback", { execution: execution("null-session") });
-    const emptyFallback = fixtureCard("empty-fallback", {
-      execution: execution("empty-session"),
-    });
+    const emptyFallback = fixtureCard("empty-fallback", { execution: execution("empty-session") });
     const absentExecution = fixtureCard("absent-execution", {
       execution: execution("absent-session"),
     });
@@ -384,26 +332,19 @@ describe("Workboard context and session-scoped reads", () => {
       .prepare("UPDATE workboard_cards SET execution_id = NULL WHERE id = ?")
       .run(absentExecution.id);
     for (const { name } of cases) {
-      const hydratedIds: unknown[] = [];
-      const restore = observeReads((_sql, rows) => {
-        hydratedIds.push(...rows.filter((row) => "notes" in row).map((row) => row.id));
-      });
-      try {
-        await expect(
-          store.captureSession({
-            title: "Reuse",
-            sessionKey: `session-${name}`,
-            boardId: "elsewhere",
-          }),
-        ).resolves.toMatchObject({ id: `arbitrary-${name}-a` });
-      } finally {
-        restore();
-      }
-      expect(hydratedIds.length).toBeGreaterThan(0);
-      expect(hydratedIds.length).toBeLessThanOrEqual(2);
-      expect(
-        hydratedIds.every((id) => id === `arbitrary-${name}-a` || id === `arbitrary-${name}-z`),
-      ).toBe(true);
+      const { value: captured, ids } = await captureRead(() =>
+        store.captureSession({
+          title: "Reuse",
+          sessionKey: `session-${name}`,
+          boardId: "elsewhere",
+        }),
+      );
+      expect(captured).toMatchObject({ id: `arbitrary-${name}-a` });
+      expect(ids.length).toBeGreaterThan(0);
+      expect(ids.length).toBeLessThanOrEqual(2);
+      expect(ids.every((id) => id === `arbitrary-${name}-a` || id === `arbitrary-${name}-z`)).toBe(
+        true,
+      );
     }
     for (const [sessionKey, id] of [
       ["direct-session", direct.id],
@@ -437,9 +378,7 @@ describe("Workboard context and session-scoped reads", () => {
 describe("Workboard board-scoped SQLite hydration", () => {
   // Injects legacy JSON through a native SQLite file handle.
   test("prunes empty legacy automation fields without losing persisted details", async () => {
-    const { store, stores, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
+    const { store, stores, dbPath } = setup();
     const card = await store.create({ title: "Legacy automation" });
     const automation = {
       summary: "Keep persisted details",
@@ -465,7 +404,7 @@ describe("Workboard board-scoped SQLite hydration", () => {
 
   // Measures fetched rows through the native SQLite statement prototype.
   test("reads only the requested board while preserving complete cards and order", async () => {
-    const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
+    const { store } = setup();
     const later = await store.create({ title: "Later", boardId: "ops", labels: ["one", "two"] });
     await store.addComment(later.id, { body: "Retain this comment" });
     const earlier = await store.create({ title: "Earlier", boardId: "ops", position: 0 });
@@ -473,22 +412,11 @@ describe("Workboard board-scoped SQLite hydration", () => {
     await store.addComment(other.id, { body: "Unrelated payload" });
     await store.create({ title: "Default board" });
     const expected = [await store.get(earlier.id), await store.get(later.id)];
-    let fetchedRows = 0;
-    let queries = 0;
-    const restore = observeReads((sql, rows) => {
-      if (/^select\b/iu.test(sql) && /\bfrom "?workboard_/iu.test(sql)) {
-        queries++;
-        fetchedRows += rows.length;
-      }
-    });
-    try {
-      await expect(store.list({ boardId: " OPS " })).resolves.toEqual(expected);
-    } finally {
-      restore();
-    }
+    const { value, rowCount, queries } = await captureRead(() => store.list({ boardId: " OPS " }));
+    expect(value).toEqual(expected);
     // Two card rows, their three events, two labels and one comment.
-    expect(fetchedRows).toBeGreaterThan(0);
-    expect(fetchedRows).toBeLessThanOrEqual(8);
+    expect(rowCount).toBeGreaterThan(0);
+    expect(rowCount).toBeLessThanOrEqual(8);
     expect(queries).toBeGreaterThan(0);
     expect(queries).toBeLessThanOrEqual(13);
     await expect(store.list({ boardId: "missing" })).resolves.toEqual([]);
@@ -500,35 +428,28 @@ describe("Workboard board-scoped SQLite hydration", () => {
 
   // Moves the card through a native SQLite file handle during statement interception.
   test("hydrates captured card IDs even if another connection moves the card after selection", async () => {
-    const { store, dbPath } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
-    const created = await store.create({
-      title: "Moving card",
-      boardId: "ops",
-      labels: ["keep"],
-    });
+    const { store, dbPath } = setup();
+    const created = await store.create({ title: "Moving card", boardId: "ops", labels: ["keep"] });
     const expected = await store.addComment(created.id, { body: "Keep across the move" });
     using raw = new DatabaseSync(dbPath);
     let moved = false;
-    const restore = observeReads((sql) => {
-      if (!moved && /^select\b.*\bfrom "?workboard_cards"?(?:\s|$)/iu.test(sql)) {
-        moved = true;
-        raw
-          .prepare("UPDATE workboard_cards SET board_id = ?, automation_json = ? WHERE id = ?")
-          .run(
-            "other",
-            JSON.stringify({ ...expected.metadata?.automation, boardId: "other" }),
-            expected.id,
-          );
-      }
-    });
-    try {
-      await expect(store.list({ boardId: "ops" })).resolves.toEqual([expected]);
-      expect(moved).toBe(true);
-    } finally {
-      restore();
-    }
+    const { value } = await captureRead(
+      () => store.list({ boardId: "ops" }),
+      (sql) => {
+        if (!moved && /^select\b.*\bfrom "?workboard_cards"?(?:\s|$)/iu.test(sql)) {
+          moved = true;
+          raw
+            .prepare("UPDATE workboard_cards SET board_id = ?, automation_json = ? WHERE id = ?")
+            .run(
+              "other",
+              JSON.stringify({ ...expected.metadata?.automation, boardId: "other" }),
+              expected.id,
+            );
+        }
+      },
+    );
+    expect(value).toEqual([expected]);
+    expect(moved).toBe(true);
     await expect(store.list({ boardId: "ops" })).resolves.toEqual([]);
     await expect(store.list({ boardId: "other" })).resolves.toEqual([
       {
@@ -545,7 +466,7 @@ describe("Workboard board-scoped SQLite hydration", () => {
 describe("Workboard card-scoped notification reads", () => {
   // Measures fetched rows through the native SQLite statement prototype.
   test("bounds fetched rows and preserves card scope, missing cards, and cursor advancement", async () => {
-    const { store } = createWorkboardSqliteTestHarness({ createStores: createKernelStores });
+    const { store } = setup();
     const selected = await store.create({
       title: "Selected notifications",
       boardId: "ops",
@@ -582,30 +503,19 @@ describe("Workboard card-scoped notification reads", () => {
       runId: "run-1",
       eventKinds: ["completed"],
     });
-    let fetchedRows = 0;
-    const restore = observeReads((sql, rows) => {
-      if (/^select\b/iu.test(sql) && /\bfrom "?workboard_/iu.test(sql)) {
-        fetchedRows += rows.length;
-      }
-    });
-    try {
-      await expect(
-        store.notificationEvents({ subscriptionId: subscription.id, cardId: other.id, limit: 1 }),
-      ).resolves.toMatchObject({ events: [{ id: "earlier" }] });
-    } finally {
-      restore();
-    }
-    expect(fetchedRows).toBeGreaterThan(0);
+    const { value, rowCount } = await captureRead(() =>
+      store.notificationEvents({ subscriptionId: subscription.id, cardId: other.id, limit: 1 }),
+    );
+    expect(value).toMatchObject({ events: [{ id: "earlier" }] });
+    expect(rowCount).toBeGreaterThan(0);
     expect(
-      fetchedRows,
+      rowCount,
       "card notification reads must not hydrate unrelated cards",
     ).toBeLessThanOrEqual(5);
     await expect(store.notificationEvents({ cardId: ` ${selected.id} ` })).resolves.toMatchObject({
       events: [{ id: "earlier" }, { id: "later" }],
     });
-    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({
-      events: [],
-    });
+    await expect(store.notificationEvents({ cardId: "missing" })).resolves.toEqual({ events: [] });
     await expect(
       store.advanceNotificationEvents({ subscriptionId: subscription.id, limit: 1 }),
     ).resolves.toMatchObject({ events: [{ id: "earlier" }] });
@@ -621,9 +531,7 @@ describe("Workboard card-scoped notification reads", () => {
 describe("Workboard dependency status reads", () => {
   // Measures fetched rows through the native SQLite statement prototype.
   test("prepares a card with fifty parents without hydrating each parent's tree", async () => {
-    const { store, stores } = createWorkboardSqliteTestHarness({
-      createStores: createKernelStores,
-    });
+    const { store, stores } = setup();
     const parents = [];
     for (let index = 0; index < 50; index++) {
       parents.push(
@@ -649,22 +557,11 @@ describe("Workboard dependency status reads", () => {
     };
     await stores.cards.register(child.id, { version: 1, card: linked });
     const expected = await store.get(child.id);
-    let queries = 0;
-    let fetchedRows = 0;
-    const restore = observeReads((sql, rows) => {
-      if (/^select\b/iu.test(sql) && /\bfrom "?workboard_/iu.test(sql)) {
-        queries++;
-        fetchedRows += rows.length;
-      }
-    });
-    try {
-      await expect(store.prepareStart(child.id)).resolves.toEqual(expected);
-    } finally {
-      restore();
-    }
+    const { value, queries, rowCount } = await captureRead(() => store.prepareStart(child.id));
+    expect(value).toEqual(expected);
     expect(queries).toBeLessThanOrEqual(14);
-    expect(fetchedRows).toBeLessThanOrEqual(102);
+    expect(rowCount).toBeLessThanOrEqual(102);
     expect(queries).toBeGreaterThan(0);
-    expect(fetchedRows).toBeGreaterThan(0);
+    expect(rowCount).toBeGreaterThan(0);
   });
 });

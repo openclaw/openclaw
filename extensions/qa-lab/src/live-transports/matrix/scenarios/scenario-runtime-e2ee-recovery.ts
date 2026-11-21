@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createMatrixQaClient } from "../substrate/client.js";
 import {
   assertMatrixQaExpectedBootstrapFailure,
@@ -12,7 +11,6 @@ import {
   assertMatrixQaBootstrapSucceeded,
   createMatrixQaE2eeAccountClient,
   ensureMatrixQaE2eeOwnDeviceVerified,
-  MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID,
   MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT,
   requireMatrixQaPassword,
   resolveMatrixQaE2eeScenarioGroupRoom,
@@ -33,14 +31,6 @@ export async function runMatrixQaE2eeBootstrapSuccessScenario(
     });
     assertMatrixQaBootstrapSucceeded("driver", result);
     return {
-      artifacts: {
-        backupCreatedVersion: result.verification.backupVersion,
-        bootstrapActor: "driver",
-        bootstrapSuccess: true,
-        currentDeviceId: result.verification.deviceId,
-        recoveryKeyId: result.verification.recoveryKeyId,
-        recoveryKeyStored: result.verification.recoveryKeyStored,
-      },
       details: [
         "driver bootstrap and guarded cross-signing reset succeeded through real Matrix crypto bootstrap",
         `device verified: ${result.verification.verified ? "yes" : "no"}`,
@@ -111,20 +101,6 @@ async function runMatrixQaRecoveryScenario(
         });
         assertMatrixQaFaultedRecoveryOwnerVerificationRequired(faulted);
         return {
-          artifacts: {
-            backupRestored: faulted.restore.success,
-            backupUsable: faulted.verification.backupUsable,
-            faultHitCount: faulted.faultHits.length,
-            faultedEndpoints: faulted.faultHits.map((hit) => hit.path),
-            faultRuleId: MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID,
-            recoveryDeviceId: recoveryDevice.deviceId,
-            recoveryKeyAccepted: faulted.verification.recoveryKeyAccepted,
-            recoveryKeyId: recoveryKey?.keyId ?? null,
-            recoveryVerified: faulted.verification.deviceOwnerVerified,
-            restoreImported: faulted.restore.imported,
-            restoreTotal: faulted.restore.total,
-            verificationSuccess: faulted.verification.success,
-          },
           details: [
             "driver recovery key unlocked backup while owner signature upload was blocked",
             `seeded encrypted event: ${seededEventId}`,
@@ -185,22 +161,6 @@ async function runMatrixQaRecoveryScenario(
       await client.deleteOwnDevices([recoveryDevice.deviceId]).catch(() => undefined);
       cleanupRecoveryDevice = false;
       return {
-        artifacts: {
-          backupCreatedVersion: reset.createdVersion,
-          backupReset: reset.success,
-          backupRestored: restored.success,
-          bootstrapActor: "driver",
-          bootstrapSuccess: ready.bootstrap?.success ?? true,
-          recoveryDeviceId: recoveryDevice.deviceId,
-          recoveryKeyId: recoveryKey?.keyId ?? null,
-          recoveryKeyUsable:
-            recoveryVerification.recoveryKeyAccepted && recoveryVerification.backupUsable,
-          recoveryKeyStored: true,
-          recoveryVerified: recoveryVerification.deviceOwnerVerified,
-          restoreImported: restored.imported,
-          restoreTotal: restored.total,
-          seededEventId,
-        },
         details: [
           "driver recovery lifecycle completed through real Matrix recovery APIs",
           `bootstrap backup version: ${ready.verification.backupVersion ?? "<none>"}`,
@@ -231,14 +191,6 @@ export async function runMatrixQaE2eeKeyBootstrapFailureScenario(
   const bootstrapError = assertMatrixQaExpectedBootstrapFailure({ faultHits, result });
 
   return {
-    artifacts: {
-      bootstrapActor: "driver",
-      bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
-      bootstrapSuccess: result.success,
-      faultedEndpoint: MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT,
-      faultHitCount: faultHits.length,
-      ...(faultHits[0]?.ruleId ? { faultRuleId: faultHits[0].ruleId } : {}),
-    },
     details: [
       "Matrix E2EE bootstrap failure surfaced through real SDK bootstrap.",
       `faulted endpoint: GET/POST ${MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT}`,

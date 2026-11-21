@@ -283,6 +283,7 @@ export async function runAcpAgentCommand(params: {
       body: params.body,
       transcriptBody: params.transcriptBody,
       inputProvenance: params.opts.inputProvenance,
+      privateCompletion: params.opts.privateCompletion,
       userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
       ...(!params.opts.userTurnTranscriptRecorder &&
       params.opts.suppressPromptPersistence !== true &&

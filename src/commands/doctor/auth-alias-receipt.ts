@@ -159,8 +159,7 @@ export function recordAuthAliasMigration(params: {
       // Preserve each owner's exact preimage and its field-only normalization.
       // Independent owner commits may settle on either side of this conversion.
       for (const entry of params.normalizeCredentialFields ? previous : []) {
-        const normalized = structuredClone(entry);
-        for (const expected of normalized.credentials) {
+        for (const expected of entry.credentials) {
           const store = params.stores.find(
             (candidate) => candidate.databasePath === expected.databasePath,
           );
@@ -184,7 +183,7 @@ export function recordAuthAliasMigration(params: {
             }
           }
         }
-        records.set(digest(normalized), normalized);
+        records.set(digest(entry), entry);
       }
       for (const entry of mappings) {
         records.set(digest(entry), entry);

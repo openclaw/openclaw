@@ -8,10 +8,15 @@ import {
   splitSystemPromptCacheBoundary,
   SYSTEM_PROMPT_CACHE_BOUNDARY,
 } from "@openclaw/ai/internal/shared";
+import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
+import { indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
+import { compactCatalogForSkillRead } from "./system-prompt-skills.js";
+import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 type PromptReportTool = { name: string; parameters: unknown; description?: string; label?: string };
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
@@ -27,10 +32,28 @@ const toolSchemaStatsCache = new WeakMap<
 >();
 
 function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChars: number }> {
+  // Compact catalogs (`skills_read` sessions) render one `- "<JSON name>"[: description]` line per
+  // skill, with decoded descriptions that may quote XML. XML catalogs keep descriptions escaped on
+  // their tag line, so no XML line starts with `- "`: the line shape selects the parser.
+  const compactEntries = Array.from(
+    skillsPrompt.matchAll(/^- ("(?:[^"\\\n]|\\.)*").*$/gmu),
+    ([line, quoted = '""']) => {
+      const name = String(JSON.parse(quoted)) || "(unknown)";
+      return { name: ` ${name}`.slice(1), blockChars: line.length };
+    },
+  );
+  if (compactEntries.length > 0) {
+    return compactEntries;
+  }
   return Array.from(skillsPrompt.matchAll(/<skill>[\s\S]*?<\/skill>/gi), (match) => {
     const block = match[0];
-    const name = block.match(/<name>\s*([^<]+?)\s*<\/name>/i)?.[1]?.trim() || "(unknown)";
-    return { name, blockChars: block.length };
+    const nameStart = block.search(/<name>\s*[^<]+?\s*<\/name>/i);
+    const name =
+      nameStart < 0
+        ? "(unknown)"
+        : block.slice(nameStart + 6, block.indexOf("<", nameStart + 6)).trim() || "(unknown)";
+    // Flatten a name-sized string before slicing so captures cannot retain the whole catalog.
+    return { name: ` ${name}`.slice(1), blockChars: block.length };
   });
 }
 
@@ -79,14 +102,57 @@ function resolveSummaryHash(summary: string): string {
 
 function buildToolsEntries(
   tools: PromptReportTool[],
+  catalogEntries?: readonly ToolSearchCatalogEntry[],
 ): SessionSystemPromptReport["tools"]["entries"] {
+  const visibleEntries = catalogEntries
+    ? indexFirstByKey(
+        catalogEntries.filter((entry) => entry.directVisible),
+        (entry) => entry.name,
+      )
+    : undefined;
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    return { name, summaryChars, summaryHash: resolveSummaryHash(summary), ...schemaStats };
+    const catalogEntry = visibleEntries?.get(name);
+    const provenance = catalogEntry ?? classifyAgentToolSource(tool);
+    return {
+      name,
+      summaryChars,
+      summaryHash: resolveSummaryHash(summary),
+      ...schemaStats,
+      source: provenance.source,
+      sourceName: provenance.sourceName,
+      serverName: provenance.mcp?.serverName,
+    };
   });
+}
+
+function buildDeferredToolsReport(
+  catalogEntries: readonly ToolSearchCatalogEntry[],
+): NonNullable<SessionSystemPromptReport["tools"]["deferred"]> {
+  const entries = catalogEntries
+    .filter((entry) => !entry.directVisible)
+    .map((entry) => {
+      // Remote/client schemas may be lazy hostile objects. Only their owner's
+      // detached JSON publication can supply a size without traversing them.
+      const published = getPublishedRuntimeToolInputSchema(entry.parameters);
+      const schemaChars =
+        published?.json.length ??
+        (entry.source === "openclaw" ? buildToolSchemaStats(entry.parameters).schemaChars : null);
+      return {
+        name: entry.name,
+        source: entry.source,
+        sourceName: entry.sourceName,
+        serverName: entry.mcp?.serverName,
+        schemaChars,
+      };
+    });
+  return {
+    entries,
+    schemaChars: entries.reduce((sum, entry) => sum + (entry.schemaChars ?? 0), 0),
+  };
 }
 
 function measureRenderedProjectContextChars(systemPrompt: string): number {
@@ -101,21 +167,24 @@ function measureRenderedProjectContextChars(systemPrompt: string): number {
 }
 
 function resolveRenderedSkillsPrompt(systemPrompt: string, skillsPrompt: string): string {
-  const catalog = skillsPrompt.trim();
-  if (!catalog) {
+  const input = skillsPrompt.trim();
+  if (!input) {
     return "";
   }
   // The renderer places the catalog after this boundary. Workspace examples and
   // provider headings in the stable prefix are not the rendered Skills section.
   const prompt = splitSystemPromptCacheBoundary(systemPrompt)?.dynamicSuffix ?? systemPrompt;
-  for (const heading of prompt.matchAll(/(?:^|\n)## Skills\n/g)) {
-    const sectionStart = heading.index + heading[0].length;
-    const catalogStart = prompt.indexOf(catalog, sectionStart);
-    const nextSection = prompt.indexOf("\n#", sectionStart);
-    // Match the whole known catalog, allowing headings inside its descriptions,
-    // only when it starts in the rendered Skills section.
-    if (catalogStart >= 0 && (nextSection < 0 || catalogStart < nextSection)) {
-      return catalog;
+  // Callers may pass the stored XML catalog; `skills_read` sessions render its compact form.
+  for (const catalog of new Set([input, compactCatalogForSkillRead(input)])) {
+    for (const heading of prompt.matchAll(/(?:^|\n)## Skills\n/g)) {
+      const sectionStart = heading.index + heading[0].length;
+      const catalogStart = prompt.indexOf(catalog, sectionStart);
+      const nextSection = prompt.indexOf("\n#", sectionStart);
+      // Match the whole known catalog, allowing headings inside its descriptions,
+      // only when it starts in the rendered Skills section.
+      if (catalogStart >= 0 && (nextSection < 0 || catalogStart < nextSection)) {
+        return catalog;
+      }
     }
   }
   return "";
@@ -138,11 +207,12 @@ export function buildSystemPromptReport(params: {
   injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
   tools: PromptReportTool[];
+  catalogEntries?: readonly ToolSearchCatalogEntry[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
-  const toolsEntries = buildToolsEntries(params.tools);
+  const toolsEntries = buildToolsEntries(params.tools, params.catalogEntries);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
   const skillsPrompt = resolveRenderedSkillsPrompt(params.systemPrompt, params.skillsPrompt);
   const skillsEntries = parseSkillBlocks(skillsPrompt);
@@ -176,6 +246,9 @@ export function buildSystemPromptReport(params: {
       listChars: 0,
       schemaChars: toolsSchemaChars,
       entries: toolsEntries,
+      ...(params.catalogEntries
+        ? { deferred: buildDeferredToolsReport(params.catalogEntries) }
+        : {}),
     },
   };
 }

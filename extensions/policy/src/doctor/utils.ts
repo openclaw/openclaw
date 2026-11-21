@@ -1,3 +1,4 @@
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import {
   normalizeStringEntries,
   normalizeStringEntriesLower,
@@ -11,7 +12,7 @@ export function readPolicyStringArray(
   options: { readonly lowercase?: boolean } = {},
 ): readonly string[] | undefined {
   const current = getPolicyPath(policy, path);
-  if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(current)) {
     return undefined;
   }
   return options.lowercase === false

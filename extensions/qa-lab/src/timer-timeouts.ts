@@ -1,17 +1,12 @@
 import {
   addTimerTimeoutGraceMs,
   clampPositiveTimerTimeoutMs,
-  resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 
-export function resolveQaGatewayTimeoutWithGraceMs(
-  timeoutMs: unknown,
-  graceMs: unknown = 5_000,
-): number | undefined {
+export function resolveQaGatewayTimeoutWithGraceMs(timeoutMs: unknown): number | undefined {
   const timeout = clampPositiveTimerTimeoutMs(timeoutMs);
   if (timeout === undefined) {
     return undefined;
   }
-  const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
-  return addTimerTimeoutGraceMs(timeout, grace);
+  return addTimerTimeoutGraceMs(timeout, 5_000);
 }

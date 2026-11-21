@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { UserProfile as UserProfileListItem } from "../../packages/gateway-protocol/src/schema/users.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -23,8 +23,8 @@ import {
   readUserProfileVersion,
 } from "./user-profile-events.js";
 import {
-  getResidentUserProfileDisplay,
   isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
   readResidentUserProfileIdentity,
 } from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
@@ -34,7 +34,6 @@ import type {
   UserChannelIdentityResult,
   UserChannelIdentitySelector,
   UserChannelIdentityWorkerOperations,
-  UserProfileAuthority,
 } from "./user-profiles.types.js";
 
 type IdentityOptions = Pick<OpenClawStateDatabaseOptions, "path" | "env">;
@@ -60,6 +59,18 @@ function unwrapIdentityResult<T>(result: UserChannelIdentityResult<T>, profileId
   }
   result satisfies never;
   throw new Error("Unsupported channel identity result");
+}
+
+/** A presentation lookup: the returned profile ID is not an authority lease. */
+export async function readCanonicalUserChannelIdentityProfileId(
+  identity: UserChannelIdentity,
+  options: IdentityOptions = {},
+): Promise<string | undefined> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "userProfiles.channelIdentity.resolve",
+    identity: { ...identity },
+  });
+  return reply?.linked?.profileId;
 }
 
 export async function listCanonicalUserChannelIdentities(
@@ -284,8 +295,29 @@ export async function prepareUserProfileRolePolicyAuthority(
           profileId: profile.profileId,
           role: profile.role,
           githubLogin: profile.githubLogin ?? null,
+          ...(profile.openclawIdAccountIds
+            ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+            : {}),
         }
       );
+    }
+    if (isArtifactPreservingStateRead("shared", source.path)) {
+      const catalog = await prepareUserProfileCatalog({ ...options, path: source.path });
+      try {
+        const profile = catalog.readCurrentAuthority(profileId);
+        return (
+          profile && {
+            profileId: profile.profileId,
+            role: profile.role,
+            githubLogin: profile.githubLogin ?? null,
+            ...(profile.openclawIdAccountIds
+              ? { openclawIdAccountIds: profile.openclawIdAccountIds }
+              : {}),
+          }
+        );
+      } finally {
+        catalog.release();
+      }
     }
     return runOpenClawStateWorkerOperation(
       context,
@@ -314,35 +346,16 @@ async function prepareUserProfileAuthority(
     profileId,
     options,
     dependency,
-    async (
-      context,
-    ): Promise<(UserProfileAuthority & { listItem?: UserProfileListItem }) | undefined> => {
-      const source = { path: context.admission.databasePath };
-      if (!includeProfile && isUserProfileCatalogReady(source.path)) {
-        const profile = readResidentUserProfileIdentity(profileId, source);
-        return (
-          profile && {
-            ...profile,
-            aliases: [
-              profile.profileId,
-              ...[...profile.aliases].filter((id) => id !== profile.profileId).toSorted(),
-            ],
-            display: getResidentUserProfileDisplay(profile.profileId, source),
-          }
-        );
+    async (context) => {
+      const catalog = await prepareUserProfileCatalog({
+        ...options,
+        path: context.admission.databasePath,
+      });
+      try {
+        return catalog.readCurrentAuthority(profileId, includeProfile);
+      } finally {
+        catalog.release();
       }
-      const reply = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        {
-          type: "userProfiles.authority.resolve",
-          profileId,
-          ...(includeProfile ? { includeProfile } : {}),
-        },
-      );
-      if (!reply) {
-        return undefined;
-      }
-      return reply.profile;
     },
     includeProfile,
   );

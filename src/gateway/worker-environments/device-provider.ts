@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
@@ -169,13 +170,17 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
         node: { deviceId },
       };
     },
-    inspect: async ({ profile }) => {
+    inspect: async ({ profile, signal }) => {
+      signal?.throwIfAborted();
       const deviceId = requireDeviceId(profile);
-      const paired = await options.getPairedDevice(deviceId);
+      const paired = await racePromiseWithAbortSignal(options.getPairedDevice(deviceId), signal);
       if (!hasPairedNodeRole(paired)) {
         return { status: "unknown" };
       }
-      const connected = await nodeTransport?.getCurrentNode(deviceId);
+      const connected = await racePromiseWithAbortSignal(
+        Promise.resolve(nodeTransport?.getCurrentNode(deviceId)),
+        signal,
+      );
       if (connected) {
         return { status: "active", sharedHost: true };
       }

@@ -18,7 +18,7 @@ export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
 export type ModelSetupPageState =
   | { phase: "loading" }
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
-  | { phase: "detect-error"; message: string };
+  | { phase: "detect-error" };
 
 export function preparedModelPageState(
   result: SystemAgentSetupDetectResult,
@@ -84,7 +84,11 @@ type ModelSetupWizardPhase =
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
-export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+// authBrandId is the Gateway-supplied brand of the selected sign-in, not its choice id.
+export type ModelSetupWizardState = ModelSetupWizardPhase & {
+  authLabel?: string;
+  authBrandId?: string;
+};
 export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
 
 export type ModelSetupState = {
@@ -101,7 +105,6 @@ export type ModelSetupState = {
   nativeSessionCatalogsEnabled: boolean;
   iconUrls: Record<string, string>;
   setupRefreshWarning: string | null;
-  detectionError: string | null;
   detectionRequest: object | null;
   cancellationNotice: string | null;
 };
@@ -121,7 +124,6 @@ export function createModelSetupState(): ModelSetupState {
     nativeSessionCatalogsEnabled: false,
     iconUrls: {},
     setupRefreshWarning: null,
-    detectionError: null,
     detectionRequest: null,
     cancellationNotice: null,
   };
@@ -171,7 +173,7 @@ export function mapActivationResult(params: {
       phase: "success",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
       ...(warning ? { warning } : {}),
     };
   }
@@ -189,7 +191,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
       phase: "ok",
       modelRef: result.modelRef,
       ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
-      ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
+      ...(result.latencyMs !== undefined ? { latencyMs: result.latencyMs } : {}),
     };
   }
   return { phase: "failed", status: result.status, error: formatUiExternalText(result.error) };
@@ -212,9 +214,12 @@ export function wizardStateFromResult(
   if (result.done && result.status === "done") {
     return { phase: "done" };
   }
+  const cancelled = result.status === "cancelled";
+  // The Gateway ends its own wizard sessions with the bare word "cancelled"; show our sentence instead.
+  const error = cancelled && result.error?.trim().toLowerCase() === "cancelled" ? "" : result.error;
   return {
-    phase: result.status === "cancelled" ? "cancelled" : "error",
-    message: formatUiExternalText(result.error, fallbackError),
+    phase: cancelled ? "cancelled" : "error",
+    message: formatUiExternalText(error, fallbackError),
   };
 }
 

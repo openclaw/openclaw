@@ -5,7 +5,7 @@ import {
   createPluginStateKeyedStore,
   registerMigratedPluginStateEntry,
 } from "../plugin-state/plugin-state-store.js";
-import { migrationFileExists } from "./state-migrations.fs.js";
+import { safeStatSync } from "./path-guards.js";
 import { archiveLegacyImportSource } from "./state-migrations.storage.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
@@ -191,7 +191,7 @@ export async function runLegacyMigrationPlans(
             try {
               // Deferred callbacks may open stores implicitly; re-enter the import's owner scope.
               await withPluginStateImportEnv(stateDir, async () => {
-                if (plan.cleanupSource === "rename" && migrationFileExists(plan.sourcePath)) {
+                if (plan.cleanupSource === "rename" && safeStatSync(plan.sourcePath)?.isFile()) {
                   archiveLegacyImportSource({
                     sourcePath: plan.sourcePath,
                     label: plan.label,
@@ -199,7 +199,7 @@ export async function runLegacyMigrationPlans(
                     warnings: cleanupWarnings,
                   });
                 }
-                if (plan.cleanupSource === "remove" && migrationFileExists(plan.sourcePath)) {
+                if (plan.cleanupSource === "remove" && safeStatSync(plan.sourcePath)?.isFile()) {
                   try {
                     fs.unlinkSync(plan.sourcePath);
                     changes.push(`Removed ${plan.label} legacy source (${plan.sourcePath})`);
@@ -239,7 +239,7 @@ export async function runLegacyMigrationPlans(
         });
         continue;
       }
-      if (migrationFileExists(plan.targetPath)) {
+      if (safeStatSync(plan.targetPath)?.isFile()) {
         continue;
       }
       fs.mkdirSync(path.dirname(plan.targetPath), { recursive: true });

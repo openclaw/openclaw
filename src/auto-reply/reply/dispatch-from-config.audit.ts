@@ -15,18 +15,11 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type {
   DispatchFromConfigParams,
-  DispatchFromConfigResult,
+  DispatchProcessedOptions,
+  DispatchProcessedOutcome,
+  InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.types.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
-
-export type DispatchProcessedOutcome = "completed" | "skipped" | "error";
-
-export type DispatchProcessedOptions = {
-  reason?: string;
-  error?: string;
-  userPrompt?: string;
-  finalResponse?: string;
-};
 
 const completedInboundAuditReasons = new Map<
   string | undefined,
@@ -95,13 +88,6 @@ function resolveInboundMessageAuditTerminal(
     errorCode: "message_processing_failed",
   };
 }
-
-export type InboundMessageAuditTerminalRecorder = {
-  note: (outcome: DispatchProcessedOutcome, options?: DispatchProcessedOptions) => void;
-  observeRunId: (runId: string) => void;
-  finishSuccess: (result: DispatchFromConfigResult) => void;
-  finishError: () => void;
-};
 
 export function emitInboundMessageAuditTerminal(params: {
   cfg: DispatchFromConfigParams["cfg"];

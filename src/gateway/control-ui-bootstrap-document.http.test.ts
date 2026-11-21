@@ -2,9 +2,14 @@ import fs from "node:fs";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "./control-ui-bootstrap-contract.js";
 import * as pluginAssets from "./control-ui-plugin-assets.js";
@@ -17,6 +22,16 @@ afterEach(() => vi.restoreAllMocks());
 it.each([false, true])(
   "embeds the endpoint payload only in admitted documents (catalog failure: %s)",
   async (catalogFails) => {
+    const phases: Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>[] = [];
+    const stop = onTrustedInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "diagnostic.phase.completed") {
+          phases.push(event);
+        }
+      },
+      { includeTrusted: ["diagnostic.phase.completed"] },
+    );
+    onTestFinished(stop);
     const plugin = {
       pluginId: "review",
       name: "Review",
@@ -85,5 +100,44 @@ it.each([false, true])(
     const denied = await request("/control/chat/main/topic", true, false);
     expect(denied.res.statusCode).toBe(200);
     expect(denied.body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+    await waitForDiagnosticEventsDrained();
+    expect(phases.length).toBeGreaterThan(0);
+    for (const phase of phases) {
+      expect(phase.details).toBeUndefined();
+    }
+  },
+);
+
+it.each(
+  [undefined, false, true].flatMap((enabled) =>
+    ["", "/control"].map((basePath) => ({ enabled, basePath })),
+  ),
+)(
+  "serves only public ID policy to an anonymous popup (enabled=$enabled, basePath=$basePath)",
+  async ({ enabled, basePath }) => {
+    const root = dirs.make("id-callback-document-");
+    fs.writeFileSync(path.join(root, "index.html"), "<html><head></head><body></body></html>");
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { identity: { name: "Private owner profile" } } } },
+      gateway: { openclawId: { enabled } },
+    };
+    const req = new IncomingMessage(new Socket());
+    req.url = `${basePath}/openclaw-id/callback`;
+    req.method = "GET";
+    req.headers = {};
+    const response = makeMockHttpResponse();
+    await handleControlUiHttpRequest(req, response.res, {
+      basePath,
+      root: { kind: "resolved", path: root },
+      config,
+      getRuntimeConfig: () => config,
+      auth: { mode: "token", token: "synthetic-gateway-token", allowTailscale: false },
+    });
+    const body = String(response.end.mock.calls[0]?.[0] ?? "");
+    expect(response.res.statusCode).toBe(200);
+    expect(body).not.toContain(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+    expect(body).not.toContain("Private owner profile");
+    expect(body).toContain(`data-openclaw-control-ui-base-path="${basePath}"`);
+    expect(body.includes('data-openclaw-id-enabled="true"')).toBe(enabled === true);
   },
 );

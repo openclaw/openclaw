@@ -3,6 +3,7 @@ import vm from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { result as spawnResult } from "./bootstrap.test-support.js";
 import type { EnvironmentRecipe } from "./environment-recipe.js";
 import { runWorkerProjectLifecycle } from "./project-setup-script.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -61,14 +62,7 @@ function lifecycleTransport(failExecutable?: string) {
           },
         },
       });
-      return {
-        stdout: "",
-        stderr,
-        code: process.exitCode,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return spawnResult({ stderr, code: process.exitCode });
     }),
   };
   return { tunnel, events, invocations, killedGroups };
@@ -86,11 +80,26 @@ const recipe: EnvironmentRecipe = {
   postStart: ["serve", "--foreground"],
 };
 
+function runLifecycle(
+  tunnel: Pick<WorkerTunnelHandle, "runWorkspaceCommand">,
+  overrides: Partial<Parameters<typeof runWorkerProjectLifecycle>[0]> = {},
+) {
+  return runWorkerProjectLifecycle({
+    recipe,
+    tunnel,
+    postCreate: true,
+    assertCurrent: () => {},
+    ...overrides,
+  });
+}
+
+const boundWorkspace = { workspaceDir: "/worker/project", homeDir: "/worker/home" };
+
 describe("cloud project lifecycle command transport", () => {
   it("runs parallel creation commands with spec command forms before start at the bound workspace", async () => {
     const { tunnel, events, invocations, killedGroups } = lifecycleTransport();
 
-    await runWorkerProjectLifecycle({ recipe, tunnel, postCreate: true, assertCurrent: () => {} });
+    await runLifecycle(tunnel);
 
     expect(killedGroups).toEqual([]);
     expect(events).toEqual([
@@ -106,9 +115,9 @@ describe("cloud project lifecycle command transport", () => {
       { executable: "/bin/sh", args: ["-c", "compile && generate"] },
       { executable: "serve", args: ["--foreground"] },
     ]);
-    for (const invocation of invocations) {
-      expect(invocation.cwd).toBe("/worker/project");
-      expect(invocation.env).toEqual({
+    for (const { cwd, env } of invocations) {
+      expect(cwd).toBe("/worker/project");
+      expect(env).toEqual({
         PATH: "/worker/bin",
         HOME: "/worker/home",
         MODE: "development",
@@ -124,8 +133,7 @@ describe("cloud project lifecycle command transport", () => {
     const provider = vi.fn(
       async (command: Parameters<NonNullable<WorkerProvider["runSetupCommand"]>>[1]) => {
         command.assertCurrent();
-        expect(command.workspaceDir).toBe("/worker/project");
-        expect(command.homeDir).toBe("/worker/home");
+        expect(command).toMatchObject(boundWorkspace);
         return tunnel.runWorkspaceCommand({
           argv: [
             "node",
@@ -140,14 +148,10 @@ describe("cloud project lifecycle command transport", () => {
         });
       },
     );
-    await runWorkerProjectLifecycle({
+    await runLifecycle(tunnel, {
       recipe: { ...recipe, env: { ...recipe.env, TOKEN: null, HTTPS_PROXY: "untrusted" } },
-      tunnel,
-      postCreate: true,
-      workspaceDir: "/worker/project",
-      homeDir: "/worker/home",
+      ...boundWorkspace,
       runSetupCommand: provider,
-      assertCurrent: () => {},
     });
     expect(provider).toHaveBeenCalledTimes(1);
     expect(tunnel.runWorkspaceCommand).toHaveBeenCalledTimes(1);
@@ -163,14 +167,10 @@ describe("cloud project lifecycle command transport", () => {
 
   it("keeps the ordinary tunnel when the provider has no protected setup transport", async () => {
     const { tunnel, events } = lifecycleTransport();
-    await runWorkerProjectLifecycle({
-      recipe,
-      tunnel,
+    await runLifecycle(tunnel, {
       postCreate: false,
-      workspaceDir: "/worker/project",
-      homeDir: "/worker/home",
+      ...boundWorkspace,
       runSetupCommand: async () => undefined,
-      assertCurrent: () => {},
     });
     expect(tunnel.runWorkspaceCommand).toHaveBeenCalledTimes(1);
     expect(events).toEqual(["spawn:serve", "close:serve"]);
@@ -179,40 +179,20 @@ describe("cloud project lifecycle command transport", () => {
   it("does not fall back to the tunnel after a provider runner rejects", async () => {
     const { tunnel } = lifecycleTransport();
     await expect(
-      runWorkerProjectLifecycle({
-        recipe,
-        tunnel,
-        postCreate: true,
-        workspaceDir: "/worker/project",
-        homeDir: "/worker/home",
+      runLifecycle(tunnel, {
+        ...boundWorkspace,
         runSetupCommand: async () => {
           throw new Error("Protected setup egress is unavailable");
         },
-        assertCurrent: () => {},
       }),
     ).rejects.toThrow("Protected setup egress is unavailable");
     expect(tunnel.runWorkspaceCommand).not.toHaveBeenCalled();
   });
 
-  it("runs postStart without repeating postCreate for an already activated worker", async () => {
-    const { tunnel, events } = lifecycleTransport();
-
-    await runWorkerProjectLifecycle({ recipe, tunnel, postCreate: false, assertCurrent: () => {} });
-
-    expect(events).toEqual(["spawn:serve", "close:serve"]);
-  });
-
   it("settles every parallel command and reports failure before starting the next phase", async () => {
     const { tunnel, events } = lifecycleTransport("lint");
 
-    await expect(
-      runWorkerProjectLifecycle({
-        recipe,
-        tunnel,
-        postCreate: true,
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("declared lifecycle failure");
+    await expect(runLifecycle(tunnel)).rejects.toThrow("declared lifecycle failure");
 
     expect(events).toEqual(["spawn:lint", "spawn:/bin/sh", "close:lint", "close:/bin/sh"]);
   });

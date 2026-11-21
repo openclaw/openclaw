@@ -1,6 +1,6 @@
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { callGateway as GatewayCaller } from "../../../gateway/call.js";
-import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
+import { bindGatewayLifecycleRequest } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { resolveSubagentChildAgentId } from "../registry/subagent-child-owner-match.js";
 import { withSubagentSessionSource } from "../spawn/subagent-session-source.js";
@@ -31,7 +31,3 @@ export async function readSubagentSessionEntry(
 export const callSubagentLifecycleGateway: typeof GatewayCaller = (request) =>
   bindGatewayLifecycleRequest()(request);
 export { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
-export {
-  isEmbeddedAgentRunActive,
-  waitForEmbeddedAgentRunEnd,
-} from "../../embedded-agent-runner/runs.js";

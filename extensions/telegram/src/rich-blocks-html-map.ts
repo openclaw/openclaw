@@ -1,5 +1,6 @@
 // Block-level HTML-island mapping: figures/lists/tables/media/maps/collages
 // and island discovery, on top of the fragment parser in rich-blocks-html.ts.
+import { TELEGRAM_HTML_BLOCK_ISLAND_TAGS } from "./format-html.js";
 import {
   richTextToPlainString,
   type InputRichBlock,
@@ -18,30 +19,21 @@ import { renderTelegramMonospaceGrid } from "./text-width.js";
 // Block-level islands the agent contract documents. A supported open tag with a
 // matching close (or a void tag) becomes a typed block; anything else stays text.
 const BLOCK_ISLAND_TAGS = new Set([
-  "details",
-  "p",
-  "table",
-  "ul",
-  "ol",
-  "figure",
-  "img",
-  "video",
-  "audio",
-  "blockquote",
-  "aside",
-  "footer",
-  "hr",
-  "pre",
-  "tg-math-block",
-  "tg-map",
-  "tg-collage",
-  "tg-slideshow",
+  ...TELEGRAM_HTML_BLOCK_ISLAND_TAGS,
   // Only an empty <a name> becomes an anchor block; hrefs fall through to the
   // inline path because elementToBlock returns undefined for them.
   "a",
 ]);
 
 const MEDIA_SRC_RE = /^https:\/\//i;
+const HTML_HEADING_SIZES: Partial<Record<string, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  h1: 1,
+  h2: 2,
+  h3: 3,
+  h4: 4,
+  h5: 5,
+  h6: 6,
+};
 type HtmlContentRenderer = (nodes: readonly HtmlNode[]) => InputRichBlock[];
 
 // True when a container holds meaningful content outside its allowed children;
@@ -404,9 +396,17 @@ function preToBlock(node: Extract<HtmlNode, { kind: "element" }>): InputRichBloc
 function elementToBlock(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock | undefined {
   if (!node.closed) {
     return undefined;
+  }
+  const headingSize = HTML_HEADING_SIZES[node.name];
+  if (headingSize) {
+    const start = node.start + node.raw.length;
+    // Heading bodies share the IR renderer's spans, decoded text, and whitespace.
+    const text = renderText(start, node.children.at(-1)?.end ?? start);
+    return text === "" ? undefined : { type: "heading", text, size: headingSize };
   }
   switch (node.name) {
     case "hr":
@@ -480,11 +480,12 @@ function elementToBlock(
 export function renderTelegramHtmlIsland(
   node: Extract<HtmlNode, { kind: "element" }>,
   renderContent: HtmlContentRenderer,
+  renderText: (start: number, end: number) => RichText,
 ): InputRichBlock[] {
   if (node.name === "p") {
     return renderContent(node.children);
   }
-  const block = elementToBlock(node, renderContent);
+  const block = elementToBlock(node, renderContent, renderText);
   return block ? [block] : [{ type: "paragraph", text: htmlNodesToRichText([node]) }];
 }
 

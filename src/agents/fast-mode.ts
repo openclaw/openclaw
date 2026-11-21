@@ -7,7 +7,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOpenAIServiceTier } from "../llm/providers/openai-fast-mode.js";
 import { type FastModeSource, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { readAgentConfigEntry } from "./agent-scope-config.js";
 import { resolveAliasedParamValue, resolveModelExtraParamSources } from "./model-extra-params.js";
 
 export {
@@ -33,7 +33,6 @@ type FastModeState = {
   fastAutoOnSeconds: number;
 };
 
-/** Resolve the effective fast-mode setting and its source. */
 export function resolveFastModeState(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -55,9 +54,11 @@ export function resolveFastModeState(params: {
   let mode = normalizeFastMode(params.sessionEntry?.fastMode);
   let source: FastModeSource = "session";
   if (mode === undefined) {
+    const agent =
+      params.agentId && params.cfg ? readAgentConfigEntry(params.cfg, params.agentId) : undefined;
     mode = normalizeFastMode(
       params.agentId && params.cfg
-        ? resolveAgentConfig(params.cfg, params.agentId)?.fastModeDefault
+        ? agent && (agent.fastModeDefault ?? params.cfg.agents?.defaults?.fastModeDefault)
         : params.cfg?.agents?.defaults?.fastModeDefault,
     );
     source = "agent";

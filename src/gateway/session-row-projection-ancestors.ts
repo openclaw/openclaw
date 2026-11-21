@@ -4,9 +4,11 @@ import {
   getSessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import {
   SessionRowFactsPending,
+  SessionRowCatalogPending,
   withReadySessionRows,
   type SessionRowReadView,
   type SessionRowPreparationOptions,
@@ -18,6 +20,7 @@ import {
   selectStoredSessionLineage,
 } from "./session-store-key.js";
 import { projectGatewaySessionRunState } from "./session-utils-display.js";
+import { reuseSessionRowChildLinks } from "./session-utils-projection.js";
 
 /** Materialization reads current physical relations from the projection's existing indexes. */
 export function createSessionRowRelationReads(owner: {
@@ -105,12 +108,19 @@ export function createSessionRowRelationReads(owner: {
           value = owner.acquireEntry(value, owner.readEntry(value));
         }
         return value?.entry && [...value.parents].some((ref) => owner.referenced(ref) === row)
-          ? [{ key: value.key, entry: value.entry }]
+          ? [
+              {
+                key: value.key,
+                entry: value.entry,
+                agentId: value.agentId,
+                storePath: value.storeTarget.storePath,
+              },
+            ]
           : [];
       });
       // Keyed child refreshes reorder the parent index; presentation must stay stable.
       links.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
-      return links;
+      return reuseSessionRowChildLinks(links, row.materialized?.source.childLinks);
     },
   };
 }
@@ -174,10 +184,18 @@ function readSessionRowAncestors<T extends records.Row>(
 
 /** Exact event frames prepare the same bounded lineage later projected for each recipient. */
 export function createSessionRowAncestorReads(owner: {
-  state: () => { cfg: records.Inputs["cfg"]; context: SessionRowReadView["state"]["rowContext"] };
+  state: () => {
+    cfg: records.Inputs["cfg"];
+    context: SessionRowReadView["state"]["rowContext"];
+    catalog: { prepareCurrent: (signal?: AbortSignal) => Promise<void> };
+  };
   referenced: (reference: string) => records.Row | undefined;
   lookup: (query: records.Lookup) => records.Row | undefined;
-  prepareExactRows: (queries: readonly records.Lookup[]) => Promise<void> | undefined;
+  prepareExactRows: (
+    queries: readonly records.Lookup[],
+    fromSelection?: boolean,
+    selectedRows?: readonly (records.Row | undefined)[],
+  ) => Promise<void> | undefined;
   prepareSelection: (options?: SessionRowSelectionPreparationOptions) => Promise<void> | undefined;
   retainExactPreparation: () => () => void;
   retainArchiveRows: () => { update: (ids: readonly string[]) => void; release: () => void };
@@ -245,12 +263,11 @@ export function createSessionRowAncestorReads(owner: {
       // Reserve priority before topology can release both this request and a bulk drain.
       const releaseExactPreparation = owner.retainExactPreparation();
       const membershipPending = Symbol("session-membership-pending");
+      let reboundCatalog = false;
       try {
         while (owner.isActive()) {
+          let consumed = false;
           try {
-            while (owner.isActive() && owner.membership.needsPreparation(selected)) {
-              await owner.membership.prepare();
-            }
             const prepared = await owner.placementFacts.withPreparedRows<
               T | typeof membershipPending
             >(
@@ -258,10 +275,11 @@ export function createSessionRowAncestorReads(owner: {
               owner.isActive,
               owner.lookup,
               selected,
-              (targets) => {
+              (targets, selectedRows) => {
                 archivedRows.update(
-                  targets.flatMap((query) => {
+                  targets.flatMap((query, index) => {
                     if (
+                      !options?.selection &&
                       isIncognitoSessionKey(
                         resolveStoredSessionKeyForAgentStore({
                           cfg: owner.state().cfg,
@@ -272,19 +290,20 @@ export function createSessionRowAncestorReads(owner: {
                     ) {
                       return [];
                     }
-                    const row = owner.lookup(query);
+                    const row = selectedRows[index];
                     return row?.entry?.archivedAt !== undefined ? [records.identity(row)] : [];
                   }),
                 );
                 if (owner.membership.needsPreparation(() => targets)) {
                   return owner.membership.prepare();
                 }
-                return owner.prepareExactRows(targets);
+                return owner.prepareExactRows(targets, Boolean(options?.selection), selectedRows);
               },
               (read, targets) => {
                 if (owner.membership.needsPreparation(() => targets)) {
                   return membershipPending;
                 }
+                consumed = true;
                 return consume(read);
               },
               options?.selection
@@ -298,6 +317,12 @@ export function createSessionRowAncestorReads(owner: {
               return prepared;
             }
           } catch (error) {
+            if (error instanceof SessionRowCatalogPending && !consumed && !reboundCatalog) {
+              reboundCatalog = true;
+              const signal = getAsyncWorkSignal();
+              await owner.inOwnerContext(() => owner.state().catalog.prepareCurrent(signal));
+              continue;
+            }
             if (!(error instanceof SessionRowFactsPending)) {
               throw error;
             }

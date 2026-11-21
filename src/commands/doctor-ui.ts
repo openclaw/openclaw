@@ -96,6 +96,8 @@ export function uiProtocolFreshnessIssueToHealthFinding(
   return {
     checkId: "core/doctor/ui-protocol-freshness",
     severity: "warning",
+    category: "fix-now",
+    docsUrl: "https://docs.openclaw.ai/web/control-ui",
     message: formatUiProtocolFreshnessIssue(issue),
     path: issue.uiIndexPath,
     fixHint: issue.installOwner

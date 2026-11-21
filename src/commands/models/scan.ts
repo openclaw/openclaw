@@ -1,15 +1,13 @@
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
-import {
-  parseStrictFiniteNumber,
-  parseStrictPositiveInteger,
-} from "@openclaw/normalization-core/number-coercion";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
 import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveApiKeyForProviderCore } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
+import { parseOptionalPositiveInteger } from "../../cli/parse-positive-integer.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
@@ -66,16 +64,6 @@ function buildScanHint(result: ModelScanResult): string {
   return [...capabilities, ctxLabel, paramLabel].filter(Boolean).join(" | ");
 }
 
-function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
-  const toolOk = results.filter((r) => r.tool.ok);
-  const imageOk = results.filter((r) => r.image.ok);
-  const toolImageOk = results.filter((r) => r.tool.ok && r.image.ok);
-  const imageOnly = imageOk.filter((r) => !r.tool.ok);
-  runtime.log(
-    `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}, image only ${imageOnly.length}`,
-  );
-}
-
 function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   const header = [
     padTerminalCell("Model", MODEL_PAD),
@@ -120,17 +108,6 @@ function parseOptionalFiniteOption(
   return parsed;
 }
 
-function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
-  if (raw === undefined || raw === null) {
-    return fallback;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return parsed;
-}
-
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -150,12 +127,13 @@ export async function modelsScanCommand(
 ) {
   const minParams = parseOptionalFiniteOption(opts.minParams, "--min-params", true);
   const maxAgeDays = parseOptionalFiniteOption(opts.maxAgeDays, "--max-age-days", true);
-  const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
+  const maxCandidates =
+    parseOptionalPositiveInteger(opts.maxCandidates ?? undefined, "--max-candidates") ?? 6;
   const timeout = parseOptionalFiniteOption(opts.timeout, "--timeout");
   const concurrency =
     opts.concurrency === undefined
       ? undefined
-      : parsePositiveIntegerOption(opts.concurrency, "--concurrency", 1);
+      : (parseOptionalPositiveInteger(opts.concurrency ?? undefined, "--concurrency") ?? 1);
 
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {
@@ -249,15 +227,13 @@ export async function modelsScanCommand(
   const imageSorted = sortScanResults(imageOk, "image");
   const imagePreferred = toolSorted.filter((entry) => entry.image.ok);
   const preselectPool = imagePreferred.length > 0 ? imagePreferred : toolSorted;
-  const preselected = preselectPool
-    .slice(0, Math.floor(maxCandidates))
-    .map((entry) => entry.modelRef);
-  const imagePreselected = imageSorted
-    .slice(0, Math.floor(maxCandidates))
-    .map((entry) => entry.modelRef);
+  const preselected = preselectPool.slice(0, maxCandidates).map((entry) => entry.modelRef);
+  const imagePreselected = imageSorted.slice(0, maxCandidates).map((entry) => entry.modelRef);
 
   if (!opts.json) {
-    printScanSummary(results, runtime);
+    runtime.log(
+      `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${imagePreferred.length}, image only ${imageOk.length - imagePreferred.length}`,
+    );
     printScanTable(sorted, runtime);
   }
 

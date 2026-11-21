@@ -53,7 +53,7 @@ export function prepareSessionManagerMemoryRead(
 
 export function prepareSessionManagerMemoryHydration(
   binding: SessionManagerMemoryBinding,
-  limits?: { maxBytes: number; maxEvents: number },
+  limits?: Parameters<typeof prepareSessionTranscriptHydration>[1],
   signal?: AbortSignal,
 ): ReturnType<typeof prepareSessionTranscriptHydration> {
   const target = captureSessionTranscriptTargetBinding(binding.target);

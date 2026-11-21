@@ -29,15 +29,11 @@ type MatrixStartupVerificationState = {
 export type MatrixStartupVerificationOutcome =
   | {
       kind: "disabled" | "verified" | "cooldown" | "pending" | "requested" | "request-failed";
-      verification: MatrixOwnDeviceVerificationStatus;
-      requestId?: string;
-      transactionId?: string;
       error?: string;
       retryAfterMs?: number;
     }
   | {
       kind: "unsupported";
-      verification?: undefined;
     };
 
 function createStartupVerificationStore(params: { env?: NodeJS.ProcessEnv; stateDir?: string }) {
@@ -85,7 +81,6 @@ export async function ensureMatrixStartupVerification(params: {
   accountConfig: Pick<MatrixConfig, "startupVerification" | "startupVerificationCooldownHours">;
   env?: NodeJS.ProcessEnv;
   nowMs?: number;
-  stateDir?: string;
   stateFilePath?: string;
 }): Promise<MatrixStartupVerificationOutcome> {
   if (params.auth.encryption !== true || !params.client.crypto) {
@@ -98,24 +93,24 @@ export async function ensureMatrixStartupVerification(params: {
     const storagePaths = await resolveMatrixStoragePaths({
       ...params.auth,
       env: params.env,
-      stateDir: params.stateDir,
     });
     statePath = path.join(storagePaths.rootDir, STARTUP_VERIFICATION_STATE_FILENAME);
   }
   await assertMatrixSupportedStateFile(statePath);
   const stateLocation = {
     env: params.env,
-    stateDir: params.stateDir ?? path.dirname(statePath),
+    stateDir: path.dirname(statePath),
   };
   const stateKey = params.auth.accountId.trim() || "default";
   const mode = params.accountConfig.startupVerification ?? DEFAULT_STARTUP_VERIFICATION_MODE;
   if (verification.verified || mode === "off") {
     await createStartupVerificationStore(stateLocation)
       .delete(stateKey)
-      .catch(() => {});
+      .catch(() => {
+        // Cooldown cleanup cannot invalidate an already verified or disabled outcome.
+      });
     return {
       kind: verification.verified ? "verified" : "disabled",
-      verification,
     };
   }
 
@@ -125,7 +120,6 @@ export async function ensureMatrixStartupVerification(params: {
   ) {
     return {
       kind: "pending",
-      verification,
     };
   }
 
@@ -152,7 +146,6 @@ export async function ensureMatrixStartupVerification(params: {
   if (retryAfterMs !== undefined) {
     return {
       kind: "cooldown",
-      verification,
       retryAfterMs,
     };
   }
@@ -180,16 +173,14 @@ export async function ensureMatrixStartupVerification(params: {
     });
     return {
       kind: "requested",
-      verification,
-      requestId: request.id,
-      transactionId: request.transactionId ?? undefined,
     };
   } catch (err) {
     const error = formatErrorMessage(err);
-    await writeState({ outcome: "failed", error }).catch(() => {});
+    await writeState({ outcome: "failed", error }).catch(() => {
+      // Preserve the original verification error if its secondary failure record cannot be saved.
+    });
     return {
       kind: "request-failed",
-      verification,
       error,
     };
   }

@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
 import type { EngineConnection, SqlConnection } from "../sql-connection.js";
+import type { PortDescriptor } from "./port-types.js";
 import type { FullTextCapability, TextIndex, TextIndexDefinition } from "./text-contract.js";
 import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
 import type { VectorCapability, VectorIndex } from "./vector-contract.js";
@@ -29,12 +30,7 @@ export type StoreSearchCapabilities = {
   rebuild?: () => void;
 };
 
-export type DatabaseErrorKind =
-  | "constraint"
-  | "busy"
-  | "connection-lost"
-  | "outcome-unknown"
-  | "other";
+type DatabaseErrorKind = "constraint" | "busy" | "connection-lost" | "outcome-unknown" | "other";
 export type PostgresSchemaFragment = {
   id: string;
   tables: readonly string[];
@@ -45,6 +41,14 @@ export type PostgresSchemaFragment = {
 type PostgresSchemaDefinition = {
   postgres: string;
   postgresFragments?: readonly PostgresSchemaFragment[];
+  /** Exact alternate eager DDL for a predecessor built with and without one column. */
+  postgresWithoutOptionalColumn?: { table: string; column: string; sql: string };
+  /** Historical schemas default to the original vector decoder. */
+  postgresVectorDecoderVersion?: 1 | 2;
+  /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
+  postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
 };
 export type StoreSchema = {
   id: string;
@@ -57,17 +61,35 @@ export type StoreSchema = {
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;
+    /** Exact predecessor export needed before Doctor may advance this family. */
+    backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
+  postgresWithoutOptionalColumn?: PostgresSchemaDefinition["postgresWithoutOptionalColumn"];
+  /** Historical schemas default to the original vector decoder. */
+  postgresVectorDecoderVersion?: 1 | 2;
+  /** Version 2 adds the stored binary candidate projection; historical schemas stay exact. */
+  postgresVectorSearchVersion?: 1 | 2;
+  /** Version 2 splits punctuation-joined tokens like SQLite FTS5; historical schemas stay exact. */
+  postgresTextSearchVersion?: 1 | 2;
   search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Source tables are verified inside this transaction, before runtime admission exists. */
+  beforeMigrate?: (
+    database: EngineConnection,
+    fromVersion: number,
+    sourceTables: ReadonlySet<string>,
+  ) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

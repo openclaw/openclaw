@@ -1,7 +1,7 @@
-import { readdirSync } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 
 export const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 
@@ -60,7 +60,7 @@ export function listSqliteTargetCandidatePathsForSessionStorePath(
   const prefix = agentId ? `${baseName}.${normalizeAgentId(agentId)}` : undefined;
   const candidateNames = new Set([path.basename(unsuffixedTarget.path)]);
   try {
-    for (const fileName of readdirSync(directory)) {
+    for (const fileName of fs.readdirSync(directory)) {
       const databaseName = fileName.replace(/-(?:wal|shm|journal)$/u, "");
       if (
         databaseName.startsWith(`${baseName}.`) &&
@@ -71,9 +71,7 @@ export function listSqliteTargetCandidatePathsForSessionStorePath(
       }
     }
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   return [...candidateNames].map((fileName) => path.join(directory, fileName));
 }

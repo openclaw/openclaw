@@ -1,4 +1,6 @@
 import { writeTextAtomic as writeFsSafeTextAtomic } from "@openclaw/fs-safe/atomic";
+import { tryReadJsonSync } from "@openclaw/fs-safe/json";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 
 export {
   JsonFileReadError,
@@ -16,6 +18,10 @@ export {
 } from "@openclaw/fs-safe/json";
 
 export { createAsyncLock } from "@openclaw/fs-safe/advanced";
+
+export function tryReadJsonObjectSync(filePath: string): Record<string, unknown> | null {
+  return asNullableRecord(tryReadJsonSync(filePath));
+}
 
 export const writeTextAtomic: typeof writeFsSafeTextAtomic = async (filePath, content, options) => {
   // The public SDK treats empty prefixes as defaults and ignores unrelated options.

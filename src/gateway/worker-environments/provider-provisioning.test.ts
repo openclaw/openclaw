@@ -13,6 +13,7 @@ import {
   readWorkerPlacementIdentity,
   projectWorkerSessionPlacement,
 } from "./placement-projector.js";
+import { localPlacement } from "./placement-suite.test-support.js";
 import * as support from "./service.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -143,6 +144,8 @@ describe("worker environment service", () => {
           os: "os-a",
           assertCurrent: expect.any(Function),
           reportStartStatus: expect.any(Function),
+          recordResourceReceipt: expect.any(Function),
+          signal: expect.any(AbortSignal),
         });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
@@ -247,6 +250,8 @@ describe("worker environment service", () => {
         profileId: "development",
         assertCurrent: expect.any(Function),
         reportStartStatus: expect.any(Function),
+        recordResourceReceipt: expect.any(Function),
+        signal: expect.any(AbortSignal),
       },
     );
   });
@@ -272,7 +277,12 @@ describe("worker environment service", () => {
       message: expect.stringContaining("worker-turn providers must return a node lease"),
     });
 
-    expect(destroy).toHaveBeenCalledWith({ leaseId: lease.leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledWith({
+      leaseId: lease.leaseId,
+      profile: { region: "test" },
+      assertCurrent: expect.any(Function),
+      signal: expect.any(AbortSignal),
+    });
     expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
     expect(support.testState.store.list()).toEqual([
       expect.objectContaining({
@@ -319,26 +329,9 @@ describe("worker environment service", () => {
     );
     const project = (record: (typeof records)[number]) => {
       const placement = {
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        agentId: "main",
-        executionMode: "worker-turn" as const,
+        ...localPlacement(),
         state: "provisioning" as const,
         environmentId: record.environmentId,
-        activeOwnerEpoch: null,
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        workspaceBaseManifestRef: null,
-        remoteWorkspaceDir: null,
-        workerBundleHash: null,
-        lastTranscriptAckCursor: null,
-        lastLiveEventAckCursor: null,
-        recoveryError: null,
-        terminalReason: null,
-        terminalAtMs: null,
-        turnClaim: null,
       };
       return projectWorkerSessionPlacement(
         placement,
@@ -439,9 +432,9 @@ describe("worker environment service", () => {
       }),
       { logger: { warn } },
     );
-    service.subscribeMachineShapeChanged(() => {
+    service.machineShapeNotifications.onChanged = () => {
       throw new Error("observer unavailable");
-    });
+    };
     const environment = await service.createWithRequest({
       profileId: "development",
       idempotencyKey: "catalog-failure",

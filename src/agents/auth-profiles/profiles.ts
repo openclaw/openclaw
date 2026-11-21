@@ -37,7 +37,10 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store-runtime.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
-import { runAuthProfileStoreUpdate } from "./store-update.js";
+import {
+  createAuthProfileStoreUpdatePublisher,
+  runAuthProfileStoreUpdate,
+} from "./store-update.js";
 import {
   isSharedMainAuthProfileAgentDir,
   resolveRuntimeAuthProfileAgentDir,
@@ -92,8 +95,7 @@ export async function setAuthProfileOrder(params: {
   sharedStoreWrite?: boolean;
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
-  const sanitized =
-    params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
+  const sanitized = params.order ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
   const order = deduped.length > 0 ? deduped : undefined;
 
@@ -164,7 +166,7 @@ export async function promoteAuthProfileInOrder(params: {
   return updated === null ? err("lock-contention") : ok(updated);
 }
 
-/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. */
+/** @deprecated Use upsertAuthProfileAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
@@ -502,15 +504,7 @@ async function removeAuthProfileTargetsWithLocks(
                     }
                     return { save: true, restore: compensation };
                   },
-                  async publish(restored, restoreOwner, ...publicationArgs) {
-                    if (restored) {
-                      await publishAuthProfileStoreUpdate(
-                        restoreOwner,
-                        restored,
-                        ...publicationArgs,
-                      );
-                    }
-                  },
+                  publish: createAuthProfileStoreUpdatePublisher(),
                 }),
               );
             }

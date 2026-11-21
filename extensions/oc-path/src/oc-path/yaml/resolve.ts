@@ -1,4 +1,4 @@
-import { isMap, isScalar, isSeq, type Node } from "yaml";
+import { isAlias, isMap, isScalar, isSeq, type Document, type Node } from "yaml";
 import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
@@ -15,7 +15,7 @@ type YamlOcPathMatch =
       | { readonly kind: "scalar"; readonly value: unknown }
       | { readonly kind: "map" }
       | { readonly kind: "seq" }
-      | { readonly kind: "pair"; readonly key: string; readonly value: unknown }
+      | { readonly kind: "pair"; readonly value: unknown }
     ));
 
 export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch | null {
@@ -25,15 +25,25 @@ export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch |
     return { kind: "root", node: ast };
   }
 
-  return walkNode(ast.doc.contents, segments, 0, []);
+  return walkNode(ast.doc, ast.doc.contents, segments, 0, []);
+}
+
+/** Follow a YAML alias (`*name`) to its anchored node; other nodes pass through. */
+export function derefYamlNode(doc: Document | undefined, node: unknown): Node | null {
+  if (isAlias(node)) {
+    return doc === undefined ? null : (node.resolve(doc) ?? null);
+  }
+  return (node as Node | null) ?? null;
 }
 
 function walkNode(
-  node: Node | null,
+  doc: Document,
+  rawNode: unknown,
   segments: readonly string[],
   i: number,
   walked: readonly unknown[],
 ): YamlOcPathMatch | null {
+  const node = derefYamlNode(doc, rawNode);
   if (node === null) {
     return null;
   }
@@ -52,7 +62,7 @@ function walkNode(
     return null;
   }
   let seg = unquoteSeg(rawSeg);
-  if (seg.length === 0) {
+  if (rawSeg.length === 0) {
     return null;
   }
 
@@ -73,16 +83,16 @@ function walkNode(
     }
     const key = isScalar(pair.key) ? pair.key.value : seg;
     const childWalked = [...walked, key];
-    if (i === segments.length - 1 && isScalar(pair.value)) {
+    const value = derefYamlNode(doc, pair.value);
+    if (i === segments.length - 1 && isScalar(value)) {
       return {
         kind: "pair",
-        node: pair.value,
-        key: seg,
-        value: pair.value.value,
+        node: value,
+        value: value.value,
         path: childWalked,
       };
     }
-    return walkNode(pair.value as Node, segments, i + 1, childWalked);
+    return walkNode(doc, value, segments, i + 1, childWalked);
   }
 
   if (isSeq(node)) {
@@ -91,7 +101,7 @@ function walkNode(
       return null;
     }
     const child = node.items[idx];
-    return walkNode(child as Node, segments, i + 1, [...walked, idx]);
+    return walkNode(doc, child, segments, i + 1, [...walked, idx]);
   }
 
   return null;

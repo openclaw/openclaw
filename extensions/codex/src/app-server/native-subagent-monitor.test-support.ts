@@ -2,7 +2,6 @@ import type {
   deliverAgentHarnessCompletion,
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
-  AgentHarnessCompletionDelivery,
   AgentHarnessCompletionScope,
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import { onTestFinished, vi } from "vitest";
@@ -27,19 +26,53 @@ import type {
 export type CodexThreadReadResponse = CodexAppServerRequestResult<"thread/read">;
 type DirectSpawnVersion = "v1" | "v2";
 
+function serverNotification<P extends JsonObject>(method: string, params: P) {
+  return { method, params };
+}
+
+export function itemNotification(
+  item: JsonObject,
+  turnId = "parent-turn",
+  threadId = "parent-thread",
+  phase = "completed",
+): CodexServerNotification {
+  return { method: `item/${phase}`, params: { threadId, turnId, item } };
+}
+
+export function collabItem(
+  tool: string,
+  receiverThreadIds: string[],
+  fields: JsonObject = {},
+): JsonObject {
+  return {
+    type: "collabAgentToolCall",
+    tool,
+    status: "completed",
+    senderThreadId: "parent-thread",
+    receiverThreadIds,
+    ...fields,
+  };
+}
+
+function threadOrigin(parentThreadId: string, agentPath?: string) {
+  return {
+    subAgent: {
+      thread_spawn: {
+        parent_thread_id: parentThreadId,
+        depth: 1,
+        ...(agentPath !== undefined ? { agent_path: agentPath } : {}),
+      },
+    },
+  };
+}
+
 export function directSpawnItem(
   version: DirectSpawnVersion,
   parentThreadId: string,
   childThreadId: string,
 ): JsonObject {
   return version === "v1"
-    ? {
-        type: "collabAgentToolCall" as const,
-        tool: "spawnAgent" as const,
-        status: "completed" as const,
-        senderThreadId: parentThreadId,
-        receiverThreadIds: [childThreadId],
-      }
+    ? collabItem("spawnAgent", [childThreadId], { senderThreadId: parentThreadId })
     : {
         type: "subAgentActivity" as const,
         kind: "started" as const,
@@ -54,18 +87,15 @@ export function successfulSendInputOutput(params: {
   parentThreadId?: string;
   turnId?: string;
 }): CodexServerNotification {
-  return {
-    method: "rawResponseItem/completed",
-    params: {
-      threadId: params.parentThreadId ?? "parent-thread",
-      turnId: params.turnId ?? "parent-turn",
-      item: {
-        type: "function_call_output",
-        call_id: params.callId,
-        output: JSON.stringify({ submission_id: params.submissionId }),
-      },
+  return serverNotification("rawResponseItem/completed", {
+    threadId: params.parentThreadId ?? "parent-thread",
+    turnId: params.turnId ?? "parent-turn",
+    item: {
+      type: "function_call_output",
+      call_id: params.callId,
+      output: JSON.stringify({ submission_id: params.submissionId }),
     },
-  };
+  });
 }
 
 export const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
@@ -102,13 +132,10 @@ export function observeCompletionAttempts() {
 
 export function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
-  type ThreadTurnsParams = { threadId?: string };
-  const threadReads = new Map<
-    string,
-    | CodexThreadReadResponse
-    | Error
-    | ((params: ThreadReadParams) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>)
-  >();
+  type ThreadReadFactory = (
+    params: ThreadReadParams,
+  ) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>;
+  const threadReads = new Map<string, CodexThreadReadResponse | Error | ThreadReadFactory>();
   const threadTurns = new Map<string, JsonValue | Error>();
   let loadedThreads: readonly string[] | undefined;
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
@@ -121,28 +148,18 @@ export function createClient() {
       }
       return { data: [...loadedThreads], nextCursor: null };
     }
-    if (method === "thread/turns/list") {
-      const childThreadId = ((params as ThreadTurnsParams | undefined) ?? {}).threadId ?? "";
-      const response = threadTurns.get(childThreadId);
-      if (response instanceof Error) {
-        throw response;
-      }
-      if (response === undefined) {
-        throw new Error(`thread turns not loaded: ${childThreadId}`);
-      }
-      return response;
-    }
-    if (method !== "thread/read") {
+    if (method !== "thread/read" && method !== "thread/turns/list") {
       throw new Error(`unexpected request: ${method}`);
     }
     const readParams = (params as ThreadReadParams | undefined) ?? {};
     const childThreadId = readParams.threadId ?? "";
-    const response = threadReads.get(childThreadId);
+    const turns = method === "thread/turns/list";
+    const response = turns ? threadTurns.get(childThreadId) : threadReads.get(childThreadId);
     if (response instanceof Error) {
       throw response;
     }
     if (response === undefined) {
-      throw new Error(`thread not loaded: ${childThreadId}`);
+      throw new Error(`${turns ? "thread turns" : "thread"} not loaded: ${childThreadId}`);
     }
     return typeof response === "function" ? await response(readParams) : response;
   });
@@ -150,6 +167,10 @@ export function createClient() {
     fixture.close();
     await Promise.resolve();
   });
+  const sender =
+    <Args extends unknown[]>(factory: (...args: Args) => CodexServerNotification) =>
+    (...args: Args) =>
+      fixture.notify(factory(...args));
   return {
     client: fixture.client,
     request: fixture.request,
@@ -159,12 +180,7 @@ export function createClient() {
     setThreadRead(childThreadId: string, response: CodexThreadReadResponse | Error) {
       threadReads.set(childThreadId, response);
     },
-    setThreadReadFactory(
-      childThreadId: string,
-      response: (
-        params: ThreadReadParams,
-      ) => CodexThreadReadResponse | Promise<CodexThreadReadResponse>,
-    ) {
+    setThreadReadFactory(childThreadId: string, response: ThreadReadFactory) {
       threadReads.set(childThreadId, response);
     },
     setThreadTurns(childThreadId: string, response: JsonValue | Error) {
@@ -175,6 +191,29 @@ export function createClient() {
     addCloseHandler: fixture.client.addCloseHandler.bind(fixture.client),
     getTransportPid: fixture.client.getTransportPid.bind(fixture.client),
     notify: (notification: CodexServerNotification) => fixture.notify(notification),
+    item: sender(itemNotification),
+    startTurn: sender(turnStartedNotification),
+    completeTurn: sender(childTurnCompletedNotification),
+    finishTurn(turnId: string, ...items: JsonValue[]) {
+      return sender(childTurnCompletedNotification)({ turnId, status: "completed", items });
+    },
+    completeNative: sender(nativeCompletionNotification),
+    sendInputOutput: sender(successfulSendInputOutput),
+    closeAgent: sender(closeAgentNotification),
+    spawn(
+      childThreadId = "child-thread",
+      turnId = "parent-turn",
+      version: DirectSpawnVersion = "v2",
+      parentThreadId = "parent-thread",
+    ) {
+      return fixture.notify(
+        itemNotification(
+          directSpawnItem(version, parentThreadId, childThreadId),
+          turnId,
+          parentThreadId,
+        ),
+      );
+    },
     close: () => fixture.close(),
   };
 }
@@ -187,11 +226,33 @@ export function createRuntime() {
     createAgentHarnessCompletionEventSink: vi.fn<typeof createAgentHarnessCompletionEventSink>(() =>
       vi.fn(),
     ),
-    deliverAgentHarnessCompletion: vi.fn(
-      async (
-        _params: Parameters<typeof deliverAgentHarnessCompletion>[0],
-      ): Promise<AgentHarnessCompletionDelivery> => ({ delivered: true, path: "direct" }),
-    ),
+    deliverAgentHarnessCompletion: vi.fn<typeof deliverAgentHarnessCompletion>(async () => ({
+      delivered: true,
+      path: "direct",
+    })),
+  };
+}
+
+export function createMonitorFixture(
+  options?: ConstructorParameters<typeof CodexNativeSubagentMonitor>[2],
+) {
+  const client = createClient();
+  const runtime = createRuntime();
+  const monitor = new CodexNativeSubagentMonitor(client.client, runtime, options);
+  const captureSource = async (request: Parameters<typeof monitor.captureModelSource>[0]) =>
+    requireNativeModelSourceCapture(await monitor.captureModelSource(request));
+  return { client, runtime, monitor, captureSource };
+}
+
+export function parentRegistration(
+  overrides: Partial<Parameters<CodexNativeSubagentMonitorInstance["registerParent"]>[0]> = {},
+) {
+  return {
+    parentThreadId: "parent-thread",
+    requesterSessionKey: "agent:main:discord:channel:C123",
+    completionScope: createCompletionScope(),
+    agentId: "main",
+    ...overrides,
   };
 }
 
@@ -236,25 +297,14 @@ export async function notifyChildStarted(
   agentPath = childThreadId,
   options: { directParentField?: boolean } = {},
 ): Promise<CodexServerNotification> {
-  const notification: CodexServerNotification = {
-    method: "thread/started",
-    params: {
-      thread: {
-        id: childThreadId,
-        ...(options.directParentField === false ? {} : { parentThreadId }),
-        preview: "inspect the repo",
-        source: {
-          subAgent: {
-            thread_spawn: {
-              parent_thread_id: parentThreadId,
-              depth: 1,
-              agent_path: agentPath,
-            },
-          },
-        },
-      },
+  const notification = serverNotification("thread/started", {
+    thread: {
+      id: childThreadId,
+      ...(options.directParentField === false ? {} : { parentThreadId }),
+      preview: "inspect the repo",
+      source: threadOrigin(parentThreadId, agentPath),
     },
-  };
+  });
   await client.notify(notification);
   return notification;
 }
@@ -287,42 +337,36 @@ export function nativeCompletionNotification(
       ? statusLabel
       : { [statusLabel]: result };
   const content = `<subagent_notification>${JSON.stringify({ agent_path: agentPath, status })}</subagent_notification>`;
-  return {
-    method: "rawResponseItem/completed",
-    params: {
-      threadId: params.parentThreadId ?? "parent-thread",
-      ...(params.turnId ? { turnId: params.turnId } : {}),
-      item: {
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text: content }],
-        internal_chat_message_metadata_passthrough: {
-          content_item_kinds: ["multi_agent.subagent_notification"],
-        },
+  return serverNotification("rawResponseItem/completed", {
+    threadId: params.parentThreadId ?? "parent-thread",
+    ...(params.turnId ? { turnId: params.turnId } : {}),
+    item: {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: content }],
+      internal_chat_message_metadata_passthrough: {
+        content_item_kinds: ["multi_agent.subagent_notification"],
       },
     },
-  };
+  });
 }
 
 export function deliveredNativeCompletion() {
-  return {
-    method: "rawResponseItem/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId: "parent-turn",
-      item: {
-        type: "agent_message",
-        author: "/root/worker",
-        recipient: "/root",
-        content: [
-          {
-            type: "input_text",
-            text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe build passed.",
-          },
-        ],
-      },
+  return serverNotification("rawResponseItem/completed", {
+    threadId: "parent-thread",
+    turnId: "parent-turn",
+    item: {
+      type: "agent_message",
+      author: "/root/worker",
+      recipient: "/root",
+      content: [
+        {
+          type: "input_text",
+          text: "Message Type: FINAL_ANSWER\nTask name: /root\nSender: /root/worker\nPayload:\nThe build passed.",
+        },
+      ],
     },
-  } satisfies CodexServerNotification;
+  });
 }
 
 export function closeAgentNotification(params: {
@@ -335,38 +379,30 @@ export function closeAgentNotification(params: {
 }): CodexServerNotification {
   const parentThreadId = params.parentThreadId ?? "parent-thread";
   const childThreadId = params.childThreadId ?? "child-thread";
-  return {
-    method: params.method,
-    params: {
-      threadId: parentThreadId,
-      turnId: params.turnId ?? "parent-turn",
-      item: {
-        id: params.itemId ?? `close-${childThreadId}`,
-        type: "collabAgentToolCall",
-        tool: "closeAgent",
-        status: params.method === "item/started" ? "inProgress" : "completed",
-        senderThreadId: parentThreadId,
-        receiverThreadIds: [childThreadId],
-        agentsStates:
-          params.method === "item/completed"
-            ? { [childThreadId]: { status: params.previousStatus ?? "completed" } }
-            : {},
-      },
-    },
-  };
+  const started = params.method === "item/started";
+  return itemNotification(
+    collabItem("closeAgent", [childThreadId], {
+      id: params.itemId ?? `close-${childThreadId}`,
+      status: started ? "inProgress" : "completed",
+      senderThreadId: parentThreadId,
+      agentsStates: started
+        ? {}
+        : { [childThreadId]: { status: params.previousStatus ?? "completed" } },
+    }),
+    params.turnId ?? "parent-turn",
+    parentThreadId,
+    started ? "started" : "completed",
+  );
 }
 
 export function turnStartedNotification(
   turnId: string,
   { threadId = "child-thread", ...turn }: { threadId?: string; error?: null } = {},
 ): CodexServerNotification {
-  return {
-    method: "turn/started",
-    params: {
-      threadId,
-      turn: { id: turnId, status: "inProgress", items: [], ...turn },
-    },
-  };
+  return serverNotification("turn/started", {
+    threadId,
+    turn: { id: turnId, status: "inProgress", items: [], ...turn },
+  });
 }
 
 export function childTurnCompletedNotification(params: {
@@ -376,18 +412,23 @@ export function childTurnCompletedNotification(params: {
   threadId?: string;
   items?: JsonValue[];
 }): CodexServerNotification {
-  return {
-    method: "turn/completed",
-    params: {
-      threadId: params.threadId ?? "child-thread",
-      turn: {
-        id: params.turnId ?? "child-turn",
-        status: params.status,
-        items: params.items ?? [],
-        error: params.error ? { message: params.error } : null,
-      },
+  return serverNotification("turn/completed", {
+    threadId: params.threadId ?? "child-thread",
+    turn: {
+      id: params.turnId ?? "child-turn",
+      status: params.status,
+      items: params.items ?? [],
+      error: params.error ? { message: params.error } : null,
     },
-  };
+  });
+}
+
+export function agentMessage(
+  id: string,
+  text: string,
+  phase?: "commentary" | "final_answer",
+): JsonObject {
+  return { id, type: "agentMessage", text, ...(phase ? { phase } : {}) };
 }
 
 export function threadRead(
@@ -411,40 +452,16 @@ export function threadRead(
   const parentThreadId = params.parentThreadId ?? "parent-thread";
   const status = params.status ?? "completed";
   const items: JsonValue[] = [
-    ...(params.result
-      ? [
-          {
-            id: "message-1",
-            type: "agentMessage",
-            text: params.result,
-            ...(params.resultPhase ? { phase: params.resultPhase } : {}),
-          },
-        ]
-      : []),
+    ...(params.result ? [agentMessage("message-1", params.result, params.resultPhase)] : []),
     ...(params.trailingCommentary
-      ? [
-          {
-            id: "message-commentary",
-            type: "agentMessage",
-            text: params.trailingCommentary,
-            phase: "commentary",
-          },
-        ]
+      ? [agentMessage("message-commentary", params.trailingCommentary, "commentary")]
       : []),
   ];
   return {
     thread: {
       id: childThreadId,
       ...(params.directParentField === false ? {} : { parentThreadId }),
-      source: {
-        subAgent: {
-          thread_spawn: {
-            parent_thread_id: parentThreadId,
-            depth: 1,
-            ...(params.agentPath ? { agent_path: params.agentPath } : {}),
-          },
-        },
-      },
+      source: threadOrigin(parentThreadId, params.agentPath || undefined),
       status: { type: params.threadStatus ?? "idle" },
       turns: [
         ...(params.previousResult
@@ -452,9 +469,7 @@ export function threadRead(
               {
                 id: "turn-previous",
                 status: "completed",
-                items: [
-                  { id: "message-previous", type: "agentMessage", text: params.previousResult },
-                ],
+                items: [agentMessage("message-previous", params.previousResult)],
                 completedAt: 1_779_000_000,
               },
             ]

@@ -1,12 +1,17 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { IncomingHttpHeaders } from "node:http";
+import http, { type IncomingHttpHeaders } from "node:http";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
+import { buffer as readResponseBuffer } from "node:stream/consumers";
+import { deserialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
+import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -19,11 +24,61 @@ import {
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
 
-export type RequestResult = {
+type RequestResult = {
   statusCode: number;
   headers: IncomingHttpHeaders;
   body: Buffer;
 };
+
+export function interceptManagedImageMutationReplies(onReply: (commandType: string) => boolean) {
+  const commands = new WeakMap<object, string>();
+  const dispatch = brokerReply.dispatchSqliteWorkerJob;
+  const receive = brokerReply.receiveSqliteWorkerReply;
+  const dispatchSpy = vi
+    .spyOn(brokerReply, "dispatchSqliteWorkerJob")
+    .mockImplementation((slot, job, rejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commands.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, rejected);
+    });
+  const replySpy = vi
+    .spyOn(brokerReply, "receiveSqliteWorkerReply")
+    .mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const command = commands.get(slot.current.request);
+        if (command && onReply(command)) {
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+        }
+      }
+      return receive(slot, reply, owner);
+    });
+  return () => {
+    replySpy.mockRestore();
+    dispatchSpy.mockRestore();
+  };
+}
+
+export async function requestManagedImageHttp(
+  origin: string,
+  pathName: string,
+  method = "GET",
+  headers?: http.ClientRequestArgs["headers"],
+): Promise<RequestResult> {
+  const response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    http
+      .get(`${origin}${pathName}`, { method, headers, agent: false }, resolve)
+      .on("error", reject);
+  });
+  return {
+    statusCode: response.statusCode ?? 0,
+    headers: response.headers,
+    body: await readResponseBuffer(response),
+  };
+}
 
 export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
@@ -39,13 +94,7 @@ export async function writeSource(sourcePath: string, body: string | Buffer) {
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect(error).toMatchObject({ code: "ENOENT" });
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be missing`);
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 type ManagedOutgoingImageTestParams = Omit<
@@ -109,11 +158,7 @@ export function requireBlock(
   blocks: readonly Record<string, unknown>[],
   index = 0,
 ): Record<string, unknown> {
-  const block = blocks[index];
-  if (!block) {
-    throw new Error(`expected block ${index}`);
-  }
-  return block;
+  return expectDefined(blocks[index], `block ${index}`);
 }
 
 export function requireAttachmentIdFromUrl(url: unknown): string {
@@ -129,10 +174,7 @@ export async function requireManagedOriginalPath(
   stateDir: string,
   attachmentId: string,
 ): Promise<string> {
-  const record = await readManagedImageRecord(attachmentId, stateDir);
-  if (!record) {
-    throw new Error(`expected managed image record ${attachmentId}`);
-  }
+  const record = expectDefined(await readManagedImageRecord(attachmentId, stateDir), attachmentId);
   return path.join(stateDir, "media", record.original.mediaSubdir, record.original.mediaId);
 }
 
@@ -146,27 +188,15 @@ export async function prepareManagedSessionStore(stateDir: string): Promise<stri
   closeOpenClawAgentDatabasesForTest();
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
   const storePath = path.join(stateDir, "sessions.sqlite");
-  const { replaceSessionEntrySync } = await import("../config/sessions/session-accessor.js");
-  replaceSessionEntrySync(
-    {
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    },
-    { sessionId: "sess-1", updatedAt: Date.now() },
-  );
+  const scope = { agentId: "main", env, sessionKey: "agent:main:main", storePath };
+  await replaceTestSessionEntry(scope, { sessionId: "sess-1", updatedAt: Date.now() });
   closeOpenClawAgentDatabasesForTest();
   const { loadExactSessionEntryReadOnlyResult } =
     await import("../config/sessions/session-accessor.sqlite-entry-availability.js");
-  expect(
-    loadExactSessionEntryReadOnlyResult({
-      agentId: "main",
-      env,
-      sessionKey: "agent:main:main",
-      storePath,
-    }),
-  ).toMatchObject({ found: true, value: { sessionKey: "agent:main:main" } });
+  expect(loadExactSessionEntryReadOnlyResult(scope)).toMatchObject({
+    found: true,
+    value: { sessionKey: "agent:main:main" },
+  });
   return storePath;
 }
 
@@ -226,16 +256,17 @@ export async function createFixture(
     body?: Buffer;
     messageId?: string | null;
     createdAt?: string;
+    alt?: string;
   },
 ) {
   const attachmentId = options?.attachmentId ?? "11111111-1111-4111-8111-111111111111";
   const sessionKey = options?.sessionKey ?? "agent:main:main";
   const filename = options?.filename ?? "cat.png";
+  const contentType = options?.contentType ?? "image/png";
+  const body = options?.body ?? Buffer.from("original-image");
   const mediaId = `${randomUUID()}-${filename}`;
   const originalPath = path.join(stateDir, "media", MANAGED_OUTGOING_ORIGINALS_SUBDIR, mediaId);
-  await fs.mkdir(path.dirname(originalPath), { recursive: true });
-  const body = options?.body ?? Buffer.from("original-image");
-  await fs.writeFile(originalPath, body);
+  await writeSource(originalPath, body);
   await insertManagedImageRecord(
     {
       attachmentId,
@@ -243,14 +274,14 @@ export async function createFixture(
       ...(options?.agentId ? { agentId: options.agentId } : {}),
       messageId: options?.messageId === undefined ? "msg-1" : options.messageId,
       createdAt: options?.createdAt ?? new Date().toISOString(),
-      alt: "Cat",
+      alt: options?.alt ?? "Cat",
       original: {
         mediaRoot: path.join(stateDir, "media"),
         mediaId,
         mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
-        contentType: options?.contentType ?? "image/png",
-        width: options?.contentType?.startsWith("image/") === false ? null : 1024,
-        height: options?.contentType?.startsWith("image/") === false ? null : 768,
+        contentType,
+        width: contentType.startsWith("image/") ? 1024 : null,
+        height: contentType.startsWith("image/") ? 768 : null,
         sizeBytes: body.byteLength,
         filename,
       },

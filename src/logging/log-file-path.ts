@@ -1,11 +1,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  DEFAULT_POSIX_TMP_ROOT,
-  resolvePreferredOpenClawTmpDir,
-} from "../infra/tmp-openclaw-dir.js";
-import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
+import { fileLogTransport } from "./logger-file-transport.js";
 
 const ROLLING_LOG_FILE_RE = /^(openclaw(?:-[a-z0-9-]+)?)-(\d{4}-\d{2}-\d{2})\.log$/u;
 const MAX_LOG_PROFILE_SEGMENT_LENGTH = 220;
@@ -28,8 +25,8 @@ function encodeLogProfileSegment(profile: string): string {
   return encoded;
 }
 
-function resolveLogProfileSegment(env: NodeJS.ProcessEnv): string | null {
-  const profile = env.OPENCLAW_PROFILE?.trim();
+function resolveLogProfileSegment(): string | null {
+  const profile = process.env.OPENCLAW_PROFILE?.trim();
   if (!profile || profile.toLowerCase() === "default") {
     return null;
   }
@@ -40,27 +37,24 @@ function resolveLogProfileSegment(env: NodeJS.ProcessEnv): string | null {
   return `-3${createHash("sha256").update(profile).digest("hex")}`;
 }
 
-/** Resolves today's default rolling log path for the active CLI profile. */
-export function resolveDefaultRollingLogFile(options?: {
-  date?: Date;
-  env?: NodeJS.ProcessEnv;
-  logDir?: string;
-}): string {
-  const date = options?.date ?? new Date();
-  const env = options?.env ?? process.env;
-  const logDir =
-    options?.logDir ?? (canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT);
-  const profileSegment = resolveLogProfileSegment(env);
+/** Captures today's default filename without qualifying a filesystem directory. */
+export function resolveDefaultRollingLogFileName(): string {
+  const date = new Date();
+  const profileSegment = resolveLogProfileSegment();
   const profileSuffix = profileSegment ? `-${profileSegment}` : "";
-  return path.join(logDir, `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(date)}${LOG_SUFFIX}`);
+  return `${LOG_PREFIX}${profileSuffix}-${formatLocalDate(date)}${LOG_SUFFIX}`;
 }
 
 /** Resolves the configured log file or today's rolling default log path. */
-export function resolveConfiguredLogFilePath(
+export async function resolveConfiguredLogFilePath(
   config?: OpenClawConfig | null,
-  options?: { date?: Date; env?: NodeJS.ProcessEnv; logDir?: string },
-): string {
-  return config?.logging?.file ?? resolveDefaultRollingLogFile(options);
+): Promise<string> {
+  return (
+    config?.logging?.file ??
+    fileLogTransport.resolveTarget(
+      fileLogTransport.prepareTarget(resolveDefaultRollingLogFileName(), true, true),
+    )
+  );
 }
 
 /** Returns whether a configured path had the legacy default rolling filename shape. */

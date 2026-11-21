@@ -4,6 +4,7 @@ import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protoco
 import { NODE_WORKER_WORKSPACE_RETAIN_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
+  NODE_WORKER_BUNDLE_PREFETCH_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
 } from "../../infra/node-runner-inventory.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -20,6 +21,7 @@ import type {
   NodeWorkerSupervisorTransport,
 } from "../node-registry-private.js";
 import { parseNodeWorkerResponse } from "./node-worker-response.js";
+import { WorkerPlacementInventoryChangedError } from "./placement-inventory-changed-error.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
@@ -35,6 +37,11 @@ export type NodeWorkerBundleRetention = {
     Readonly<Pick<WorkerAdmissionHandshake, "bundleHash" | "openclawVersion">>
   >;
   isEnvironmentOwnedNode: (nodeId: string) => boolean;
+  prefetch?: (
+    node: NodeWorkerSupervisorNodeProof,
+    signal: AbortSignal,
+    assertCurrent: () => void,
+  ) => Promise<void>;
 };
 
 type NodeWorkspaceRetainCoordinatorOptions = {
@@ -150,16 +157,27 @@ export function createNodeWorkspaceRetainCoordinator(
   let transport: NodeWorkerSupervisorTransport | undefined;
   let sequence = 0;
   const operations = new Map<string | undefined, Promise<void>>();
+  const prefetches = new Map<
+    string,
+    {
+      connId: string;
+      bundleHash: string;
+      controller: AbortController;
+      isCurrent: () => boolean;
+      pending?: Promise<void>;
+    }
+  >();
   let started = false;
   let stopped = false;
 
   const publishPreparedSnapshot = async (
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
-    preparedPlacements: PreparedPlacementFacts,
+    preparedPlacements: Map<string, PreparedPlacement>,
+    dispatch: { started: boolean },
   ): Promise<void> => {
     // Environment-owned cloud nodes prepare under their enrollment/mode owner.
-    // Persistent hosts keep the current build when installed; maintenance never installs it.
+    // Persistent hosts pin the current build before best-effort archive staging.
     const bundleRetention = options.bundleRetention;
     const bundleRetentionSupported =
       node.workerHost.bundleRetention === NODE_WORKER_BUNDLE_RETENTION_VERSION;
@@ -206,7 +224,7 @@ export function createNodeWorkspaceRetainCoordinator(
       const placements = (() => {
         try {
           inventory.assertCurrent();
-          return inventory.placements;
+          return [...inventory.placements];
         } finally {
           inventory.release();
         }
@@ -317,6 +335,7 @@ export function createNodeWorkspaceRetainCoordinator(
         if (!isDispatchAuthorized()) {
           return;
         }
+        dispatch.started = true;
         const result = await currentTransport.invoke({
           node,
           command: NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
@@ -368,6 +387,44 @@ export function createNodeWorkspaceRetainCoordinator(
           } else if (input.bundleStatusHash) {
             currentTransport.acceptBundleStatus?.(node, undefined);
           }
+          const previous = prefetches.get(node.nodeId);
+          if (
+            retained.applied &&
+            hostBuild &&
+            input.bundleHashes?.includes(hostBuild.bundleHash) &&
+            node.workerHost.bundlePrefetch === NODE_WORKER_BUNDLE_PREFETCH_VERSION &&
+            bundleRetention?.prefetch &&
+            !previous?.pending &&
+            (previous?.connId !== node.connId || previous.bundleHash !== hostBuild.bundleHash)
+          ) {
+            const controller = new AbortController();
+            const entry: NonNullable<ReturnType<typeof prefetches.get>> = {
+              connId: node.connId,
+              bundleHash: hostBuild.bundleHash,
+              controller,
+              isCurrent,
+            };
+            prefetches.set(node.nodeId, entry);
+            const assertCurrent = () => {
+              controller.signal.throwIfAborted();
+              if (!isCurrent()) {
+                throw new Error("Node bundle prefetch owner is no longer current");
+              }
+            };
+            entry.pending = bundleRetention
+              .prefetch(node, controller.signal, assertCurrent)
+              .catch((error: unknown) => {
+                options.warn(
+                  `Node bundle prefetch failed (${node.nodeId}): ${error instanceof Error ? error.message : String(error)}`,
+                );
+              })
+              .finally(() => {
+                entry.pending = undefined;
+                if (controller.signal.aborted && !stopped) {
+                  void schedule(node.nodeId);
+                }
+              });
+          }
           return;
         }
       }
@@ -382,31 +439,52 @@ export function createNodeWorkspaceRetainCoordinator(
     currentTransport: NodeWorkerSupervisorTransport,
     node: NodeWorkerSupervisorNodeProof,
   ): Promise<void> => {
-    const prepared = new Map<string, PreparedPlacement>();
-    try {
-      const sessionIds = new Set(
-        nodeEnvironments(options, node.nodeId).flatMap((environment) =>
-          !isTerminalWorkerEnvironmentState(environment.state) &&
-          environment.attachedSessionIds.length === 1
-            ? environment.attachedSessionIds
-            : [],
-        ),
-      );
-      for (const sessionId of sessionIds) {
-        if (stopped) {
-          return;
+    for (let attempt = 0; ; attempt += 1) {
+      const prepared = new Map<string, PreparedPlacement>();
+      const dispatch = { started: false };
+      try {
+        const sessionIds = new Set(
+          nodeEnvironments(options, node.nodeId).flatMap((environment) =>
+            !isTerminalWorkerEnvironmentState(environment.state) &&
+            environment.attachedSessionIds.length === 1
+              ? environment.attachedSessionIds
+              : [],
+          ),
+        );
+        for (const sessionId of sessionIds) {
+          if (stopped) {
+            return;
+          }
+          prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
         }
-        prepared.set(sessionId, await options.placements.prepareRuntimeRefresh(sessionId));
-      }
-      await publishPreparedSnapshot(currentTransport, node, prepared);
-    } finally {
-      for (const facts of prepared.values()) {
-        facts.release();
+        await publishPreparedSnapshot(currentTransport, node, prepared, dispatch);
+        return;
+      } catch (error) {
+        // Retry one stale preparation, never an invoked or partially applied pruning pass.
+        if (
+          attempt > 0 ||
+          dispatch.started ||
+          !(error instanceof WorkerPlacementInventoryChangedError)
+        ) {
+          throw error;
+        }
+      } finally {
+        for (const facts of prepared.values()) {
+          facts.release();
+        }
       }
     }
   };
 
   const schedule = (nodeId?: string): Promise<void> => {
+    for (const [id, entry] of prefetches) {
+      if (!entry.isCurrent()) {
+        entry.controller.abort();
+        if (!entry.pending) {
+          prefetches.delete(id);
+        }
+      }
+    }
     if (stopped) {
       return Promise.resolve();
     }
@@ -478,8 +556,14 @@ export function createNodeWorkspaceRetainCoordinator(
       stopped = true;
       started = false;
       abortController.abort(new Error("node workspace retention stopped"));
+      for (const entry of prefetches.values()) {
+        entry.controller.abort();
+      }
       pendingNodes.clear();
       await Promise.all(operations.values());
+      await Promise.all(
+        [...prefetches.values()].flatMap((entry) => (entry.pending ? [entry.pending] : [])),
+      );
     },
   };
 }

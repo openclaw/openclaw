@@ -37,6 +37,7 @@ export const waitForGatewayUpdateRecovery = lifecycleContext(
 export {
   adoptUpdateRun,
   getUpdateRun,
+  listUpdateRuns,
   recordUpdateRunDiagnostic,
   recordUpdateRunStep,
   recordUpdateRunVerification,
@@ -51,3 +52,7 @@ export {
 export const assertForegroundUpdateOrigin = serviceHandoff(
   (runtime) => runtime.assertForegroundUpdateOrigin,
 );
+
+export const runManagedHandoffSentinelChild = createLazyRuntimeMethodBinder(
+  () => import("../infra/update-managed-service-handoff-sentinel.js"),
+)((runtime) => runtime.executeInstalledHandoffSentinelOperation);

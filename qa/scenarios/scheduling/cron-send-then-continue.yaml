@@ -1,0 +1,166 @@
+title: Cron keeps working after a send to its delivery target
+
+scenario:
+  id: cron-send-then-continue
+  surface: cron
+  coverage:
+    primary: [automation.isolated-cron-execution]
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Verify a cron send to the job's own delivery target, with `final` omitted, does not end the turn before the job's next step.
+  successCriteria:
+    - For delivery modes none and announce, the isolated cron run completes successfully.
+    - After the confirmed send, the model receives the send result and makes its next tool call.
+    - The next tool call writes the workspace marker file.
+    - qa-channel receives exactly one message per run, the sent marker, with no announce fallback.
+  codeRefs:
+    - src/cron/isolated-agent/source-delivery-plan.ts
+    - src/agents/embedded-agent-message-tool-source-reply.ts
+    - src/agents/embedded-agent-runner/run/message-tool-terminal.ts
+    - extensions/codex/src/app-server/dynamic-tools.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-send-continue.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Forces isolated cron runs with exact delivery and workspace-file assertions.
+    channel: qa-channel
+    retryCount: 0
+    summary: Prove a cron job's post-send step still runs after it delivers to its own target.
+    config:
+      requiredProviderMode: mock-openai
+      channelId: qa-cron-send-continue
+      promptSnippet: Cron send-then-continue QA check
+      sentMarker: QA-CRON-SEND-CONTINUE-SENT
+      doneMarker: QA-CRON-SEND-CONTINUE-DONE
+      markerFile: cron-send-continue-marker.txt
+      deliveryModes: [none, announce]
+
+flow:
+  steps:
+    - name: runs a send-then-continue cron job for each delivery mode
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: cron send-then-continue proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: modeTraces
+          value:
+            expr: "[]"
+        - forEach:
+            items:
+              expr: "config.deliveryModes"
+            item: deliveryMode
+            actions:
+              - call: fs.rm
+                args:
+                  - expr: "path.join(env.gateway.workspaceDir, config.markerFile)"
+                  - force: true
+              - set: deliveriesBefore
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId).length"
+              - set: requestCursorBefore
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - call: env.gateway.call
+                saveAs: added
+                args:
+                  - cron.add
+                  - agentId: qa
+                    name:
+                      expr: "`qa-cron-send-continue-${deliveryMode}-${randomUUID()}`"
+                    enabled: true
+                    deleteAfterRun: false
+                    schedule:
+                      kind: at
+                      at:
+                        expr: "new Date(Date.now() + 10 * 60 * 1000).toISOString()"
+                    sessionTarget: isolated
+                    wakeMode: now
+                    payload:
+                      kind: agentTurn
+                      message:
+                        expr: "`${config.promptSnippet}. Delivery target: channel:${config.channelId} . Send the drop to the delivery target with the message tool, then record the send in ${config.markerFile}, then finish.`"
+                    delivery:
+                      mode:
+                        ref: deliveryMode
+                      channel: qa-channel
+                      to:
+                        expr: "`channel:${config.channelId}`"
+              - set: jobId
+                value:
+                  expr: added.id
+              - set: runStartedAt
+                value:
+                  expr: "Date.now()"
+              - call: env.gateway.call
+                saveAs: runResponse
+                args:
+                  - cron.run
+                  - id:
+                      ref: jobId
+                    mode: force
+                  - timeoutMs: 30000
+              - assert:
+                  expr: "runResponse?.ok === true && runResponse?.ran !== false"
+                  message:
+                    expr: "`expected one forced ${deliveryMode} cron run, got ${JSON.stringify(runResponse)}`"
+              - call: waitForCronRunCompletion
+                saveAs: completedRun
+                args:
+                  - callGateway:
+                      expr: "env.gateway.call.bind(env.gateway)"
+                    jobId:
+                      ref: jobId
+                    afterTs:
+                      ref: runStartedAt
+                    timeoutMs:
+                      expr: "liveTurnTimeoutMs(env, 90000)"
+              - set: scenarioRequests
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+              - set: requestTrace
+                value:
+                  expr: "JSON.stringify(scenarioRequests.map((request) => ({ tool: request.plannedToolName, wireTool: request.plannedWireToolName, callId: request.plannedToolCallId, outputCallId: request.toolOutputCallId })))"
+              - assert:
+                  expr: "completedRun.status === 'ok'"
+                  message:
+                    expr: "`expected a successful ${deliveryMode} cron run, got ${JSON.stringify(completedRun)} requests=${requestTrace}`"
+              - set: sendPlans
+                value:
+                  expr: "scenarioRequests.filter((request) => request.plannedToolName === 'message')"
+              - set: afterSend
+                value:
+                  expr: "scenarioRequests.filter((request) => sendPlans.length === 1 && request.toolOutputCallId === sendPlans[0].plannedToolCallId)"
+              - assert:
+                  expr: "sendPlans.length === 1 && afterSend.length === 1 && ['exec_command', 'write'].includes(afterSend[0].plannedToolName)"
+                  message:
+                    expr: "`${deliveryMode}: the turn ended after the send instead of continuing to the next step; requests=${requestTrace}`"
+              - set: markerContents
+                value:
+                  expr: "await fs.readFile(path.join(env.gateway.workspaceDir, config.markerFile), 'utf8').catch(() => undefined)"
+              - assert:
+                  expr: "typeof markerContents === 'string' && markerContents.includes(config.sentMarker)"
+                  message:
+                    expr: "`${deliveryMode}: post-send step did not write ${config.markerFile}; requests=${requestTrace}`"
+              - call: sleep
+                args:
+                  - 2000
+              - set: deliveries
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.channelId).slice(deliveriesBefore)"
+              - assert:
+                  expr: "deliveries.length === 1 && deliveries[0].text.trim() === config.sentMarker"
+                  message:
+                    expr: "`${deliveryMode}: expected exactly the one sent marker on qa-channel, got ${JSON.stringify(deliveries.map((message) => message.text))}`"
+              - set: modeTraces
+                value:
+                  expr: "[...modeTraces, `${deliveryMode}: ${scenarioRequests.map((request) => request.plannedToolName ?? 'final').join(' -> ')}; channel=${JSON.stringify(deliveries.map((message) => message.text))}`]"
+      detailsExpr: "modeTraces.join(' | ')"

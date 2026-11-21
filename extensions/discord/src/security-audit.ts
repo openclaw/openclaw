@@ -10,6 +10,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
+import type { OpenClawPluginSecurityAuditCollector } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
@@ -58,13 +59,7 @@ export async function collectDiscordSecurityAuditFindings(params: {
   orderedAccountIds: string[];
   hasExplicitAccountPath: boolean;
 }) {
-  const findings: Array<{
-    checkId: string;
-    severity: "info" | "warn" | "critical";
-    title: string;
-    detail: string;
-    remediation?: string;
-  }> = [];
+  const findings: Awaited<ReturnType<OpenClawPluginSecurityAuditCollector>> = [];
   const discordCfg = params.account.config ?? {};
   const accountId =
     normalizeOptionalString(params.accountId) ?? params.account.accountId ?? "default";

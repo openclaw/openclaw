@@ -31,8 +31,10 @@ suite.define(() => {
           locale: "zh-CN",
         });
         const gateway = await installMockGateway(page, {
-          featureMethods: ["openclaw.chat"],
+          awaitInitialRoster: false,
+          featureMethods: ["openclaw.chat", "openclaw.chat.history"],
           methodResponses: {
+            "openclaw.chat.history": { turns: [] },
             "openclaw.chat": {
               sessionId: "locale-onboarding",
               reply: welcome.text,

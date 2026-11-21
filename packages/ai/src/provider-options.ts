@@ -1,4 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import type { ProviderContext, ProviderModel, ProviderStreamOptions } from "./provider-types.js";
 import type { OpenAIReasoningEffort } from "./providers/openai-reasoning-effort.js";
 import type { OpenAICompletionsToolChoice } from "./providers/openai-tool-projection.js";
 import type { StreamOptions } from "./types.js";
@@ -15,6 +16,45 @@ export type OpenAIResponsesCompactionRejection = CompactionReplayRejection;
 export type CodeModeToolSurfaceObservation = {
   beforeToolIdentities: readonly string[];
   afterToolIdentities: readonly string[];
+};
+
+type RequestModelIdentity = Pick<ProviderModel, "provider" | "id" | "api"> & { baseUrl?: string };
+const measuredRequestPressures = new WeakMap<
+  ProviderContext,
+  Pick<ProviderContext, "messages" | "tools" | "systemPrompt"> & {
+    model: RequestModelIdentity;
+    tokens: number;
+  }
+>();
+
+/** Request-local pressure admitted by the host's matched provider-usage owner. */
+export const measuredRequestPressure = {
+  set(model: RequestModelIdentity, context: ProviderContext, tokens: number | undefined): void {
+    if (tokens === undefined) {
+      measuredRequestPressures.delete(context);
+      return;
+    }
+    measuredRequestPressures.set(context, {
+      model: { provider: model.provider, id: model.id, api: model.api, baseUrl: model.baseUrl },
+      messages: context.messages,
+      tools: context.tools,
+      systemPrompt: context.systemPrompt,
+      tokens,
+    });
+  },
+  get(model: RequestModelIdentity, context: ProviderContext): number | undefined {
+    const pressure = measuredRequestPressures.get(context);
+    return pressure &&
+      pressure.model.provider === model.provider &&
+      pressure.model.id === model.id &&
+      pressure.model.api === model.api &&
+      pressure.model.baseUrl === model.baseUrl &&
+      pressure.messages === context.messages &&
+      pressure.tools === context.tools &&
+      pressure.systemPrompt === context.systemPrompt
+      ? pressure.tokens
+      : undefined;
+  },
 };
 
 const CODE_MODE_TOOL_SURFACE_OBSERVER = Symbol("openaiCodeModeToolSurfaceObserver");
@@ -78,6 +118,11 @@ export const preparedRequestSuffix = {
   has(context: object): boolean {
     return Reflect.has(context, PREPARED_REQUEST_SUFFIX);
   },
+  hasToolCall(context: object, id: string): boolean {
+    // SAFETY: Only mark() writes this private carrier, with captured prefix wire IDs.
+    const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
+    return ids?.has(id) ?? false;
+  },
   toolCallId(context: object, id: string, normalized: string): string {
     // SAFETY: Only mark() writes this private carrier, with the captured prefix's wire IDs.
     const ids = Reflect.get(context, PREPARED_REQUEST_SUFFIX) as ReadonlySet<string> | undefined;
@@ -99,6 +144,17 @@ export type AnthropicContextManagementOptions = {
 
 /** Provider options shared by the Anthropic provider and canonical transport. */
 export interface AnthropicOptions extends StreamOptions, AnthropicContextManagementOptions {
+  /**
+   * Called when Anthropic rejected an OAuth request with claude_code_version_too_old
+   * and the transport adopted the version it named. Owners persist it so the next
+   * process starts at that version instead of being rejected again.
+   */
+  onClaudeCodeVersionRequired?: (version: string) => void;
+  /**
+   * Called when Anthropic rejected `speed: "fast"` for this model; the transport
+   * already resent the request at standard speed. Owners stop offering fast mode.
+   */
+  onFastModeUnsupported?: (modelId: string) => void;
   /**
    * Enable extended thinking.
    * For Opus 4.6+ and Sonnet 4.6: uses adaptive thinking (model decides when/how much to think).
@@ -144,7 +200,7 @@ export interface AnthropicOptions extends StreamOptions, AnthropicContextManagem
 }
 
 /** Options shared by the OpenAI Responses and Completions transports. */
-export type BaseOpenAIStreamOptions = StreamOptions & {
+export type BaseOpenAIStreamOptions = ProviderStreamOptions & {
   topP?: number;
   authProfileId?: string;
   firstEventTimeoutMs?: number;

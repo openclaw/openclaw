@@ -14,30 +14,22 @@ vi.mock("openclaw/plugin-sdk/channel-join-intro-runtime", () => ({
   reportChannelRoomJoin: reportChannelRoomJoinMock,
 }));
 
-const { getChatSpy, getLoadConfigMock, getOnHandler, telegramBotDepsForTest } =
+const { getChatSpy, getLoadConfigMock, getOnHandler } =
   await import("./bot.create-telegram-bot.test-harness.js");
 const { createTelegramBotCore } = await import("./bot-core.js");
 const { runWithTelegramSpooledReplayUpdate, getTelegramSpooledReplayDeferredParticipant } =
   await import("./bot-processing-outcome.js");
 
-const TELEGRAM_GROUP_CHAT_ID = -1001234567890;
+const chatId = -1001234567890;
+const room = { id: chatId, type: "supergroup", title: "Incident Response" };
 
-function createMembershipContext(params?: { newStatus?: "left" | "member" }) {
-  const member = {
-    id: telegramBotInfoForTest.id,
-    is_bot: true,
-    first_name: "OpenClaw",
-  };
+function createMembershipContext(newStatus: "left" | "member" = "member", isForum = false) {
   const membership = {
-    chat: {
-      id: TELEGRAM_GROUP_CHAT_ID,
-      type: "supergroup",
-      title: "Incident Response",
-    },
+    chat: { ...room, is_forum: isForum },
     from: { id: 12345, is_bot: false, first_name: "Sam", last_name: "Rivera" },
     date: 1736380800,
-    old_chat_member: { status: "left", user: member },
-    new_chat_member: { status: params?.newStatus ?? "member", user: member },
+    old_chat_member: { status: "left", user: telegramBotInfoForTest },
+    new_chat_member: { status: newStatus, user: telegramBotInfoForTest },
   };
   return {
     update: { update_id: 900, my_chat_member: membership },
@@ -46,119 +38,117 @@ function createMembershipContext(params?: { newStatus?: "left" | "member" }) {
   };
 }
 
-async function registerJoinHandler(config: OpenClawConfig) {
-  getLoadConfigMock().mockReturnValue(config);
-  await createTelegramBotCore({
-    token: "tok",
-    botInfo: telegramBotInfoForTest,
-    telegramDeps: telegramBotDepsForTest,
-  });
+type TelegramConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>;
+
+async function registerJoinHandler(config: TelegramConfig = { groupPolicy: "open" }) {
+  getLoadConfigMock().mockReturnValue({ channels: { telegram: config } });
+  await createTelegramBotCore({ token: "tok", botInfo: telegramBotInfoForTest });
   return getOnHandler("my_chat_member");
 }
 
-describe("Telegram group join introductions", () => {
-  beforeEach(() => {
-    reportChannelRoomJoinMock.mockClear();
+async function replayJoin(
+  options: Partial<NonNullable<Parameters<typeof runWithTelegramSpooledReplayUpdate>[2]>> = {},
+) {
+  const handler = await registerJoinHandler();
+  const context = createMembershipContext();
+  return runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
+    abortSignal: new AbortController().signal,
+    onAdopted: vi.fn(),
+    onDeferred: vi.fn(),
+    onAbandoned: vi.fn(),
+    ...options,
   });
+}
+
+describe("Telegram group join introductions", () => {
+  beforeEach(() => reportChannelRoomJoinMock.mockClear());
 
   it("reports the bot's native group join with metadata-only room context", async () => {
-    const config: OpenClawConfig = {
-      channels: {
-        telegram: {
-          groupPolicy: "open",
-          groupAllowFrom: ["99999"],
-        },
-      },
-    };
+    const config: TelegramConfig = { groupPolicy: "open", groupAllowFrom: ["99999"] };
     getChatSpy.mockResolvedValue({
-      id: TELEGRAM_GROUP_CHAT_ID,
-      type: "supergroup",
-      title: "Incident Response",
+      ...room,
       description: "Coordinate production incidents",
       pinned_message: { text: "Start with the incident checklist" },
     });
     const handler = await registerJoinHandler(config);
-
     await handler(createMembershipContext());
-
     expect(reportChannelRoomJoinMock).toHaveBeenCalledTimes(1);
     const params = reportChannelRoomJoinMock.mock.calls[0]?.[0];
-    if (!params) {
-      throw new Error("Expected a group join introduction");
-    }
     expect(params).toMatchObject({
-      cfg: config,
+      cfg: { channels: { telegram: config } },
       channel: "telegram",
       accountId: "default",
-      conversationId: String(TELEGRAM_GROUP_CHAT_ID),
-      deliverTo: String(TELEGRAM_GROUP_CHAT_ID),
+      conversationId: String(chatId),
+      deliverTo: String(chatId),
       inviterLabel: "Sam Rivera",
       roomAllowed: true,
       route: { agentId: "main" },
     });
-    await expect(params.resolveRoomContext({ messageLimit: 30 })).resolves.toEqual({
+    await expect(params?.resolveRoomContext({ messageLimit: 30 })).resolves.toEqual({
       title: "Incident Response",
       purpose: "Coordinate production incidents",
       pinned: "Start with the incident checklist",
       historyUnavailable: true,
     });
-    expect(getChatSpy).toHaveBeenCalledWith(TELEGRAM_GROUP_CHAT_ID);
+    expect(getChatSpy).toHaveBeenCalledWith(chatId);
   });
 
   it("ignores a departure", async () => {
-    const handler = await registerJoinHandler({
-      channels: { telegram: { groupPolicy: "open" } },
-    });
-
-    await handler(createMembershipContext({ newStatus: "left" }));
-
+    const handler = await registerJoinHandler();
+    await handler(createMembershipContext("left"));
     expect(reportChannelRoomJoinMock).not.toHaveBeenCalled();
     expect(getChatSpy).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "disabled group policy",
-      config: { groupPolicy: "disabled" as const },
-    },
-    {
-      name: "an explicitly disabled group",
-      config: {
-        groupPolicy: "open" as const,
-        groups: { [String(TELEGRAM_GROUP_CHAT_ID)]: { enabled: false } },
-      },
-    },
-    {
-      name: "a group outside the room allowlist",
-      config: {
-        groupPolicy: "allowlist" as const,
-        groups: { "-1009999999999": { enabled: true } },
-      },
-    },
-  ])("passes a rejected conversation to the shared owner for $name", async ({ config }) => {
-    const handler = await registerJoinHandler({ channels: { telegram: config } });
-
+  it.each<[string, TelegramConfig]>([
+    ["disabled policy", { groupPolicy: "disabled" }],
+    ["disabled room", { groupPolicy: "open", groups: { [chatId]: { enabled: false } } }],
+    [
+      "allowlist miss",
+      { groupPolicy: "allowlist", groups: { "-1009999999999": { enabled: true } } },
+    ],
+  ])("reports roomAllowed=false for %s", async (_name, config) => {
+    const handler = await registerJoinHandler(config);
     await handler(createMembershipContext());
-
     expect(reportChannelRoomJoinMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversationId: String(TELEGRAM_GROUP_CHAT_ID),
-        roomAllowed: false,
-      }),
+      expect.objectContaining({ conversationId: String(chatId), roomAllowed: false }),
     );
     expect(getChatSpy).not.toHaveBeenCalled();
   });
 
-  it("does not start an introduction after its ingress owner was aborted", async () => {
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    const frame = await runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
-      abortSignal: AbortSignal.abort(new Error("account stopped")),
-      onAdopted: vi.fn(),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
-    });
+  it.each([
+    ["disabled General topic", { enabled: false }, false, "main"],
+    ["disabled General policy", { groupPolicy: "disabled" }, false, "main"],
+    ["General topic agent", { agentId: "triage" }, true, "triage"],
+  ] as const)(
+    "respects the %s for a forum introduction",
+    async (_name, topic, roomAllowed, agentId) => {
+      const handler = await registerJoinHandler({
+        groupPolicy: "open",
+        groups: { [chatId]: { topics: { "1": topic } } },
+      });
+      await handler(createMembershipContext("member", true));
 
+      expect(reportChannelRoomJoinMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          conversationId: String(chatId),
+          deliverTo: String(chatId),
+          threadId: 1,
+          roomAllowed,
+          route: expect.objectContaining({
+            agentId,
+            sessionKey: expect.stringContaining(":topic:1"),
+          }),
+        }),
+      );
+      expect(getChatSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not start an introduction after its ingress owner was aborted", async () => {
+    const frame = await replayJoin({
+      abortSignal: AbortSignal.abort(new Error("account stopped")),
+    });
     expect(reportChannelRoomJoinMock).not.toHaveBeenCalled();
     await expect(frame.deferredWork?.task).resolves.toMatchObject({ kind: "failed-retryable" });
   });
@@ -175,15 +165,7 @@ describe("Telegram group join introductions", () => {
       await commit.promise;
       return { kind: "posted" };
     });
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    const frame = runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
-      abortSignal: abort.signal,
-      onAdopted: vi.fn(),
-      onDeferred: vi.fn(),
-      onAbandoned: vi.fn(),
-      onAdoptionFinalizing: finalizing,
-    });
+    const frame = replayJoin({ abortSignal: abort.signal, onAdoptionFinalizing: finalizing });
     try {
       await accepted.promise;
       expect(finalizing).toHaveBeenCalledOnce();
@@ -197,23 +179,28 @@ describe("Telegram group join introductions", () => {
     await expect(participant?.task).resolves.toEqual({ kind: "completed" });
   });
 
-  it("settles the introduction hold when the shared owner throws unexpectedly", async () => {
-    const error = new Error("introduction owner failed");
-    let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
-    reportChannelRoomJoinMock.mockImplementationOnce(async () => {
-      participant = getTelegramSpooledReplayDeferredParticipant();
-      throw error;
-    });
-    const handler = await registerJoinHandler({ channels: { telegram: { groupPolicy: "open" } } });
-    const context = createMembershipContext();
-    await expect(
-      runWithTelegramSpooledReplayUpdate(context.update, () => handler(context), {
-        abortSignal: new AbortController().signal,
-        onAdopted: vi.fn(),
-        onDeferred: vi.fn(),
-        onAbandoned: vi.fn(),
-      }),
-    ).rejects.toBe(error);
-    await expect(participant?.task).resolves.toEqual({ kind: "failed-retryable", error });
-  });
+  it.each(["throws", "returns failure"])(
+    "keeps the introduction retryable when the shared owner %s",
+    async (outcome) => {
+      const error = new Error("introduction owner failed");
+      let participant: ReturnType<typeof getTelegramSpooledReplayDeferredParticipant>;
+      reportChannelRoomJoinMock.mockImplementationOnce(async () => {
+        participant = getTelegramSpooledReplayDeferredParticipant();
+        if (outcome === "throws") {
+          throw error;
+        }
+        return { kind: "failed", reason: error.message };
+      });
+      const replay = replayJoin();
+      if (outcome === "throws") {
+        await expect(replay).rejects.toBe(error);
+      } else {
+        await expect(replay).rejects.toThrow(error.message);
+      }
+      await expect(participant?.task).resolves.toEqual({
+        kind: "failed-retryable",
+        error: outcome === "throws" ? error : expect.objectContaining({ message: error.message }),
+      });
+    },
+  );
 });

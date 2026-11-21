@@ -106,9 +106,7 @@ function captureSessionRuntimeOwnershipRead(params: SessionRuntimeOwnershipReadP
     },
     finish(ownership: AgentHarnessSessionRuntimeOwnership | undefined) {
       assertCurrent();
-      return ownership
-        ? { ...ownership, ...(ownership.modelRef ? { modelRef: { ...ownership.modelRef } } : {}) }
-        : undefined;
+      return ownership;
     },
     close() {
       active = false;

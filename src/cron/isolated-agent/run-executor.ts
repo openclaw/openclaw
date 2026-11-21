@@ -1,9 +1,11 @@
+import { openExecYieldResume } from "../../agents/bash-tools.exec-notify.js";
 /** Executes isolated cron prompts with model fallbacks. */
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   LiveSessionModelSwitchError,
   logWarn,
@@ -15,8 +17,24 @@ import { createCronPromptExecutor } from "./run-prompt-executor.js";
 import { syncCronSessionLiveSelection } from "./run-session-state.js";
 import type { CronCompletedPromptRun, CronExecutionResult } from "./run.types.js";
 
-/** Executes an isolated cron prompt, including live model-switch retries. */
+/**
+ * Executes an isolated cron prompt, including live model-switch retries. A turn that yields on this
+ * run's wake-armed commands resumes here, in the same operation, with their exit result.
+ */
 export async function executeCronRun(params: CronRunExecutionParams): Promise<CronExecutionResult> {
+  return await withSessionTurn(
+    {
+      sessionKey: params.runSessionKey,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      agentId: params.agentId,
+      storePath: params.cronSession.storePath,
+      abortSignal: params.abortSignal,
+    },
+    (_operation, signal) => executeCronRunOwned({ ...params, abortSignal: signal }),
+  );
+}
+
+async function executeCronRunOwned(params: CronRunExecutionParams): Promise<CronExecutionResult> {
   const resolvedVerboseLevel: VerboseLevel =
     normalizeVerboseLevel(params.cronSession.sessionEntry.verboseLevel) ??
     normalizeVerboseLevel(params.agentVerboseDefault) ??
@@ -42,10 +60,22 @@ export async function executeCronRun(params: CronRunExecutionParams): Promise<Cr
   let modelSwitchRetries = 0;
   let promptMediaTaskIds: ReadonlySet<string> = new Set();
   let execution: CronCompletedPromptRun;
+  using execYield = openExecYieldResume({
+    agentId: params.agentId,
+    sessionKey: params.runSessionKey,
+  });
+  let prompt = params.commandBody;
   while (true) {
     try {
       promptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
-      execution = await runPrompt(params.commandBody, runStartedAt);
+      execution = await runPrompt(prompt, runStartedAt);
+      const exitWake = execution.runResult.meta?.yielded
+        ? await execYield.next(params.abortSignal)
+        : undefined;
+      if (exitWake) {
+        prompt = exitWake;
+        continue;
+      }
       break;
     } catch (err) {
       if (

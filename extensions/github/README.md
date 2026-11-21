@@ -10,11 +10,12 @@ OpenClaw. This official plugin is included with OpenClaw and enabled by default.
 - Read descriptions, discussion and review comments, and expandable file diffs.
 - Inspect pull request checks for the current head commit and refresh their status.
 - Ask the agent to read a known public issue, pull request, or commit with `github_read`.
+- Read a completed public Actions job log by giving `github_read` its job URL.
 - Find public issues and pull requests in a chosen repository with `github_search`.
 
 ## Get started
 
-Click a public GitHub issue, pull request, or commit link in chat. The reader opens
+Hover or focus a public GitHub issue, pull request, or commit link in chat to preview it. Click the link to read it beside chat. The reader opens
 beside the conversation. Use **Open on GitHub** for the full page.
 
 Manage the plugin from **Plugins → GitHub**. If you use a plugin allowlist, include
@@ -28,6 +29,14 @@ and optional `refresh: true`. It returns the same bounded document as the reader
 including applicable comments, file changes, checks, and partial-result markers.
 Requests use the invoking agent's Gateway-held identity, so sandboxed agents do
 not need GitHub credentials or network access in their shells.
+
+Actions job URLs use `/OWNER/REPO/actions/runs/RUN_ID/job/JOB_ID`. The tool reads
+the last 64 KiB of the completed job's log and includes its run, job, conclusion,
+and commit identity. Earlier output is explicitly marked omitted. Logs remain
+public-only, are redacted and treated as untrusted content, and are fetched fresh.
+Unavailable logs return an error; the selected identity may need Actions read
+access. Download URLs and credentials stay in the Gateway. UI job links continue
+to open on GitHub, and no CI rerun or archive download is provided.
 
 `github_search` requires `repository: "owner/repo"` and `kind: "issue" | "pull"`.
 Search each kind separately when you need both; this also works with GitHub App

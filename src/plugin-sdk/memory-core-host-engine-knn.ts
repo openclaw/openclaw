@@ -10,8 +10,15 @@ export {
   supportsNodeSqliteExtensionLoading,
 } from "../infra/node-sqlite.js";
 
-export { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
-export { retainOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
+export {
+  openOpenClawAgentDatabaseReadOnly,
+  withFreshOpenClawAgentDatabaseReadOnly,
+} from "../state/openclaw-agent-db-readonly-open.js";
+export {
+  retainOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../state/openclaw-agent-db-readonly.js";
+export { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 export {
   decodeMemoryEmbedding,
   parseEmbedding,

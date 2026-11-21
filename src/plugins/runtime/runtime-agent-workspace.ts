@@ -6,7 +6,7 @@ type PluginWorkspaceParams = Omit<
   "guard"
 > & {
   guard?: { assertHost?: () => void };
-  /** @deprecated Runs before dispatch. Use SQL-free guard.assertHost for live commit authority. Final compatibility day: 2026-12-31. */
+  /** @deprecated Runs before dispatch. Use SQL-free guard.assertHost for live commit authority. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   beforePersistentApply?: () => void;
 };
 

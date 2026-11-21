@@ -18,22 +18,24 @@ import {
   SYNCED_PREF_KEYS,
   SYNCED_PREFS,
   prefValuesEqual,
+  isAppearancePref,
   clearSidebarEntriesMetadata,
   type ServerUiPrefs,
 } from "./server-prefs-state.ts";
-import type { ServerUiPrefsSync, ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
+import type { ServerUiPrefsWriter } from "./server-prefs-sync-contract.ts";
 import {
   selectProfileUiPrefs,
   removePendingUiPrefsBatch,
   serverUiPrefsCommittedSnapshot,
 } from "./server-prefs-write-batch.ts";
+import type { serverUiPrefsOutbox } from "./server-prefs.ts";
 import type { UiSettings } from "./settings-contract.ts";
 import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 // Operation-only code: the synchronous preference owner retains its outbox and
 // all generation/authority facts, exposed live across every awaited boundary.
 export async function drainPendingPrefs(
-  sync: ServerUiPrefsSync,
+  sync: typeof serverUiPrefsOutbox,
   writer: ServerUiPrefsWriter,
   epoch: number,
 ): Promise<void> {
@@ -150,7 +152,7 @@ export async function drainPendingPrefs(
     let acknowledgedBase = batch.sidebarEntries;
     let composed = false;
     let reordered = false;
-    const compose: ServerUiPrefsSync["composeSidebar"] = (pending, next) => {
+    const compose: (typeof serverUiPrefsOutbox)["composeSidebar"] = (pending, next) => {
       if (!next.sidebarEntries) {
         return;
       }
@@ -190,12 +192,7 @@ export async function drainPendingPrefs(
                   writer.state.client,
                   batch,
                   () => {
-                    if (
-                      !profileIsCurrent() ||
-                      writer.state.client !== capturedClient ||
-                      !writer.state.connected ||
-                      !sync.pushCanWrite
-                    ) {
+                    if (!profileIsCurrent() || !sync.pushCanWrite) {
                       return false;
                     }
                     sync.reconcilePersistedPendingPrefs();
@@ -465,13 +462,20 @@ export async function drainPendingPrefs(
             result.error,
             result.reason === "rejected",
           );
+          if (useProfile && result.reason === "rejected") {
+            sync.updateRetainedLocalKeys(
+              sync.pendingScope,
+              SYNCED_PREF_KEYS.filter((key) => isAppearancePref(key) && Object.hasOwn(failed, key)),
+              true,
+            );
+          }
           const localPins = SYNCED_PREFS.sidebarEntries.extract(failed.sidebarEntries);
           if (result.reason === "rejected" && localPins && sync.batchIsCurrent(acknowledgedBatch)) {
             // Preserve the choice in the existing profile mirror before retiring its
             // unwritable outbox entry; other preferences must still be allowed to drain.
             sync.applyServerPrefsPatch({ sidebarEntries: localPins });
             sync.updateRetainedLocalKeys(sync.pendingScope, ["sidebarEntries"], true);
-            showToast({ message: result.error });
+            showToast({ placement: "top-right", severity: "error", message: result.error });
           }
           sync.publishPreferenceWrites();
         }

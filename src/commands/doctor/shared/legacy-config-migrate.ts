@@ -1,7 +1,7 @@
 import { getDeferredPluginMigrationConfigFacts } from "../../../config/deferred-plugin-migration-config.js";
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
-// Validating legacy config migration wrapper used by doctor config flow.
 import type { OpenClawConfig } from "../../../config/types.js";
+import type { ValidateConfigWithPluginsParams } from "../../../config/validation-plugin-rules.js";
 import { validateConfigObjectRawWithPlugins } from "../../../config/validation.js";
 import {
   applyLegacyDoctorMigrations,
@@ -12,6 +12,7 @@ import {
 export function migrateLegacyConfig(
   raw: unknown,
   options: LegacyDoctorMigrationOptions,
+  semanticValidation?: ValidateConfigWithPluginsParams["semanticValidation"],
 ): {
   config: OpenClawConfig | null;
   sourceConfig?: OpenClawConfig;
@@ -32,6 +33,7 @@ export function migrateLegacyConfig(
   // Runtime defaults create unrelated plugin entries that Doctor would then load
   // and persist. Validate repair candidates without materializing those defaults.
   const validated = validateConfigObjectRawWithPlugins(resolvedCandidate, {
+    semanticValidation,
     deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(context?.resolvedRaw ?? raw),
   });
   if (!validated.ok) {

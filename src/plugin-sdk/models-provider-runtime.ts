@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for building model-provider command replies.
- */
 import {
   buildPreparedModelsProviderData,
   type ModelsProviderData,

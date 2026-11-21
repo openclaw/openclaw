@@ -12,7 +12,7 @@ export type ConfigFormStructuredDraftProps = {
 };
 
 export function resolveStructuredDraftInitialValue(
-  params: ConfigNodeRenderParams,
+  params: Pick<ConfigNodeRenderParams, "schema" | "value" | "isRequired" | "structuredDraftOwner">,
 ): Record<string, unknown> | unknown[] | undefined {
   if (
     params.value !== undefined ||
@@ -31,7 +31,7 @@ export function resolveStructuredDraftInitialValue(
     (type === "object" && isRecord(schemaDefault)) ||
     (type === "array" && Array.isArray(schemaDefault))
   ) {
-    initialValue = structuredClone(schemaDefault);
+    initialValue = schemaDefault;
   }
   return isSupportedConfigValueValid(params.schema, initialValue) ? undefined : initialValue;
 }

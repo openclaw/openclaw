@@ -6,7 +6,7 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import type { RpcSourceAdapter } from "../../sessions/session-controller.rpc-sources.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   loadGatewaySessionEntryReadOnlyInWorker,
@@ -153,14 +153,18 @@ export function captureAbortedPartial(params: {
   runId: string;
   sessionKey: string;
   sessionId: string;
+  agentId?: string;
   text: string;
   abortOrigin: ChatAbortOrigin;
-  session: ChatAbortSessionSnapshot;
-  resolveTerminalProducer?: ChatAbortControllerEntry["resolveTerminalProducer"];
+  session?: ChatAbortSessionSnapshot;
+  resolveTerminalProducer?: RpcSourceAdapter["resolveTerminalProducer"];
 }) {
   const { runId, abortOrigin } = params;
   try {
     const session = params.session;
+    if (!session) {
+      throw new Error("Aborted partial transcript metadata is unavailable");
+    }
     if (!session.ok) {
       throw session.error;
     }
@@ -214,15 +218,16 @@ export function deferAbortedPartialPersistence(
     | "agentRunSeq"
     | "getRuntimeConfig"
   >,
-): void {
+): (() => void) | undefined {
   if (!snapshot?.ok || snapshot.settlement.deferred || !snapshot.settlement.producer) {
-    return;
+    return undefined;
   }
+  let revoked = false;
   try {
     snapshot.settlement.deferred = snapshot.settlement.producer.handoff((producerCompleted) =>
       context.trackExecution(async () => {
         const producerError = await producerCompleted;
-        if (isCliPartialOutputRejected(producerError)) {
+        if (revoked || isCliPartialOutputRejected(producerError)) {
           return;
         }
         let warning: string | undefined;
@@ -255,10 +260,16 @@ export function deferAbortedPartialPersistence(
         }
       }),
     );
+    if (snapshot.settlement.deferred) {
+      return () => {
+        revoked = true;
+      };
+    }
   } catch (error) {
     // No handoff was accepted; the caller keeps its synchronous persistence path.
     context.logGateway.warn(`chat.abort producer handoff failed: ${formatErrorMessage(error)}`);
   }
+  return undefined;
 }
 
 export const ABORTED_PARTIAL_PERSISTENCE_WARNING =

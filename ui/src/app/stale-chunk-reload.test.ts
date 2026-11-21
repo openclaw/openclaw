@@ -3,19 +3,24 @@ import { CONTROL_UI_BASE_PATH_ATTRIBUTE } from "../../../src/gateway/control-ui-
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { i18n } from "../i18n/index.ts";
-import * as storageAccess from "../local-storage.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
+import {
+  dispatchPreloadError,
+  memoryStorage,
+  stubDocumentNavigation,
+} from "./stale-chunk-reload.test-support.ts";
 import {
   cancelStaleChunkRecovery,
   installMissingStylesheetRecovery,
   installStaleChunkReloadListener,
   isStaleChunkImportError,
+  retryControlUiImport,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
 const GUARD_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
-const PROBE_TIMEOUT_MS = 3_000;
+const PROBE_TIMEOUT_MS = 10_000;
 
 function guard(buildId: string, at = Date.now()) {
   return JSON.stringify({ buildId, at });
@@ -50,36 +55,6 @@ function stubHangingDocumentFetch() {
   return fetchMock;
 }
 
-function memoryStorage(initial: Record<string, string> = {}): Storage {
-  const store = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return store.size;
-    },
-    clear: () => store.clear(),
-    key: (index: number) => [...store.keys()][index] ?? null,
-    removeItem: (key: string) => {
-      store.delete(key);
-    },
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  };
-}
-
-function stubDocumentNavigation() {
-  vi.useFakeTimers();
-  const target = window;
-  const replace = vi.fn();
-  vi.stubGlobal("window", {
-    location: { href: target.location.href, replace },
-    addEventListener: target.addEventListener.bind(target),
-    removeEventListener: target.removeEventListener.bind(target),
-    dispatchEvent: target.dispatchEvent.bind(target),
-  });
-  vi.spyOn(storageAccess, "getSafeSessionStorage").mockReturnValue(memoryStorage());
-  return replace;
-}
-
 beforeEach(() => {
   vi.useFakeTimers({ now: 1_000 });
   vi.spyOn(Math, "random").mockReturnValue(0);
@@ -98,6 +73,93 @@ afterEach(async () => {
 });
 
 describe("isStaleChunkImportError", () => {
+  it.each([
+    ["Importing a module script failed.", true],
+    ["Failed to fetch dynamically imported module: /assets/lazy.js", true],
+    ["error loading dynamically imported module: /assets/lazy.js", true],
+    ["Load failed", false],
+  ])("classifies the browser TypeError %s", (message, expected) => {
+    expect(isStaleChunkImportError(new TypeError(message))).toBe(expected);
+  });
+
+  it.each([false, true])(
+    "leaves route recovery to its retry owner (persistent failure: %s)",
+    async (persistent) => {
+      const replace = stubDocumentNavigation();
+      const uninstall = installStaleChunkReloadListener();
+      const reload = vi.fn();
+      const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+      vi.stubGlobal("fetch", probe);
+      const failImport = async () => {
+        const error = new TypeError("Failed to fetch dynamically imported module");
+        dispatchPreloadError(error);
+        throw error;
+      };
+      const load = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(failImport)
+        .mockImplementation(persistent ? failImport : async () => "loaded");
+      const completion = retryControlUiImport(load).catch(async (error: unknown) => {
+        expect(isStaleChunkImportError(error)).toBe(true);
+        return scheduleStaleChunkReload({ reload, storage: memoryStorage() });
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(reload).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(load).toHaveBeenCalledOnce();
+        probe.mockImplementation(
+          async (_input, init) =>
+            new Response(
+              init?.method === "HEAD"
+                ? null
+                : `<script>globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO=${JSON.stringify(CONTROL_UI_BUILD_INFO)};</script>`,
+            ),
+        );
+        window.dispatchEvent(new Event("online"));
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(completion).resolves.toBe(persistent ? true : "loaded");
+        expect(load).toHaveBeenCalledTimes(2);
+        expect(reload).toHaveBeenCalledTimes(persistent ? 1 : 0);
+        expect(replace).not.toHaveBeenCalled();
+      } finally {
+        uninstall();
+      }
+    },
+  );
+  it("does not retry a failed CSS preload without its styles after reachability returns", async () => {
+    const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", probe);
+    const failure = new Error("Unable to preload CSS for /assets/route-AbCd1234.css");
+    const load = vi.fn().mockRejectedValue(failure);
+    const pending = retryControlUiImport(load);
+    const rejected = expect(pending).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(load).toHaveBeenCalledOnce();
+    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it("does not rerun a retired route loader after reconnect", async () => {
+    const probe = vi.fn().mockRejectedValue(new TypeError("offline"));
+    vi.stubGlobal("fetch", probe);
+    const controller = new AbortController();
+    const load = vi
+      .fn()
+      .mockRejectedValue(new TypeError("Failed to fetch dynamically imported module"));
+    const pending = retryControlUiImport(load, controller.signal);
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    probe.mockResolvedValue(new Response(null, { status: 200 }));
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
+    expect(load).toHaveBeenCalledOnce();
+  });
   it("ignores unrelated errors and non-error values", () => {
     expect(isStaleChunkImportError(new Error("request failed"))).toBe(false);
     expect(isStaleChunkImportError("Importing a module script failed.")).toBe(false);
@@ -685,7 +747,10 @@ describe("retryStaleChunkReloadWhenReachable single-shot", () => {
 
       expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
         `${location.origin}${resourceBase}/index.html`,
-        expect.objectContaining({ method: "HEAD", cache: "no-store" }),
+        expect.objectContaining({
+          cache: "no-store",
+          headers: { "X-OpenClaw-Reachability-Probe": "1" },
+        }),
       );
       expect(replace).toHaveBeenCalledOnce();
       const destination = new URL(replace.mock.calls[0]![0]);
@@ -732,42 +797,38 @@ describe("retryStaleChunkReloadWhenReachable", () => {
   });
 });
 
-describe("installStaleChunkReloadListener", () => {
-  function dispatchPreloadError(payload: unknown) {
-    const event = new Event("vite:preloadError", { cancelable: true });
-    (event as Event & { payload?: unknown }).payload = payload;
-    window.dispatchEvent(event);
-  }
-
-  it("schedules recovery only for stale-chunk payloads", async () => {
-    const replace = stubDocumentNavigation();
-    const fetchMock = stubDocumentFetch(new Response(null, { status: 200 }));
-    const uninstall = installStaleChunkReloadListener();
-    try {
-      dispatchPreloadError(new Error("boom in module evaluation"));
-      expect(fetchMock).not.toHaveBeenCalled();
-      dispatchPreloadError(new Error("Importing a module script failed."));
-      await vi.advanceTimersByTimeAsync(0);
-      expect(replace).toHaveBeenCalledOnce();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    } finally {
-      uninstall();
-    }
-  });
-});
-
 describe("installMissingStylesheetRecovery", () => {
   function setReadyState(readyState: DocumentReadyState) {
     return vi.spyOn(document, "readyState", "get").mockReturnValue(readyState);
   }
 
-  function dispatchStylesheetError() {
+  function dispatchStylesheetError(href = "/assets/index-AbCd1234.css") {
     const link = document.createElement("link");
     link.rel = "stylesheet";
+    link.href = href;
     document.head.append(link);
     link.dispatchEvent(new Event("error"));
     link.remove();
   }
+
+  it.each(["/fonts/geist.css", "/themes/claw.css", "/plugins/example/style.css"])(
+    "ignores optional stylesheet failure: %s",
+    async (href) => {
+      const replace = stubDocumentNavigation();
+      setReadyState("loading");
+      const probe = stubDocumentFetch();
+      const uninstall = installMissingStylesheetRecovery();
+      try {
+        dispatchStylesheetError(href);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(probe).not.toHaveBeenCalled();
+        expect(replace).not.toHaveBeenCalled();
+        expect(document.querySelector('[role="alert"]')).toBeNull();
+      } finally {
+        uninstall();
+      }
+    },
+  );
 
   it("does nothing when the stylesheet sentinel is present and removes listeners", () => {
     stubDocumentNavigation();
@@ -896,15 +957,18 @@ describe("retryStaleChunkReloadWhenReachable deadline enforcement", () => {
   });
 });
 
-it("never starts another probe once the wait carried past the deadline", async () => {
+it("keeps probing past a wall-clock step before the wait deadline", async () => {
   const reload = vi.fn();
   const probe = stubDocumentFetch(new Response(null, { status: 503 }));
   const pending = retryStaleChunkReloadWhenReachable({ reload, timeoutMs: 5_000 });
   await vi.advanceTimersByTimeAsync(0);
+  expect(probe).toHaveBeenCalledOnce();
   // Wall time can move ahead while the tab is suspended, before its scheduled retry runs.
+  // The process-local wait window must survive the step; only its own deadline ends it.
   vi.setSystemTime(Date.now() + 10_000);
   await vi.advanceTimersByTimeAsync(1_000);
+  expect(probe.mock.calls.length).toBeGreaterThan(1);
+  await vi.advanceTimersByTimeAsync(5_000);
   await expect(pending).resolves.toBe(false);
-  expect(probe).toHaveBeenCalledOnce();
   expect(reload).not.toHaveBeenCalled();
 });

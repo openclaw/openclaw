@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { resolveAgentExplicitRecipientSession } from "../../infra/outbound/agent-delivery.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -104,6 +105,7 @@ export async function prepareAgentRequestRouting(params: {
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
@@ -130,9 +132,14 @@ export async function prepareAgentRequestRouting(params: {
         threadId: params.request.threadId,
       });
     } catch (error) {
+      params.assertCurrent?.();
       params.clearDedupe();
       return rejectInvalidRequest(formatForLog(error));
     }
+  }
+  // A route result cannot revive a request canceled while its provider was pending.
+  if (sessionIdTarget || explicitRecipient) {
+    params.assertCurrent?.();
   }
   if (explicitRecipientSession?.error) {
     params.clearDedupe();
@@ -163,6 +170,13 @@ export async function prepareAgentRequestRouting(params: {
     // Reserve before the worker read yields, including ordinary session keys.
     params.reserveDedupe(requestedSessionKey, agentId);
     try {
+      if (agentId) {
+        await waitForAgentInputAdmission(agentId, {
+          cfg: params.cfg,
+          sessionKey: requestedSessionKey,
+          owner: params.context.resolveGatewayContext?.()?.agentDatabaseStartup,
+        });
+      }
       loaded = await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: params.cfg,
         key: requestedSessionKey,

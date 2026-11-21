@@ -1,9 +1,9 @@
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import {
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  waitForSessionWorkAdmissionRelease,
-} from "../../../sessions/session-lifecycle-admission.js";
+  SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
+  waitForSessionControllerSettlement,
+} from "../../../sessions/session-controller.lifecycle.js";
 import type { captureSubagentCommands } from "./subagent-control-commands.js";
 
 /** One native Stop retains acceptance, caller failure, and its cleanup observations. */
@@ -16,6 +16,40 @@ export function createSubagentKillAcceptance(params: {
   commands?: ReturnType<typeof captureSubagentCommands>;
 }) {
   let acceptedCallerFailure: { error: unknown } | undefined;
+  let acceptedPreparationFailure: { error: unknown } | undefined;
+  const acceptedFailures = () => [
+    ...new Set(
+      [acceptedCallerFailure, acceptedPreparationFailure].flatMap((failure) =>
+        failure ? [failure.error] : [],
+      ),
+    ),
+  ];
+  const prepare = (run: () => Promise<void>) => async () => {
+    try {
+      await run();
+    } catch (error) {
+      if (!params.stopAcceptance.accepted || hasSqliteWorkerOutcomeUnknown(error)) {
+        throw error;
+      }
+      try {
+        params.assertNativeCurrent();
+        if (!params.ownsSessionIncarnation() || !params.isKillOwnerCurrent()) {
+          throw new Error("Subagent accepted cancellation lost its native owner.", {
+            cause: error,
+          });
+        }
+      } catch (nativeError) {
+        throw new AggregateError(
+          [error, nativeError],
+          "Subagent cancellation preparation and native ownership failed",
+          { cause: nativeError },
+        );
+      }
+      // Preparation can fail after an abort observer revokes the requester. Keep
+      // that failure while the accepted native claim finishes its own settlement.
+      acceptedPreparationFailure = { error };
+    }
+  };
   const accept = (accepted: boolean) => {
     params.stopAcceptance.accepted ||= accepted;
     if (
@@ -64,9 +98,9 @@ export function createSubagentKillAcceptance(params: {
     try {
       // Signaling can revoke the caller synchronously. Its failed fresh-command
       // guard cannot abandon the admission release already owned by this Stop.
-      released = await waitForSessionWorkAdmissionRelease(
+      released = await waitForSessionControllerSettlement(
         release,
-        SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+        SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
       );
     } catch (error) {
       throw acceptanceFailure
@@ -101,19 +135,20 @@ export function createSubagentKillAcceptance(params: {
     options: { settleCommands: boolean },
   ): Promise<T> => {
     const cancellation = operation.then(
-      (result) =>
-        acceptedCallerFailure
+      (result) => {
+        const failures = acceptedFailures();
+        return failures.length
           ? {
               ...result,
-              error: [result.error, formatErrorMessage(acceptedCallerFailure.error)]
-                .filter(Boolean)
-                .join(" "),
+              error: [result.error, ...failures.map(formatErrorMessage)].filter(Boolean).join(" "),
             }
-          : result,
+          : result;
+      },
       (error: unknown) => {
-        throw acceptedCallerFailure
+        const failures = acceptedFailures();
+        throw failures.length
           ? new AggregateError(
-              [acceptedCallerFailure.error, error],
+              [...failures, error],
               "Subagent cancellation and accepted claim settlement failed",
               { cause: error },
             )
@@ -153,11 +188,15 @@ export function createSubagentKillAcceptance(params: {
     );
   };
   return {
+    prepare,
     accept,
     drain,
     finish,
     get callerFailure() {
       return acceptedCallerFailure;
+    },
+    get preparationFailed() {
+      return acceptedPreparationFailure !== undefined;
     },
   };
 }

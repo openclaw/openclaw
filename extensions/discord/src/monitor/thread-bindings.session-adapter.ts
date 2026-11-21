@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
+  resolveThreadBindingTargetKind,
   registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
   warnPluginSdkDeprecation,
@@ -75,7 +76,26 @@ export function createThreadBindingSessionAdapter(params: {
       const conversationId = normalizeOptionalString(input.conversation.conversationId) ?? "";
       const createThread = input.placement === "child";
       const metadata = snapshotThreadBindingMetadata(input) ?? {};
-      const targetKind = input.targetKind === "subagent" ? "subagent" : "acp";
+      const existing = createThread ? undefined : params.manager.getByThreadId(conversationId);
+      const previous =
+        existing?.targetSessionKey === targetSessionKey &&
+        (existing.targetKind === "subagent") === (input.targetKind === "subagent")
+          ? existing
+          : undefined;
+      const targetKind = await resolveThreadBindingTargetKind({
+        cfg: params.resolveCurrentCfg(),
+        targetSessionKey,
+        targetKind: input.targetKind,
+        metadata: { ...previous?.metadata, ...metadata },
+        agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
+        channel: "Discord",
+        assertCurrent: () => {
+          params.assertCurrent();
+          assertCurrent?.();
+        },
+      });
+      params.assertCurrent();
+      assertCurrent?.();
       const threadId = createThread ? undefined : conversationId || undefined;
       let channelId: string | undefined;
 
@@ -174,7 +194,6 @@ export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBin
     getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
     getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
-    getBySessionKey: () => undefined,
     listBySessionKey: () => [],
     listBindings: () => [],
     touchThread: async () => null,

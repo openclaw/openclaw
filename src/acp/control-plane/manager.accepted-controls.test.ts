@@ -1,16 +1,17 @@
 /** Accepted backend controls, not stale requests, own subsequent session replay. */
 import { describe, expect, it, vi } from "vitest";
 import { buildConfiguredAcpSessionKey } from "../persistent-bindings.types.js";
+import { createAcceptedFixture } from "./manager.ownership.test-support.js";
 import {
   AcpRuntimeError,
   AcpSessionManager,
   baseCfg,
   createRuntime,
-  expectMockCallFields,
-  expectNoMockCallFields,
+  expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
-  installMutableAcpSessionMetaUpsert,
+  managerFixture,
+  mockMutableSession,
   readySessionMeta,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
@@ -46,35 +47,17 @@ describe("AcpSessionManager accepted controls", () => {
   }
 
   function setupSession(thinking?: string, initialModel = model) {
-    const runtimeState = createRuntime();
-    let meta = readySessionMeta({
-      runtimeOptions: { model: initialModel, ...(thinking ? { thinking } : {}) },
-    });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    const state = createAcceptedFixture({
       sessionKey,
-      storeSessionKey: sessionKey,
-      acp: meta,
-    }));
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(
-      async (params: {
-        mutate: (
-          current: SessionAcpMeta,
-          entry: { acp: SessionAcpMeta },
-        ) => SessionAcpMeta | null | undefined;
-      }) => {
-        meta = params.mutate(meta, { acp: meta }) ?? meta;
-        return { sessionId: "accepted-controls", updatedAt: Date.now(), acp: meta };
+      meta: {
+        runtimeOptions: { model: initialModel, ...(thinking ? { thinking } : {}) },
       },
-    );
-    runtimeState.getCapabilities.mockResolvedValue({
+    });
+    state.getCapabilities.mockResolvedValue({
       controls: ["session/set_config_option", "session/status"],
       configOptionKeys: ["model", "reasoning_effort"],
     });
-    return { ...runtimeState, readMeta: () => meta, manager: new AcpSessionManager() };
+    return { ...state, readMeta: () => state.persisted.currentMeta };
   }
 
   async function runTurn(manager: AcpSessionManager, requestId: string) {
@@ -91,12 +74,7 @@ describe("AcpSessionManager accepted controls", () => {
   it("persists clamped thinking after an explicit model change", async () => {
     const state = setupSession("high", "openai/gpt-5.6-sol");
     state.setConfigOption.mockResolvedValue(acceptedOptions("medium", ["low", "medium", "high"]));
-    const result = await state.manager.setSessionConfigOption({
-      cfg: baseCfg,
-      sessionKey,
-      key: "model",
-      value: model,
-    });
+    const result = await state.setOption("model", model);
     const expectedOptions = { model, thinking: "medium" };
     expect(result).toEqual(expectedOptions);
     expect(state.readMeta().runtimeOptions).toEqual(expectedOptions);
@@ -139,8 +117,7 @@ describe("AcpSessionManager accepted controls", () => {
     });
     await runTurn(state.manager, "initial-low");
     await state.manager.updateSessionRuntimeOptions({
-      cfg: baseCfg,
-      sessionKey,
+      ...state.target,
       patch: { thinking: "high" },
     });
     state.setConfigOption.mockClear();
@@ -161,8 +138,7 @@ describe("AcpSessionManager accepted controls", () => {
   it("keeps accepted thinking when a later automatic control fails", async () => {
     const state = setupSession("high");
     await state.manager.updateSessionRuntimeOptions({
-      cfg: baseCfg,
-      sessionKey,
+      ...state.target,
       patch: { permissionProfile: "strict" },
     });
     state.getCapabilities.mockResolvedValue({ controls: ["session/set_config_option"] });
@@ -202,8 +178,7 @@ describe("AcpSessionManager accepted controls", () => {
       const state = setupSession();
       const value = key === "timeout" ? "30" : "high";
       await state.manager.updateSessionRuntimeOptions({
-        cfg: baseCfg,
-        sessionKey,
+        ...state.target,
         patch: { backendExtras: { [key]: value } },
       });
       state.getCapabilities.mockResolvedValue({
@@ -261,22 +236,12 @@ describe("AcpSessionManager configured bindings", () => {
       thinking: "off",
     };
     const sessionKey = buildConfiguredAcpSessionKey(spec);
-    let currentMeta: SessionAcpMeta | undefined;
+    const state: { currentMeta: SessionAcpMeta | undefined } = { currentMeta: undefined };
+    mockMutableSession(sessionKey, state);
     hoisted.readAcpSessionEntryMock.mockImplementation(() =>
-      currentMeta ? { sessionKey, storeSessionKey: sessionKey, acp: currentMeta } : null,
-    );
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(
-      ({
-        mutate,
-      }: {
-        mutate: (
-          current: SessionAcpMeta | undefined,
-          entry: { acp?: SessionAcpMeta },
-        ) => SessionAcpMeta | null | undefined;
-      }) => {
-        currentMeta = mutate(currentMeta, { acp: currentMeta }) ?? currentMeta;
-        return { sessionId: "configured-session", updatedAt: Date.now(), acp: currentMeta };
-      },
+      state.currentMeta
+        ? { sessionKey, storeSessionKey: sessionKey, acp: state.currentMeta }
+        : null,
     );
     const manager = new AcpSessionManager();
     const getManager = vi.spyOn(managerModule, "getAcpSessionManager").mockReturnValue(manager);
@@ -295,22 +260,22 @@ describe("AcpSessionManager configured bindings", () => {
       expect(await ensure("off")).toEqual({ ok: true, sessionKey });
       await runTurn("first");
       await runTurn("second");
-      expect(currentMeta?.runtimeOptions?.thinking).toBe("off");
+      expect(state.currentMeta?.runtimeOptions?.thinking).toBe("off");
 
       expect(await ensure("high")).toEqual({ ok: true, sessionKey });
       await runTurn("third");
-      const acceptedMeta = currentMeta;
+      const acceptedMeta = state.currentMeta;
       for (let attempt = 0; attempt < 2; attempt++) {
         expect(await ensure("off")).toEqual({
           ok: false,
           sessionKey,
           error: "Live off is unsupported",
         });
-        expect(currentMeta).toEqual(acceptedMeta);
+        expect(state.currentMeta).toEqual(acceptedMeta);
       }
       expect(await ensure()).toEqual({ ok: true, sessionKey });
       await runTurn("fourth");
-      expect(currentMeta?.runtimeOptions?.thinking).toBe("high");
+      expect(state.currentMeta?.runtimeOptions?.thinking).toBe("high");
       expect(runtimeState.ensureSession).toHaveBeenCalledOnce();
       expect(runtimeState.close).not.toHaveBeenCalled();
       expect(runtimeState.runTurn).toHaveBeenCalledTimes(4);
@@ -327,7 +292,7 @@ describe("AcpSessionManager configured bindings", () => {
         ["model", "openai/gpt-5.6-luna"],
         ["thinking", "high"],
       ]);
-      expect(currentMeta?.runtimeOptions).toEqual({
+      expect(state.currentMeta?.runtimeOptions).toEqual({
         model: "openai/gpt-5.6-luna",
         thinking: "high",
       });
@@ -348,20 +313,11 @@ describe("AcpSessionManager runtime config validation", () => {
     requestId: "run",
   };
   function setup(meta: SessionAcpMeta | undefined) {
-    const runtimeState = createRuntime();
     const state = { currentMeta: meta };
     const sessionKey = `agent:${meta?.agent ?? "codex"}:acp:config`;
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: state.currentMeta,
-    }));
-    installMutableAcpSessionMetaUpsert(state);
-    return { runtimeState, state, manager: new AcpSessionManager() };
+    const fixture = managerFixture(sessionKey);
+    mockMutableSession(sessionKey, state);
+    return { ...fixture, state };
   }
 
   it("rejects invalid options before backend controls run", async () => {
@@ -412,10 +368,12 @@ describe("AcpSessionManager runtime config validation", () => {
       expect(state.currentMeta?.runtimeOptions).toEqual(expected);
       await manager.runTurn(turn);
       for (const [key, value] of controls) {
-        expectMockCallFields(runtimeState.setConfigOption, { key, value });
+        expectCalledWith(runtimeState.setConfigOption, { key, value });
       }
       if (appliedModel.kind === "dropped") {
-        expectNoMockCallFields(runtimeState.setConfigOption, { key: "model" });
+        expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+          expect.objectContaining({ key: "model" }),
+        );
       }
       expect(runtimeState.runTurn).toHaveBeenCalledOnce();
     },
@@ -449,62 +407,34 @@ describe("AcpSessionManager runtime config validation", () => {
 describe("AcpSessionManager resetSessionRuntimeOptions", () => {
   installAcpSessionManagerTestLifecycle();
 
-  function setupReset() {
-    const runtimeState = createRuntime();
-    const sessionKey = "agent:codex:acp:reset-options";
-    let meta = readySessionMeta({
-      cwd: "/workspace/removed",
-      runtimeOptions: { cwd: "/workspace/removed", thinking: "high" },
-    });
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
-    hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
-      sessionKey,
-      storeSessionKey: sessionKey,
-      acp: meta,
-    }));
-    hoisted.upsertAcpSessionMetaMock.mockImplementation(
-      async (params: {
-        mutate: (
-          current: SessionAcpMeta,
-          entry: { acp: SessionAcpMeta },
-        ) => SessionAcpMeta | null | undefined;
-      }) => {
-        meta = params.mutate(meta, { acp: meta }) ?? meta;
-        return { sessionId: "reset-options", updatedAt: Date.now(), acp: meta };
-      },
-    );
-    return {
-      runtimeState,
-      manager: new AcpSessionManager(),
-      target: { cfg: baseCfg, sessionKey },
-      get meta() {
-        return meta;
-      },
-    };
-  }
-
   it("keeps overrides and the retained handle available when reset close fails", async () => {
-    const fixture = setupReset();
+    const fixture = createAcceptedFixture({
+      sessionKey: "agent:codex:acp:reset-options",
+      meta: {
+        cwd: "/workspace/removed",
+        runtimeOptions: { cwd: "/workspace/removed", thinking: "high" },
+      },
+    });
     await fixture.manager.getSessionStatus(fixture.target);
-    fixture.runtimeState.getStatus.mockRejectedValue(new Error("backend status unavailable"));
-    fixture.runtimeState.ensureSession.mockRejectedValue(new Error("backend cannot be started"));
-    fixture.runtimeState.close.mockRejectedValueOnce(new Error("backend close failed"));
+    fixture.getStatus.mockRejectedValue(new Error("backend status unavailable"));
+    fixture.ensureSession.mockRejectedValue(new Error("backend cannot be started"));
+    fixture.close.mockRejectedValueOnce(new Error("backend close failed"));
 
     await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).rejects.toMatchObject({
       code: "ACP_TURN_FAILED",
       message: "backend close failed",
     });
 
-    expect(fixture.meta.runtimeOptions).toEqual({ cwd: "/workspace/removed", thinking: "high" });
+    expect(fixture.persisted.currentMeta.runtimeOptions).toEqual({
+      cwd: "/workspace/removed",
+      thinking: "high",
+    });
     expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(1);
     await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).resolves.toEqual({});
-    expect(fixture.runtimeState.ensureSession).toHaveBeenCalledOnce();
-    expect(fixture.runtimeState.close).toHaveBeenCalledTimes(2);
-    expectMockCallFields(fixture.runtimeState.close, { reason: "reset-runtime-options" });
-    expect(fixture.meta.runtimeOptions).toBeUndefined();
+    expect(fixture.ensureSession).toHaveBeenCalledOnce();
+    expect(fixture.close).toHaveBeenCalledTimes(2);
+    expectCalledWith(fixture.close, { reason: "reset-runtime-options" });
+    expect(fixture.persisted.currentMeta.runtimeOptions).toBeUndefined();
     expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });
 });

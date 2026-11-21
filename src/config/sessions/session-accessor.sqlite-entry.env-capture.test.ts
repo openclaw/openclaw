@@ -19,7 +19,17 @@ const boundary = vi.hoisted(() => ({
     params.assertCurrent();
     const prepared = await params.prepare([]);
     params.assertCurrent();
-    return { entry: prepared?.next ?? null, wrote: prepared?.next !== undefined };
+    return {
+      entry: prepared?.next ?? null,
+      // Maintenance is mocked below; this fact only selects its environment handoff.
+      writtenSource: prepared?.next
+        ? {
+            kind: "file",
+            physicalIdentity: "synthetic-file",
+            nativeLocation: params.database.path,
+          }
+        : undefined,
+    };
   }),
   maintain: vi.fn(),
   history: vi.fn(),
@@ -79,18 +89,12 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite: boundary.maintain,
 }));
 vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
-vi.mock("./session-accessor.sqlite-scope.js", () => ({
-  resolveSqliteScope: (scope: ResolvedSqliteScope) => scope,
+vi.mock("./session-accessor.sqlite-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-accessor.sqlite-scope.js")>()),
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
   runExclusiveSqliteSessionWrite: boundary.queue,
-  toDatabaseOptions: (scope: ResolvedSqliteScope) => ({
-    agentId: scope.agentId,
-    env: scope.env,
-    path: scope.path,
-  }),
 }));
 vi.mock("./session-accessor.sqlite-status.js", () => ({}));
-vi.mock("./session-canonical-key.js", () => ({ assertCanonicalSessionKeyWrite() {} }));
 vi.mock("./session-entry-lineage.js", () => ({}));
 // mock-isolation: Observe captured worker inputs without starting persistence on synthetic paths.
 vi.mock("./session-entry-patch.js", () => ({ patchSessionEntryInWorker: boundary.worker }));
@@ -101,7 +105,6 @@ vi.mock("./session-history-eviction.js", () => ({
 vi.mock("./session-store-path.js", () => ({
   resolveSessionStorePathForScope: () => "/synthetic/store",
 }));
-vi.mock("./store-entry.js", () => ({}));
 vi.mock("./types.js", () => ({}));
 
 afterEach(() => {

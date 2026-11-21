@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { twitchMessageActions } from "./actions.js";
+import { twitchPlugin } from "./plugin.js";
+
+const twitchMessageActions = twitchPlugin.actions!;
 
 describe("twitchMessageActions", () => {
   it("advertises sends for core execution", () => {

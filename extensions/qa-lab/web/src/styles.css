@@ -1,8 +1,3 @@
-/* ==============================================
-   QA Lab — Redesigned UI with light/dark theme
-   ============================================== */
-
-/* --- Theme tokens --- */
 :root,
 [data-theme="dark"] {
   color-scheme: dark;
@@ -80,7 +75,6 @@
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.2);
 }
 
-/* --- Reset --- */
 *,
 *::before,
 *::after {
@@ -108,7 +102,6 @@ body {
   height: 100%;
 }
 
-/* --- Scrollbar --- */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -126,7 +119,6 @@ body {
   background: var(--scrollbar-thumb-hover);
 }
 
-/* --- Form elements --- */
 button,
 input,
 select,
@@ -213,7 +205,6 @@ select {
   cursor: pointer;
 }
 
-/* --- App shell layout --- */
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -223,7 +214,6 @@ select {
   color: var(--text);
 }
 
-/* --- Header --- */
 .header {
   display: flex;
   flex-wrap: wrap;
@@ -291,7 +281,6 @@ select {
   color: var(--accent);
 }
 
-/* --- Status badge --- */
 .badge {
   display: inline-flex;
   align-items: center;
@@ -310,14 +299,12 @@ select {
   color: var(--warning-text);
 }
 
-.badge-pass,
-.badge-completed {
+.badge-pass {
   background: var(--success-soft);
   color: var(--success-text);
 }
 
-.badge-fail,
-.badge-failed {
+.badge-fail {
   background: var(--danger-soft);
   color: var(--danger-text);
 }
@@ -334,7 +321,6 @@ select {
   color: var(--accent);
 }
 
-/* --- Theme toggle --- */
 .theme-toggle {
   display: flex;
   align-items: center;
@@ -353,14 +339,12 @@ select {
   color: var(--text);
 }
 
-/* --- Layout --- */
 .layout {
   display: flex;
   flex: 1;
   overflow: hidden;
 }
 
-/* --- Sidebar --- */
 .sidebar {
   width: 360px;
   flex-shrink: 0;
@@ -444,7 +428,6 @@ select {
   gap: 4px;
 }
 
-/* Config form */
 .config-field {
   margin-bottom: 10px;
 }
@@ -467,7 +450,6 @@ select {
   margin-top: 4px;
 }
 
-/* Scenario list */
 .sidebar-scenarios {
   flex: 1;
   display: flex;
@@ -555,7 +537,6 @@ select {
   text-overflow: ellipsis;
 }
 
-/* Sidebar actions */
 .sidebar-actions {
   padding: 14px 16px;
   border-top: 1px solid var(--border);
@@ -580,7 +561,6 @@ select {
   flex: 1;
 }
 
-/* Run status */
 .run-status {
   flex-shrink: 0;
 }
@@ -628,9 +608,6 @@ select {
   line-height: 1.6;
 }
 
-/* --- Main content --- */
-
-/* --- Tab bar --- */
 .tab-bar {
   display: flex;
   align-items: center;
@@ -669,7 +646,6 @@ select {
   flex: 1;
 }
 
-/* --- Tab content --- */
 .tab-content {
   flex: 1;
   overflow: hidden;
@@ -677,9 +653,6 @@ select {
   flex-direction: column;
 }
 
-/* --- Chat view --- */
-
-/* Chat sidebar (channels / DMs) */
 .chat-sidebar {
   width: 220px;
   flex-shrink: 0;
@@ -762,7 +735,6 @@ select {
   text-overflow: ellipsis;
 }
 
-/* Chat main area (messages + composer) */
 .main-content,
 .chat-main {
   flex: 1;
@@ -840,7 +812,6 @@ select {
   font-size: 14px;
 }
 
-/* Messages */
 .msg {
   display: flex;
   gap: 12px;
@@ -999,7 +970,6 @@ select {
   border: 1px solid var(--border);
 }
 
-/* Composer */
 .chat-composer {
   border-top: 1px solid var(--border);
   padding: 12px 20px;
@@ -1061,7 +1031,6 @@ select {
   flex-shrink: 0;
 }
 
-/* --- Results view --- */
 .chat-view,
 .results-view {
   display: flex;
@@ -1135,7 +1104,6 @@ select {
   margin-top: 1px;
 }
 
-/* Results inspector */
 .results-inspector {
   flex: 1;
   overflow-y: auto;
@@ -1351,7 +1319,6 @@ select {
   margin-top: 7px;
 }
 
-/* Step cards */
 .step-list {
   display: flex;
   flex-direction: column;
@@ -1408,8 +1375,6 @@ select {
   border: 1px solid var(--border);
 }
 
-/* --- Report view --- */
-
 .report-content {
   flex: 1;
   overflow-y: auto;
@@ -1430,7 +1395,6 @@ select {
   border: 1px solid var(--border);
 }
 
-/* --- Evidence view --- */
 .evidence-view {
   display: flex;
   flex-direction: column;
@@ -2074,7 +2038,6 @@ button.evidence-matrix-cell {
   }
 }
 
-/* --- Events view --- */
 .report-view,
 .events-view {
   display: flex;
@@ -3488,11 +3451,6 @@ button.evidence-matrix-cell {
   }
 }
 
-/* --- Utility --- */
-.text-muted {
-  color: var(--text-secondary);
-}
-
 .text-dimmed {
   color: var(--text-tertiary);
 }
@@ -3507,7 +3465,6 @@ button.evidence-matrix-cell {
   padding: 8px 0;
 }
 
-/* --- Responsive --- */
 @media (max-width: 900px) {
   .sidebar {
     width: 280px;

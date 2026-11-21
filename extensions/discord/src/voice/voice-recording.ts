@@ -48,7 +48,7 @@ export class DiscordVoiceRecording {
   constructor(
     private readonly params: {
       entry: VoiceSessionEntry;
-      cfg: OpenClawConfig;
+      readConfig: () => OpenClawConfig;
       userId: string;
       isInputComplete: () => boolean;
       minimumSeconds: () => number;
@@ -173,8 +173,9 @@ export class DiscordVoiceRecording {
         await previousProcessing;
         return await processDiscordVoiceSegment({
           ...this.params,
+          // Transcribe with the current media config; the recorder can outlive a hot reload.
+          cfg: this.params.readConfig(),
           wavPath: wav.path,
-          durationSeconds: wav.durationSeconds,
           isConversationCurrent: this.params.canConverse,
           onConversationOnly: () => conversationOnly.resolve(),
           recording,

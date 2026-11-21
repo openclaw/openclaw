@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for session-key comparison, classification, and transcript identities.
- */
 export {
   isIncognitoSessionKey,
   resolveAgentIdFromSessionKey,

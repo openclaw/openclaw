@@ -480,7 +480,6 @@ export async function prepareAgentWorkspaceAttachments(params: {
   const notes = new Set<string>();
   let noteChars = 0;
   for (const [index, media] of batches.entries()) {
-    assertCurrent();
     let note: string | undefined;
     if (access?.prepareTurnAttachments) {
       note = await access.prepareTurnAttachments(
@@ -496,7 +495,6 @@ export async function prepareAgentWorkspaceAttachments(params: {
       );
     } else if (localExecution) {
       const { prepareLocalWorkspaceAttachments } = await import("./workspace-attachments.local.js");
-      assertCurrent();
       note = await prepareLocalWorkspaceAttachments({
         media,
         execution: localExecution,

@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { projectSessionDisplayMessage } from "../gateway/session-display-projection.js";
 import { readSessionTranscriptRunId } from "./transcript-events.js";
 
@@ -20,6 +21,7 @@ export function readSessionTranscriptTerminalModel(
     message.display !== false &&
     projectSessionDisplayMessage(message, { view: "model-context" })?.role === "assistant" &&
     typeof message.provider === "string" &&
+    !isTranscriptArtifactProvider(message.provider) &&
     typeof message.model === "string"
     ? { runId, modelProvider: message.provider, model: message.model }
     : null;
@@ -33,6 +35,7 @@ export function isSessionTranscriptTerminalModel(
     model &&
     typeof model.runId === "string" &&
     typeof model.modelProvider === "string" &&
+    !isTranscriptArtifactProvider(model.modelProvider) &&
     typeof model.model === "string",
   );
 }

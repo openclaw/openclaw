@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveAgentConfig } from "../../agent-scope-config.js";
 
@@ -11,22 +10,10 @@ const DEFAULT_SWARM_CONFIG = {
   defaultAgentId: "",
 };
 
-function normalizeRawConfig(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value === "boolean") {
-    return { enabled: value };
-  }
-  return isRecord(value) ? value : undefined;
-}
+type SwarmConfig = NonNullable<OpenClawConfig["tools"]>["swarm"];
 
-function readSwarmLimit(
-  raw: Record<string, unknown>,
-  key: Exclude<keyof typeof DEFAULT_SWARM_CONFIG, "enabled" | "defaultAgentId">,
-  max: number,
-): number {
-  const value = raw[key];
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? Math.min(value, max)
-    : DEFAULT_SWARM_CONFIG[key];
+function normalizeRawConfig(value: SwarmConfig): Exclude<SwarmConfig, boolean> {
+  return typeof value === "boolean" ? { enabled: value } : value;
 }
 
 /** Resolve global and per-agent Swarm configuration into bounded runtime values. */
@@ -41,11 +28,20 @@ export function resolveSwarmConfig(
       : undefined;
   const raw = agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
   return {
-    enabled: typeof raw.enabled === "boolean" ? raw.enabled : DEFAULT_SWARM_CONFIG.enabled,
-    maxConcurrent: readSwarmLimit(raw, "maxConcurrent", 1_000),
-    maxChildrenPerGroup: readSwarmLimit(raw, "maxChildrenPerGroup", 10_000),
-    maxTotalPerGroup: readSwarmLimit(raw, "maxTotalPerGroup", 100_000),
-    waitTimeoutSecondsMax: readSwarmLimit(raw, "waitTimeoutSecondsMax", 24 * 60 * 60),
-    defaultAgentId: typeof raw.defaultAgentId === "string" ? raw.defaultAgentId.trim() : "",
+    enabled: raw.enabled ?? DEFAULT_SWARM_CONFIG.enabled,
+    maxConcurrent: Math.min(raw.maxConcurrent ?? DEFAULT_SWARM_CONFIG.maxConcurrent, 1_000),
+    maxChildrenPerGroup: Math.min(
+      raw.maxChildrenPerGroup ?? DEFAULT_SWARM_CONFIG.maxChildrenPerGroup,
+      10_000,
+    ),
+    maxTotalPerGroup: Math.min(
+      raw.maxTotalPerGroup ?? DEFAULT_SWARM_CONFIG.maxTotalPerGroup,
+      100_000,
+    ),
+    waitTimeoutSecondsMax: Math.min(
+      raw.waitTimeoutSecondsMax ?? DEFAULT_SWARM_CONFIG.waitTimeoutSecondsMax,
+      24 * 60 * 60,
+    ),
+    defaultAgentId: raw.defaultAgentId?.trim() ?? "",
   };
 }

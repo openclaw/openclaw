@@ -22,16 +22,9 @@ export function createMatrixHandlerState(config: {
   runtime: RuntimeEnv;
   allowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
   groupAllowFromResolvedEntries: readonly MatrixResolvedAllowlistEntry[];
-  resolveLiveUserAllowlist: typeof resolveMatrixMonitorLiveUserAllowlist;
 }) {
-  const {
-    core,
-    accountId,
-    runtime,
-    allowFromResolvedEntries,
-    groupAllowFromResolvedEntries,
-    resolveLiveUserAllowlist,
-  } = config;
+  const { core, accountId, runtime, allowFromResolvedEntries, groupAllowFromResolvedEntries } =
+    config;
 
   let cachedStoreAllowFrom: {
     value: string[];
@@ -56,7 +49,7 @@ export function createMatrixHandlerState(config: {
     if (cached?.signature === signature) {
       return cached.entries;
     }
-    const entries = await resolveLiveUserAllowlist({
+    const entries = await resolveMatrixMonitorLiveUserAllowlist({
       cfg: paramsValue.cfg,
       accountId,
       entries: paramsValue.entries,

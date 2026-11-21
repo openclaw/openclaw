@@ -13,6 +13,7 @@ CREATE TABLE "user_profile_identities" (
   "subject" text COLLATE "C" NOT NULL,
   "profile_id" text COLLATE "C" NOT NULL,
   "canonical_login" text COLLATE "C",
+  "verified_email_json" text COLLATE "C",
   "created_at" bigint NOT NULL,
   "authorization_id" text COLLATE "C",
   "authorization_basis_json" text COLLATE "C",
@@ -33,8 +34,8 @@ CREATE TABLE "user_profiles" (
   PRIMARY KEY ("id")
 );
 
-CREATE INDEX "idx_user_profile_emails_profile_id" ON "user_profile_emails" (("profile_id") ASC NULLS FIRST);
+CREATE INDEX "idx_user_profile_emails_profile_id" ON "user_profile_emails" (("profile_id") ASC);
 
 CREATE UNIQUE INDEX "idx_user_profile_identities_authorization" ON "user_profile_identities" (("authorization_id") ASC NULLS FIRST);
 
-CREATE INDEX "idx_user_profile_identities_profile_id" ON "user_profile_identities" (("profile_id") ASC NULLS FIRST);
+CREATE INDEX "idx_user_profile_identities_profile_id" ON "user_profile_identities" (("profile_id") ASC);

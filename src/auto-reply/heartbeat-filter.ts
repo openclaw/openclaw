@@ -10,7 +10,6 @@ import {
   isContractToolResultBlock,
   readToolCallName,
 } from "../shared/tool-block-contract.js";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -20,6 +19,9 @@ import {
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
+// Saved transcripts retain calls to the retired response tool.
+const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
+
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
@@ -27,9 +29,11 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
     (token) => `After completing all due tasks, reply ${token}.`,
   ),
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  // Saved transcripts retain the closing the retired executor wrote when the response tool was unused.
+  `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;
@@ -120,6 +124,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
 export function isHeartbeatUserMessage(
   message: HeartbeatTranscriptMessage,
   heartbeatPrompt?: string,
+  options: { heartbeatOnly?: boolean } = {},
 ): boolean {
   if (message.role !== "user") {
     return false;
@@ -130,7 +135,9 @@ export function isHeartbeatUserMessage(
     return false;
   }
   const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
-  const transcriptPrompts = Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
+  const transcriptPrompts = options.heartbeatOnly
+    ? [INTERNAL_WAKE_TRANSCRIPT_PROMPTS.heartbeat]
+    : Object.values(INTERNAL_WAKE_TRANSCRIPT_PROMPTS);
   if (transcriptPrompts.some((prompt) => trimmed === prompt)) {
     return true;
   }
@@ -161,6 +168,7 @@ export function isHeartbeatUserMessage(
 export function isHeartbeatOkResponse(
   message: HeartbeatTranscriptMessage,
   ackMaxChars?: number,
+  allowTruncated = false,
 ): boolean {
   if (message.role !== "assistant" || collectAssistantToolCalls(message).length > 0) {
     return false;
@@ -169,7 +177,7 @@ export function isHeartbeatOkResponse(
   return (
     !hasNonTextContent &&
     (isSilentAssistantTranscriptMessage(message) ||
-      isHeartbeatAcknowledgementText(text, ackMaxChars))
+      isHeartbeatAcknowledgementText(text, ackMaxChars, allowTruncated))
   );
 }
 
@@ -221,6 +229,7 @@ function resolveHeartbeatArtifactSpanEnd(
   messages: HeartbeatTranscriptMessage[],
   startIndex: number,
   ackMaxChars?: number,
+  allowTruncated = false,
 ): number | undefined {
   let index = startIndex + 1;
   let sawTerminalHeartbeatArtifact = false;
@@ -235,7 +244,7 @@ function resolveHeartbeatArtifactSpanEnd(
     if (message.role === "user" && !isEmbeddedToolResultOnlyContent(message.content)) {
       break;
     }
-    if (isHeartbeatOkResponse(message, ackMaxChars)) {
+    if (isHeartbeatOkResponse(message, ackMaxChars, allowTruncated)) {
       sawTerminalHeartbeatArtifact = true;
       index = advancePastAdjacentToolResults(messages, index + 1);
       continue;
@@ -286,7 +295,12 @@ export function filterHeartbeatTranscriptArtifacts<T extends HeartbeatTranscript
   for (let i = 0; i < messages.length;) {
     const message = expectDefined(messages[i], "messages entry at i");
     const next = isHeartbeatUserMessage(message, heartbeatPrompt)
-      ? resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars)
+      ? resolveHeartbeatArtifactSpanEnd(
+          messages,
+          i,
+          ackMaxChars,
+          isHeartbeatUserMessage(message, heartbeatPrompt, { heartbeatOnly: true }),
+        )
       : undefined;
     if (next === undefined) {
       result.push(message);

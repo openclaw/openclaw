@@ -12,6 +12,7 @@ import { parseCronPacingBounds } from "./pacing.js";
 import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import { isCronEventSchedule } from "./source-schedule.js";
 import { normalizeCronStaggerMs } from "./stagger.js";
+import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronSchedule } from "./types.js";
 
 type CronScheduleIdentityInput = { schedule?: unknown; enabled?: unknown } & Record<
@@ -68,7 +69,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
   if (kind === "on-exit") {
     const command = readNonBlankString(schedule.command);
     return command
-      ? { kind: "on-exit", command, cwd: normalizeOptionalString(schedule.cwd) }
+      ? { kind: "on-exit", command, cwd: readNonBlankString(schedule.cwd) }
       : undefined;
   }
   if (kind === "stream") {
@@ -84,7 +85,7 @@ function schedulePayloadFromRecord(schedule: Record<string, unknown>): CronSched
     return {
       kind: "stream",
       command: [...command],
-      cwd: normalizeOptionalString(schedule.cwd),
+      cwd: readNonBlankString(schedule.cwd),
       mode: mode === "line" || mode === "match" ? mode : undefined,
       match: typeof schedule.match === "string" ? schedule.match : undefined,
       batchMs: readScheduleInteger(schedule, "batchMs"),
@@ -120,7 +121,12 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
       ? schedulePayloadFromRecord(job.schedule as Record<string, unknown>)
       : undefined;
   const pacing = resolvePacingPayload(job);
-  if (!schedule || pacing === null) {
+  const streamSandbox = parseCronStreamSandboxTarget(job.streamSandbox);
+  if (
+    !schedule ||
+    pacing === null ||
+    (job.streamSandbox !== undefined && (!streamSandbox || schedule.kind !== "stream"))
+  ) {
     return undefined;
   }
   return JSON.stringify({
@@ -129,6 +135,7 @@ export function tryCronScheduleIdentity(job: CronScheduleIdentityInput): string 
     schedule: schedule.kind === "event" ? JSON.parse(stableStringify(schedule)) : schedule,
     pacing,
     hasTrigger: job.trigger !== undefined && job.trigger !== null,
+    ...(streamSandbox ? { streamSandbox } : {}),
   });
 }
 

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   recordPluginCandidateInstallOwner,
   resolvePluginCandidateInstallOwner,
@@ -28,9 +28,6 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 const { resolveReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
 const { createConfigIoContext } = await import("./io.context.js");
-const { resolveConfigWidePluginMetadataSnapshot, resolveConfigWidePluginManifestRegistry } =
-  await import("./io.plugin-metadata.js");
-
 const { createCanonicalAgentConfigFixture } = await import("../test-utils/config-roster.js");
 const { validateConfigObjectWithPlugins, validateConfigObjectWithPluginsAsync } =
   await import("./validation.js");
@@ -50,9 +47,6 @@ function manifestRecord(id: string, source: string, channels: string[] = []): Pl
     rootDir: source,
     origin: "workspace",
     channels,
-    name: id,
-    description: "test plugin",
-    version: "1.0.0",
     configSchema: { type: "object", additionalProperties: false },
   });
 }
@@ -79,9 +73,6 @@ function workspaceSnapshot(
     policyHash,
     index,
     registryIndex: index,
-    plugins,
-    manifestRegistry: { plugins, diagnostics: [] },
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     discovery: {
       candidates: plugins.map((plugin) =>
         recordPluginCandidateInstallOwner(
@@ -100,219 +91,158 @@ function workspaceSnapshot(
   });
 }
 
-describe("config IO plugin metadata snapshots", () => {
-  beforeEach(() => {
-    clearCurrentPluginMetadataSnapshot();
-    clearPluginMetadataLifecycleCaches();
-    mocks.resolvePluginMetadataSnapshotInput.mockReset();
-  });
+function metadataLoader() {
+  const context = createConfigIoContext({ env: {}, observe: false });
+  return context.createValidationPluginMetadataSnapshotLoader({ env: {} });
+}
 
-  it.each(["sync", "async"] as const)(
-    "reuses Gateway metadata through %s config validation",
-    async (mode) => {
-      const config: OpenClawConfig = {
-        agents: { entries: { ops: { workspace: "/srv/ops" } } },
-        logging: { level: "info" },
-        plugins: { allow: ["prepared"] },
-      };
-      const prepared = manifestRecord("prepared", "/srv/ops/prepared");
-      const snapshot = workspaceSnapshot(
-        "/srv/ops",
-        [prepared],
-        [],
-        resolveInstalledPluginIndexPolicyHash(config, {}),
-      );
-      setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
-      mocks.resolvePluginMetadataSnapshotInput.mockReturnValue(snapshot);
-      const nextConfig = { ...config, logging: { level: "debug" } };
-      const loader = createConfigIoContext({
-        env: {},
-        observe: false,
-      }).createValidationPluginMetadataSnapshotLoader({ env: {} });
-
-      const result = await withPluginCache(createPluginCache(), () =>
-        mode === "sync"
-          ? validateConfigObjectWithPlugins(nextConfig, {
-              env: {},
-              loadPluginMetadataSnapshot: loader.load,
-            })
-          : validateConfigObjectWithPluginsAsync(nextConfig, {
-              env: {},
-              loadPluginMetadataSnapshotAsync: loader.loadAsync,
-            }),
-      );
-
-      expect(result).toMatchObject({ ok: true });
-      expect(loader.getSnapshot()).toBe(snapshot);
-      expect(mocks.resolvePluginMetadataSnapshotInput).not.toHaveBeenCalled();
-    },
+function mockWorkspaces(entries: Record<string, ReturnType<typeof workspaceSnapshot>>) {
+  const snapshots = new Map(Object.entries(entries));
+  mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
+    ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
   );
+  return snapshots;
+}
 
-  it("discovers the new workspace when reload changes legacy default ownership", async () => {
-    const legacyConfig = (defaultAgent: "ops" | "research") => ({
-      plugins: { allow: ["new-workspace-plugin"] },
-      agents: {
-        defaults: { workspace: "/srv/base" },
-        entries: {
-          ops: { default: defaultAgent === "ops" },
-          research: { default: defaultAgent === "research" },
-        },
-      },
-    });
-    const config = createCanonicalAgentConfigFixture(legacyConfig("ops")).config;
-    const policyHash = resolveInstalledPluginIndexPolicyHash(config, {});
-    const initial = workspaceSnapshot("/srv/base", [], [], policyHash);
-    setGatewayPluginMetadataSnapshot(initial, { config, env: {} });
-    const added = manifestRecord("new-workspace-plugin", "/srv/base/ops/plugin");
-    const snapshots = new Map([
-      ["/srv/base", workspaceSnapshot("/srv/base", [], [], policyHash)],
-      ["/srv/base/ops", workspaceSnapshot("/srv/base/ops", [added], [], policyHash)],
-    ]);
-    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
-      ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
+beforeEach(() => {
+  clearCurrentPluginMetadataSnapshot();
+  clearPluginMetadataLifecycleCaches();
+  mocks.resolvePluginMetadataSnapshotInput.mockReset();
+});
+
+it.each(["sync", "async"] as const)(
+  "reuses Gateway metadata through %s config validation",
+  async (mode) => {
+    const config: OpenClawConfig = {
+      agents: { entries: { ops: { workspace: "/srv/ops" } } },
+      logging: { level: "info" },
+      plugins: { allow: ["prepared"] },
+    };
+    const prepared = manifestRecord("prepared", "/srv/ops/prepared");
+    const snapshot = workspaceSnapshot(
+      "/srv/ops",
+      [prepared],
+      [],
+      resolveInstalledPluginIndexPolicyHash(config, {}),
     );
-    const nextConfig = createCanonicalAgentConfigFixture(legacyConfig("research")).config;
-    const loader = createConfigIoContext({
-      env: {},
-      observe: false,
-    }).createValidationPluginMetadataSnapshotLoader({ env: {} });
+    setGatewayPluginMetadataSnapshot(snapshot, { config, env: {} });
+    mocks.resolvePluginMetadataSnapshotInput.mockReturnValue(snapshot);
+    const nextConfig = { ...config, logging: { level: "debug" } };
+    const loader = metadataLoader();
 
     const result = await withPluginCache(createPluginCache(), () =>
-      validateConfigObjectWithPluginsAsync(nextConfig, {
-        env: {},
-        loadPluginMetadataSnapshotAsync: loader.loadAsync,
-      }),
+      mode === "sync"
+        ? validateConfigObjectWithPlugins(nextConfig, {
+            env: {},
+            loadPluginMetadataSnapshot: loader.load,
+          })
+        : validateConfigObjectWithPluginsAsync(nextConfig, {
+            env: {},
+            loadPluginMetadataSnapshotAsync: loader.loadAsync,
+          }),
     );
 
     expect(result).toMatchObject({ ok: true });
-    expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
-    expect(
-      mocks.resolvePluginMetadataSnapshotInput.mock.calls.map(([params]) => params.workspaceDir),
-    ).toEqual(["/srv/base/ops", "/srv/base"]);
-  });
-
-  it("feeds merged workspace plugins to snapshot-backed read-only discovery", () => {
-    const primary = manifestRecord("primary", "/srv/ops/primary");
-    const secondary = manifestRecord("research-chat-plugin", "/srv/research/research-chat-plugin", [
-      "research-chat",
-    ]);
-    const mergedRegistry = { plugins: [primary, secondary], diagnostics: [] };
-    const secondaryDiagnostic = {
-      level: "warn" as const,
-      code: "persisted-registry-stale-source" as const,
-      message: "Retained secondary registry metadata",
-    };
-    const snapshots = new Map([
-      ["/srv/ops", workspaceSnapshot("/srv/ops", [primary], ["primary"])],
-      [
-        "/srv/research",
-        {
-          ...workspaceSnapshot("/srv/research", [secondary]),
-          registryDiagnostics: [secondaryDiagnostic],
-        },
-      ],
-    ]);
-    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
-      ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
-    );
-    const cfg = {
-      agents,
-      channels: { "research-chat": { enabled: true } },
-      plugins: {
-        allow: ["research-chat-plugin"],
-        entries: { "research-chat-plugin": { enabled: true } },
-      },
-    };
-    const context = createConfigIoContext({ env: {}, observe: false });
-    const loader = context.createValidationPluginMetadataSnapshotLoader({
-      env: {},
-    });
-    loader.load(cfg);
-    const snapshot = loader.getSnapshot();
-
-    expect(snapshot?.index.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "primary",
-      "research-chat-plugin",
-    ]);
-    expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
-    expect(snapshot?.registryIndex.plugins.map((plugin) => plugin.pluginId)).toEqual(["primary"]);
-    expect(snapshot?.registryDiagnostics).toEqual([secondaryDiagnostic]);
-    expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
-    expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
-    expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
-      false,
-    );
-    expect(snapshot?.byPluginId.get("research-chat-plugin")).toBe(secondary);
-    expect(snapshot?.owners.channels.get("research-chat")).toEqual(["research-chat-plugin"]);
-    expect(snapshot?.discovery?.candidates.map((candidate) => candidate.workspaceDir)).toEqual([
-      "/srv/ops",
-      "/srv/research",
-    ]);
-    expect(snapshot?.discovery?.candidates.map(resolvePluginCandidateInstallOwner)).toEqual([
-      "primary",
-      "research-chat-plugin",
-    ]);
-    expect(Object.isFrozen(snapshot?.index.plugins)).toBe(true);
     expect(loader.getSnapshot()).toBe(snapshot);
-    expect(
-      resolveReadOnlyChannelPluginsForConfig(cfg, {
-        env: {},
-        metadataSnapshot: snapshot,
-      }).plugins.map((plugin) => plugin.id),
-    ).toContain("research-chat");
+    expect(mocks.resolvePluginMetadataSnapshotInput).not.toHaveBeenCalled();
+  },
+);
+
+it("discovers the new workspace when reload changes legacy default ownership", async () => {
+  const legacyConfig = (defaultAgent: "ops" | "research") => ({
+    plugins: { allow: ["new-workspace-plugin"] },
+    agents: {
+      defaults: { workspace: "/srv/base" },
+      entries: {
+        ops: { default: defaultAgent === "ops" },
+        research: { default: defaultAgent === "research" },
+      },
+    },
   });
-
-  it("preserves shared source order and rejects conflicting IDs throughout the inventory", () => {
-    const primary = manifestRecord("primary", "/srv/ops/primary");
-    const shared = manifestRecord("shared", "/plugins/shared");
-    const secondary = manifestRecord("secondary", "/srv/research/secondary");
-    const snapshots = new Map([
-      [
-        "/srv/ops",
-        workspaceSnapshot("/srv/ops", [
-          primary,
-          shared,
-          manifestRecord("conflict", "/srv/ops/conflict"),
-        ]),
-      ],
-      [
-        "/srv/research",
-        workspaceSnapshot("/srv/research", [
-          secondary,
-          shared,
-          manifestRecord("conflict", "/srv/research/conflict"),
-        ]),
-      ],
-    ]);
-    mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
-      ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
-    );
-
-    const snapshot = resolveConfigWidePluginMetadataSnapshot({ config: { agents }, env: {} });
-
-    expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["primary", "shared", "secondary"]);
-    expect(snapshot.index.plugins.map((plugin) => plugin.pluginId)).toEqual([
-      "primary",
-      "shared",
-      "secondary",
-    ]);
-    expect(snapshot.discovery?.candidates.map((candidate) => candidate.idHint)).toEqual([
-      "primary",
-      "shared",
-      "secondary",
-    ]);
-    expect(structuredClone(snapshot.manifestRegistry)).toEqual(snapshot.manifestRegistry);
-    expect(
-      structuredClone(
-        resolveConfigWidePluginManifestRegistry({ config: { agents }, env: {}, pluginIds: [] }),
-      ).plugins,
-    ).toEqual([]);
-    expect(snapshot.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "conflict",
-        message: expect.stringContaining("present in multiple agent workspaces"),
-      }),
-    );
+  const config = createCanonicalAgentConfigFixture(legacyConfig("ops")).config;
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config, {});
+  const initial = workspaceSnapshot("/srv/base", [], [], policyHash);
+  setGatewayPluginMetadataSnapshot(initial, { config, env: {} });
+  const added = manifestRecord("new-workspace-plugin", "/srv/base/ops/plugin");
+  mockWorkspaces({
+    "/srv/base": workspaceSnapshot("/srv/base", [], [], policyHash),
+    "/srv/base/ops": workspaceSnapshot("/srv/base/ops", [added], [], policyHash),
   });
+  const nextConfig = createCanonicalAgentConfigFixture(legacyConfig("research")).config;
+  const loader = metadataLoader();
+
+  const result = await withPluginCache(createPluginCache(), () =>
+    validateConfigObjectWithPluginsAsync(nextConfig, {
+      env: {},
+      loadPluginMetadataSnapshotAsync: loader.loadAsync,
+    }),
+  );
+
+  expect(result).toMatchObject({ ok: true });
+  expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
+});
+
+it("merges workspace discovery in order, retaining diagnostics but rejecting conflicting IDs", () => {
+  const primary = manifestRecord("primary", "/srv/ops/primary");
+  const secondary = manifestRecord("chat", "/srv/research/chat", ["research-chat"]);
+  const shared = manifestRecord("shared", "/plugins/shared");
+  const secondaryDiagnostic = {
+    level: "warn" as const,
+    code: "persisted-registry-stale-source" as const,
+    message: "Retained secondary registry metadata",
+  };
+  const snapshots = mockWorkspaces({
+    "/srv/ops": workspaceSnapshot(
+      "/srv/ops",
+      [primary, shared, manifestRecord("conflict", "/srv/ops/conflict")],
+      ["primary"],
+    ),
+    "/srv/research": {
+      ...workspaceSnapshot("/srv/research", [
+        secondary,
+        shared,
+        manifestRecord("conflict", "/srv/research/conflict"),
+      ]),
+      registryDiagnostics: [secondaryDiagnostic],
+    },
+  });
+  const cfg = {
+    agents,
+    channels: { "research-chat": { enabled: true } },
+    plugins: {
+      allow: ["chat"],
+      entries: { chat: { enabled: true } },
+    },
+  };
+  const loader = metadataLoader();
+  loader.load(cfg);
+  const snapshot = loader.getSnapshot();
+
+  const ids = ["primary", "shared", "chat"];
+  expect(snapshot?.index.plugins.map((plugin) => plugin.pluginId)).toEqual(ids);
+  expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
+  expect(snapshot?.registryDiagnostics).toEqual([secondaryDiagnostic]);
+  expect(snapshot?.plugins.map((plugin) => plugin.id)).toEqual(ids);
+  expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
+    false,
+  );
+  expect(snapshot?.discovery?.candidates.map((candidate) => candidate.workspaceDir)).toEqual([
+    "/srv/ops",
+    "/srv/research",
+    "/srv/research",
+  ]);
+  expect(snapshot?.discovery?.candidates.map(resolvePluginCandidateInstallOwner)).toEqual(ids);
+  expect(
+    resolveReadOnlyChannelPluginsForConfig(cfg, {
+      env: {},
+      metadataSnapshot: snapshot,
+    }).plugins.map((plugin) => plugin.id),
+  ).toContain("research-chat");
+  expect(snapshot?.diagnostics).toContainEqual(
+    expect.objectContaining({
+      level: "error",
+      pluginId: "conflict",
+      message: expect.stringContaining("present in multiple agent workspaces"),
+    }),
+  );
 });

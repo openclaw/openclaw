@@ -1,174 +1,88 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type {
-  PluginStateCompareIntent,
-  PluginStateCompareResult,
-  PluginStateKeyedStore,
-  PluginStateObservation,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { storeSessionLearning } from "./feedback-reflection-store.js";
-import { runFeedbackReflection } from "./feedback-reflection.js";
-import type { MSTeamsApp } from "./sdk.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
+import {
+  createMSTeamsMessageHandlerDeps,
+  installMSTeamsTestRuntime,
+} from "./monitor-handler.test-helpers.js";
 
-type LearningEntry = { sessionKey: string; learnings: string[]; updatedAt: number };
-type ComparisonStore = Pick<PluginStateKeyedStore<LearningEntry, 2>, "observe" | "compareAndApply">;
+const mocks = vi.hoisted(() => ({ reflect: vi.fn(), send: vi.fn() }));
 
-const mocks = vi.hoisted(() => {
-  const observe = vi.fn<(key: string) => Promise<PluginStateObservation<LearningEntry>>>();
-  const compareAndApply =
-    vi.fn<
-      (
-        key: string,
-        comparison: string,
-        intent: PluginStateCompareIntent<LearningEntry>,
-      ) => Promise<PluginStateCompareResult<LearningEntry>>
-    >();
-  return {
-    observe,
-    compareAndApply,
-    openKeyedStoreV2: vi.fn<() => ComparisonStore>(),
-    reflect: vi.fn(),
-    send: vi.fn(),
-  };
-});
-
-vi.mock("./runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./runtime.js")>()),
-  getMSTeamsRuntime: () => ({ state: { openKeyedStoreV2: mocks.openKeyedStoreV2 } }),
-}));
-vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
-  DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS: 300_000,
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   runChannelFeedbackReflection: mocks.reflect,
+  recordChannelFeedbackEvent: vi.fn(async () => true),
 }));
 vi.mock("./sdk-proactive.js", () => ({ sendMSTeamsActivityWithReference: mocks.send }));
 vi.mock("./messenger.js", () => ({ buildConversationReference: (value: unknown) => value }));
 
-const params = { storePath: "/synthetic/sessions", sessionKey: "session", learning: "repeat" };
-
 beforeEach(() => {
   vi.resetAllMocks();
-  mocks.observe.mockResolvedValue({ value: undefined, comparison: "absent" });
-  mocks.compareAndApply.mockResolvedValue({ status: "applied" });
-  mocks.openKeyedStoreV2.mockReturnValue({
-    observe: mocks.observe,
-    compareAndApply: mocks.compareAndApply,
-  });
+  installMSTeamsTestRuntime();
 });
-afterEach(() => vi.restoreAllMocks());
 
-describe("MSTeams feedback learning persistence", () => {
-  it("rebases an append after conflict, retaining ten entries and duplicate learnings", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValue(200);
-    const current = {
-      sessionKey: "session",
-      learnings: [...Array.from({ length: 9 }, (_, index) => String(index)), "repeat"],
-      updatedAt: 90,
-    };
-    mocks.compareAndApply.mockResolvedValueOnce({
-      status: "conflict",
-      current: { value: current, comparison: "current" },
-    });
-
-    await storeSessionLearning(params);
-
-    expect(mocks.compareAndApply).toHaveBeenLastCalledWith(expect.any(String), "current", {
-      operation: "update",
-      action: "set",
-      value: {
-        sessionKey: "session",
-        learnings: [...current.learnings.slice(1), "repeat"],
-        updatedAt: 100,
+async function reflect(conversationType = "personal") {
+  const completed = createDeferred<void>();
+  const log = {
+    debug: vi.fn((message: string) => {
+      if (
+        message === "skipping reflection (cooldown active)" ||
+        message === "reflection produced no output" ||
+        message === "skipping reflection follow-up outside direct message"
+      ) {
+        completed.resolve();
+      }
+    }),
+    error: vi.fn(() => completed.resolve()),
+    info: vi.fn(),
+  };
+  mocks.send.mockImplementation(async () => completed.resolve());
+  const deps = createMSTeamsMessageHandlerDeps({
+    cfg: {
+      channels: { msteams: { dmPolicy: "open", allowFrom: ["*"], groupPolicy: "open" } },
+    },
+  });
+  deps.log = log;
+  await runMSTeamsFeedbackInvokeHandler(
+    {
+      activity: {
+        type: "invoke",
+        id: "feedback-invoke",
+        from: { id: "user", aadObjectId: "user" },
+        conversation: { id: "conversation", conversationType },
+        value: { actionName: "feedback", actionValue: { reaction: "dislike" } },
       },
-    });
-  });
-
-  it("still writes when appending leaves the bounded value unchanged", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(100);
-    const current = {
-      sessionKey: "session",
-      learnings: Array<string>(10).fill("repeat"),
-      updatedAt: 100,
-    };
-    mocks.observe.mockResolvedValue({ value: current, comparison: "current" });
-
-    await storeSessionLearning(params);
-
-    expect(mocks.compareAndApply).toHaveBeenCalledWith(expect.any(String), "current", {
-      operation: "update",
-      action: "set",
-      value: current,
-    });
-  });
-
-  it("propagates an unknown write outcome without repeating the append", async () => {
-    const failure = new Error("worker result unavailable");
-    mocks.compareAndApply.mockRejectedValue(failure);
-
-    await expect(storeSessionLearning(params)).rejects.toBe(failure);
-    expect(mocks.compareAndApply).toHaveBeenCalledOnce();
-  });
-});
+      sendActivity: vi.fn(async () => undefined),
+      updateActivity: vi.fn(async () => undefined),
+    },
+    deps,
+  );
+  await completed.promise;
+  await Promise.allSettled(mocks.send.mock.results.map((result) => result.value));
+  return log;
+}
 
 describe("MSTeams reflection completion", () => {
-  it.each(["applied", "failed"] as const)(
-    "waits for the %s storage outcome before its optional follow-up",
-    async (outcome) => {
-      const admitted = createDeferred<void>();
-      const pending = createDeferred<PluginStateCompareResult<LearningEntry>>();
-      mocks.compareAndApply
-        .mockResolvedValueOnce({
-          status: "conflict",
-          current: {
-            value: { sessionKey: "session", learnings: ["earlier"], updatedAt: 1 },
-            comparison: "current",
-          },
-        })
-        .mockImplementation(() => {
-          admitted.resolve();
-          return pending.promise;
-        });
-      mocks.reflect.mockResolvedValue({
-        status: "complete",
-        storePath: params.storePath,
-        learning: params.learning,
-        responseLength: 6,
-        followUp: true,
-        userMessage: "Synthetic follow-up",
-      });
-      const log = { debug: vi.fn(), info: vi.fn(), error: vi.fn() };
-      const operation = runFeedbackReflection({
-        cfg: {},
-        app: {} as MSTeamsApp,
-        accountId: "default",
-        conversationRef: { conversation: { id: "conversation", conversationType: "personal" } },
-        sessionKey: "session",
-        agentId: "main",
-        conversationId: "conversation",
-        conversationKind: "direct",
-        log,
-      });
-      try {
-        await admitted.promise;
-        expect(mocks.send).not.toHaveBeenCalled();
-        if (outcome === "applied") {
-          pending.resolve({ status: "applied" });
-        } else {
-          pending.reject(new Error("state unavailable"));
-        }
-        await operation;
-      } finally {
-        pending.resolve({ status: "applied" });
-        await operation;
-      }
+  const complete = { status: "complete", followUp: true, userMessage: "Synthetic follow-up" };
+  it.each([
+    ["personal", complete, true],
+    ["channel", complete, false],
+    ["personal", { status: "cooldown" }, false],
+    ["personal", { status: "empty" }, false],
+  ] as const)("handles %s reflection %j (send=%s)", async (kind, result, sent) => {
+    mocks.reflect.mockResolvedValue(result);
+    await reflect(kind);
+    expect(mocks.send.mock.calls.map((call) => [call[2], call[3].accountId])).toEqual(
+      sent ? [[{ type: "message", text: "Synthetic follow-up" }, "default"]] : [],
+    );
+  });
 
-      expect(mocks.reflect).toHaveBeenCalledOnce();
-      expect(mocks.compareAndApply).toHaveBeenCalledTimes(2);
-      expect(mocks.send).toHaveBeenCalledOnce();
-      if (outcome === "failed") {
-        expect(log.debug).toHaveBeenCalledWith("failed to store reflection learning", {
-          error: "state unavailable",
-        });
-      }
-    },
-  );
+  it("records a dispatch failure without sending a follow-up", async () => {
+    mocks.reflect.mockRejectedValue(new Error("dispatch unavailable"));
+    const log = await reflect();
+    expect(log.error).toHaveBeenCalledWith("reflection dispatch failed", {
+      error: "dispatch unavailable",
+    });
+    expect(mocks.send).not.toHaveBeenCalled();
+  });
 });

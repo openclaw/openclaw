@@ -1,4 +1,4 @@
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
@@ -24,7 +24,6 @@ import {
   readAgentRunProviderReview,
 } from "../sessions/provider-review-terminal.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -116,17 +115,15 @@ it("keeps embedded completion pending until its incognito pause fences the next 
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const patchEntry = sessionEntries.patchSessionEntryTarget;
-      vi.spyOn(sessionEntries, "patchSessionEntryTarget").mockImplementationOnce(
+      const patchEntry = sessionEntries.applySessionEntryTargetOperation;
+      vi.spyOn(sessionEntries, "applySessionEntryTargetOperation").mockImplementationOnce(
         async (...args) => {
           entered.resolve();
           await release.promise;
           return patchEntry(...args);
         },
       );
-      const scheduler = createTestGatewayScheduler();
-      onTestFinished(() => scheduler.stop());
-      const owner = createSessionLifecyclePersistenceOwner(scheduler);
+      const owner = createSessionLifecyclePersistenceOwner();
       const persistence = owner.observe({
         sessionKey: target.sessionKey,
         agentId: "main",

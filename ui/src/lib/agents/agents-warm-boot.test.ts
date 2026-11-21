@@ -3,7 +3,7 @@ import type { AgentsListResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentCapability } from "./index.ts";
 
-it("retires visible discovery after a failed refresh and retries without the previous roster", async () => {
+it("retains visible discovery after a failed refresh and replaces it on retry", async () => {
   const previous: AgentsListResult = {
     defaultId: "private",
     mainKey: "main",
@@ -14,7 +14,7 @@ it("retires visible discovery after a failed refresh and retries without the pre
   const request = vi
     .fn()
     .mockResolvedValueOnce(previous)
-    .mockRejectedValueOnce(new Error("role changed; reconnect"))
+    .mockRejectedValueOnce(new Error("roster unavailable"))
     .mockResolvedValueOnce(current);
   const agents = createAgentCapability({
     snapshot: { client: createTestGatewayClient(request), phase: "connected" },
@@ -24,8 +24,8 @@ it("retires visible discovery after a failed refresh and retries without the pre
     await agents.ensureList();
     expect(agents.state.agentsList).toEqual(previous);
     await agents.refreshList();
-    expect(agents.state.agentsList).toBeNull();
-    expect(agents.state.agentsError).toContain("role changed; reconnect");
+    expect(agents.state.agentsList).toEqual(previous);
+    expect(agents.state.agentsError).toContain("roster unavailable");
     await expect(agents.ensureList()).resolves.toEqual(current);
     expect(agents.state.agentsList).toEqual(current);
     expect(agents.state.agentsError).toBeNull();

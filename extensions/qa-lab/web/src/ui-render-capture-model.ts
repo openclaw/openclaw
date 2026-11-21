@@ -376,7 +376,6 @@ export function buildCaptureViewModel(state: UiState) {
       : "nav-first");
   const effectivePayloadLayout =
     state.capturePayloadDetailLayout ?? (selectedPayload.looksStructured ? "formatted" : "raw");
-  const effectivePayloadExtent = state.capturePayloadExtent;
   return {
     state,
     sessionIds,
@@ -429,7 +428,6 @@ export function buildCaptureViewModel(state: UiState) {
     effectiveDetailView,
     effectiveFlowLayout,
     effectivePayloadLayout,
-    effectivePayloadExtent,
   };
 }
 

@@ -9,7 +9,9 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -23,8 +25,7 @@ import {
   captureLifecycleDatabaseScope,
   resolveSqliteScope,
   prepareSqliteScope,
-  resolveSqliteWriteAdmissionScope,
-  runExclusiveSqliteSessionWrite,
+  withPreparedSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type {
@@ -52,6 +53,7 @@ import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent,
+  type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -67,6 +69,12 @@ export {
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
 
+export type SessionEntryDatabasePreparationReceipt = {
+  readonly candidates: readonly SessionStoreReadCandidate[];
+  readonly ready: Promise<{ assertCurrent(): void }>;
+  observeRegistration(observer: (change: AgentDatabaseRegistryChange) => void): () => void;
+};
+
 type SessionEntryDatabasePreparationSource = {
   database: { agentId: string; path: string };
   identity: DatabasePathIdentity;
@@ -79,6 +87,7 @@ function captureSessionEntryDatabasePreparation(
   assertCurrent: () => void,
   relatedScopes: readonly SessionAccessScope[] = [],
   expectedSource?: SessionEntryDatabasePreparationSource,
+  followRegistration?: (change: AgentDatabaseRegistryChange) => void,
 ) {
   const captureScope = (source: SessionAccessScope) => ({
     ...source,
@@ -129,6 +138,7 @@ function captureSessionEntryDatabasePreparation(
       candidates.push({ ...selected, identity: expected.identity });
     }
   }
+  const registrationObservers = new Set<(change: AgentDatabaseRegistryChange) => void>();
   let execution: OpenClawAgentDatabaseExecution | undefined;
   const assertSourceCurrent = () => {
     memory?.assertCurrent();
@@ -142,6 +152,17 @@ function captureSessionEntryDatabasePreparation(
     assertSourceCurrent();
   };
   return {
+    candidates,
+    observeRegistration(this: void, observer: (change: AgentDatabaseRegistryChange) => void) {
+      registrationObservers.add(observer);
+      return () => registrationObservers.delete(observer);
+    },
+    notifyRegistration(change: AgentDatabaseRegistryChange) {
+      followRegistration?.(change);
+      for (const observer of registrationObservers) {
+        observer(change);
+      }
+    },
     assertCurrent: assertSourceCurrent,
     env: target.env,
     get execution() {
@@ -149,6 +170,7 @@ function captureSessionEntryDatabasePreparation(
     },
     assertHeld,
     release: async () => {
+      registrationObservers.clear();
       await execution?.release();
     },
     async resolve() {
@@ -240,6 +262,7 @@ export function prepareSessionEntryMutationDatabases(
           target.assertCurrent,
           target.relatedScopes,
           target.expectedSource,
+          target.followRegistration,
         ),
       };
     } catch (reason) {
@@ -287,16 +310,7 @@ export function prepareSessionEntryMutationDatabases(
           const identity = target.identity;
           const execution = captureOpenClawAgentDatabaseExecution(
             target.options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
           // One physical execution serves the cohort; caller guards still authorize preparation.
           for (const member of members) {
@@ -307,8 +321,8 @@ export function prepareSessionEntryMutationDatabases(
             assertCurrent,
             execution,
             (change) => {
-              for (const { index } of members) {
-                targets[index]!.followRegistration?.(change);
+              for (const { capture } of members) {
+                capture.notifyRegistration(change);
               }
             },
           );
@@ -337,6 +351,15 @@ export function prepareSessionEntryMutationDatabases(
   }
   return {
     preparations,
+    sources: captured.map((capture, index): SessionEntryDatabasePreparationReceipt | undefined =>
+      capture.status === "fulfilled"
+        ? {
+            candidates: capture.value.candidates,
+            ready: preparations[index]!,
+            observeRegistration: capture.value.observeRegistration,
+          }
+        : undefined,
+    ),
     async [Symbol.asyncDispose]() {
       await promotion.catch(() => {});
       const released = await Promise.allSettled(
@@ -383,29 +406,12 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
-  // Preserve earlier queued writes for existing-key adoption and protect shared-store
-  // discovery from sibling cold registration. Commit custody is acquired separately.
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
-  const prepare = () => prepareSqliteScope(target);
-  const resolved = captureLifecycleDatabaseScope(
-    isMainThread
-      ? admission
-        ? await runExclusiveSqliteSessionWrite(
-            admission,
-            prepare,
-            "session.entry.create-with-transcript",
-          )
-        : await prepare()
-      : resolveSqliteScope(target),
-  );
-  return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
-}
-
-export function cloneSessionEntries(
-  store: Record<string, SessionEntry>,
-): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    Object.entries(store).map(([sessionKey, entry]) => [sessionKey, { ...entry }]),
+  return withPreparedSqliteScope(target, (prepared) =>
+    createSessionEntryWithTranscriptInScope(
+      captureLifecycleDatabaseScope(prepared),
+      createEntry,
+      options,
+    ),
   );
 }
 

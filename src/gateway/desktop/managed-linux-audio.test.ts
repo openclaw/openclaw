@@ -1,138 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type {
-  ManagedRun,
-  ProcessSupervisor,
-  RunExit,
-  SpawnInput,
-} from "../../process/supervisor/types.js";
-import { createManagedLinuxAudio, managedLinuxAudioEnv } from "./managed-linux-audio.js";
+import { assertAudioCurrent, createAudioFixture } from "./audio.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
-function fixture(
-  options: {
-    missing?: string;
-    silentServer?: boolean;
-    silentCapture?: boolean;
-    captureFailure?: boolean;
-    deferCapture?: boolean;
-    beforeCaptureReturn?: () => void;
-  } = {},
-) {
-  const tempDir = tempDirs.make("desktop-audio-test-");
-  const inputs: Array<Extract<SpawnInput, { mode: "child" }>> = [];
-  const runs: ManagedRun[] = [];
-  const serverSpawned = createDeferred();
-  const captureSpawned = createDeferred();
-  const captureAdmission = createDeferred();
-  const scopeCleaned = vi.fn();
-  const captureAdmitted = vi.fn();
-  const supervisor: ProcessSupervisor = {
-    acquireScopeCleanup(scope) {
-      return async () => {
-        supervisor.cancelScope(scope);
-        await Promise.all(
-          runs.filter((_, index) => inputs[index]?.scopeKey === scope).map((run) => run.wait()),
-        );
-        scopeCleaned(scope);
-      };
-    },
-    async spawn(input) {
-      if (input.mode !== "child") {
-        throw new Error("expected native child");
-      }
-      input.assertCurrent?.();
-      inputs.push(input);
-      const exit = createDeferred<RunExit>();
-      let settled = false;
-      const run: ManagedRun = {
-        runId: String(runs.length),
-        startedAtMs: 0,
-        activity: {
-          get resultSettled() {
-            return settled;
-          },
-          lastOutputAtMs: 0,
-        },
-        wait: () => exit.promise,
-        cancel() {
-          settled = true;
-          exit.resolve({
-            reason: "manual-cancel",
-            exitCode: 0,
-            exitSignal: null,
-            durationMs: 0,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          });
-        },
-      };
-      runs.push(run);
-      if (input.argv[0] === "pulseaudio") {
-        serverSpawned.resolve();
-        if (!options.silentServer) {
-          input.onStderr?.("I: main.c: Daemon startup complete.\n");
-        }
-      } else {
-        captureSpawned.resolve();
-        if (options.deferCapture) {
-          await captureAdmission.promise;
-          input.assertCurrent?.();
-        }
-        captureAdmitted();
-        if (options.captureFailure) {
-          throw new Error("parec spawn failed");
-        }
-        if (!options.silentCapture) {
-          input.onStdoutRaw?.(Buffer.from([0, 128, 255, 127]));
-        }
-        options.beforeCaptureReturn?.();
-      }
-      return run;
-    },
-    cancel(id) {
-      runs.find((run) => run.runId === id)?.cancel();
-    },
-    cancelScope(scope) {
-      for (const [index, run] of runs.entries()) {
-        if (inputs[index]?.scopeKey === scope) {
-          run.cancel();
-        }
-      }
-    },
-  };
-  const env = { PULSE_SERVER: "unix:/unrelated/native", ...managedLinuxAudioEnv(tempDir) };
-  const owner = createManagedLinuxAudio({
-    supervisor,
-    tempDir,
-    env,
-    assertCurrent() {},
-    runtime: { detectBinary: async (binary) => binary !== options.missing, startupTimeoutMs: 100 },
-  });
-  cleanups.push(() => owner.stop());
-  return {
-    owner,
-    inputs,
-    runs,
-    env,
-    tempDir,
-    serverSpawned,
-    captureSpawned,
-    captureAdmission,
-    scopeCleaned,
-    captureAdmitted,
-  };
+function fixture(options?: Parameters<typeof createAudioFixture>[1]) {
+  const f = createAudioFixture(tempDirs.make("desktop-audio-test-"), options);
+  cleanups.push(() => f.owner.stop());
+  return f;
+}
+
+function expectCaptureStopped(f: ReturnType<typeof fixture>) {
+  expect(f.runs.map((run) => run.activity.resultSettled)).toEqual([false, true]);
 }
 
 describe("managed Linux private audio", () => {
@@ -165,8 +52,7 @@ describe("managed Linux private audio", () => {
     expect(f.inputs[1]?.captureOutput).toBe(false);
     expect(capture.stream.read()).toEqual(Buffer.from([0, 128, 255, 127]));
     await capture.stop();
-    expect(f.runs[1]?.activity.resultSettled).toBe(true);
-    expect(f.runs[0]?.activity.resultSettled).toBe(false);
+    expectCaptureStopped(f);
   });
 
   it.each(["missing server", "missing recorder", "server timeout"])(
@@ -182,7 +68,7 @@ describe("managed Linux private audio", () => {
       const f = fixture(missing ? { missing } : { silentServer: true });
       if (!missing) {
         await f.serverSpawned.promise;
-        await vi.advanceTimersByTimeAsync(101);
+        await vi.advanceTimersByTimeAsync(5_001);
       }
       const audio = await f.owner.ready;
       expect(audio.source).toBeUndefined();
@@ -193,36 +79,6 @@ describe("managed Linux private audio", () => {
       expect(f.inputs).toHaveLength(missing ? 0 : 1);
       expect(f.scopeCleaned).toHaveBeenCalledOnce();
       expect(f.runs.every((run) => run.activity.resultSettled)).toBe(true);
-    },
-  );
-
-  it.each([true, false])(
-    "revalidates live authority at native admission without an abort (%s)",
-    async (allowed) => {
-      const f = fixture({ deferCapture: true });
-      const audio = await f.owner.ready;
-      let current = true;
-      const controller = new AbortController();
-      const started = audio.source!.start(controller.signal, () => {
-        if (!current) {
-          throw new Error("viewer retired");
-        }
-      });
-      const rejected = allowed ? undefined : expect(started).rejects.toThrow("viewer retired");
-      await f.captureSpawned.promise;
-      current = allowed;
-      f.captureAdmission.resolve();
-      if (allowed) {
-        const capture = await started;
-        expect(capture.stream.read()).toEqual(Buffer.from([0, 128, 255, 127]));
-        await capture.stop();
-      } else {
-        await rejected;
-      }
-      expect(controller.signal.aborted).toBe(false);
-      expect(f.captureAdmitted).toHaveBeenCalledTimes(allowed ? 1 : 0);
-      expect(f.runs[1]?.activity.resultSettled).toBe(true);
-      expect(f.runs[0]?.activity.resultSettled).toBe(false);
     },
   );
 
@@ -257,19 +113,13 @@ describe("managed Linux private audio", () => {
       const controller = new AbortController();
       const started = audio.source!.start(
         controller.signal,
-        failure === "authority"
-          ? () => {
-              if (!current) {
-                throw new Error("viewer retired");
-              }
-            }
-          : undefined,
+        failure === "authority" ? () => assertAudioCurrent(current) : undefined,
       );
       const rejected = expect(started).rejects.toThrow(message);
       if (failure === "timeout" || failure === "abort") {
         await f.captureSpawned.promise;
         if (failure === "timeout") {
-          await vi.advanceTimersByTimeAsync(101);
+          await vi.advanceTimersByTimeAsync(5_001);
         } else {
           controller.abort();
           f.captureAdmission.resolve();
@@ -279,8 +129,7 @@ describe("managed Linux private audio", () => {
       if (failure === "authority") {
         expect(f.captureAdmitted).toHaveBeenCalledOnce();
       }
-      expect(f.runs[1]?.activity.resultSettled).toBe(true);
-      expect(f.runs[0]?.activity.resultSettled).toBe(false);
+      expectCaptureStopped(f);
     },
   );
 
@@ -293,21 +142,5 @@ describe("managed Linux private audio", () => {
     expect(capture.stream.errored?.message).toContain("not consuming");
     await capture.stop();
     expect(f.runs[1]?.activity.resultSettled).toBe(true);
-  });
-
-  it("server loss retires sources and closes all active captures", async () => {
-    const f = fixture();
-    const audio = await f.owner.ready;
-    const source = audio.source!;
-    const capture = await source.start(new AbortController().signal);
-    f.runs[0]?.cancel();
-    await audio.failed;
-    expect(audio.source).toBeUndefined();
-    await f.owner.stop();
-    expect(capture.stream.destroyed).toBe(true);
-    expect(audio.source).toBeUndefined();
-    expect(audio.unavailableReason).toBeDefined();
-    expect(f.runs.every((run) => run.activity.resultSettled)).toBe(true);
-    await expect(source.start(new AbortController().signal)).rejects.toThrow("unavailable");
   });
 });

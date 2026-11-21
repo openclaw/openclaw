@@ -1,4 +1,3 @@
-import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   captureNativeSessionEntryCurrentRead,
@@ -31,7 +30,9 @@ import {
 } from "../../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
 import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,
@@ -296,8 +297,20 @@ export function readNativeSessionBindingEntries<T>(
   );
 }
 
-/** @deprecated Retain prepared lineage or use createNativeSessionBindingScope. */
+/** @deprecated Use createPreparedNativeSessionBindingAuthority with retained lineage or createNativeSessionBindingScope; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export function createNativeSessionBindingAuthority(
+  lineage: readonly NativeSessionBindingLineage[],
+  assertCurrent: () => void,
+): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "createNativeSessionBindingAuthority",
+    replacement: "createPreparedNativeSessionBindingAuthority or createNativeSessionBindingScope",
+  });
+  return createNativeSessionBindingAuthorityInternal(lineage, assertCurrent);
+}
+
+export function createNativeSessionBindingAuthorityInternal(
   lineage: readonly NativeSessionBindingLineage[],
   assertCurrent: () => void,
 ): NativeSessionBindingAuthority {
@@ -527,12 +540,23 @@ export function combinePreparedNativeSessionBindingAuthority(
   });
 }
 
-/** @deprecated Use combinePreparedNativeSessionBindingAuthority. */
+/** @deprecated Use combinePreparedNativeSessionBindingAuthority; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export function combineNativeSessionBindingAuthority(
   ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
 ): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "combineNativeSessionBindingAuthority",
+    replacement: "combinePreparedNativeSessionBindingAuthority",
+  });
+  return combineNativeSessionBindingAuthorityInternal(...authorities);
+}
+
+export function combineNativeSessionBindingAuthorityInternal(
+  ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
+): NativeSessionBindingAuthority {
   const present = [...new Set(authorities.filter((authority) => authority !== undefined))];
-  return createNativeSessionBindingAuthority(
+  return createNativeSessionBindingAuthorityInternal(
     present.flatMap(({ lineage }) => lineage),
     () => {
       for (const authority of present) {

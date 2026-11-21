@@ -102,33 +102,6 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     };
   }
 
-  private createSigningKeysUiAuthCallback(params: {
-    userId: string;
-    password?: string;
-  }): MatrixUiAuthCallback {
-    return async <T>(makeRequest: (authData: MatrixAuthDict | null) => Promise<T>): Promise<T> => {
-      try {
-        return await makeRequest(null);
-      } catch {
-        // Some homeservers require an explicit dummy UIA stage even when no user interaction is needed.
-        try {
-          return await makeRequest({ type: "m.login.dummy" });
-        } catch {
-          if (!params.password?.trim()) {
-            throw new Error(
-              "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
-            );
-          }
-          return await makeRequest({
-            type: "m.login.password",
-            identifier: { type: "m.id.user", user: params.userId },
-            password: params.password,
-          });
-        }
-      }
-    };
-  }
-
   private async bootstrapCrossSigning(
     crypto: MatrixCryptoBootstrapApi,
     options: {
@@ -139,10 +112,30 @@ export class MatrixCryptoBootstrapper<TRawEvent extends MatrixRawEvent> {
     },
   ): Promise<{ ready: boolean; published: boolean }> {
     const userId = await this.deps.getUserId();
-    const authUploadDeviceSigningKeys = this.createSigningKeysUiAuthCallback({
-      userId,
-      password: this.deps.getPassword?.(),
-    });
+    const password = this.deps.getPassword?.();
+    const authUploadDeviceSigningKeys: MatrixUiAuthCallback = async <T>(
+      makeRequest: (authData: MatrixAuthDict | null) => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await makeRequest(null);
+      } catch {
+        // Some homeservers require an explicit dummy UIA stage even when no user interaction is needed.
+        try {
+          return await makeRequest({ type: "m.login.dummy" });
+        } catch {
+          if (!password?.trim()) {
+            throw new Error(
+              "Matrix cross-signing key upload requires UIA; provide matrix.password for m.login.password fallback",
+            );
+          }
+          return await makeRequest({
+            type: "m.login.password",
+            identifier: { type: "m.id.user", user: userId },
+            password,
+          });
+        }
+      }
+    };
     const hasPublishedCrossSigningKeys = () =>
       crypto.userHasCrossSigningKeys(userId, true).catch(() => false);
     const isCrossSigningReady = () => crypto.isCrossSigningReady().catch(() => false);

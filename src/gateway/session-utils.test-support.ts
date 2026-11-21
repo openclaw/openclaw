@@ -1,11 +1,9 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  appendTranscriptMessageSync,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -16,6 +14,35 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+
+export function makeSession(sessionId: string, fields: Partial<InternalSessionEntry> = {}) {
+  return { sessionId, updatedAt: 1, ...fields };
+}
+
+export function storeConfig(
+  store: string,
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
+): OpenClawConfig {
+  return { session: { mainKey: "main", store }, agents: { entries } };
+}
+
+export const agentStore = (root: string, agentId = "{agentId}") =>
+  path.join(root, "agents", agentId, "sessions", "sessions.json");
+
+export function seedDeletedMainStores(stateDir: string, mainKey = "main") {
+  const deletedStorePath = agentStore(stateDir, "main");
+  const liveStorePath = agentStore(stateDir, "ops");
+  for (const storePath of [liveStorePath, deletedStorePath]) {
+    fs.mkdirSync(path.dirname(storePath), { recursive: true });
+  }
+  seedSessionEntries(liveStorePath, {
+    [`agent:ops:${mainKey}`]: makeSession("sess-live-default", { updatedAt: 10 }),
+  });
+  seedSessionEntries(deletedStorePath, {
+    "agent:main:main": makeSession("sess-deleted-main", { updatedAt: 20 }),
+  });
+  return { deletedStorePath, storeTemplate: agentStore(stateDir) };
+}
 
 export async function closeSessionSqliteDatabasesForTest(): Promise<void> {
   await closeOpenClawAgentDatabasesAsync();
@@ -56,33 +83,9 @@ export function seedSessionEntries(storePath: string, entries: Record<string, Se
   }
 }
 
-export function appendTranscriptMessages(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  messages: unknown[];
-  agentId?: string;
-}) {
-  for (const message of params.messages) {
-    appendTranscriptMessageSync(
-      {
-        agentId: params.agentId ?? "main",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { message },
-    );
-  }
-}
-
 export function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
-  return {
-    session: { mainKey: "main" },
-    agents: {
-      entries: { main: { workspace, identity: { avatar: "avatar-link.png" } } },
-    },
-  } as OpenClawConfig;
+  const main = { workspace, identity: { avatar: "avatar-link.png" } };
+  return { session: { mainKey: "main" }, agents: { entries: { main } } };
 }
 
 export function createModelDefaultsConfig(params: {
@@ -90,17 +93,7 @@ export function createModelDefaultsConfig(params: {
   models?: Record<string, { agentRuntime?: { id: string } }>;
   agentRuntime?: { id: string };
 }): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: { primary: params.primary },
-        models: {
-          ...params.models,
-          ...(params.agentRuntime
-            ? { [params.primary]: { agentRuntime: params.agentRuntime } }
-            : {}),
-        },
-      },
-    },
-  } as OpenClawConfig;
+  const { primary, models, agentRuntime } = params;
+  const overrides = agentRuntime ? { [primary]: { agentRuntime } } : {};
+  return { agents: { defaults: { model: { primary }, models: { ...models, ...overrides } } } };
 }

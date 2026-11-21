@@ -83,6 +83,8 @@ export type WorkboardSessionsBoardRead = {
   sessions: Array<
     WorkboardSessionFacts & Pick<WorkboardSessionPlacement, "columnId" | "source" | "reason">
   >;
+  nextCursor?: string;
+  total?: number;
   people?: SessionPerson[];
   warning?: string;
 };

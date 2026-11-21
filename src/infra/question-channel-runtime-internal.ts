@@ -66,11 +66,8 @@ export function createQuestionChannelRuntime(
   const retainedEntries = new Set<QuestionChannelEntry>();
   const deliveryContext = new AsyncLocalStorage<{
     entries: Map<string, QuestionChannelEntry | undefined>;
-    finalizers: AsyncWorkScope;
-    owner: AbortSignal | undefined;
     track: ReturnType<typeof captureAsyncWorkTracker>;
   }>();
-  const retiredGateways = new WeakSet<AbortSignal>();
   let finalizers = new AsyncWorkScope();
   let clearing: Promise<void> | undefined;
 
@@ -114,7 +111,7 @@ export function createQuestionChannelRuntime(
   return {
     handleRequested: (record: QuestionRecord, scheduler: GatewayScheduler) => {
       const owner = getAsyncWorkSignal();
-      if (clearing || (owner && retiredGateways.has(owner))) {
+      if (clearing) {
         return;
       }
       // The host publishes Requested before delivery; callbacks cannot create
@@ -169,8 +166,6 @@ export function createQuestionChannelRuntime(
       return deliveryContext.run(
         {
           entries: captured,
-          finalizers: parent?.finalizers ?? finalizers,
-          owner: parent ? parent.owner : getAsyncWorkSignal(),
           track: parent ? parent.track : captureAsyncWorkTracker(),
         },
         run,
@@ -186,20 +181,12 @@ export function createQuestionChannelRuntime(
       finalize: QuestionDeliveryFinalizer;
     }) => {
       const captured = deliveryContext.getStore();
-      if (
-        clearing ||
-        (captured &&
-          (captured.finalizers !== finalizers ||
-            (captured.owner && retiredGateways.has(captured.owner))))
-      ) {
+      if (clearing) {
         return;
       }
       const entry = captured?.entries.has(questionId)
         ? captured.entries.get(questionId)
         : entries.get(questionId);
-      if (entry?.owner && retiredGateways.has(entry.owner)) {
-        return;
-      }
       if (!entry || !retainedEntries.has(entry)) {
         // Lost or expired bindings cannot use a replacement request. Disable
         // every native target on the still-live delivery owner.
@@ -223,7 +210,6 @@ export function createQuestionChannelRuntime(
     retireGateway: (owner: AbortSignal) => {
       // The Gateway calls this after joining received work and its finalizers,
       // not at beginClose: an admitted resolve can still finalize deliveries.
-      retiredGateways.add(owner);
       for (const entry of retainedEntries) {
         if (entry.owner === owner) {
           releaseEntry(entry);

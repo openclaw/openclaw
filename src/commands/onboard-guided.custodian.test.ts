@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 const launchTuiCli = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
 vi.mock("../tui/tui-launch.js", () => ({ launchTuiCli }));
@@ -85,7 +85,7 @@ describe("runGuidedOnboarding", () => {
 
   it("never attempts browser handoff for remote chat onboarding", async () => {
     const prompter = createWizardPrompter();
-    const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
+    const runBrowserHandoff = vi.fn(async () => true);
     const deps = setupDeps({
       prompter,
       handoffMode: "chat",
@@ -317,7 +317,10 @@ describe("runGuidedOnboarding", () => {
       status: "completed",
       runId: pending?.runId,
     });
-    expect(retry.launchHatchTui).toHaveBeenCalledWith("/tmp/approved-workspace");
+    expect(retry.observeHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({ workspace: "/tmp/approved-workspace", next: "hatch" }),
+    );
+    expect(retry.launchHatchTui).toHaveBeenCalledWith(expect.objectContaining({ deliver: false }));
   });
 
   it("replaces a stale receipt when explicit onboarding owns the replacement config", async () => {

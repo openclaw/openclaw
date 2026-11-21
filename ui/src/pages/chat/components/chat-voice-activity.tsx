@@ -1,10 +1,16 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
-import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { createMemo, lazy, onSettled, Show } from "solid-js";
+import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
+import type { ComposerDictationOwner } from "../composer-dictation.ts";
+import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
+import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
-const BAR_GAINS = [0.38, 0.62, 0.84, 1, 0.84, 0.62, 0.38];
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
@@ -22,96 +28,130 @@ export function voiceStatusLabel(
   );
 }
 
-type MicrophoneActivityProps = {
+// Levels stay with the Talk owner; only status/source changes replace the canvas.
+export function MicrophoneActivity(props: {
   status?: RealtimeTalkStatus;
   inputLevel?: RealtimeTalkLevelSignal;
-};
-
-// Levels stay with the talk owner; its subscription updates only decorative bars.
-export function MicrophoneActivity(props: MicrophoneActivityProps) {
-  let host!: HTMLElement;
-  const signal = createMemo(() => props.inputLevel);
-  createEffect(signal, (source) => {
-    const renderLevel = (level: number) => {
-      host.dataset.level = String(level);
-      for (const [index, bar] of [...host.children].entries()) {
-        if (bar instanceof HTMLElement) {
-          bar.style.setProperty(
-            "--talk-bar-scale",
-            String(0.18 + level * (BAR_GAINS[index] ?? 1) * 0.82),
-          );
-        }
-      }
-    };
-    renderLevel(source?.value ?? 0);
-    return source?.subscribe(renderLevel);
-  });
+}) {
+  const canvasLifetime = createMemo(
+    (): { status: MicrophoneMeterStatus; source: RealtimeTalkLevelSignal | undefined } => ({
+      status:
+        props.status === "connecting" || props.status === "thinking" ? props.status : "listening",
+      source: props.inputLevel,
+    }),
+    {
+      equals: (previous, next) =>
+        previous.status === next.status && previous.source === next.source,
+    },
+  );
+  let host: HTMLElement | undefined;
   return (
     <openclaw-microphone-activity
-      ref={(element) => {
-        host = element;
-      }}
+      ref={(element) => (host = element)}
       class="agent-chat__voice-activity"
-      data-status={
-        props.status === "connecting" || props.status === "thinking" ? props.status : "listening"
-      }
+      data-level="0"
+      data-status={canvasLifetime().status}
       data-source="microphone"
       aria-hidden="true"
     >
-      <For each={BAR_GAINS}>
-        {(_, index) => (
-          <span
-            class="agent-chat__voice-activity-bar"
-            style={{ "--talk-bar-delay": `${index() * -70}ms` }}
-          />
-        )}
-      </For>
+      <Show when={canvasLifetime()} keyed>
+        {(initial) => {
+          const initialStatus = initial.status;
+          if (initialStatus === "connecting") {
+            return null;
+          }
+          const initialSource = initial.source;
+          const reducedMotion = createMediaQuerySource("(prefers-reduced-motion: reduce)");
+          let canvas: HTMLCanvasElement | undefined;
+          onSettled(() => {
+            const currentHost = host;
+            const surface = canvas;
+            if (!currentHost || !surface) {
+              return undefined;
+            }
+            let renderer: ReturnType<typeof createMicrophoneMeter> | undefined;
+            const initialLevel = initialSource?.value ?? 0;
+            const setLevel = (level: number) => {
+              const value = String(level);
+              if (currentHost.dataset.level !== value) {
+                currentHost.dataset.level = value;
+              }
+              // CSS already draws silence. Allocate only when there is activity to paint.
+              if (
+                !renderer &&
+                (initialStatus === "thinking" || (initialStatus === "listening" && level > 0))
+              ) {
+                renderer = createMicrophoneMeter(
+                  currentHost,
+                  surface,
+                  initialStatus,
+                  reducedMotion,
+                );
+                // Preserve the first transition from silence rather than jumping to its target.
+                renderer.setLevel(initialLevel);
+              }
+              renderer?.setLevel(level);
+            };
+            // The owner's subscription immediately supplies its current level.
+            const stop = initialSource?.subscribe(setLevel);
+            if (!initialSource) {
+              setLevel(0);
+            }
+            return () => {
+              stop?.();
+              renderer?.dispose();
+            };
+          });
+          return (
+            <canvas
+              ref={(element) => (canvas = element)}
+              class="agent-chat__voice-activity-canvas"
+              aria-hidden="true"
+            />
+          );
+        }}
+      </Show>
     </openclaw-microphone-activity>
   );
 }
 
-type ChatVoiceStatusProps = {
+export function ChatVoiceStatus(props: {
   status?: RealtimeTalkStatus;
   detail?: string | null;
+  /** Defaults to warning for microphone access problems and danger otherwise. */
+  tone?: "danger" | "warning";
   onDismissError?: () => void;
   onUseSystemDefaultMicrophone?: () => Promise<void>;
-};
-
-export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
+}) {
   return (
     <Show
       when={props.status === "connecting"}
       fallback={
         <Show when={props.status === "error" && props.detail}>
-          <div class="agent-chat__composer-errors agent-chat__composer-errors--standalone">
-            <div class="agent-chat__composer-error agent-chat__talk-status" role="alert">
-              <span class="agent-chat__composer-error-icon" aria-hidden="true">
-                <Icon name="alertTriangle" />
-              </span>
-              <div class="callout__content">
-                <div class="agent-chat__talk-status-text">{props.detail}</div>
-                <Show when={props.onUseSystemDefaultMicrophone}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    onClick={() => void props.onUseSystemDefaultMicrophone?.()}
-                  >
-                    {t("chat.composer.useSystemDefaultMicrophoneForCall")}
-                  </button>
-                </Show>
-              </div>
-              <Show when={props.onDismissError}>
+          <InlineAlert
+            tone={
+              props.tone ??
+              (props.detail && isRealtimeTalkMicrophoneIssueMessage(props.detail)
+                ? "warning"
+                : "danger")
+            }
+            class="agent-chat__composer-alert"
+            onDismiss={props.onDismissError}
+            dismissLabel={t("chat.composer.dismissVoiceInputError")}
+            action={
+              <Show when={props.onUseSystemDefaultMicrophone}>
                 <button
-                  class="callout__dismiss"
+                  class="btn btn--sm"
                   type="button"
-                  onClick={() => props.onDismissError?.()}
-                  aria-label={t("chat.composer.dismissVoiceInputError")}
+                  onClick={() => void props.onUseSystemDefaultMicrophone?.()}
                 >
-                  <Icon name="x" />
+                  {t("chat.composer.useSystemDefaultMicrophoneForCall")}
                 </button>
               </Show>
-            </div>
-          </div>
+            }
+          >
+            {props.detail}
+          </InlineAlert>
         </Show>
       }
     >
@@ -127,10 +167,19 @@ export function ChatVoiceStatus(props: ChatVoiceStatusProps) {
   );
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
-    }
-  }
+// The dictation phase view loads with the first dictation, outside the boot bundle.
+const ActiveDictationStatus = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "ActiveDictationStatus",
+});
+
+export function ComposerDictationStatus(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  return (
+    <Show when={props.readDictation()?.active || props.readDictation()?.transcribing}>
+      <ChatLazyBoundary>
+        <ActiveDictationStatus readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
+  );
 }

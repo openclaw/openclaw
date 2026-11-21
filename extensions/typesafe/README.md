@@ -7,8 +7,11 @@ decision-model API. Core supplies the provider-neutral `decision_evaluate` agent
 tool when the agent has an effective `decisionModel` selection, subject to normal
 tool policy and harness capabilities. No separate tool enablement is required.
 
-Requires OpenClaw and plugin API **2026.9.6 or later**. Released OpenClaw
-2026.9.5 does not include the decision API.
+This adapter requires the prepared Decision V2 API. Released OpenClaw
+`2026.10.4` exposes V1 only. For development, use a matching source checkout
+containing the prepared V2 runtime and this plugin. Packaged use requires a
+supporting paired host/plugin release; the older installation floor alone does
+not establish V2 compatibility.
 
 ```sh
 openclaw plugins install @openclaw/typesafe
@@ -36,3 +39,19 @@ a server you trust. Set the server's routing model ID as `decisionModel`.
 See the [TypeSafe AI setup guide](https://docs.openclaw.ai/plugins/typesafe) and
 [decision-model documentation](https://docs.openclaw.ai/concepts/decision-models)
 for configuration, rubrics, and API semantics.
+
+## Live adapter test
+
+From a matching source checkout, inject a TypeSafe-issued `TYPESAFE_API_KEY`
+through your secret manager, then run:
+
+```sh
+OPENCLAW_LIVE_TEST=1 node scripts/run-vitest.mjs --config test/vitest/vitest.live.config.ts extensions/typesafe/src/decisions.live.test.ts
+```
+
+The test sends two synthetic Boolean/Choice/Score batches (text and a generated
+320 × 320 PNG) to hosted Jev and consumes the account's allowance. It skips without both the opt-in flag and key. It checks
+the registered V2 adapter and real transport with an isolated prepared credential;
+it does not test host credential discovery or change any model selection. When
+HTTPS proxy environment settings are present, the test explicitly selects the
+shared environment-proxy transport (including protected-key egress).

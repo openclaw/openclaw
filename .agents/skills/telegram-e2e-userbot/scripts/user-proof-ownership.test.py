@@ -118,7 +118,7 @@ for filename in ["user-record.py", "user-driver.py"]:
             state = Path(f"/proc/{child_pid}/stat")
             try:
                 stopped = state.read_text().split()[2] == "Z"
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 stopped = True
             if stopped:
                 break

@@ -31,8 +31,6 @@ export interface OverlayOptions {
   /** Return true when an embedded control consumed Escape without dismissing. */
   onEscape?(event: KeyboardEvent): boolean;
   onInitialFocus?(intent: "first" | "last"): void;
-  onReturnFocus?(target: HTMLElement): void;
-  beforeNativeHide?(): void;
   acquireOcclusion?(surface: HTMLElement): () => void;
 }
 

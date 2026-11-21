@@ -3,11 +3,6 @@ import type {
   DiagnosticEmbeddedRunOwner,
 } from "../infra/diagnostic-model-request-provenance.js";
 import {
-  type DiagnosticArgumentChurnActivity,
-  mergeArgumentChurnActivity,
-  recordDiagnosticActivityProgress,
-} from "./diagnostic-argument-churn-activity.js";
-import {
   type DiagnosticRepeatedRequestActivity,
   mergeRepeatedRequestActivity,
 } from "./diagnostic-repeated-request-activity.js";
@@ -17,14 +12,18 @@ import {
   type DiagnosticRecoveryActivity,
 } from "./diagnostic-run-activity-recovery.js";
 
-export type SessionActivity = DiagnosticArgumentChurnActivity &
-  DiagnosticRepeatedRequestActivity &
+export type SessionActivity = DiagnosticRepeatedRequestActivity &
   DiagnosticRecoveryActivity & {
     sessionId?: string;
     sessionKey?: string;
     lastProgressAt: number;
     lastProgressReason?: string;
+    lastProgressSequence?: number;
   };
+
+// Wall-clock timestamps measure staleness; this process-local order breaks
+// same-millisecond ties between progress events and merged refs.
+let diagnosticActivitySequence = 0;
 
 export type DiagnosticBackendActivity = {
   deadlineAtMs: number;
@@ -44,6 +43,22 @@ export type DiagnosticOwnerRegistration = {
 
 export const activityByRef = new Map<string, SessionActivity>();
 export const activityByRunId = new Map<string, SessionActivity>();
+
+/** Retire aliases only after the session's producers and diagnostic queue have drained. */
+export function clearDiagnosticSessionActivity(sessionId: string): void {
+  const retired = activityByRef.get(`id:${sessionId}`);
+  if (!retired) {
+    return;
+  }
+  for (const index of [activityByRef, activityByRunId]) {
+    index.forEach((activity, ref) => {
+      if (activity === retired) {
+        index.delete(ref);
+      }
+    });
+  }
+}
+
 export const embeddedRunIndex = {
   remove(activity: SessionActivity, workKey: string): void {
     const embeddedRun = activity.activeEmbeddedRuns.get(workKey);
@@ -85,7 +100,7 @@ export function sessionRefs(params: { sessionId?: string; sessionKey?: string })
   return refs;
 }
 
-export function registerSessionActivityRefs(
+function registerSessionActivityRefs(
   activity: SessionActivity,
   params: { sessionId?: string; sessionKey?: string; runId?: string; seq?: number },
 ): void {
@@ -150,7 +165,6 @@ function mergeSessionActivity(target: SessionActivity, source: SessionActivity):
     target.lastProgressReason = source.lastProgressReason;
     target.lastProgressSequence = source.lastProgressSequence;
   }
-  mergeArgumentChurnActivity(target, source);
   mergeRepeatedRequestActivity(target, source);
   replaceSessionActivityReferences(source, target);
 }
@@ -208,5 +222,5 @@ export function touchSessionActivity(
 ): void {
   activity.lastProgressAt = now;
   activity.lastProgressReason = reason;
-  recordDiagnosticActivityProgress(activity);
+  activity.lastProgressSequence = ++diagnosticActivitySequence;
 }

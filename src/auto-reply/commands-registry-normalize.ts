@@ -1,8 +1,6 @@
-/** Normalizes and detects slash commands through their canonical aliases. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import { getChatCommands } from "./commands-registry.data.js";
@@ -17,7 +15,15 @@ type TextAliasSpec = {
 let cachedTextAliases: Map<string, TextAliasSpec> | undefined;
 
 // Commands whose free-text argument becomes agent input keep every line and its spacing.
-const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set(["goal", "steer"]);
+const ARGUMENT_PRESERVING_COMMAND_KEYS = new Set([
+  "acp",
+  "btw",
+  "dashboard",
+  "followup",
+  "goal",
+  "loop",
+  "steer",
+]);
 
 const TARGETED_COMMAND_BODY_RE =
   /^\/([^\s@]+)@([A-Za-z0-9_]+)(?=$|\s|[.!?！？…,，。;；:：'"’”)\]}])([\s\S]*)$/u;
@@ -48,15 +54,11 @@ function getTextAliases(): Map<string, TextAliasSpec> {
   for (const command of getChatCommands()) {
     // Canonicalize to the primary text alias, not `/${key}`. Some command keys are
     // internal identifiers while the public text command is a dedicated alias.
-    const canonical = normalizeOptionalString(command.textAliases[0]) || `/${command.key}`;
+    const canonical = command.textAliases[0] ?? `/${command.key}`;
     const acceptsArgs = Boolean(command.acceptsArgs);
     for (const alias of command.textAliases) {
-      const normalized = normalizeOptionalLowercaseString(alias);
-      if (!normalized) {
-        continue;
-      }
-      if (!aliases.has(normalized)) {
-        aliases.set(normalized, { command, canonical, acceptsArgs });
+      if (!aliases.has(alias)) {
+        aliases.set(alias, { command, canonical, acceptsArgs });
       }
     }
   }
@@ -94,7 +96,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
 
   const normalizedBotUsername = normalizeOptionalLowercaseString(options?.botUsername);
   const mentionMatch = normalized.match(TARGETED_COMMAND_BODY_RE);
-  const targetBotUsername = normalizeOptionalLowercaseString(mentionMatch?.[2]);
+  const targetBotUsername = mentionMatch?.[2]?.toLowerCase();
   const targetMatchesBot =
     normalizedBotUsername !== undefined && targetBotUsername === normalizedBotUsername;
   const resolveBeforeIdentity =
@@ -116,7 +118,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
     return appendMultilineTail(commandBody, multilineTail);
   }
   const [, token, rest] = tokenMatch;
-  const tokenKey = `/${normalizeLowercaseStringOrEmpty(token)}`;
+  const tokenKey = `/${token?.toLowerCase()}`;
   const tokenSpec = textAliasMap.get(tokenKey);
   if (!tokenSpec) {
     return appendMultilineTail(commandBody, multilineTail);
@@ -139,7 +141,7 @@ export function maybeResolveTextAlias(raw: string, _cfg?: OpenClawConfig) {
   if (!trimmed.startsWith("/")) {
     return null;
   }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
+  const normalized = trimmed.toLowerCase();
   const aliases = getTextAliases();
   const tokenMatch = normalized.match(/^\/([^\s:]+)(?:\s|$)/);
   if (!tokenMatch) {

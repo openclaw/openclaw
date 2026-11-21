@@ -1,5 +1,3 @@
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { nativeGatewaysCapability } from "./native-gateways.runtime.ts";
 
 export function isNativeLocalGateway(): boolean {
@@ -20,8 +18,4 @@ export function localEditorFilePath(content: EditorFile, execNode?: string | nul
   return content.root
     ? `${content.root.replace(/[\\/]+$/, "")}/${content.path.replace(/^[\\/]+/, "")}`
     : null;
-}
-
-export function observeNativeGateway(host: SolidControllerHost, onChange?: () => void): void {
-  void new SubscriptionsController(host).watchStore(nativeGatewaysCapability, onChange);
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 
 function configRuntimeAliasBindings(source: ts.SourceFile): string {
   const names = new Set<string>();

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   formatNativeToolOutput,
   formatNativeToolSummary,
@@ -14,6 +13,7 @@ import {
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import {
@@ -422,11 +422,13 @@ export class AgentsApiNativeToolProjection {
       : undefined;
     // The bounded digest detects changed projected facts without retaining a
     // second payload. Canonical enrichment replaces the same terminal item.
-    const projectionHash = nativeTerminalProjectionHash({
-      tool: toolSnapshot,
-      item: itemSnapshot,
-      command: commandSnapshot,
-    });
+    const projectionHash = hashText(
+      JSON.stringify({
+        tool: toolSnapshot,
+        item: itemSnapshot,
+        command: commandSnapshot,
+      }),
+    );
     if (state.terminalProjectionHash === projectionHash) {
       return;
     }
@@ -526,8 +528,4 @@ export class AgentsApiNativeToolProjection {
   private identity(turnId: string, itemId: string): string {
     return `agentsapi:${this.remoteSessionId}:${turnId}:${itemId}`;
   }
-}
-
-function nativeTerminalProjectionHash(snapshot: Record<string, unknown>): string {
-  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }

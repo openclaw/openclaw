@@ -18,10 +18,10 @@ import {
   formatLegacySqliteSessionMarkerForScope,
   prepareSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
@@ -32,6 +32,7 @@ import {
 import { forkParentEntryInWorker, forkParentTranscriptInWorker } from "./session-parent-fork.js";
 import type { ParentForkEntryPatch, ParentForkEntryParams } from "./session-parent-fork.types.js";
 import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
+import { withSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
@@ -98,7 +99,9 @@ export async function prepareSessionForkTranscript(
         storePath: params.targetStorePath,
       });
     }
-    const hydration = prepareSessionTranscriptHydration(sourceScope);
+    const hydration = withSessionTranscriptHydrationCaller("parent-fork", () =>
+      prepareSessionTranscriptHydration(sourceScope),
+    );
     const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
     const snapshot = await readRestoredSessionTranscript(sourceScope, hydration.read, {
       assertCurrent: params.commitGuard,
@@ -223,10 +226,12 @@ export async function resolveSessionParentForkDecision(params: {
           ),
       )) ?? null)
     : resolveParentForkSourceTranscript(
-        await loadSessionTranscriptEvents({
-          storePath: params.storePath,
-          sessionId: parentSessionId,
-        }),
+        await withSessionTranscriptHydrationCaller("parent-fork", () =>
+          loadSessionTranscriptEvents({
+            storePath: params.storePath,
+            sessionId: parentSessionId,
+          }),
+        ),
       );
   return planParentForkDecision(parentEntry, estimateParentForkPromptTokens(source));
 }

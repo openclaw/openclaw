@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -14,7 +14,7 @@ type OriginDatabase = {
 
 /** Forget retains its supplied connection and original transaction boundary. */
 export function deleteMemoryEntryOriginsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   params: MemoryOriginDeletion,
   admission?: { onBegin: () => void; withCommit: (commit: () => void) => void },
 ): number {

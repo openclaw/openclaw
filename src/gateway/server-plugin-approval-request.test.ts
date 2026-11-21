@@ -1,18 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimePluginScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
 import { withInProcessAgentRuntimeIdentity } from "./in-process-agent-runtime-identity.js";
-import { createGatewayMethodRegistry } from "./methods/registry.js";
-import type {
-  GatewayRequestHandlerOptions,
-  GatewayRequestOptions,
-} from "./server-methods/types.js";
+import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import {
   createContext,
@@ -20,260 +20,200 @@ import {
 } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchTrustedPluginGatewayMethod } from "./server-plugins.js";
 
+const requestParams = { title: "Review workflow", description: "No effect" };
+const accepted = { status: "accepted" };
+const missingScope = /missing scope: operator\.approvals/;
+const hookIdentity = {
+  kind: "agentRuntime",
+  agentId: "main",
+  sessionKey: "agent:main:main",
+  operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+  delegatedAuthority: {
+    kind: "local",
+    lifecycleGeneration: "generation-1",
+    claimId: "claim-1",
+    operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+  },
+  approvalOwnerPluginId: "registered-hook",
+} as const;
+
+function writerConfig(
+  scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"],
+): OpenClawConfig {
+  const writer = { agents: "*" as const, scopes, sessions: { others: "write" as const } };
+  return { gateway: { roles: { default: "writer", definitions: { writer } } } };
+}
+
+function fixture(scopes = ["operator.write"]) {
+  const caller = createOperatorClient({ profileName: "plugin-caller", scopes });
+  const request = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, accepted));
+  const resolve = vi.fn(({ respond }: GatewayRequestHandlerOptions) => respond(true, { ok: true }));
+  const context = createContext([
+    ["plugin.approval.request", "operator.approvals", "plugin-approval", request],
+    ["plugin.approval.resolve", "operator.approvals", "plugin-approval", resolve],
+  ]);
+  const scoped = <T>(run: () => Promise<T>, client = caller) =>
+    withPluginRuntimeGatewayRequestScope({ client, context, isWebchatConnect: () => false }, run);
+  const trusted = (
+    pluginId = "lobster",
+    pluginOrigin: "bundled" | "config" = "bundled",
+    method = "plugin.approval.request",
+    params: Record<string, unknown> = { pluginId, ...requestParams },
+  ) =>
+    scoped(() =>
+      withPluginRuntimePluginScope({ pluginId, pluginOrigin }, () =>
+        dispatchTrustedPluginGatewayMethod(method, params, { scopes: ["operator.approvals"] }),
+      ),
+    );
+  const hookOptions = withInProcessAgentRuntimeIdentity(
+    {
+      forceSyntheticClient: true,
+      allowHostPluginApprovalRequest: true,
+      syntheticScopes: ["operator.approvals"],
+      syntheticScopeMode: "minimum" as const,
+      resolveGatewayContext: () => context,
+    },
+    hookIdentity,
+  );
+  const hook = () =>
+    dispatchGatewayMethodInProcess("plugin.approval.request", requestParams, hookOptions);
+  return { caller, context, request, resolve, scoped, trusted, hook };
+}
+
 describe("trusted plugin approval requests", () => {
-  it("respects the caller's write-only named role", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const caller = createOperatorClient({
-        profileName: "named-role-plugin-caller",
-        scopes: ["operator.write"],
-      });
-      const cfg: OpenClawConfig = {
-        gateway: {
-          roles: {
-            default: "writer",
-            definitions: {
-              writer: {
-                agents: "*",
-                scopes: ["operator.write"],
-                sessions: { others: "write" },
-              },
-            },
-          },
-        },
-      };
-      const context = createContext();
-      context.getRuntimeConfig = () => cfg;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "plugin.approval.request",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) => {
-              respond(true, { status: "accepted" });
-            },
-          },
-        ]);
+  it("respects the caller's write-only named role", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const cfg = writerConfig();
+      f.context.getRuntimeConfig = () => cfg;
+      await expect(f.trusted()).resolves.toEqual(accepted);
+    }));
 
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          withPluginRuntimePluginScope({ pluginId: "lobster", pluginOrigin: "bundled" }, () =>
-            expect(
-              dispatchTrustedPluginGatewayMethod(
-                "plugin.approval.request",
-                { pluginId: "lobster", title: "Review workflow", description: "No effect" },
-                { scopes: ["operator.approvals"] },
-              ),
-            ).resolves.toEqual({ status: "accepted" }),
-          ),
-      );
-    });
-  });
+  it("lets a write-only tool caller request review without allowing it to resolve review", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      await expect(f.trusted()).resolves.toEqual(accepted);
+      const client = f.request.mock.calls[0]?.[0].client;
+      expect(client?.connect.scopes).toEqual(["operator.write"]);
+      expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
+      expect(client?.internal?.approvalRuntime).not.toBe(true);
+      await expect(
+        f.trusted("lobster", "bundled", "plugin.approval.resolve", {
+          id: "plugin:test",
+          decision: "allow-once",
+        }),
+      ).rejects.toThrow(missingScope);
+      expect(f.resolve).not.toHaveBeenCalled();
+    }));
 
-  it("lets a write-only tool caller request review without allowing it to resolve review", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const caller = createOperatorClient({
-        profileName: "plugin-tool-caller",
-        scopes: ["operator.write"],
-      });
-      const context = createContext();
-      let requestClient: GatewayRequestOptions["client"] = null;
-      let resolveCalled = false;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "plugin.approval.request",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-              requestClient = client;
-              respond(true, { status: "accepted" });
-            },
-          },
-          {
-            name: "plugin.approval.resolve",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) => {
-              resolveCalled = true;
-              respond(true, { ok: true });
-            },
-          },
-        ]);
+  it("accepts a live signed hook owner without granting reviewer scope", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      f.context.validateAgentRuntimeApprovalAuthority = (candidate) => candidate === hookIdentity;
+      await expect(f.scoped(f.hook)).resolves.toEqual(accepted);
+      const client = f.request.mock.calls[0]?.[0].client;
+      expect(client?.connect.scopes).toEqual(["operator.write"]);
+      expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("registered-hook");
+      expect(client?.internal?.approvalRuntime).not.toBe(true);
+      f.context.validateAgentRuntimeApprovalAuthority = () => false;
+      await expect(f.scoped(f.hook)).rejects.toThrow(missingScope);
+    }));
 
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          withPluginRuntimePluginScope(
-            { pluginId: "lobster", pluginOrigin: "bundled" },
-            async () => {
-              await expect(
-                dispatchTrustedPluginGatewayMethod(
-                  "plugin.approval.request",
-                  { pluginId: "lobster", title: "Review workflow", description: "No effect" },
-                  { scopes: ["operator.approvals"] },
-                ),
-              ).resolves.toEqual({ status: "accepted" });
-              expect(requestClient?.connect.scopes).toEqual(["operator.write"]);
-              expect(requestClient?.internal?.pluginApprovalRequestOwnerId).toBe("lobster");
-              expect(requestClient?.internal?.approvalRuntime).not.toBe(true);
-
-              await expect(
-                dispatchTrustedPluginGatewayMethod(
-                  "plugin.approval.resolve",
-                  { id: "plugin:test", decision: "allow-once" },
-                  { scopes: ["operator.approvals"] },
-                ),
-              ).rejects.toThrow(/missing scope: operator\.approvals/);
-              expect(resolveCalled).toBe(false);
-            },
-          ),
-      );
-    });
-  });
-
-  it("accepts a live signed hook owner without granting reviewer scope", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const caller = createOperatorClient({
-        profileName: "signed-hook-caller",
-        scopes: ["operator.write"],
-      });
-      const identity = {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        delegatedAuthority: {
-          kind: "local",
-          lifecycleGeneration: "generation-1",
-          claimId: "claim-1",
-          operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        },
-        approvalOwnerPluginId: "registered-hook",
-      } as const;
-      const context = createContext();
-      context.validateAgentRuntimeApprovalAuthority = (candidate) => candidate === identity;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "plugin.approval.request",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-              expect(client?.connect.scopes).toEqual(["operator.write"]);
-              expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("registered-hook");
-              expect(client?.internal?.approvalRuntime).not.toBe(true);
-              respond(true, { status: "accepted" });
-            },
-          },
-        ]);
-      const dispatchOptions = withInProcessAgentRuntimeIdentity(
-        {
-          forceSyntheticClient: true,
-          allowHostPluginApprovalRequest: true,
-          syntheticScopes: ["operator.approvals"],
-          syntheticScopeMode: "minimum" as const,
-          resolveGatewayContext: () => context,
-        },
-        identity,
-      );
-
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          expect(
-            dispatchGatewayMethodInProcess(
-              "plugin.approval.request",
-              { title: "Review hook", description: "No effect" },
-              dispatchOptions,
-            ),
-          ).resolves.toEqual({ status: "accepted" }),
-      );
-
-      context.validateAgentRuntimeApprovalAuthority = () => false;
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          expect(
-            dispatchGatewayMethodInProcess(
-              "plugin.approval.request",
-              { title: "Review hook", description: "No effect" },
-              dispatchOptions,
-            ),
-          ).rejects.toThrow(/missing scope: operator\.approvals/),
-      );
-    });
-  });
-
-  it("uses a retained write-only operator for a signed hook after the client scope ends", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = createOperatorClient({
-        profileName: "retained-hook-operator",
-        scopes: ["operator.write"],
-      });
+  it("uses a retained write-only operator for a signed hook after the client scope ends", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
       const authority = createAdmittedRunOperatorAuthority({
-        profileId: source.authenticatedUserProfile!.profileId,
+        profileId: f.caller.authenticatedUserProfile!.profileId,
         scopes: ["operator.write"],
         assertCurrent: () => undefined,
-        readCurrentRoleAssignment: () => "writer",
+        readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
       });
-      const identity = {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        delegatedAuthority: {
-          kind: "local",
-          lifecycleGeneration: "generation-1",
-          claimId: "claim-1",
-          operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        },
-        approvalOwnerPluginId: "registered-hook",
-      } as const;
-      let roleScopes: Array<"operator.write" | "operator.read"> = ["operator.write"];
-      const cfg = (): OpenClawConfig => ({
-        gateway: {
-          roles: {
-            default: "writer",
-            definitions: {
-              writer: {
-                agents: "*",
-                scopes: roleScopes,
-                sessions: { others: "write" },
-              },
-            },
-          },
-        },
-      });
-      const context = createContext();
-      context.getRuntimeConfig = cfg;
-      context.getCommittedRuntimeConfig = cfg;
-      context.validateAgentRuntimeApprovalAuthority = (candidate) => candidate === identity;
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "plugin.approval.request",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ client, respond }: GatewayRequestHandlerOptions) => {
-              expect(client?.connect.scopes).toEqual(["operator.write"]);
-              expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("registered-hook");
-              respond(true, { status: "accepted" });
-            },
-          },
-        ]);
-      const dispatchOptions = withInProcessAgentRuntimeIdentity(
-        {
-          forceSyntheticClient: true,
-          allowHostPluginApprovalRequest: true,
-          syntheticScopes: ["operator.approvals"],
-          syntheticScopeMode: "minimum" as const,
-          resolveGatewayContext: () => context,
-        },
-        identity,
-      );
+      let roleScopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.write"];
+      const cfg = () => writerConfig(roleScopes);
+      f.context.getRuntimeConfig = cfg;
+      f.context.getCommittedRuntimeConfig = cfg;
+      f.context.validateAgentRuntimeApprovalAuthority = (candidate) => candidate === hookIdentity;
       const request = () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            operatorAuthority: authority,
+            gatewayContextResolver: () => f.context,
+          },
+          f.hook,
+        );
+      await expect(request()).resolves.toEqual(accepted);
+      const client = f.request.mock.calls[0]?.[0].client;
+      expect(client?.connect.scopes).toEqual(["operator.write"]);
+      expect(client?.internal?.pluginApprovalRequestOwnerId).toBe("registered-hook");
+      const unrelatedReader = createOperatorClient({
+        profileName: "unrelated-hook-reader",
+        scopes: ["operator.read"],
+      });
+      await expect(f.scoped(request, unrelatedReader)).rejects.toThrow(missingScope);
+      roleScopes = ["operator.read"];
+      await expect(request()).rejects.toThrow(/Your operator role changed/);
+    }));
+
+  it("lets a retained write-only run await its own approval verdict", (testContext: TestContext) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+        approvalKind: "plugin",
+        validateAgentRuntimeDelegatedAuthority: () => true,
+      });
+      const handlers = createPluginApprovalHandlers(manager);
+      const parked = vi.fn();
+      const context = createContext([
+        [
+          "plugin.approval.request",
+          "operator.approvals",
+          "plugin-approval",
+          handlers["plugin.approval.request"]!,
+        ],
+        [
+          "plugin.approval.waitDecision",
+          "operator.approvals",
+          "plugin-approval",
+          async (options) => {
+            parked();
+            await handlers["plugin.approval.waitDecision"]!(options);
+          },
+        ],
+      ]);
+      const caller = createOperatorClient({
+        profileName: "write-only-run",
+        scopes: ["operator.write"],
+      });
+      const otherRun = {
+        ...hookIdentity,
+        operationalRunInstance: { instanceId: "instance-2", runId: "run-2" },
+      };
+      const cfg = () => writerConfig();
+      Object.assign(context, {
+        getRuntimeConfig: cfg,
+        getCommittedRuntimeConfig: cfg,
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => true,
+        validateAgentRuntimeApprovalAuthority: (candidate: unknown) =>
+          candidate === hookIdentity || candidate === otherRun,
+      });
+      let revoked = false;
+      const authority = createAdmittedRunOperatorAuthority({
+        profileId: caller.authenticatedUserProfile!.profileId,
+        scopes: ["operator.write"],
+        assertCurrent: () => {
+          if (revoked) {
+            throw new Error("run authority revoked");
+          }
+        },
+        readCurrentRoleFacts: () => ({ assignedRole: "writer" }),
+      });
+      const dispatch = (
+        method: string,
+        params: Record<string, unknown>,
+        identity: typeof otherRun = hookIdentity,
+      ) =>
         withGatewayToolCallerIdentity(
           {
             agentId: "main",
@@ -282,88 +222,49 @@ describe("trusted plugin approval requests", () => {
             gatewayContextResolver: () => context,
           },
           () =>
-            dispatchGatewayMethodInProcess(
-              "plugin.approval.request",
-              { title: "Review hook", description: "No effect" },
-              dispatchOptions,
+            dispatchGatewayMethodInProcess<{ id: string; decision?: string }>(
+              method,
+              params,
+              withInProcessAgentRuntimeIdentity(
+                {
+                  forceSyntheticClient: true,
+                  allowHostPluginApprovalRequest: true,
+                  syntheticScopes: ["operator.approvals"],
+                  syntheticScopeMode: "minimum" as const,
+                  resolveGatewayContext: () => context,
+                },
+                identity,
+              ),
             ),
         );
-
-      await expect(request()).resolves.toEqual({ status: "accepted" });
-      const unrelatedReader = createOperatorClient({
-        profileName: "unrelated-hook-reader",
-        scopes: ["operator.read"],
+      const { id } = await dispatch("plugin.approval.request", {
+        ...requestParams,
+        twoPhase: true,
       });
-      await withPluginRuntimeGatewayRequestScope(
-        { client: unrelatedReader, context, isWebchatConnect: () => false },
-        () => expect(request()).rejects.toThrow(/missing scope: operator\.approvals/),
+      await expect(dispatch("plugin.approval.waitDecision", { id }, otherRun)).rejects.toThrow(
+        /expired or not found/,
       );
-      roleScopes = ["operator.read"];
-      await expect(request()).rejects.toThrow(/Your operator role changed/);
-    });
-  });
+      const wait = dispatch("plugin.approval.waitDecision", { id });
+      await vi.waitFor(async () => expect(await manager.resolve(id, "allow-once")).toBe(true));
+      await expect(wait).resolves.toMatchObject({ id, decision: "allow-once" });
+      // Revocation during the wait withholds a later allowance.
+      const next = await dispatch("plugin.approval.request", { ...requestParams, twoPhase: true });
+      const revokedWait = dispatch("plugin.approval.waitDecision", { id: next.id });
+      await vi.waitFor(() => expect(parked).toHaveBeenCalledTimes(3));
+      revoked = true;
+      await manager.resolve(next.id, "allow-once");
+      await expect(revokedWait).rejects.toThrow("run authority revoked");
+    }));
 
-  it("does not offer the bridge to a read-only caller", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const caller = createOperatorClient({
-        profileName: "read-only-plugin-caller",
-        scopes: ["operator.read"],
-      });
-      const context = createContext();
-      context.getGatewayMethodRegistry = () =>
-        createGatewayMethodRegistry([
-          {
-            name: "plugin.approval.request",
-            scope: "operator.approvals",
-            owner: { kind: "core", area: "plugin-approval" },
-            handler: ({ respond }: GatewayRequestHandlerOptions) => {
-              respond(true, { status: "accepted" });
-            },
-          },
-        ]);
+  it("does not offer the bridge to a read-only caller", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await expect(fixture(["operator.read"]).trusted()).rejects.toThrow(missingScope);
+    }));
 
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          withPluginRuntimePluginScope({ pluginId: "lobster", pluginOrigin: "bundled" }, () =>
-            expect(
-              dispatchTrustedPluginGatewayMethod(
-                "plugin.approval.request",
-                { pluginId: "lobster", title: "Review workflow", description: "No effect" },
-                { scopes: ["operator.approvals"] },
-              ),
-            ).rejects.toThrow(/missing scope: operator\.approvals/),
-          ),
+  it("does not offer the bridge to an untrusted plugin", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await expect(fixture().trusted("untrusted-probe", "config")).rejects.toThrow(
+        /only available to bundled or trusted official plugins/,
       );
-    });
-  });
-
-  it("does not offer the bridge to an untrusted plugin", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const caller = createOperatorClient({
-        profileName: "untrusted-plugin-caller",
-        scopes: ["operator.write"],
-      });
-      const context = createContext();
-      await withPluginRuntimeGatewayRequestScope(
-        { client: caller, context, isWebchatConnect: () => false },
-        () =>
-          withPluginRuntimePluginScope(
-            { pluginId: "untrusted-probe", pluginOrigin: "config" },
-            () =>
-              expect(
-                dispatchTrustedPluginGatewayMethod(
-                  "plugin.approval.request",
-                  {
-                    pluginId: "untrusted-probe",
-                    title: "Review workflow",
-                    description: "No effect",
-                  },
-                  { scopes: ["operator.approvals"] },
-                ),
-              ).rejects.toThrow(/only available to bundled or trusted official plugins/),
-          ),
-      );
-    });
-  });
+    }));
 });

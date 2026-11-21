@@ -4,8 +4,7 @@ import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
-import { readNextcloudTalkErrorBody } from "./guarded-response.js";
-import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
+import { buildNextcloudTalkOcsOptions, readNextcloudTalkErrorBody } from "./guarded-response.js";
 
 const BOT_FEATURE_RESPONSE = 2;
 
@@ -81,18 +80,8 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
   try {
     const { response, release } = await fetchWithSsrFGuard({
       url,
-      init: {
-        method: "GET",
-        headers: {
-          Authorization: `Basic ${auth}`,
-          "OCS-APIRequest": "true",
-          Accept: "application/json",
-        },
-      },
+      ...buildNextcloudTalkOcsOptions(auth, account.config.network?.dangerouslyAllowPrivateNetwork),
       auditContext: "nextcloud-talk.bot-response-preflight",
-      policy: ssrfPolicyFromPrivateNetworkOptIn(
-        account.config.network?.dangerouslyAllowPrivateNetwork,
-      ),
       timeoutMs,
     });
     try {

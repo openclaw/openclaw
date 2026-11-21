@@ -43,14 +43,10 @@ export function createDebugProxyCaptureStoreForContext(context: OpenClawStateWor
     }
   };
   const unregisterResource = registerOpenClawStateDatabaseAsyncResource({
-    close: async (identity) => {
-      if (identity !== undefined && identity.key !== context.admission.identity.key) {
-        return;
-      }
-      // Canonical maintenance invalidates admission; only orderly scope release
-      // may finalize capture through the still-admitted logical lease.
-      await retire();
-    },
+    admission: context.admission,
+    // Canonical maintenance invalidates admission; only orderly scope release
+    // may finalize capture through the still-admitted logical lease.
+    close: retire,
   });
   const unregisterLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
     if (event.kind !== "opened" && event.identity?.key === context.admission.identity.key) {

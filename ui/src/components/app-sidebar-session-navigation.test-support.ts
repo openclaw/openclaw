@@ -1,11 +1,18 @@
 import type { GatewaySessionRow } from "../api/types.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { buildSidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 
 export function projectSidebarSession(
   row: Partial<GatewaySessionRow>,
   selfUserId?: string,
+  options: {
+    preparedWorkSession?: boolean;
+    routeSessionKey?: string;
+    highlightCurrentSession?: boolean;
+    hasComposerDraft?: boolean;
+  } = {},
 ): SidebarRecentSession {
   const context = {
     basePath: "",
@@ -19,25 +26,25 @@ export function projectSidebarSession(
       },
     },
     sessions: {
-      isPreparedWorkSession: () => false,
-      isRunVisuallyActive: isSessionRunActive,
+      isPreparedWorkSession: () => options.preparedWorkSession === true,
+      isRunVisuallyActive: isSessionRunStateActive,
       pullRequestSummary: () => undefined,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({
     context,
-    routeSessionKey: "agent:main:main",
+    routeSessionKey: options.routeSessionKey ?? "agent:main:main",
     sessionsResult: null,
     sessionsAgentId: null,
     showCron: false,
     showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
-    highlightCurrentSession: false,
-    runtimeSampledAtByRow: new WeakMap(),
+    highlightCurrentSession: options.highlightCurrentSession === true,
+    rowProjection: new SidebarSessionRowProjection(),
     loadingChildSessionKeys: new Set(),
     outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
+    hasSessionDraft: () => options.hasComposerDraft === true,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });

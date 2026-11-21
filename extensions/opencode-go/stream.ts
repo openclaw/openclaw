@@ -9,57 +9,50 @@ import {
   createOpenAICompatibleCompletionsThinkingOffWrapper,
   createPayloadPatchStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   isOpencodeGoFixedAnthropicReasoningModelId,
   isOpencodeGoKimiNoReasoningModelId,
 } from "./provider-policy-api.js";
-import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 
-function createOpencodeGoAttributionWrapper(
-  baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
-  sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
-): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
-  return (model, context, options) => {
-    const api = sourceApi ?? model.api;
-    // OpenAI transports already consume the central policy; Anthropic does not.
-    // Keep this narrow so each request resolves attribution exactly once.
-    if (model.provider !== "opencode-go" || api !== "anthropic-messages") {
-      return baseStreamFn(model, context, options);
-    }
-    return baseStreamFn(model, context, {
-      ...options,
-      headers: resolveProviderRequestHeaders({
-        provider: model.provider,
-        api,
-        baseUrl: model.baseUrl,
-        capability: "llm",
-        transport: "stream",
-        callerHeaders: options?.headers,
-        precedence: "defaults-win",
-      }),
-    });
-  };
+const REASONING_REPLAY_FIELDS = [
+  "reasoning_details",
+  "reasoning_content",
+  "reasoning",
+  "reasoning_text",
+] as const;
+
+const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
+
+function stripReasoningReplayFields(value: unknown): void {
+  const record = asOptionalObjectRecord(value);
+  if (!record) {
+    return;
+  }
+  for (const field of REASONING_REPLAY_FIELDS) {
+    delete record[field];
+  }
+
+  const content = record.content;
+  if (Array.isArray(content)) {
+    const nextContent = stripReasoningReplayItems(content);
+    record.content =
+      nextContent.length > 0
+        ? nextContent
+        : [{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }];
+  }
 }
 
-function createOpencodeGoDeepSeekWrapper(
-  baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
-  thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
-): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {
-  const flashStreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-    baseStreamFn,
-    thinkingLevel,
-    shouldPatchModel: (model) =>
-      model.provider === "opencode-go" && model.id === "deepseek-v4-flash",
-    resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
-  });
-  return (
-    createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: flashStreamFn,
-      thinkingLevel,
-      shouldPatchModel: (model) =>
-        model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
-    }) ?? baseStreamFn
-  );
+function stripReasoningReplayItems(items: unknown[]): unknown[] {
+  const retained = [];
+  for (const item of items) {
+    const type = asOptionalObjectRecord(item)?.type;
+    if (type !== "thinking" && type !== "redacted_thinking" && type !== "reasoning") {
+      stripReasoningReplayFields(item);
+      retained.push(item);
+    }
+  }
+  return retained;
 }
 
 export function createOpencodeGoWireWrapper(
@@ -73,7 +66,14 @@ export function createOpencodeGoWireWrapper(
     baseStreamFn,
     ({ payload, model }) => {
       if (isOpencodeGoKimiNoReasoningModelId(model.id)) {
-        stripOpencodeGoKimiReasoningPayload(payload);
+        stripReasoningReplayFields(payload);
+        delete payload.reasoning_effort;
+        delete payload.reasoningEffort;
+        for (const key of ["messages", "input"] as const) {
+          if (Array.isArray(payload[key])) {
+            payload[key] = stripReasoningReplayItems(payload[key]);
+          }
+        }
       } else if (isOpencodeGoFixedAnthropicReasoningModelId(model.id)) {
         delete payload.thinking;
         delete payload.output_config;
@@ -86,14 +86,46 @@ export function createOpencodeGoWireWrapper(
     thinkingLevel,
     ctx.sourceApi,
   );
-  const deepSeek = createOpencodeGoDeepSeekWrapper(
-    (model, context, options) =>
-      model.provider === "opencode-go" && model.id === "kimi-k3"
-        ? thinkingOff(model, context, options)
-        : payloadStreamFn(model, context, options),
+  const selected: NonNullable<typeof baseStreamFn> = (model, context, options) =>
+    model.provider === "opencode-go" && model.id === "kimi-k3"
+      ? thinkingOff(model, context, options)
+      : payloadStreamFn(model, context, options);
+  const flashStreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+    baseStreamFn: selected,
     thinkingLevel,
-  );
-  return createOpencodeGoAttributionWrapper(deepSeek, ctx.sourceApi);
+    shouldPatchModel: (model) =>
+      model.provider === "opencode-go" &&
+      (model.id === "deepseek-v4-flash" || model.id === "deepseek-v4.1-flash"),
+    resolveReasoningEffort: (level) => (level === "low" ? "low" : level === "max" ? "max" : "high"),
+  });
+  const deepSeek =
+    createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: flashStreamFn,
+      thinkingLevel,
+      shouldPatchModel: (model) =>
+        model.provider === "opencode-go" && model.id === "deepseek-v4-pro",
+    }) ?? selected;
+  const sourceApi = ctx.sourceApi;
+  return (model, context, options) => {
+    const api = sourceApi ?? model.api;
+    // OpenAI transports already consume the central policy; Anthropic does not.
+    // Keep this narrow so each request resolves attribution exactly once.
+    if (model.provider !== "opencode-go" || api !== "anthropic-messages") {
+      return deepSeek(model, context, options);
+    }
+    return deepSeek(model, context, {
+      ...options,
+      headers: resolveProviderRequestHeaders({
+        provider: model.provider,
+        api,
+        baseUrl: model.baseUrl,
+        capability: "llm",
+        transport: "stream",
+        callerHeaders: options?.headers,
+        precedence: "defaults-win",
+      }),
+    });
+  };
 }
 
 export function createOpencodeGoWrapper(

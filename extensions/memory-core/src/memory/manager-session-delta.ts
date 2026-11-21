@@ -2,12 +2,12 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryChunkRowId } from "./manager-source-index-kernel.js";
-import type { MemoryIndexWorkItem, MemorySyncProviderGeneration } from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySyncProviderGeneration } from "./manager-sync-base.js";
 
 export type PreparedMemoryIndexEntry = {
   entry: MemoryIndexWorkItem["entry"];
   source: MemorySource;
-  /** Chunks to embed and write; a session delta leaves out retained chunks. */
+  /** Chunks to embed and write; an incremental replacement leaves out retained chunks. */
   chunks: IndexedMemoryChunk[];
   /** Retained chunks whose small metadata changed. */
   retained?: IndexedMemoryChunk[];
@@ -15,21 +15,6 @@ export type PreparedMemoryIndexEntry = {
   removedIds?: string[];
   structuredInputBytes?: number;
 };
-
-/** A shadow's empty tombstone table cannot authorize publication into the live index. */
-export async function assertMemorySessionNotForgotten(
-  database: MemoryIndexDatabase,
-  session: { agentId: string; sessionId: string },
-  assertCurrent: () => void,
-): Promise<void> {
-  const predicate = await database.read({ type: "session.current", input: session }, assertCurrent);
-  assertCurrent();
-  if (predicate === "forgotten") {
-    throw new Error(
-      "A session was forgotten while memory indexing was running; retry the memory index.",
-    );
-  }
-}
 
 // The index owner plans once; publication consumes the plan without rereading it.
 export async function retainIndexedSessionChunks(
@@ -39,13 +24,8 @@ export async function retainIndexedSessionChunks(
   assertCurrent: () => void,
 ): Promise<PreparedMemoryIndexEntry> {
   const { entry, source, chunks } = prepared;
-  // A full reindex fills an empty shadow, which has no rows to retain.
-  if (
-    source !== "sessions" ||
-    entry.kind === "multimodal" ||
-    chunks.length === 0 ||
-    database.isShadow
-  ) {
+  // Rebuild groups replace their private shadow rows as a unit.
+  if (entry.kind === "multimodal" || chunks.length === 0 || database.isShadow) {
     return prepared;
   }
   const indexed = await database.read(
@@ -63,7 +43,7 @@ export async function retainIndexedSessionChunks(
   const model = generation?.provider?.model ?? "fts-only";
   const written: IndexedMemoryChunk[] = [];
   const retained: IndexedMemoryChunk[] = [];
-  // Repeated transcript text yields identical rows under one id. Plan each id
+  // Repeated text yields identical rows under one id. Plan each id
   // once so a duplicate cannot rewrite the row this delta retains.
   const planned = new Set<string>();
   for (const chunk of chunks) {
@@ -85,6 +65,12 @@ export async function retainIndexedSessionChunks(
         retained.push(chunk);
       }
     }
+  }
+  // An edit near the top of a memory file shifts every later line range and
+  // changes every id. Complete replacement then clears the path with one
+  // bounded vector scan, where a delta would issue scalar deletes per row.
+  if (source === "memory" && written.length === planned.size) {
+    return prepared;
   }
   return {
     ...prepared,

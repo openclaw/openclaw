@@ -11,10 +11,8 @@ import {
   resolveNodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
-import {
-  loadDevicePairingStateForMutation,
-  normalizeDevicePairingRole,
-} from "./device-pairing-state.kernel.js";
+import { normalizeDevicePairingRole } from "./device-pairing-roles.js";
+import { loadDevicePairingStateForMutation } from "./device-pairing-state.kernel.js";
 import {
   persistDevicePairingStoreState as persistState,
   updatePairedDeviceInTransaction,
@@ -61,6 +59,7 @@ export function ensureDeviceTokenInWorker(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  approval?: DeviceAuthToken["approval"];
   nowMs: number;
 }): DeviceAuthToken | null {
   return updatePairedDeviceInTransaction<DeviceAuthToken | null>(params.deviceId, (paired) => {
@@ -94,6 +93,7 @@ export function ensureDeviceTokenInWorker(params: {
       role,
       scopes: requestedScopes,
       issuer: params.issuer,
+      approval: params.approval,
       existing,
       now,
       rotatedAtMs: existing ? now : undefined,
@@ -130,13 +130,16 @@ function resolveDeviceTokenUpdateContext(params: { device: PairedDevice | null; 
 }
 
 /** Rotate a role token inside the device's approved scope baseline. */
-export function rotateDeviceTokenInWorker(params: {
-  deviceId: string;
-  role: string;
-  scopes?: string[];
-  callerScopes?: readonly string[];
-  nowMs: number;
-}): RotateDeviceTokenResult {
+export function rotateDeviceTokenInWorker(
+  params: {
+    deviceId: string;
+    role: string;
+    scopes?: string[];
+    callerScopes?: readonly string[];
+    nowMs: number;
+  },
+  onRetiredNodeToken?: (token: { deviceId: string; expectedToken: string }) => void,
+): RotateDeviceTokenResult {
   const state = loadDevicePairingStateForMutation(params.nowMs);
   const context = resolveDeviceTokenUpdateContext({
     device: state.pairedByDeviceId[params.deviceId.trim()] ?? null,
@@ -198,8 +201,10 @@ export function rotateDeviceTokenInWorker(params: {
     })
       ? { deviceId: device.deviceId, expectedToken: existing.token }
       : undefined;
-  // Retire the matching legacy cache with the token, even if the CLI loses its response.
-  persistState(state, undefined, "paired", { retiredNodeToken });
+  persistState(state, undefined, "paired");
+  if (retiredNodeToken) {
+    onRetiredNodeToken?.(retiredNodeToken);
+  }
   return { ok: true, entry: next };
 }
 

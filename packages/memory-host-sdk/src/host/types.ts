@@ -1,7 +1,5 @@
 // Public memory host contracts shared by runtime, builtin search, and package consumers.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "./openclaw-runtime-config.js";
-import type { MemorySearchDeadlineControlOptions } from "./search-deadline-control.js";
 export type MemorySource = "memory" | "sessions";
 
 export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
@@ -9,7 +7,14 @@ export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
 export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
 
 /** Additional memory root, optionally narrowed by a root-relative glob. */
-export type MemoryExtraPath = string | { path: string; pattern?: string };
+export type MemoryExtraPath =
+  | string
+  | {
+      path: string;
+      pattern?: string;
+      /** Keep matching reference files out of mtime-based temporal decay. */
+      evergreen?: boolean;
+    };
 
 export type MemoryEntryProvenance = {
   originClass: MemoryOriginClass;
@@ -37,22 +42,18 @@ export type MemorySearchResult = {
   provenance?: MemoryEntryProvenance;
 };
 
-/** CLI search contract shared by the Gateway adapter and the owning memory plugin. */
-export type MemoryCliSearchParams = {
-  manager: MemorySearchManager;
-  cfg: OpenClawConfig;
-  agentId: string;
-  query: string;
-  maxResults?: number;
-  minScore?: number;
-  assertCurrent?: () => void;
-};
-
 export type MemoryCliSearchResult = {
   results: MemorySearchResult[];
   stale?: true;
   warning?: string;
   action?: string;
+};
+
+/** Indexed-memory search response shared by the Gateway and browser presentation. */
+export type MemorySearchResponse = MemoryCliSearchResult & {
+  agentId: string;
+  provider: string;
+  searchMode: "hybrid" | "fts-only";
 };
 
 export type MemoryCliSearchOutcome =
@@ -383,7 +384,7 @@ export function resolveMemoryIndexSearchDiagnostic(
 
 export function resolveMemorySearchStaleness(
   status: Pick<MemoryProviderStatus, "custom" | "lastSyncError"> &
-    Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider">>,
+    Partial<Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "dirty">>,
   agentId?: string,
 ): { stale: true; warning: string; action: string } | null {
   const diagnostic = resolveMemoryIndexIdentityDiagnostic(status);
@@ -392,61 +393,19 @@ export function resolveMemorySearchStaleness(
   }
   const reason = status.lastSyncError?.trim();
   if (!reason) {
-    return null;
+    return status.dirty
+      ? {
+          stale: true,
+          warning: "Memory index has pending updates. Results use the last published index.",
+          action: `Retry after background indexing, or run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
+        }
+      : null;
   }
   return {
     stale: true,
     warning: `Memory index is stale: ${reason}. Search results may be incomplete.`,
     action: `Run: ${formatMemoryIndexRebuildGuidance(status, agentId)}`,
   };
-}
-
-export interface MemorySearchManager {
-  search(
-    query: string,
-    opts?: {
-      maxResults?: number;
-      minScore?: number;
-      sessionKey?: string;
-      /**
-       * Keyword/FTS scoring only: skip query embedding and vector search.
-       * For reply-path recall (trigger injection) that must not add a
-       * network round-trip per inbound message.
-       */
-      lexicalOnly?: boolean;
-      /** Active repository identities used only for project-aware ranking. */
-      activeProjectKeys?: string[];
-      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
-      /**
-       * Ranked memory-file keyword candidates bounded by maxResults, available before semantic retrieval completes.
-       * Callers must apply the same visibility checks as for final results.
-       * Null invalidates a previous snapshot before its provider/index changes.
-       */
-      onPartialResults?: (results: MemorySearchResult[] | null) => void;
-      sources?: MemorySource[];
-      /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
-      signal?: AbortSignal;
-    } & MemorySearchDeadlineControlOptions,
-  ): Promise<MemorySearchResult[]>;
-  listTriggerCandidates?(opts?: {
-    limit?: number;
-    activeProjectKeys?: string[];
-  }): Promise<MemorySearchResult[]>;
-  listCuratedProjectCandidates?(opts: {
-    activeProjectKeys: string[];
-    limit?: number;
-  }): Promise<MemorySearchResult[]>;
-  readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
-  /** @deprecated Prefer statusAsync when available to keep storage reads off the caller thread. */
-  status(): MemoryProviderStatus;
-  /** Set includeCounts to false for query-path facts without database diagnostics. */
-  statusAsync?(options?: { includeCounts?: boolean }): Promise<MemoryProviderStatus>;
-  sync?(params?: MemorySyncParams): Promise<void>;
-  getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
-  probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
-  probeVectorStoreAvailability?(): Promise<boolean>;
-  probeVectorAvailability(): Promise<boolean>;
-  close?(): Promise<void>;
 }
 
 /** Preserve synchronous third-party managers while built-in status reads run in their worker. */

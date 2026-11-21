@@ -1,4 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../infra/sql-connection.js";
 import { readSqliteDatabaseSiblingWriteRevision } from "../../infra/sqlite-database-admission.js";
 import {
   getAdmittedSqliteSchemaFacts,
@@ -8,11 +9,11 @@ import {
 /** Connection revision shared by entry snapshots and maintenance age facts. */
 export type SqliteSessionEntryRevision = {
   siblingWriteRevision: number | undefined;
-  sessionNodesGeneration: number;
+  sessionNodesGeneration: number | undefined;
   schemaVersion: number;
 };
 
-export function readSessionNodesGeneration(database: DatabaseSync): number {
+export function readSessionNodesGeneration(database: EngineConnection): number {
   const revision = readSqliteNativeMutationRevision(database);
   if (revision === undefined) {
     throw new Error("SQLite session entry caching requires a tracked writer");
@@ -23,8 +24,20 @@ export function readSessionNodesGeneration(database: DatabaseSync): number {
 }
 
 export function readSessionEntryCacheValidityToken(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): SqliteSessionEntryRevision {
+  if (isPostgresSqlConnection(database)) {
+    const schema = getPostgresPhysicalFacts(database);
+    if (!schema) {
+      throw new Error("Session entry caching requires admitted PostgreSQL schema facts");
+    }
+    // PG lacks scoped cache coverage; never certify reuse with native row-cache receipts.
+    return {
+      siblingWriteRevision: undefined,
+      sessionNodesGeneration: undefined,
+      schemaVersion: schema.version,
+    };
+  }
   const schema = getAdmittedSqliteSchemaFacts(database);
   if (!schema) {
     throw new Error("SQLite session entry caching requires admitted schema facts");
@@ -55,7 +68,7 @@ class SessionEntryRevisionConflictError extends Error {
 
 /** Reuse prepared facts until this connection observes a write, then compare only their predicate. */
 export function createSessionEntryRevisionGuard(
-  database: DatabaseSync,
+  database: EngineConnection,
   assertSourceCurrent: () => void,
   matches: () => boolean,
 ): () => void {

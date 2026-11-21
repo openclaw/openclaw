@@ -1,4 +1,3 @@
-// Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,

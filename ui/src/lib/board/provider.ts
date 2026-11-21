@@ -20,13 +20,13 @@ export function boardExists(snapshot: BoardSnapshot): boolean {
   return snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
 }
 
-function createNullProvider(sessionKey: string): BoardProvider {
+export function createNullBoardProvider(key: string): BoardProvider {
+  const sessionKey = normalizeDefaultMainSessionAliasForUi(key);
   const pinWidget = async () => {
     throw new Error("Session dashboard unavailable");
   };
   const widgetAppView = async (): Promise<BoardWidgetAppViewState> => ({
     status: "stale",
-    error: "Session dashboard unavailable",
   });
   return {
     sessionKey,
@@ -50,13 +50,10 @@ function createNullProvider(sessionKey: string): BoardProvider {
   };
 }
 
-type BoardProviderCapabilities = Pick<
-  BoardProvider,
-  "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant"
->;
-
-const nullProviders = new Map<string, BoardProvider>();
-const gatewayProviders = new Map<string, { provider: GatewayBoardProvider; consumers: number }>();
+const gatewayProviders = new Map<
+  string,
+  { provider: GatewayBoardProvider; consumers: number; presentationScope?: object }
+>();
 export function boardProviderCacheKey(session: BoardGetParams): string {
   const identity = resolveUiConversationIdentity(
     {},
@@ -68,27 +65,20 @@ export function boardProviderCacheKey(session: BoardGetParams): string {
 
 // Session lookups are read-only: only a lifecycle-owned lease may create and
 // subscribe a gateway transport, so hidden panes cannot orphan subscriptions.
-export function boardProviderForSession(session: BoardGetParams, available = true): BoardProvider {
-  const key = boardProviderCacheKey(session);
-  const sessionKey = normalizeDefaultMainSessionAliasForUi(session.sessionKey);
-  const gatewayProvider = available ? gatewayProviders.get(key)?.provider : undefined;
-  if (gatewayProvider) {
-    return gatewayProvider;
-  }
-  let provider = nullProviders.get(key);
-  if (!provider) {
-    provider = createNullProvider(sessionKey);
-    nullProviders.set(key, provider);
-  }
-  return provider;
+export function boardProviderForSession(
+  session: BoardGetParams,
+  available = true,
+): BoardProvider | undefined {
+  return available ? gatewayProviders.get(boardProviderCacheKey(session))?.provider : undefined;
 }
 
 export type BoardProviderLease = {
   provider: BoardProvider;
+  restoreSnapshot: (snapshot: unknown, receivedAtMs: number) => void;
   update: (
     client: BoardGatewayClient,
     connected: boolean,
-    capabilities: BoardProviderCapabilities,
+    capabilities: Pick<BoardProvider, "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant">,
   ) => void;
   release: () => void;
 };
@@ -101,15 +91,27 @@ export function acquireBoardProviderForSession(
   canPinMcpApps = false,
   canMutate = true,
   canGrant = true,
+  presentationScope?: object,
+  cacheSnapshot?: (snapshot: BoardSnapshot | null, receivedAtMs: number) => void,
 ): BoardProviderLease {
   const key = boardProviderCacheKey(session);
   let entry = gatewayProviders.get(key);
+  if (entry && entry.presentationScope !== presentationScope) {
+    // Retiring views may still hold leases; they must not lend their account's
+    // loaded transport to the new presentation owner.
+    entry.provider.dispose();
+    entry = undefined;
+  }
   if (!entry) {
     const target = {
       ...session,
       sessionKey: normalizeDefaultMainSessionAliasForUi(session.sessionKey),
     };
-    entry = { provider: new GatewayBoardProvider(target, client, connected), consumers: 0 };
+    entry = {
+      provider: new GatewayBoardProvider(target, client, connected),
+      consumers: 0,
+      presentationScope,
+    };
     gatewayProviders.set(key, entry);
   } else {
     entry.provider.attachClient(client, connected);
@@ -123,12 +125,20 @@ export function acquireBoardProviderForSession(
   };
   entry.consumers += 1;
   let released = false;
+  let leaseConnected = connected;
+  const isCurrent = () => !released && gatewayProviders.get(key) === entry;
   const requireCapability = (allowed: boolean, action: string) => {
     if (!allowed) {
       throw new Error(`Session dashboard ${action} unavailable`);
     }
   };
+  const stopCache = cacheSnapshot ? transport.subscribeCacheSnapshot(cacheSnapshot) : undefined;
   return {
+    restoreSnapshot: (snapshot, receivedAtMs) => {
+      if (isCurrent()) {
+        transport.restoreSnapshot(snapshot, receivedAtMs);
+      }
+    },
     // Transport snapshots are shared; mutation authority belongs to this live lease.
     provider: {
       loadError$: transport.loadError$,
@@ -148,16 +158,16 @@ export function acquireBoardProviderForSession(
         return transport.hasLoadedSnapshot;
       },
       get canPinWidgets() {
-        return !released && capabilities.canPinWidgets;
+        return isCurrent() && leaseConnected && capabilities.canPinWidgets;
       },
       get canPinMcpApps() {
-        return !released && capabilities.canPinMcpApps;
+        return isCurrent() && leaseConnected && capabilities.canPinMcpApps;
       },
       get canMutate() {
-        return !released && capabilities.canMutate;
+        return isCurrent() && leaseConnected && capabilities.canMutate;
       },
       get canGrant() {
-        return !released && capabilities.canGrant;
+        return isCurrent() && leaseConnected && capabilities.canGrant;
       },
       async applyOps(ops) {
         requireCapability(this.canMutate, "mutation");
@@ -177,10 +187,11 @@ export function acquireBoardProviderForSession(
       },
     },
     update: (nextClient, nextConnected, nextCapabilities) => {
-      if (released || gatewayProviders.get(key)?.provider !== entry.provider) {
+      if (!isCurrent()) {
         return;
       }
       capabilities = nextCapabilities;
+      leaseConnected = nextConnected;
       entry.provider.attachClient(nextClient, nextConnected);
     },
     release: () => {
@@ -188,16 +199,15 @@ export function acquireBoardProviderForSession(
         return;
       }
       released = true;
-      const current = gatewayProviders.get(key);
-      if (!current || current.provider !== entry.provider) {
+      stopCache?.();
+      entry.consumers -= 1;
+      if (entry.consumers > 0) {
         return;
       }
-      current.consumers -= 1;
-      if (current.consumers > 0) {
-        return;
+      if (gatewayProviders.get(key) === entry) {
+        gatewayProviders.delete(key);
       }
-      gatewayProviders.delete(key);
-      current.provider.dispose();
+      entry.provider.dispose();
     },
   };
 }

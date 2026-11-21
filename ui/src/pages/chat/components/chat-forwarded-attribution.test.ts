@@ -119,7 +119,7 @@ it("routes forwarded cron runs with primary and keyboard activation, preserving 
     onOpenSessionLink,
   };
   const transcript = createTestTranscript();
-  onTestFinished(() => transcript.hostDisconnected());
+  onTestFinished(() => transcript.dispose());
   container = document.body.appendChild(document.createElement("div"));
   mountStatefulSolid(ChatThread, { props, transcript }, container);
   await waitForSolid(() =>

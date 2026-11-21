@@ -1,14 +1,8 @@
-import type { OAuthDiscoveryState } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
+  OAuthDiscoveryState,
   OAuthClientInformationMixed,
   OAuthTokens,
-} from "@modelcontextprotocol/sdk/shared/auth.js";
-
-type McpOAuthAuthorizationChallenge = {
-  resourceMetadataUrl?: string;
-  scope?: string;
-  requiresAuthorization?: true;
-};
+} from "@modelcontextprotocol/client";
 
 export type McpOAuthStore = {
   /** Non-secret authorization incarnation; token refresh preserves it, reauthorization does not. */
@@ -17,13 +11,19 @@ export type McpOAuthStore = {
   credentialState?: "uninitialized" | "cleared";
   clientInformation?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
+  /** A possibly consumed rotating grant cannot be replayed after owner exit. */
+  refreshClaim?: string;
   tokenExpiresAt?: number;
   tokensAuthorizationServerUrl?: string;
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
   redirectUrl?: string;
-  pendingAuthorizationChallenge?: McpOAuthAuthorizationChallenge;
+  pendingAuthorizationChallenge?: {
+    resourceMetadataUrl?: string;
+    scope?: string;
+    requiresAuthorization?: true;
+  };
 };
 
 export type McpOAuthMutation =
@@ -33,7 +33,10 @@ export type McpOAuthMutation =
       tokens: OAuthTokens;
       tokenExpiresAt: number | undefined;
       replaceAuthorization?: boolean;
+      refreshClaim?: string;
     }
+  | { kind: "beginRefresh"; claim: string; refreshToken: string }
+  | { kind: "restoreRefresh"; claim: string }
   | { kind: "ensureAuthorization" }
   | {
       kind: "authorizationRedirect";

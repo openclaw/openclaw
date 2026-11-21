@@ -3,24 +3,16 @@ import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generat
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import type {
   MusicGenerationProvider,
-  MusicGenerationRequest,
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import {
-  assertOkOrThrowHttpError,
-  createProviderOperationDeadline,
-  postJsonRequest,
-  resolveProviderOperationTimeoutMs,
-  type ProviderOperationDeadline,
-} from "openclaw/plugin-sdk/provider-http";
+import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import {
   asOptionalRecord,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -31,15 +23,6 @@ const OPENROUTER_MUSIC_MODELS = [
   DEFAULT_OPENROUTER_MUSIC_MODEL,
   OPENROUTER_CLIP_MUSIC_MODEL,
 ] as const;
-
-type OpenRouterAudioStreamAccumulator = {
-  audioBuffers: Buffer[];
-  audioBytes: number;
-  audioBase64Remainder: string;
-  transcriptChunks: string[];
-  transcriptBytes: number;
-  maxBytes: number;
-};
 
 function imageToContentPart(image: MusicGenerationSourceImage) {
   const url =
@@ -54,30 +37,6 @@ function imageToContentPart(image: MusicGenerationSourceImage) {
     type: "image_url",
     image_url: { url },
   };
-}
-
-function buildOpenRouterMusicPrompt(req: MusicGenerationRequest): string {
-  const parts = [req.prompt.trim()];
-  const lyrics = normalizeOptionalString(req.lyrics);
-  if (req.instrumental === true) {
-    parts.push("Instrumental only. No vocals, no sung lyrics, no spoken word.");
-  }
-  if (lyrics) {
-    parts.push(`Lyrics:\n${lyrics}`);
-  }
-  if (typeof req.durationSeconds === "number") {
-    parts.push(`Target duration: about ${Math.round(req.durationSeconds)} seconds.`);
-  }
-  return parts.join("\n\n");
-}
-
-function buildOpenRouterMessageContent(req: MusicGenerationRequest) {
-  const prompt = buildOpenRouterMusicPrompt(req);
-  const images = req.inputImages ?? [];
-  if (images.length === 0) {
-    return prompt;
-  }
-  return [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
 }
 
 function readDeltaAudio(part: unknown) {
@@ -102,56 +61,6 @@ function createOpenRouterMusicTooLargeError(kind: "audio" | "transcript", maxByt
   return new Error(`OpenRouter music generation ${kind} exceeded ${maxBytes} bytes`);
 }
 
-function appendDecodedOpenRouterMusicAudio(
-  result: OpenRouterAudioStreamAccumulator,
-  base64: string,
-): void {
-  if (!base64) {
-    return;
-  }
-  const remainingBytes = result.maxBytes - result.audioBytes;
-  if (estimateBase64DecodedBytes(base64) > remainingBytes) {
-    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
-  }
-  const canonicalAudio = canonicalizeBase64(base64);
-  if (!canonicalAudio) {
-    throw new Error("OpenRouter music generation returned malformed base64 audio data");
-  }
-  const decodedBytes = Buffer.byteLength(canonicalAudio, "base64");
-  if (decodedBytes > remainingBytes) {
-    throw createOpenRouterMusicTooLargeError("audio", result.maxBytes);
-  }
-  const buffer = Buffer.from(canonicalAudio, "base64");
-  result.audioBytes += buffer.byteLength;
-  result.audioBuffers.push(buffer);
-}
-
-function appendOpenRouterMusicAudio(result: OpenRouterAudioStreamAccumulator, data: string): void {
-  // OpenRouter defines delta.audio.data as slices of one base64 stream. Keep
-  // only the incomplete quartet so arbitrary provider chunk boundaries decode safely.
-  const combined = result.audioBase64Remainder + data;
-  const completeLength = combined.length - (combined.length % 4);
-  result.audioBase64Remainder = combined.slice(completeLength);
-  appendDecodedOpenRouterMusicAudio(result, combined.slice(0, completeLength));
-}
-
-function flushOpenRouterMusicAudio(result: OpenRouterAudioStreamAccumulator): void {
-  appendDecodedOpenRouterMusicAudio(result, result.audioBase64Remainder);
-  result.audioBase64Remainder = "";
-}
-
-function appendOpenRouterMusicTranscript(
-  result: OpenRouterAudioStreamAccumulator,
-  transcript: string,
-): void {
-  const nextBytes = result.transcriptBytes + Buffer.byteLength(transcript, "utf8");
-  if (nextBytes > result.maxBytes) {
-    throw createOpenRouterMusicTooLargeError("transcript", result.maxBytes);
-  }
-  result.transcriptBytes = nextBytes;
-  result.transcriptChunks.push(transcript);
-}
-
 function readOpenRouterStreamError(part: unknown): string | undefined {
   if (!isRecord(part) || !isRecord(part.error)) {
     return undefined;
@@ -159,54 +68,7 @@ function readOpenRouterStreamError(part: unknown): string | undefined {
   return normalizeOptionalString(part.error.message) ?? "unknown provider stream error";
 }
 
-function processOpenRouterSseLine(line: string, result: OpenRouterAudioStreamAccumulator): boolean {
-  if (!line.startsWith("data:")) {
-    return false;
-  }
-  const data = line.slice("data:".length).trim();
-  if (!data) {
-    return false;
-  }
-  if (data === "[DONE]") {
-    return true;
-  }
-  const payload: unknown = JSON.parse(data);
-  const streamError = readOpenRouterStreamError(payload);
-  if (streamError) {
-    throw new Error(`OpenRouter music generation failed: ${streamError}`);
-  }
-  const audio = readDeltaAudio(payload);
-  if (audio?.data) {
-    appendOpenRouterMusicAudio(result, audio.data);
-  }
-  if (audio?.transcript) {
-    appendOpenRouterMusicTranscript(result, audio.transcript);
-  }
-  return false;
-}
-
-function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
-  return resolveProviderOperationTimeoutMs({
-    deadline,
-    defaultTimeoutMs: deadline.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  });
-}
-
-async function readOpenRouterStreamChunk(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: ProviderOperationDeadline,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
-  return await withTimeout(reader.read(), timeoutMs, {
-    createError: () => new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`),
-  });
-}
-
-async function readOpenRouterAudioStream(
-  response: Response,
-  deadline: ProviderOperationDeadline,
-  maxBytes: number,
-) {
+async function readOpenRouterAudioStream(response: Response, maxBytes: number) {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
   }
@@ -218,14 +80,83 @@ async function readOpenRouterAudioStream(
     audioBase64Remainder: "",
     transcriptChunks: [] as string[],
     transcriptBytes: 0,
-    maxBytes,
   };
+  function appendDecodedOpenRouterMusicAudio(base64: string): void {
+    if (!base64) {
+      return;
+    }
+    const remainingBytes = maxBytes - result.audioBytes;
+    if (estimateBase64DecodedBytes(base64) > remainingBytes) {
+      throw createOpenRouterMusicTooLargeError("audio", maxBytes);
+    }
+    const canonicalAudio = canonicalizeBase64(base64);
+    if (!canonicalAudio) {
+      throw new Error("OpenRouter music generation returned malformed base64 audio data");
+    }
+    const buffer = Buffer.from(canonicalAudio, "base64");
+    result.audioBytes += buffer.byteLength;
+    result.audioBuffers.push(buffer);
+  }
+
+  function appendOpenRouterMusicAudio(data: string): void {
+    // OpenRouter defines delta.audio.data as slices of one base64 stream. Keep
+    // only the incomplete quartet so arbitrary provider chunk boundaries decode safely.
+    const combined = result.audioBase64Remainder + data;
+    const completeLength = combined.length - (combined.length % 4);
+    result.audioBase64Remainder = combined.slice(completeLength);
+    appendDecodedOpenRouterMusicAudio(combined.slice(0, completeLength));
+  }
+
+  function finishOpenRouterMusicStream() {
+    appendDecodedOpenRouterMusicAudio(result.audioBase64Remainder);
+    result.audioBase64Remainder = "";
+    return {
+      audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
+      transcript: result.transcriptChunks.join(""),
+    };
+  }
+
+  function appendOpenRouterMusicTranscript(transcript: string): void {
+    const nextBytes = result.transcriptBytes + Buffer.byteLength(transcript, "utf8");
+    if (nextBytes > maxBytes) {
+      throw createOpenRouterMusicTooLargeError("transcript", maxBytes);
+    }
+    result.transcriptBytes = nextBytes;
+    result.transcriptChunks.push(transcript);
+  }
+
+  function processOpenRouterSseLine(line: string): boolean {
+    if (!line.startsWith("data:")) {
+      return false;
+    }
+    const data = line.slice("data:".length).trim();
+    if (!data) {
+      return false;
+    }
+    if (data === "[DONE]") {
+      return true;
+    }
+    const payload: unknown = JSON.parse(data);
+    const streamError = readOpenRouterStreamError(payload);
+    if (streamError) {
+      throw new Error(`OpenRouter music generation failed: ${streamError}`);
+    }
+    const audio = readDeltaAudio(payload);
+    if (audio?.data) {
+      appendOpenRouterMusicAudio(audio.data);
+    }
+    if (audio?.transcript) {
+      appendOpenRouterMusicTranscript(audio.transcript);
+    }
+    return false;
+  }
+
   const maxEventBytes = resolveOpenRouterSseEventMaxBytes(maxBytes);
   const lineFragments: string[] = [];
   let pendingBytes = 0;
   try {
     for (;;) {
-      const { value, done } = await readOpenRouterStreamChunk(reader, deadline);
+      const { value, done } = await reader.read();
       if (done) {
         break;
       }
@@ -248,19 +179,14 @@ async function readOpenRouterAudioStream(
           line = lineFragments.join("");
           lineFragments.length = 0;
         }
-        if (processOpenRouterSseLine(line.trim(), result)) {
-          flushOpenRouterMusicAudio(result);
-          return {
-            audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
-            transcript: result.transcriptChunks.join(""),
-          };
+        if (processOpenRouterSseLine(line.trim())) {
+          return finishOpenRouterMusicStream();
         }
       }
       if (start < chunk.length) {
         lineFragments.push(chunk.slice(start));
       }
     }
-    resolveOpenRouterStreamRemainingMs(deadline);
     lineFragments.push(decoder.decode());
     const buffer = lineFragments.join("");
     pendingBytes = Buffer.byteLength(buffer, "utf8");
@@ -269,14 +195,10 @@ async function readOpenRouterAudioStream(
         `OpenRouter music generation SSE event exceeded ${maxEventBytes} bytes for a ${maxBytes}-byte media limit`,
       );
     }
-    if (!processOpenRouterSseLine(buffer.trim(), result)) {
+    if (!processOpenRouterSseLine(buffer.trim())) {
       throw new Error("OpenRouter music generation stream ended before completion");
     }
-    flushOpenRouterMusicAudio(result);
-    return {
-      audioBuffer: Buffer.concat(result.audioBuffers, result.audioBytes),
-      transcript: result.transcriptChunks.join(""),
-    };
+    return finishOpenRouterMusicStream();
   } finally {
     // A capture tee can keep cancellation pending until its sibling finishes.
     // Release the reader without waiting so the request owner can abort transport.
@@ -332,18 +254,30 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;
       const format = req.format ?? "wav";
-      const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
-      const streamDeadline = createProviderOperationDeadline({
-        timeoutMs: requestedTimeoutMs,
-        label: "OpenRouter music generation",
-      });
-      const timeoutMs = resolveOpenRouterStreamRemainingMs(streamDeadline);
+      const timeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
+      const parts = [req.prompt.trim()];
+      const lyrics = normalizeOptionalString(req.lyrics);
+      if (req.instrumental === true) {
+        parts.push("Instrumental only. No vocals, no sung lyrics, no spoken word.");
+      }
+      if (lyrics) {
+        parts.push(`Lyrics:\n${lyrics}`);
+      }
+      if (typeof req.durationSeconds === "number") {
+        parts.push(`Target duration: about ${Math.round(req.durationSeconds)} seconds.`);
+      }
+      const prompt = parts.join("\n\n");
+      const images = req.inputImages ?? [];
+      const content =
+        images.length === 0
+          ? prompt
+          : [{ type: "text", text: prompt }, ...images.map(imageToContentPart)];
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
         body: {
           model,
-          messages: [{ role: "user", content: buildOpenRouterMessageContent(req) }],
+          messages: [{ role: "user", content }],
           modalities: ["text", "audio"],
           audio: { format },
           stream: true,
@@ -358,7 +292,6 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
         const streamResult = await readOpenRouterAudioStream(
           response,
-          streamDeadline,
           resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         );
         if (streamResult.audioBuffer.byteLength === 0) {
@@ -380,6 +313,13 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
             requestedFormat: format,
           },
         };
+      } catch (error) {
+        if (error instanceof Error && error.name === "TimeoutError") {
+          throw new Error(`OpenRouter music generation timed out after ${timeoutMs}ms`, {
+            cause: error,
+          });
+        }
+        throw error;
       } finally {
         await release();
       }

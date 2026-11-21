@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, expect, it } from "vitest";
@@ -11,23 +10,18 @@ import { readWindowsProcessCensus } from "./windows-process-census.js";
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
 it.runIf(process.platform === "win32")(
-  "observes a retained-cwd descendant and proves its exit",
+  "observes a retained-cwd descendant, excludes its custody, and proves its exit",
   { timeout: 30_000 },
   async ({ signal }) => {
-    const retained = path.join(temp.make("openclaw-handoff-census-"), "retained 工作");
-    fs.mkdirSync(retained);
-    const child = spawn(
-      process.execPath,
-      [
-        "--eval",
-        "process.on('message', () => process.exit(0)); process.on('disconnect', () => process.exit(1)); process.send('ready');",
-      ],
-      {
-        cwd: retained,
-        stdio: ["ignore", "ignore", "pipe", "ipc"],
-        windowsHide: true,
-      },
-    );
+    const retained = temp.make("openclaw-handoff-census retained 工作-");
+    const source =
+      "process.on('message', () => process.exit(0)); process.on('disconnect', () => process.exit(1)); process.send('ready');";
+    const child = spawn(process.execPath, ["--eval", source], {
+      cwd: retained,
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+      windowsHide: true,
+    });
+    const observe = () => readWindowsProcessCensus(15_000).find(({ pid }) => pid === child.pid);
     const closed = once(child, "close");
     void closed.catch(() => {});
     let worker: Worker | undefined;
@@ -42,14 +36,14 @@ it.runIf(process.platform === "win32")(
           throw new Error(`Census fixture closed before readiness: ${stderr}`);
         }),
       ]);
-      const observed = [...readWindowsProcessCensus(15_000)].find(
-        (entry) => entry.pid === child.pid,
-      );
-      expect(observed?.parentPid).toBe(process.pid);
-      expect(observed?.startIdentity).toMatch(/^\d+$/);
-      expect(observed?.commandLine).toContain("process.send('ready')");
-      expect(path.resolve(observed?.cwd ?? "").toLowerCase()).toBe(retained.toLowerCase());
+      const observed = observe();
+      expect(observed).toMatchObject({
+        parentPid: process.pid,
+        startIdentity: expect.stringMatching(/^\d+$/),
+        commandLine: expect.stringContaining("process.send('ready')"),
+      });
       expect(observed?.foreignOwner).toBeUndefined();
+      expect(path.resolve(observed?.cwd ?? "").toLowerCase()).toBe(retained.toLowerCase());
       worker = new Worker(
         `
         const { parentPort, workerData } = require('node:worker_threads');
@@ -71,24 +65,21 @@ it.runIf(process.platform === "win32")(
       );
       const [workerObserved] = await once(worker, "message", { signal });
       expect(workerObserved).toEqual(observed);
-      // The run ID is absent from argv: matching this child requires native cwd inspection.
+      // The run ID is absent from argv: native cwd inspection sees the retained path,
+      // while start-ordered ancestry still proves this inspector's child is not handoff work.
       const census = inspectOtherOpenClawProcesses({
         runId: "absent-fixture-run",
         artifactPaths: [retained],
       });
-      expect(census.matchingPids).toContain(child.pid);
-      // Hosted runners can carry unrelated same-user processes whose PEB is unreadable;
-      // those stay fail-closed in production but are not part of this fixture's contract.
+      expect(census.matchingPids).not.toContain(child.pid);
+      // Unrelated same-user processes on hosted runners may have unreadable PEBs.
       expect(census.unverifiedPids).not.toContain(child.pid);
       if (census.unverifiedPids.length === 0) {
         expect(census.error).toBeUndefined();
       }
       child.send("exit");
       expect(await closed, stderr).toEqual([0, null]);
-      expect(
-        [...readWindowsProcessCensus(15_000)].find((entry) => entry.pid === child.pid)
-          ?.startIdentity,
-      ).not.toBe(observed?.startIdentity);
+      expect(observe()?.startIdentity).not.toBe(observed?.startIdentity);
     } finally {
       await worker?.terminate();
       if (child.exitCode === null && child.signalCode === null) {

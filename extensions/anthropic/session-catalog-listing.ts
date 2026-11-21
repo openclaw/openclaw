@@ -63,21 +63,39 @@ export async function listLocalClaudeSessionPage(
   const params = readListParams(value);
   const offset = decodeOffset(params.cursor, "catalog");
   const search = params.searchTerm?.toLocaleLowerCase();
-  const records = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).filter((record) => {
-    if (!search) {
+  const scan = await listClaudeSessions(resolvedHome, resolvedScanOptions);
+  // Exact lookup reads only matching transcripts, independent of the ordinary discovery frontier.
+  const exact =
+    search && !scan.records.some((record) => record.threadId.toLocaleLowerCase() === search)
+      ? await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, sessionId: search })
+      : undefined;
+  const needle = search?.normalize("NFC");
+  const records = [...(exact?.records ?? []), ...scan.records].filter((record) => {
+    if (!needle) {
       return true;
     }
     return [record.name, record.cwd, record.gitBranch, record.threadId].some((candidate) =>
-      candidate?.toLocaleLowerCase().includes(search),
+      candidate?.toLocaleLowerCase().normalize("NFC").includes(needle),
     );
   });
   const page = records
     .slice(offset, offset + params.limit)
     .map(({ filePath: _filePath, ...record }) => record);
   const nextOffset = offset + page.length;
+  const hasMore = nextOffset < records.length;
   return {
     sessions: page,
-    ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    ...(hasMore ? { nextCursor: encodeOffset(nextOffset) } : {}),
+    // Host errors stop automatic pagination, so report the frontier after all discovered rows.
+    ...(!hasMore && scan.truncated
+      ? {
+          error: {
+            code: "DISCOVERY_TRUNCATED",
+            message:
+              "Claude session discovery reached its scan limit; some sessions are omitted. Search by exact session ID.",
+          },
+        }
+      : {}),
   };
 }
 
@@ -90,15 +108,16 @@ export async function readLocalClaudeTranscriptPage(
   const resolvedScanOptions =
     scanOptions ?? (homeDir === undefined ? gatewayClaudeScanOptions(true) : {});
   const params = readTranscriptParams(value);
-  let filePath = (await listClaudeSessions(resolvedHome, resolvedScanOptions)).find(
+  const lookupOptions = { ...resolvedScanOptions, sessionId: params.threadId };
+  let filePath = (await listClaudeSessions(resolvedHome, lookupOptions)).records.find(
     (record) => record.threadId === params.threadId,
   )?.filePath;
   if (!filePath) {
     // A just-created session can race the stamp snapshot. Specific reads must retry against disk so
     // opening a new thread never fails only because the assembled catalog is still warm.
     filePath = (
-      await listClaudeSessions(resolvedHome, { ...resolvedScanOptions, forceRefresh: true })
-    ).find((record) => record.threadId === params.threadId)?.filePath;
+      await listClaudeSessions(resolvedHome, { ...lookupOptions, forceRefresh: true })
+    ).records.find((record) => record.threadId === params.threadId)?.filePath;
   }
   if (!filePath) {
     throw new ClaudeCatalogParamsError("Claude session is unavailable");
@@ -106,9 +125,9 @@ export async function readLocalClaudeTranscriptPage(
   const handle = await fs.open(filePath, "r");
   try {
     const stat = await handle.stat();
-    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "transcript") : stat.size;
+    const requestedEnd = params.cursor ? decodeOffset(params.cursor, "chat history") : stat.size;
     if (requestedEnd > stat.size) {
-      throw new ClaudeCatalogParamsError("transcript cursor is invalid");
+      throw new ClaudeCatalogParamsError("chat history cursor is invalid");
     }
     let position = requestedEnd;
     let scanned = 0;
@@ -124,7 +143,7 @@ export async function readLocalClaudeTranscriptPage(
       const chunk = Buffer.allocUnsafe(size);
       const filled = await readFileWindowFully(handle, chunk, position);
       if (filled !== size) {
-        throw new Error("Claude transcript changed while it was being read");
+        throw new Error("Claude chat history changed while it was being read");
       }
       scanned += filled;
       let right = filled;
@@ -166,7 +185,7 @@ export async function readLocalClaudeTranscriptPage(
       }
     }
     if (position > 0 && found.length < params.limit) {
-      throw new Error("Claude transcript page exceeded the safe scan limit");
+      throw new Error("Claude chat history page exceeded the safe scan limit");
     }
     const requested = found.slice(0, params.limit);
     const selected: typeof requested = [];
@@ -362,7 +381,7 @@ export async function readClaudeSessionTranscript(params: {
   limit: number;
   allowProcessHomeFallback?: boolean;
 }): Promise<ClaudeSessionTranscriptPage> {
-  const cursor = readOptionalCursor(params.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "chat history");
   if (params.hostId === CLAUDE_LOCAL_SESSION_HOST_ID) {
     assertClaudeLocalAccess(params.hostId, params.allowProcessHomeFallback);
     return {
@@ -412,9 +431,9 @@ export async function readClaudeSessionTranscript(params: {
     page.threadId !== params.threadId ||
     Buffer.byteLength(JSON.stringify(page), "utf8") > MAX_TRANSCRIPT_PAGE_BYTES
   ) {
-    throw new Error("Claude node returned an invalid transcript page");
+    throw new Error("Claude node returned an invalid chat history page");
   }
-  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid transcript page");
+  const nextCursor = readNodePageCursor(page, "Claude node returned an invalid chat history page");
   return {
     hostId: params.hostId,
     label: resolveNodeLabel(node),

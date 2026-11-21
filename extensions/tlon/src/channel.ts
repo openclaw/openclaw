@@ -7,6 +7,10 @@ import {
   createRuntimeOutboundDelegates,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+import {
+  buildChannelOutboundSessionRoute,
+  type ChannelOutboundSessionRouteParams,
+} from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -18,7 +22,6 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonDoctor } from "./doctor.js";
-import { resolveTlonOutboundSessionRoute } from "./session-route.js";
 import { createTlonSetupWizardBase, tlonSetupContract } from "./setup-core.js";
 import {
   formatTargetHint,
@@ -29,6 +32,30 @@ import {
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const TLON_CHANNEL_ID = "tlon" as const;
+
+function resolveTlonOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+  const parsed = parseTlonTarget(params.target);
+  if (!parsed) {
+    return null;
+  }
+  const isGroup = parsed.kind === "group";
+  const peerId = isGroup ? parsed.nest : parsed.ship;
+
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: "tlon",
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: {
+      kind: isGroup ? "group" : "direct",
+      id: peerId,
+    },
+    chatType: isGroup ? "group" : "direct",
+    from: isGroup ? `tlon:group:${peerId}` : `tlon:${peerId}`,
+    to: `tlon:${peerId}`,
+  });
+}
 
 const loadTlonChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 

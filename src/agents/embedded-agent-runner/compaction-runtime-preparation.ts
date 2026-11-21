@@ -21,39 +21,18 @@ import {
   providerUsesCredentialScopedModelMetadata,
   resolveReusableRuntimeModelAuth,
 } from "../runtime-plan/credential-scoped-model.js";
-import {
-  prepareAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuth,
-  type PreparedAgentRuntimeAuthAttempt,
-} from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import { prepareAgentRuntimeAuth } from "../runtime-plan/prepare-auth.js";
+import type {
+  PreparedAgentRuntimeAuth,
+  PreparedAgentRuntimeAuthAttempt,
+  AgentRuntimeAuthPlan,
+  AgentRuntimePlan,
+} from "../runtime-plan/types.js";
 import {
   resolveCompactionHarnessRuntime,
   resolveCompactionTargetRuntime,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
-
-export function projectCodexHostTranscriptBytePreflightConfig(
-  config: OpenClawConfig | undefined,
-  active: boolean,
-): OpenClawConfig | undefined {
-  const compaction = config?.agents?.defaults?.compaction;
-  if (
-    !active ||
-    !compaction ||
-    (!Object.hasOwn(compaction, "model") && !Object.hasOwn(compaction, "provider"))
-  ) {
-    return config;
-  }
-  const { model: _model, provider: _provider, ...projectedCompaction } = compaction;
-  return {
-    ...config,
-    agents: {
-      ...config.agents,
-      defaults: { ...config.agents?.defaults, compaction: projectedCompaction },
-    },
-  };
-}
 
 /** Resolves the shared policy, target, and harness ownership for either compaction entry point. */
 export function resolveCompactionRuntimeSelection(params: {
@@ -136,8 +115,8 @@ export function resolveCompactionRuntimeSelection(params: {
       authProfileId: target.authProfileId,
     }),
     provider,
-    runtimeProvider: target.runtimeProvider ?? provider,
-    contextConfigProvider: target.contextProvider ?? provider,
+    runtimeProvider: provider,
+    contextConfigProvider: provider,
     modelId,
   };
 }

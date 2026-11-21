@@ -78,7 +78,7 @@ export function copyPluginInstallRecordMap<T>(
   return copied;
 }
 
-export function parsePluginInstallRecord(value: unknown): PluginInstallRecord | null {
+function parsePluginInstallRecord(value: unknown): PluginInstallRecord | null {
   const parsed = PluginInstallRecordSchema.safeParse(value);
   if (!parsed.success) {
     return null;

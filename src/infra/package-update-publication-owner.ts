@@ -2,9 +2,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { retainMutationAuthority } from "./mutation-authority.js";
 import {
@@ -26,6 +26,7 @@ import {
   matchesPackageActivationLauncher as matchesLauncher,
   verifyPackageActivationSelectedLaunchers as verifySelectedLaunchers,
 } from "./package-update-activation-launcher.js";
+import { privatePackageActivationIdentity } from "./package-update-activation-paths.js";
 import {
   assertPackageActivationActionAllowed,
   readPackageActivationRecordStatus as packageActivationStatus,
@@ -39,8 +40,10 @@ import {
 } from "./package-update-filesystem.js";
 import {
   createPackageIntegrityReader,
+  packageIntegrityMatches,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { publicationExchange } from "./package-update-publication-exchange.js";
 import {
   copyPackagePublicationTree,
   createPackagePublicationTreeMatcher,
@@ -61,7 +64,12 @@ export function createPublicationOwner(
   let record = initial;
   let descriptor = record.descriptor;
   let privateCandidate = freshlyPrepared;
-  const trees = createPackagePublicationTreeMatcher(descriptor, onWarning, () => privateCandidate);
+  const trees = createPackagePublicationTreeMatcher(
+    descriptor,
+    onWarning,
+    () => privateCandidate,
+    assertion,
+  );
   const matches = trees.matches;
   let retirementSelected: "previous" | "candidate" | undefined;
   const live = descriptor.authority.installKey;
@@ -129,7 +137,13 @@ export function createPublicationOwner(
   const assertCurrent = () => {
     assertion();
     journal.assertCurrent(record);
-    const currentAnchor = entryIdentity(custodyPath("anchor"), true);
+    let currentAnchor: string | null;
+    try {
+      currentAnchor = privatePackageActivationIdentity(custodyPath("anchor"), "anchor");
+    } catch (error) {
+      ignoreMissingPath(error);
+      currentAnchor = null;
+    }
     if (
       currentAnchor !== descriptor.anchorIdentity &&
       !(
@@ -225,10 +239,12 @@ export function createPublicationOwner(
     }
     return { selected, previous, candidate, launcherStates };
   };
+  const exchange = publicationExchange(anchor, () => record, assertCurrent, transition, inspect);
   const verifyClosure = async () => {
+    assertion();
     assertInventory();
     assertManagedUpdateLeaseDatabaseIdentity(descriptor.authority);
-    if (packageActivationIdentity(helper(), false) !== descriptor.helperIdentity) {
+    if (privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity) {
       throw new Error("Sealed package recovery helper identity changed.");
     }
     const bytes = await fsp.readFile(helper());
@@ -338,7 +354,7 @@ export function createPublicationOwner(
     transition("publishing", { kind: "copy-previous", identity });
     const reader = createPackageIntegrityReader();
     const source = await reader.tree(live, live, descriptor.previous);
-    if (!isDeepStrictEqual(source, descriptor.previous)) {
+    if (!packageIntegrityMatches(descriptor.previous, source)) {
       throw new Error("Package copy source changed.");
     }
     await copyPackagePublicationTree(live, copyRoot, assertCopy);
@@ -363,6 +379,7 @@ export function createPublicationOwner(
       }
       await discardIncompleteCopy();
       await finishCopiedDisplacement();
+      await exchange.restore();
       let observed = await inspect();
       assertCurrent();
       if (resume && observed.selected === "previous" && !observed.previous) {
@@ -372,6 +389,7 @@ export function createPublicationOwner(
         transition("aborted");
         return packageActivationStatus(record);
       }
+      observed = (await exchange.publish(resume, observed, onDisplaced)) ?? observed;
       if (observed.selected === "previous") {
         transition("publishing", { kind: "displace" });
         assertCurrent();
@@ -592,7 +610,7 @@ export function createPublicationOwner(
     assertCurrent();
     if (
       entryIdentity(anchor, true) !== null ||
-      packageActivationIdentity(helper(), false) !== descriptor.helperIdentity
+      privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity
     ) {
       throw new Error("Final package recovery cleanup identity changed.");
     }
@@ -602,7 +620,7 @@ export function createPublicationOwner(
       selected,
     });
     assertCurrent();
-    if (packageActivationIdentity(helper(), false) !== descriptor.helperIdentity) {
+    if (privatePackageActivationIdentity(helper(), "helper") !== descriptor.helperIdentity) {
       throw new Error("Final helper identity changed.");
     }
     await fsp.unlink(helper());
@@ -649,6 +667,7 @@ export function createPublicationOwner(
       privateCandidate = false;
       assertCurrent();
       await discardIncompleteCopy();
+      await exchange.restore();
       const observed = await inspect();
       assertCurrent();
       if (
@@ -698,6 +717,7 @@ export function createPublicationOwner(
       transition("rolled-back", null, publications);
     },
     status: () => packageActivationStatus(record),
+    exchangeOutcome: exchange.outcome,
     assertCurrent,
   };
 }

@@ -9,13 +9,17 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.types.js";
+import { prepareSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
+import type {
+  TelegramNativeCommandCallbackDispatcher,
+  TelegramPluginCommandContinuation,
+} from "./bot-handlers.types.js";
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
-import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  syncTelegramMenuCommands,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -43,6 +47,7 @@ type RegisterTelegramNativeCommandsParams = Omit<
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
+  continuePluginCommandTurn: TelegramPluginCommandContinuation;
 };
 
 export const registerTelegramNativeCommands = async ({
@@ -51,7 +56,7 @@ export const registerTelegramNativeCommands = async ({
   nativeEnabled,
   nativeSkillsEnabled,
   shouldSkipUpdate,
-  telegramDeps = defaultTelegramNativeCommandDeps,
+  continuePluginCommandTurn,
   ...executorParams
 }: RegisterTelegramNativeCommandsParams): Promise<{
   nativeCommandNames: ReadonlyMap<string, string>;
@@ -69,7 +74,7 @@ export const registerTelegramNativeCommands = async ({
   }
   const skillCommands =
     nativeEnabled && nativeSkillsEnabled && boundRoute
-      ? await telegramDeps.prepareSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
+      ? await prepareSkillCommandsForAgents({ cfg, agentIds: [boundRoute.agentId] })
       : [];
   const pluginCommandRuntime = createPluginCommandRuntime();
   const pluginCommandSpecs = pluginCommandRuntime.listNativeCandidates("telegram");
@@ -182,7 +187,7 @@ export const registerTelegramNativeCommands = async ({
     );
   }
   // Telegram only limits menu entries; hidden commands remain callable.
-  void telegramDeps.syncTelegramMenuCommands({
+  void syncTelegramMenuCommands({
     bot,
     runtime,
     commandsToRegister,
@@ -201,7 +206,6 @@ export const registerTelegramNativeCommands = async ({
     const { executeTelegramBuiltinCommand } = await loadTelegramBuiltinCommandExecutor();
     return await executeTelegramBuiltinCommand({
       ...executorParams,
-      telegramDeps,
       botUser,
       msg,
       rawText,
@@ -234,14 +238,19 @@ export const registerTelegramNativeCommands = async ({
         return;
       }
       const { executeTelegramPluginCommand } = await loadTelegramPluginCommandExecutor();
+      const message = ctx.message;
       await executeTelegramPluginCommand({
         ...executorParams,
-        telegramDeps,
         botUser: ctx.me,
-        msg: ctx.message,
+        msg: message,
         rawText: ctx.match?.trim() ?? "",
         commandName: pluginCommand.command,
         candidate: pluginCommand.spec,
+        continueAgentTurn: (turn) =>
+          continuePluginCommandTurn({
+            ...turn,
+            ctx: { message, update: ctx.update, me: ctx.me, getFile: ctx.getFile.bind(ctx) },
+          }),
       });
     });
   }

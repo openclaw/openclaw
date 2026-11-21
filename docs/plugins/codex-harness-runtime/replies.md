@@ -1,5 +1,5 @@
 ---
-summary: "Visible reply delivery, heartbeat turns, and bounded final-answer recovery"
+summary: "Visible reply delivery, scheduled turns, and bounded final-answer recovery"
 read_when:
   - You are choosing between automatic and message-tool replies
   - A Codex turn finished tool work without a visible answer
@@ -9,7 +9,9 @@ sidebarTitle: "Replies and final answers"
 
 How final assistant text reaches the source conversation, and what happens when a Codex turn settles without one. Part of the [Codex harness runtime](/plugins/codex-harness-runtime) guide; [Where each section moved](/plugins/codex-harness-runtime#where-each-section-moved) lists every section.
 
-## Visible replies and heartbeats
+<a id="visible-replies-and-heartbeats" />
+
+## Visible replies and scheduled turns
 
 Direct/source chat turns through the Codex harness default to automatic final
 assistant delivery for internal WebChat surfaces, matching the Pi harness
@@ -27,11 +29,10 @@ Native Codex messages explicitly marked for asynchronous delivery use an
 independent delivery intent. They are delivered separately from optional progress
 and from the eventual final answer, including when block streaming is disabled.
 
-Codex heartbeat turns get `heartbeat_respond` in the searchable OpenClaw tool
-catalog by default so the agent can record whether the wake should stay quiet
-or notify. Heartbeat turns use the same Codex Default collaboration mode as
-ordinary chat turns. The heartbeat monitor's cron scratch is appended to the
-scheduled heartbeat user message when present.
+Migrated heartbeat monitors use ordinary automation turns. Their prompt,
+scratch, and delivery policy belong to the job; silence and visible replies use
+the ordinary terminal-reply contract. The retired `heartbeat_respond` tool and
+its fallback are no longer installed. See [Heartbeat migration](/gateway/heartbeat).
 
 ## Attachments in a remote workspace
 
@@ -68,7 +69,10 @@ Recovery reserves its existing limits for the complete current turn, then keeps
 the nearest whole earlier exchanges that fit. Older exchanges can be omitted,
 including a whole exchange that is too large. A notice identifies missing history
 when space permits; the finalizer is always instructed to state uncertainty about
-missing facts. Current evidence that exceeds the limits, invalid tool pairs, or
+missing facts. If an earlier tool exchange remains unfinished at the verified
+current-turn boundary, recovery omits all earlier context rather than splitting
+the exchange at a user steering message. Current evidence that exceeds the limits,
+invalid tool pairs, or
 unsupported content still makes recovery unavailable. Existing conversation
 history stays intact, and completed actions are never repeated.
 

@@ -7,13 +7,12 @@ import {
   installationSchema,
   nativeWindowsContextSchema,
 } from "./extension-windows-contract.js";
-import { createWindowsNativePlatform } from "./extension-windows-platform.js";
+import { windowsNativePlatform as ops } from "./extension-windows-platform.js";
 import { windowsFixture } from "./extension-windows.test-support.js";
 describe("Windows read-only authority and portable path boundaries", () => {
   it.skipIf(process.platform !== "win32")(
     "admits the current runtime beneath protected OS ancestors without changing ownership",
     async () => {
-      const ops = createWindowsNativePlatform();
       const identity = await ops.identity();
       expect(isWindowsNativePath(identity.localAppData)).toBe(true);
       expect(sidSchema.safeParse(identity.sid).success).toBe(true);
@@ -79,7 +78,6 @@ describe("Windows read-only authority and portable path boundaries", () => {
   it.skipIf(process.platform === "win32")(
     "cannot discover or mutate Windows authority on a POSIX host",
     async () => {
-      const ops = createWindowsNativePlatform();
       await expect(ops.identity()).rejects.toThrow("Windows identity unavailable");
       await expect(
         ops.assertPath("C:\\node.exe", { kind: "file", private: false }),

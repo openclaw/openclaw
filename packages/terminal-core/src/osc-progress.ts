@@ -4,10 +4,7 @@ const OSC_PROGRESS_PREFIX = "\u001b]9;4;";
 const OSC_PROGRESS_ST = "\u001b\\";
 
 /** Return true when the terminal is known to support OSC progress messages. */
-export function supportsOscProgress(env: NodeJS.ProcessEnv, isTty: boolean): boolean {
-  if (!isTty) {
-    return false;
-  }
+export function supportsOscProgress(env: NodeJS.ProcessEnv): boolean {
   const termProgram = (env.TERM_PROGRAM ?? "").toLowerCase();
   return (
     termProgram.includes("ghostty") || termProgram.includes("wezterm") || Boolean(env.WT_SESSION)

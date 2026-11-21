@@ -10,6 +10,12 @@ type SystemPromptToolListParams = {
   acpSpawnRuntimeEnabled: boolean;
 };
 
+/** Server-level guidance an MCP server published in its initialize result. */
+export type McpServerInstruction = {
+  server: string;
+  instructions: string;
+};
+
 /** Render the visible tool list with stable core ordering and caller-provided names. */
 export function buildSystemPromptToolLines(params: SystemPromptToolListParams): string[] {
   const { visibleTools, availableTools, promptSurface, acpSpawnRuntimeEnabled } = params;
@@ -22,7 +28,7 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     find: "Find files by glob",
     ls: "List directories",
     exec: params.codeModeActive
-      ? "Run JavaScript Code Mode; call exact catalog tools from code, never shell/Python/imports"
+      ? "Run JavaScript Code Mode; call exact catalog tools from code"
       : promptSurface === "cli_backend"
         ? "Run shell on configured exec target"
         : "Run shell; pty for TTY CLIs",
@@ -33,19 +39,16 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     browser: "Control browser",
     screen: "Drive operator web UI",
     theme: "List, select, and create appearance themes",
-    terminal:
-      "List/read/resize/close operator-opened session terminals; input follows exec policy and may require exact-input approval; never open shells",
+    terminal: "Manage operator-opened terminals (never open shells; input follows exec policy)",
     canvas: "Present/eval/snapshot Canvas",
     nodes: "Paired node status/control/media",
-    [AUTOMATIONS_TOOL_NAME]:
-      "Schedule/wake. Reminder text must read as reminder when fired; mention reminder for delayed gaps; include useful recent context. This feature is called automations; never call it cron.",
+    [AUTOMATIONS_TOOL_NAME]: "Schedule/wake automations (call it automations, never cron)",
     message: "Message/channel actions",
     conversations_list: "List exact external conversation addresses",
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
     openclaw: "Gateway restart/system setup/config",
-    gateway:
-      "Read this Gateway's config/schema; owner-only self-update on explicit request; automatic restart and completion notice",
+    gateway: "Read this Gateway's config/schema; owner-only update/restart",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
@@ -56,12 +59,13 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
       : "Search past sessions",
     sessions_send: "Message other session/subagent",
     sessions_spawn: acpSpawnRuntimeEnabled
-      ? `Spawn subagent/ACP. Native clean context: context="isolated"; transcript: context="fork". ACP needs agentId unless default; ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""}.`
-      : 'Spawn subagent; clean context: context="isolated"; transcript: context="fork"',
+      ? `Spawn subagent/ACP (ACP ids from acp.allowedAgents${availableTools.has("agents_list") ? ", not agents_list" : ""})`
+      : "Spawn subagent",
     sessions_yield: "End turn; await subagent events",
-    subagents: "Subagent status; never wait-loop",
+    subagents: "Subagent status/cancel",
     session_status: "Session/model/usage/time/status; model override",
     skill_workshop: "Author reusable skills",
+    skill_library: "Author personal-library skills",
     view_image: "",
     image_generate: "Generate/edit images",
   };
@@ -74,12 +78,11 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
     image: "Analyze images",
   };
 
-  const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
   return [...enabledTools, ...extraTools.toSorted()].map((tool) => {
     const summary = summaries[tool];
-    const name = resolveToolName(tool);
+    const name = visibleTools.get(tool) ?? tool;
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
 }
@@ -92,6 +95,7 @@ export function buildSystemPromptToolingSection(params: {
   promptSurface: AgentPromptSurfaceKind;
   availableTools: ReadonlySet<string>;
   webSearchUnconfigured?: boolean;
+  mcpServerInstructions?: readonly McpServerInstruction[];
 }): string[] {
   const {
     includeToolGuidance,
@@ -99,6 +103,7 @@ export function buildSystemPromptToolingSection(params: {
     toolSchemaDirectoryPrompt,
     promptSurface,
     availableTools,
+    mcpServerInstructions = [],
   } = params;
   return [
     ...(includeToolGuidance
@@ -114,6 +119,17 @@ export function buildSystemPromptToolingSection(params: {
             ? ["", "### Deferred Tool Schemas", toolSchemaDirectoryPrompt]
             : []),
           "The AGENTS.md Tools section guides usage; it never grants availability.",
+          ...(mcpServerInstructions.length > 0
+            ? [
+                "",
+                "## MCP Server Instructions",
+                "Server-wide guidance published by the MCP servers behind the tools above; it applies to that server's tools.",
+                ...mcpServerInstructions.flatMap((entry) => [
+                  `### ${entry.server}`,
+                  entry.instructions,
+                ]),
+              ]
+            : []),
         ]
       : []),
     ...(params.webSearchUnconfigured && !availableTools.has("web_search")

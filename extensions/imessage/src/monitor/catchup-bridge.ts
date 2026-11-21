@@ -51,8 +51,6 @@ type RunIMessageCatchupParams = {
    */
   observeSkippedFromMePayload?: (message: IMessagePayload) => Promise<void> | void;
   runtime?: RuntimeLogger;
-  /** Override clock for tests. */
-  now?: () => number;
 };
 
 /** Replay oldest-first through durable admission; tombstones reject live/watch overlap. */
@@ -218,6 +216,5 @@ export async function runIMessageCatchup(
     },
     log,
     warn: warnLog,
-    ...(params.now ? { now: params.now() } : {}),
   });
 }

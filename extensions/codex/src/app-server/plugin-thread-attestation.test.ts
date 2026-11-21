@@ -31,7 +31,7 @@ describe("Codex thread tool-surface admission", () => {
           threadId: "thread-empty",
           appIds: [],
           restrictedToolSurface: false,
-          lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+          lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
           signal: controller.signal,
           assertCurrent,
           withCurrent,

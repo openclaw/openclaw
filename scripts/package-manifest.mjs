@@ -13,7 +13,21 @@ const BACKUP_PATH = path.join(".artifacts", "package-manifest", "package.json.pr
 const CRABBOX_SOURCE_LAUNCHER = "node scripts/crabbox-wrapper.mjs";
 const CRABBOX_PUBLISHED_LAUNCHER = "node dist/crabbox-wrapper.js";
 
-function preparedPackageManifest(content, platformOptionals = {}) {
+function runtimeExportConditions(value) {
+  if (Array.isArray(value)) {
+    return value.map(runtimeExportConditions);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([condition]) => condition !== "types" && !condition.startsWith("types@"))
+        .map(([condition, target]) => [condition, runtimeExportConditions(target)]),
+    );
+  }
+  return value;
+}
+
+function preparedPackageManifest(content, platformOptionals = {}, runtimeOnly = false) {
   const packageJson = JSON.parse(content);
   let changed = false;
 
@@ -54,6 +68,17 @@ function preparedPackageManifest(content, platformOptionals = {}) {
       }
     }
   }
+  if (runtimeOnly) {
+    // Private app artifacts retain runtime resolution without promising an SDK type build.
+    packageJson.private = true;
+    delete packageJson.types;
+    delete packageJson.typings;
+    delete packageJson.typesVersions;
+    if (packageJson.exports) {
+      packageJson.exports = runtimeExportConditions(packageJson.exports);
+    }
+    changed = true;
+  }
   return changed ? `${JSON.stringify(packageJson, null, 2)}\n` : content;
 }
 
@@ -89,6 +114,15 @@ export async function restorePackageManifest(cwd = process.cwd()) {
 
 /** Prepare published package metadata while recording restorable source bytes. */
 export async function preparePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, false);
+}
+
+/** Prepare an unpublished private runtime artifact, including bundled workspace packages. */
+export async function prepareRuntimePackageManifest(cwd = process.cwd()) {
+  return prepareManifest(cwd, true);
+}
+
+async function prepareManifest(cwd, runtimeOnly) {
   const packageJsonPath = path.join(cwd, PACKAGE_JSON_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(packageJsonPath, "utf8");
@@ -102,7 +136,7 @@ export async function preparePackageManifest(cwd = process.cwd()) {
       JSON.parse(generateNpmPackageLock(cwd)),
     );
   }
-  const prepared = preparedPackageManifest(original, platformOptionals);
+  const prepared = preparedPackageManifest(original, platformOptionals, runtimeOnly);
   if (prepared === original) {
     return false;
   }

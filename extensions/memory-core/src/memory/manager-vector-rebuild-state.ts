@@ -1,19 +1,19 @@
 // Memory Core plugin module owns persisted vector completeness state.
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { MEMORY_INDEX_META_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryVectorIndexState } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export const VECTOR_REBUILD_META_KEY = "memory_vector_rebuild_v1";
 
-export function markMemoryVectorIndexClean(db: DatabaseSync): void {
+export function markMemoryVectorIndexClean(db: EngineConnection): void {
   db.prepare(
     `INSERT INTO ${MEMORY_INDEX_META_TABLE} (key, value) VALUES (?, 'clean')
      ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
   ).run(VECTOR_REBUILD_META_KEY);
 }
 
-export function markMemoryVectorRebuildRequired(db: DatabaseSync): void {
+export function markMemoryVectorRebuildRequired(db: EngineConnection): void {
   db.prepare(
     `INSERT INTO ${MEMORY_INDEX_META_TABLE} (key, value) VALUES (?, '1')
      ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
@@ -21,7 +21,7 @@ export function markMemoryVectorRebuildRequired(db: DatabaseSync): void {
 }
 
 export function resolvePersistedMemoryVectorIndexState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   vectorTable: string;
   metaVectorDims?: number;
   hasSemanticChunks: boolean;

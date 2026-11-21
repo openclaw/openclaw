@@ -377,7 +377,7 @@ export async function applyNonInteractivePluginProviderChoice(
       if (profiles.length > 0) {
         const selected =
           modelTarget === "utility"
-            ? result.agents?.defaults?.utilityModel?.trim()
+            ? resolveAgentModelPrimaryValue(result.agents?.defaults?.utilityModel)
             : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
         const modelRef = resolveSetupModel({
           label: providerChoice.provider.label,
@@ -436,7 +436,7 @@ export async function applyNonInteractivePluginProviderChoice(
   }
   const selectedModel =
     modelTarget === "utility"
-      ? result.agents?.defaults?.utilityModel?.trim()
+      ? resolveAgentModelPrimaryValue(result.agents?.defaults?.utilityModel)
       : resolveAgentModelPrimaryValue(result.agents?.defaults?.model);
   if (modelTarget === "utility") {
     if (!selectedModel) {

@@ -1,4 +1,3 @@
-/** Ensures runtime registry access stays inside plugin boundary and activation rules. */
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -19,31 +18,14 @@ const allowedRuntimeResolverRefs = new Set([
 ]);
 
 function listSourceFiles(dir: string): string[] {
-  const externalFiles = listExternalSourceFiles(dir);
-  if (externalFiles) {
-    return externalFiles;
-  }
-  return listSourceFilesByDirectory(dir);
-}
-
-function listExternalSourceFiles(dir: string): string[] | null {
-  return listGitSourceFiles(dir) ?? listFindSourceFiles(dir);
-}
-
-function listGitSourceFiles(dir: string): string[] | null {
   const relativeRoot = toRepoRelativePath(repoRoot, dir) || ".";
   const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
-  if (!files) {
-    return null;
+  if (files) {
+    return files
+      .map((file) => resolve(repoRoot, file))
+      .filter((filePath) => fs.existsSync(filePath) && isProductionTypeScriptFile(filePath))
+      .toSorted();
   }
-  return files
-    .map((file) => resolve(repoRoot, file))
-    .filter((filePath) => fs.existsSync(filePath))
-    .filter(isProductionTypeScriptFile)
-    .toSorted();
-}
-
-function listFindSourceFiles(dir: string): string[] | null {
   const result = spawnSync("find", [dir, "-type", "f", "-name", "*.ts"], {
     cwd: repoRoot,
     encoding: "utf8",
@@ -51,7 +33,7 @@ function listFindSourceFiles(dir: string): string[] | null {
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0) {
-    return null;
+    return listSourceFilesByDirectory(dir);
   }
   return result.stdout
     .split("\n")
@@ -63,23 +45,16 @@ function listFindSourceFiles(dir: string): string[] | null {
 }
 
 function listSourceFilesByDirectory(dir: string): string[] {
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir)) {
+  return fs.readdirSync(dir).flatMap((entry) => {
     if (entry === "node_modules" || entry === "dist") {
-      continue;
+      return [];
     }
     const path = resolve(dir, entry);
-    const stat = fs.statSync(path);
-    if (stat.isDirectory()) {
-      files.push(...listSourceFilesByDirectory(path));
-      continue;
+    if (fs.statSync(path).isDirectory()) {
+      return listSourceFilesByDirectory(path);
     }
-    if (!isProductionTypeScriptFile(path)) {
-      continue;
-    }
-    files.push(path);
-  }
-  return files;
+    return isProductionTypeScriptFile(path) ? [path] : [];
+  });
 }
 
 function isProductionTypeScriptFile(path: string): boolean {
@@ -103,17 +78,12 @@ describe("runtime plugin registry boundary", () => {
 
   it("keeps runtime registry resolution behind the loader boundary", () => {
     const offenders = listSourceFiles(resolve(repoRoot, "src"))
-      .map((path) => ({
-        path,
-        relativePath: relative(repoRoot, path),
-        source: readFileSync(path, "utf8"),
-      }))
       .filter(
         (file) =>
-          !allowedRuntimeResolverRefs.has(file.relativePath) &&
-          file.source.includes("resolveRuntimePluginRegistry"),
+          !allowedRuntimeResolverRefs.has(relative(repoRoot, file)) &&
+          readFileSync(file, "utf8").includes("resolveRuntimePluginRegistry"),
       )
-      .map((file) => file.relativePath);
+      .map((file) => relative(repoRoot, file));
 
     expect(offenders).toStrictEqual([]);
   });

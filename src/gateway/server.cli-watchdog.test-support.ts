@@ -1,88 +1,63 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  createClaudeCliGatewayConfig,
+  createClaudeCliGatewayEnv,
+} from "./server.chat-cli-auth.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
-
-const FREEZE_CONTROLLER = String.raw`const { execFileSync } = require("node:child_process");
-const fs = require("node:fs");
-const root = Number(process.argv[2]);
-const receipt = process.argv[3];
-const cliPid = Number(process.argv[4]);
-const identity = (pid) => {
-  try {
-    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim();
-  } catch {
-    return undefined;
-  }
-};
-if (root !== process.ppid || root <= 1) throw new Error("Controller must own its parent test process");
-const rows = execFileSync("/bin/ps", ["-axo", "pid=,ppid="], { encoding: "utf8" })
-  .trim().split("\n").map((line) => {
-    const [pid, parent] = line.trim().split(/\s+/).map(Number);
-    return { pid, parent };
-  });
-const owned = [{ pid: root, identity: identity(root) }];
-for (let index = 0; index < owned.length; index++) {
-  owned.push(...rows.filter((row) => row.parent === owned[index].pid && row.pid !== process.pid)
-    .map((row) => ({ pid: row.pid, identity: identity(row.pid) })));
-}
-if (!owned.some((entry) => entry.pid === cliPid)) throw new Error("CLI is not in the owned tree");
-const cliTree = [owned.find((entry) => entry.pid === cliPid)];
-for (let index = 0; index < cliTree.length; index++) {
-  cliTree.push(...rows.filter((row) => row.parent === cliTree[index].pid)
-    .map((row) => owned.find((entry) => entry.pid === row.pid)));
-}
-const stopped = [];
-let finished = false;
-const record = { root, controller: process.pid, owned, armedAt: Date.now() };
-const signal = (entry, name) => {
-  if (entry.identity && identity(entry.pid) === entry.identity) process.kill(entry.pid, name);
-};
-const resume = () => {
-  if (finished) return;
-  finished = true;
-  for (const entry of stopped.slice().reverse()) signal(entry, "SIGCONT");
-  record.resumedAt = Date.now();
-  fs.writeFileSync(receipt, JSON.stringify(record));
-};
-process.on("SIGTERM", () => { resume(); process.exit(143); });
-process.on("SIGINT", () => { resume(); process.exit(130); });
-process.on("exit", resume);
-process.on("disconnect", () => { resume(); process.exit(0); });
-process.on("message", (message) => {
-  if (message === "resume") { resume(); process.exit(0); }
-});
-fs.writeFileSync(receipt, JSON.stringify(record));
-// The test drives the Gateway's clock; its verified CLI tree stops in the OS.
-for (const entry of cliTree.slice().reverse()) {
-  signal(entry, "SIGSTOP");
-  stopped.push(entry);
-}
-const confirmStopped = () => {
-  if (finished) return;
-  for (const entry of stopped) {
-    const state = execFileSync("/bin/ps", ["-p", String(entry.pid), "-o", "state="], { encoding: "utf8" });
-    if (!state.includes("T")) {
-      if (state.includes("Z")) throw new Error("Owned CLI exited before stopping");
-      setImmediate(confirmStopped);
-      return;
-    }
-  }
-  record.stoppedAt = Date.now();
-  fs.writeFileSync(receipt, JSON.stringify(record));
-  process.send("stopped");
-};
-confirmStopped();
-`;
 
 export function createWatchdogClock() {
   let now = 0;
-  const timers = new Map<() => void, { at: number; callback: () => void }>();
+  let depth = 0;
+  let nativeDepth = 0;
+  const nativeNow = Date.now;
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  const timers = new Map<
+    Parameters<typeof clearTimeout>[0],
+    { at: number; callback: () => void }
+  >();
+  const run = <T>(work: () => T): T => {
+    if (depth > 0) {
+      return work();
+    }
+    depth++;
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (nativeDepth > 0 ? nativeNow() : now));
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delayMs, ...args) => {
+        if (nativeDepth > 0) {
+          return nativeSetTimeout(callback, delayMs, ...args);
+        }
+        // Use a genuine, already-cleared handle without leaving a native timer running.
+        const handle = nativeSetTimeout(() => {}, 0);
+        nativeClearTimeout(handle);
+        timers.set(handle, { at: now + (delayMs ?? 0), callback: () => callback(...args) });
+        return handle;
+      });
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+      if (nativeDepth > 0) {
+        nativeClearTimeout(handle);
+      } else {
+        timers.delete(handle);
+      }
+    });
+    try {
+      return work();
+    } finally {
+      clearSpy.mockRestore();
+      timeoutSpy.mockRestore();
+      nowSpy.mockRestore();
+      depth--;
+    }
+  };
   const advance = (ms: number) => {
     const target = now + ms;
     for (;;) {
@@ -90,21 +65,23 @@ export function createWatchdogClock() {
       if (!next || next[1].at > target) {
         break;
       }
-      const [cancel, timer] = next;
+      const [handle, timer] = next;
       now = Math.max(now, timer.at);
-      timers.delete(cancel);
-      timer.callback();
+      timers.delete(handle);
+      run(timer.callback);
     }
     now = target;
   };
   return {
     now: () => now,
-    setTimeout: (callback: () => void, delayMs: number) => {
-      const cancel = () => {
-        timers.delete(cancel);
-      };
-      timers.set(cancel, { at: now + delayMs, callback });
-      return cancel;
+    run,
+    native: <T>(work: () => T): T => {
+      nativeDepth++;
+      try {
+        return work();
+      } finally {
+        nativeDepth--;
+      }
     },
     // A suspended event loop observes elapsed time before it can dispatch overdue timers.
     jump: (ms: number) => {
@@ -136,7 +113,8 @@ let sessionId;
 let turns = 0;
 let resumed = false;
 const behavior = process.env.OPENCLAW_TEST_CLI_BEHAVIOR;
-const reply = () => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Preserved reply." }] } });
+const reply = (text = "Preserved reply.") => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+const complete = (result) => send({ type: "result", subtype: "success", is_error: false, result, session_id: sessionId });
 process.on("SIGCONT", () => {
   if (resumed) return;
   resumed = true;
@@ -146,7 +124,7 @@ process.on("SIGCONT", () => {
 // Completion and heartbeat delays use the same scenario clock as the host watchdog.
 process.on("SIGUSR1", () => {
   reply();
-  if (behavior === "complete") send({ type: "result", subtype: "success", is_error: false, result: "Preserved reply.", session_id: sessionId });
+  if (behavior === "complete") complete("Preserved reply.");
 });
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -157,11 +135,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     const index = process.argv.includes("--resume") ? process.argv.indexOf("--resume") : process.argv.indexOf("--session-id");
     sessionId = process.argv[index + 1];
     if (JSON.stringify(message.message).includes("Warm up this session")) {
-      send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Warm reply." }] } });
-      send({ type: "result", subtype: "success", is_error: false, result: "Warm reply.", session_id: sessionId });
+      reply("Warm reply.");
+      complete("Warm reply.");
       return;
     }
-    send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Working." }] } });
+    reply("Working.");
     publish("ready.json", { pid: process.pid, time: Date.now(), turns });
   }
 });`;
@@ -169,28 +147,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
 export async function createWatchdogFixture() {
   const state = await createOpenClawTestState({
     label: "cli-freeze",
-    env: {
-      PATH: undefined,
-      OPENCLAW_PATH_BOOTSTRAPPED: "1",
-      CLAUDE_CONFIG_DIR: undefined,
-      ANTHROPIC_API_KEY: undefined,
-      ANTHROPIC_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN: undefined,
-      CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: undefined,
-      CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR: undefined,
-      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-    },
+    env: createClaudeCliGatewayEnv(),
   });
   let gateway: Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>> | undefined;
   const cleanup = () =>
@@ -206,8 +163,6 @@ export async function createWatchdogFixture() {
       () => state.cleanup(),
     );
   try {
-    const controllerScript = state.path("freeze-tree.cjs");
-    await fs.writeFile(controllerScript, FREEZE_CONTROLLER);
     const binDir = state.path("bin");
     const nativeRoot = state.path("native");
     await Promise.all([fs.mkdir(binDir), fs.mkdir(nativeRoot)]);
@@ -226,30 +181,12 @@ export async function createWatchdogFixture() {
         },
       },
     });
-    const modelRef = "anthropic/claude-sonnet-4-6";
     const token = "freeze-fixture";
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: state.workspaceDir,
-          skipBootstrap: true,
-          utilityModel: "",
-          heartbeat: { every: "0m" },
-          model: { primary: modelRef },
-          models: { [modelRef]: { agentRuntime: { id: "claude-cli" } } },
-        },
-      },
-      plugins: {
-        enabled: true,
-        allow: ["anthropic"],
-        entries: {
-          anthropic: { enabled: true, config: { sessionCatalog: { enabled: false } } },
-        },
-        slots: { memory: "none" },
-      },
-      tools: { profile: "minimal" },
-      gateway: { auth: { mode: "token", token } },
-    } satisfies OpenClawConfig;
+    const cfg = createClaudeCliGatewayConfig(
+      state.workspaceDir,
+      "anthropic/claude-sonnet-4-6",
+      token,
+    );
     gateway = await gatewayFixture.startGatewayWithClient({
       cfg,
       configPath: state.configPath,
@@ -259,7 +196,7 @@ export async function createWatchdogFixture() {
     await gateway.server.startupSettled;
     const backends = resolveRuntimeCliBackends();
     expect(backends.some((backend) => backend.id === "claude-cli")).toBe(true);
-    return { state, gateway, backends, token, controllerScript, cleanup };
+    return { state, gateway, backends, token, cleanup };
   } catch (error) {
     return await runQaGatewayFixture(async () => {
       throw error;

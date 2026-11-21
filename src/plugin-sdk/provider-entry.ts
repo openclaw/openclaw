@@ -4,6 +4,10 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  isPluginManifestOnboardingScope,
+  normalizeProviderAssistantVisibility,
+} from "../plugins/manifest-capability-normalizers.js";
 import type {
   PluginManifestProviderAuthChoice,
   PluginManifestSetupProvider,
@@ -108,9 +112,6 @@ type ManifestProviderAuthOptions = Omit<
   promptMessage?: string;
 };
 
-/**
- * Catalog configuration accepted by the single-provider entry helper.
- */
 type SingleProviderPluginCatalogOptions =
   | {
       /**
@@ -258,16 +259,8 @@ function resolveManifestProviderAuth(params: {
     throw new Error(`Incomplete manifest API-key auth for provider "${params.providerId}"`);
   }
   const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
-  const assistantVisibility =
-    choice.assistantVisibility === "visible" ||
-    choice.assistantVisibility === "manual-only" ||
-    choice.assistantVisibility === "detected-only"
-      ? choice.assistantVisibility
-      : undefined;
-  const onboardingScopes = choice.onboardingScopes?.filter(
-    (scope): scope is NonNullable<ProviderPluginWizardSetup["onboardingScopes"]>[number] =>
-      scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
-  );
+  const assistantVisibility = normalizeProviderAssistantVisibility(choice.assistantVisibility);
+  const onboardingScopes = choice.onboardingScopes?.filter(isPluginManifestOnboardingScope);
   return [
     {
       methodId: choice.method,

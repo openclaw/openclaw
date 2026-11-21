@@ -1,10 +1,14 @@
-// Gateway credential secret-input resolver.
 // Resolves SecretRefs before applying Gateway credential precedence rules.
 import {
   cloneConfigWithResolutionFacts,
   resolveConfigSecretRef,
 } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { resolveDatabaseFamilyEngines } from "../infra/database-engine/registry.js";
 import { isSecretResolutionError } from "../secrets/resolve-errors.js";
 import { materializeSecretInput } from "../secrets/resolve-secret-input-string.js";
 import {
@@ -42,22 +46,47 @@ async function resolveConfiguredGatewaySecretInput(params: {
     value: configuredValue,
     defaults: params.config.secrets?.defaults,
   });
-  const value = await materializeSecretInput({
-    config: params.config,
-    value: ref ?? configuredValue,
-    env: params.env,
-    normalize: trimToUndefined,
-    onResolveRefError: (error) => {
-      if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
-        throw error;
-      }
-      throw new GatewaySecretRefUnavailableError(params.path);
-    },
-  });
+  const materialize = () =>
+    materializeSecretInput({
+      config: params.config,
+      value: ref ?? configuredValue,
+      env: params.env,
+      normalize: trimToUndefined,
+      onResolveRefError: (error) => {
+        if (isSecretResolutionError(error) && error.code === "SECRET_REF_REDACTED_VALUE") {
+          throw error;
+        }
+        throw new GatewaySecretRefUnavailableError(params.path);
+      },
+    });
+  // CLI RPC paths defer storage selection, so read store refs from a PostgreSQL state family
+  // instead of the default SQLite store. SQLite state and selected processes keep their path.
+  const value =
+    ref?.source === "store" &&
+    !getDatabaseEngineSelection() &&
+    resolveDatabaseFamilyEngines(params.config).state === "postgres"
+      ? await withDatabaseEngineSelection(
+          await resolveConfiguredDatabaseEngineSelection(params),
+          materialize,
+        )
+      : await materialize();
   if (!value) {
     throw new Error(`${params.path} resolved to an empty or non-string value.`);
   }
   return value;
+}
+
+async function resolveConfiguredDatabaseEngineSelection(params: {
+  config: OpenClawConfig;
+  path: SupportedGatewaySecretInputPath;
+  env: NodeJS.ProcessEnv;
+}) {
+  const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+  try {
+    return await resolveDatabaseEngineSelection(params.config, params.env);
+  } catch {
+    throw new GatewaySecretRefUnavailableError(params.path);
+  }
 }
 
 function hasConfiguredGatewaySecretRef(

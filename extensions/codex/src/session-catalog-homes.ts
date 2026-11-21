@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { scheduler } from "node:timers/promises";
 import {
@@ -8,12 +7,14 @@ import {
 } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/file-access-runtime";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
   resolveCodexAppServerUserHomeDir,
 } from "./app-server/auth-start-options.js";
 import { setCodexCatalogConnectionHomeResolver } from "./app-server/binding-connection.js";
+import type { CodexPluginConfig } from "./app-server/config-contracts.js";
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import type { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
 import { codexCatalogHomeIdFromCanonicalPath } from "./session-catalog-home-id.js";
@@ -35,7 +36,7 @@ type CatalogHomeCandidate = {
 type CatalogGeneration = {
   config: OpenClawConfig;
   assertCurrent: () => void;
-  pluginConfig: unknown;
+  pluginConfig: CodexPluginConfig;
   agentIds?: string[];
   agentDirs: Map<string, string>;
   paths: Map<string, string | Promise<string>>;
@@ -77,7 +78,7 @@ export function createCodexCatalogHomeResolver(params: {
             );
           }
         },
-        pluginConfig: params.getPluginConfig(),
+        pluginConfig: readCodexPluginConfig(params.getPluginConfig()),
         agentDirs: new Map(),
         paths: new Map(),
         directories: new Set(),
@@ -105,12 +106,7 @@ export function createCodexCatalogHomeResolver(params: {
     const discovery = canonicalPathFromExistingAncestor(resolved)
       .catch(() => resolved)
       .then(async (canonical) => {
-        if (
-          await fs.stat(canonical).then(
-            (stat) => stat.isDirectory(),
-            () => false,
-          )
-        ) {
+        if ((await safeStat(canonical))?.isDirectory()) {
           snapshot.directories.add(value);
         }
         snapshot.paths.set(value, canonical);
@@ -140,8 +136,7 @@ export function createCodexCatalogHomeResolver(params: {
           return candidates;
         }
       }
-      for (const entry of readCodexPluginConfig(snapshot.pluginConfig).sessionCatalog?.homes ??
-        []) {
+      for (const entry of snapshot.pluginConfig.sessionCatalog?.homes ?? []) {
         await scheduler.yield();
         const { path: home, label } = typeof entry === "string" ? { path: entry } : entry;
         await append(home, label);
@@ -262,7 +257,7 @@ export function createCodexCatalogHomeResolver(params: {
     forAgent: (agentId: string) => prepareAgentHomes(generation(), agentId, true),
     async forNode(requestedAgentId?: string): Promise<CodexNodeHome> {
       const snapshot = generation();
-      const configured = readCodexPluginConfig(snapshot.pluginConfig).appServer;
+      const configured = snapshot.pluginConfig.appServer;
       if (
         configured?.homeScope === "agent" ||
         (configured?.transport && configured.transport !== "stdio")

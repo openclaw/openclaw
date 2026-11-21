@@ -1,6 +1,4 @@
 /**
- * Realtime voice provider selection and config resolution.
- *
  * This adapter applies the generic capability-provider resolver to Talk
  * providers, including default model injection and per-call config overrides.
  */
@@ -12,16 +10,16 @@ import {
 } from "../plugin-sdk/provider-selection-runtime.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "./provider-contexts.js";
 import {
   readInternalRealtimeVoiceProviderApi,
   type InternalRealtimeVoiceProviderCapabilities,
 } from "./provider-internal.js";
 import { getRealtimeVoiceProvider, listRealtimeVoiceProviders } from "./provider-registry.js";
-import type {
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderResolveConfigContext,
-} from "./provider-types.js";
+import type { RealtimeVoiceProviderConfig } from "./provider-types.js";
 
 /** Resolved realtime voice provider plus provider-normalized config. */
 export type ResolvedRealtimeVoiceProvider = {
@@ -266,7 +264,7 @@ function requireRealtimeVoiceProvider(
   return resolution;
 }
 
-/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. Final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveConfiguredRealtimeVoiceProviderAsync for stored-credential providers. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveConfiguredRealtimeVoiceProvider(
   params: ResolveConfiguredRealtimeVoiceProviderParams,
 ): ResolvedRealtimeVoiceProvider {

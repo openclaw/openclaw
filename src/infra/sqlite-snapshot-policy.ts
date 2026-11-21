@@ -1,15 +1,12 @@
 import fs from "node:fs";
-import { getChildLogger } from "../logging/logger.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
-import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 
 export const MAX_SNAPSHOT_ATTEMPTS = 10;
+export const SQLITE_SOURCE_READ_BUSY_TIMEOUT_MS = 30_000;
 
 const SNAPSHOT_RETRY_BASE_MS = 10;
 const SNAPSHOT_RETRY_MAX_MS = 80;
-
-type SnapshotOperation = "online-backup" | "raw-copy";
-type SnapshotOutcome = "error" | "success";
 
 export function sqliteSnapshotSourceFileSize(pathname: string): number {
   try {
@@ -23,31 +20,24 @@ export function sqliteSnapshotSourceFileSize(pathname: string): number {
   }
 }
 
-export function emitSqliteSnapshotTelemetry(
-  fields: {
-    attempt: number;
-    copiedBytes: number;
-    durationMs: number;
-    operation: SnapshotOperation;
-    outcome: SnapshotOutcome;
-    owner: string;
-    sourceMainBytes: number;
-    sourceWalBytes: number;
-    waitMs?: number;
-  },
-  error?: unknown,
-): void {
-  try {
-    getChildLogger({ subsystem: "infra/sqlite-snapshot" }).debug(
-      {
-        ...fields,
-        errorCode:
-          error && typeof error === "object" && "code" in error ? String(error.code) : undefined,
-      },
-      "SQLite snapshot operation completed.",
+export function assertSqliteSnapshotSpace(pathname: string | null, destination: string): void {
+  if (pathname === null) {
+    return;
+  }
+  const requiredBytes = ["", "-wal", "-journal"].reduce(
+    (bytes, suffix) => bytes + sqliteSnapshotSourceFileSize(pathname + suffix),
+    0,
+  );
+  const space = tryReadDiskSpace(destination);
+  // Private recovery may write cloned pages. Admit the whole family conservatively,
+  // even when the filesystem could initially satisfy the copy with a cheap clone.
+  if (space && space.availableBytes < requiredBytes) {
+    throw Object.assign(
+      new Error(
+        `SQLite read-only snapshot needs ${formatDiskSpaceBytes(requiredBytes)} (${requiredBytes} bytes) near ${destination}, but only ${formatDiskSpaceBytes(space.availableBytes)} (${space.availableBytes} bytes) is available. Free disk space before retrying.`,
+      ),
+      { code: "ENOSPC" },
     );
-  } catch {
-    // Snapshot diagnostics must not replace the operation result.
   }
 }
 
@@ -59,34 +49,4 @@ export function waitForSnapshotRetrySync(attempt: number): void {
   if (delayMs > 0) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delayMs);
   }
-}
-
-export function createSnapshotAttemptReporter(
-  pathname: string,
-): (
-  operation: SnapshotOperation,
-  outcome: SnapshotOutcome,
-  prepared?: PreparedSqliteReadOnlyLocation,
-  error?: unknown,
-) => void {
-  const started = performance.now();
-  return (operation, outcome, prepared, error) => {
-    try {
-      emitSqliteSnapshotTelemetry(
-        {
-          attempt: 1,
-          copiedBytes: prepared ? fs.statSync(prepared.location).size : 0,
-          durationMs: Math.max(0, performance.now() - started),
-          operation,
-          outcome,
-          sourceMainBytes: sqliteSnapshotSourceFileSize(pathname),
-          sourceWalBytes: sqliteSnapshotSourceFileSize(`${pathname}-wal`),
-          owner: "path-reader",
-        },
-        error,
-      );
-    } catch {
-      // Snapshot diagnostics must not replace the operation result.
-    }
-  };
 }

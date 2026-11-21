@@ -515,6 +515,13 @@ falls back to that content, and an unusable alternative image becomes a text box
 Invalid template thumbnails are removed. Carousel thumbnails are removed together
 so every column keeps the same image layout. Text and action buttons stay intact.
 
+Quick replies discard malformed items before applying LINE’s 13-button limit and
+omit an empty button row. Message actions follow LINE’s surface rules: camera,
+photo-library, and location controls belong to quick replies; rich-menu switching
+does not belong to messages. Unsupported visible controls become an unavailable
+action, while invalid optional actions or desktop links are removed without
+disabling the rest of the card. Callback data is never truncated or rewritten.
+
 ## ACP support
 
 LINE supports ACP (Agent Communication Protocol) conversation bindings:

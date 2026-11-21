@@ -1,4 +1,5 @@
 import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-catalog-types";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * OpenAI-compatible reasoning-effort normalization. Different GPT families
  * expose different accepted effort enums, so callers map requested values here
@@ -6,6 +7,7 @@ import { resolveOpenAIThinkingApi } from "@openclaw/model-catalog-core/model-cat
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
 
 const ENABLED_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
@@ -20,6 +22,7 @@ type OpenAIReasoningModel = {
   api?: unknown;
   baseUrl?: unknown;
   compat?: unknown;
+  thinkingLevelMap?: unknown;
 };
 
 const GPT_5_REASONING_EFFORTS = ["minimal", "low", "medium", "high"] as const;
@@ -36,7 +39,12 @@ const GENERIC_REASONING_EFFORTS = ["low", "medium", "high"] as const;
 const CANONICAL_REASONING_EFFORTS = new Set(["none", ...ENABLED_REASONING_EFFORTS, "off"]);
 
 function normalizeModelId(id: string | null | undefined): string {
-  return normalizeLowercaseStringOrEmpty(id ?? "").replace(/-\d{4}-\d{2}-\d{2}$/u, "");
+  return (
+    normalizeLowercaseStringOrEmpty(id ?? "")
+      // Routers keep the upstream provider qualifier on the wire.
+      .replace(/^openai\//u, "")
+      .replace(/-\d{4}-\d{2}-\d{2}$/u, "")
+  );
 }
 
 /** Return whether a model is the GPT-5.4 mini family. */
@@ -59,10 +67,36 @@ export function isOpenAIGpt56Model(model: OpenAIReasoningModel): boolean {
   return /^gpt-5\.6(?:-|$)/u.test(id) || /^gpt-5\.6(?:\s|\(|-|$)/u.test(name);
 }
 
+/** Apply the native Chat Completions tool contract after callers qualify the endpoint and model ID. */
+export function applyOpenAICompletionsToolReasoning(
+  payload: Record<string, unknown>,
+  model: { id: string; name?: string },
+): void {
+  if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+    return;
+  }
+  // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
+  // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+  if (isOpenAIGpt56Model(model)) {
+    payload.reasoning_effort = "none";
+  } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+    delete payload.reasoning_effort;
+  }
+}
+
 /** Return whether a model has a known GPT-6 reasoning and sampling contract. */
 export function isOpenAIGpt6Model(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
-  return id === "gpt-6-astra" || id === "gpt-6-sol" || id === "gpt-6-luna" || id === "gpt-6.1-sol";
+  // GPT-6.2 migration contract (2026-11-17): mandatory reasoning and no sampling.
+  // https://developers.openai.com/api/docs/guides/latest-model
+  return (
+    id === "gpt-6-astra" ||
+    id === "gpt-6-sol" ||
+    id === "gpt-6-luna" ||
+    id === "gpt-6.1-sol" ||
+    id === "gpt-6.2-astra" ||
+    id === "gpt-6.2-sol"
+  );
 }
 
 /** Normalize user-facing reasoning effort names to API effort names. */
@@ -71,20 +105,6 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
   const folded = trimmed.toLowerCase();
   // Only fold canonical names; provider-native values can be case-sensitive.
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
-}
-
-function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
-    return [];
-  }
-  const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return normalizeUniqueTrimmedStringList(raw);
 }
 
 function isDisabledReasoningEffort(effort: string): boolean {
@@ -102,9 +122,15 @@ export function resolveOpenAISupportedReasoningEfforts(
 export function resolveOpenAIModelReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] | undefined {
-  const compatEfforts = readCompatReasoningEfforts(model.compat);
-  if (compatEfforts) {
-    return compatEfforts;
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+      return [];
+    }
+    const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (Array.isArray(raw)) {
+      return normalizeUniqueTrimmedStringList(raw);
+    }
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
@@ -112,6 +138,9 @@ export function resolveOpenAIModelReasoningEfforts(
   const supportsMax = api !== "openai-completions";
   // Azure deployment capabilities remain explicit until its GPT-6 contracts are verified.
   if (isOpenAIGpt6Model(model) && api !== "azure-openai-responses") {
+    if (id === "gpt-6.2-astra" || id === "gpt-6.2-sol") {
+      return GPT_6_MANDATORY_REASONING_EFFORTS;
+    }
     if (id === "gpt-6-astra" || id === "gpt-6.1-sol") {
       return supportsMax ? GPT_6_MANDATORY_REASONING_EFFORTS : GPT_CODEX_REASONING_EFFORTS;
     }
@@ -172,8 +201,18 @@ export function supportsOpenAIReasoningEffort(
   model: OpenAIReasoningModel,
   effort: string,
 ): boolean {
-  return resolveOpenAISupportedReasoningEfforts(model).includes(
-    normalizeOpenAIReasoningEffort(effort) as OpenAIApiReasoningEffort,
+  const requested = normalizeOpenAIReasoningEffort(effort);
+  const supported = resolveOpenAIModelReasoningEfforts(model);
+  if (supported !== undefined) {
+    return supported.includes(requested);
+  }
+  // A partial mapping declares its wire values without claiming a complete ladder.
+  return (
+    GENERIC_REASONING_EFFORTS.some((value) => value === requested) ||
+    [
+      ...Object.values(resolveOpenAIReasoningEffortMap({ compat: model.compat })),
+      ...Object.values(asRecord(model.thinkingLevelMap)),
+    ].some((value) => typeof value === "string" && value.trim() === requested)
   );
 }
 

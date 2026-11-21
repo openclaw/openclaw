@@ -132,7 +132,7 @@ struct ChatTalkButton: View {
 
     private func compactLabel(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
         ChatTalkButtonGlyph(control: self.control)
-            .font(OpenClawChatTypography.body(size: 14, weight: .semibold, relativeTo: .subheadline))
+            .font(.system(size: OpenClawChatTypography.scaled(14), weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: iconControlSize, height: iconControlSize)
             // Prominent filled circle so the mic reads as the primary action,

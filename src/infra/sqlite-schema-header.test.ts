@@ -1,6 +1,5 @@
 import childProcess, { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { Duplex } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -10,16 +9,26 @@ import {
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { createHotSqliteRollbackJournal } from "../../test/helpers/sqlite-hot-journal.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
+import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-schema-header-inspection.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { fork: vi.fn(actual.fork) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
-    syncBuiltinESMExports();
+    vi.mocked(childProcess.fork).mockReset();
     vi.unstubAllEnvs();
     cleanup();
   }),
@@ -32,6 +41,26 @@ beforeAll(async () => {
 afterAll(async () => {
   await receipts?.close();
 });
+
+function runSqliteChild(pathname: string, source: string) {
+  return spawnSync(process.execPath, ["--input-type=module", "-e", source, pathname], {
+    encoding: "utf8",
+    timeout: 5000,
+  });
+}
+
+const readFamily = (pathname: string, suffix: string) =>
+  [pathname, pathname + suffix].map((file) => fs.readFileSync(file));
+
+async function expectMigrationNotReady(
+  reader: ReturnType<typeof createAgentSchemaInspectionWorker>,
+  pathname: string,
+  supportedVersion: number,
+) {
+  await expect(
+    reader.inspect({ pathname, supportedVersion, requireStartupMigrationReadiness: true }),
+  ).resolves.toBeNull();
+}
 
 describe("schema-header native reader lifetime", () => {
   it("preserves the parent's rollback writer lock and excludes its uncommitted metadata", async () => {
@@ -50,12 +79,9 @@ describe("schema-header native reader lifetime", () => {
         version: 7,
         writerAppVersion: "committed",
       });
-      const competitor = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
+      const competitor = runSqliteChild(
+        pathname,
+        `
         import { DatabaseSync } from 'node:sqlite';
         const db = new DatabaseSync(process.argv[1]);
         try {
@@ -66,9 +92,6 @@ describe("schema-header native reader lifetime", () => {
           process.stdout.write('writer refused');
         } finally { db.close(); }
       `,
-          pathname,
-        ],
-        { encoding: "utf8", timeout: 5000 },
       );
       expect(competitor.status, competitor.stderr).toBe(0);
       expect(competitor.stdout).toBe("writer refused");
@@ -89,46 +112,23 @@ describe("schema-header native reader lifetime", () => {
       CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
       INSERT INTO schema_meta VALUES('primary','committed');
       PRAGMA user_version=7;
-      CREATE TABLE payload(data BLOB);
-      WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<32)
-      INSERT INTO payload SELECT zeroblob(8192) FROM n;
     `);
       database.close();
-      const crashed = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "-e",
-          `
-      import { DatabaseSync } from 'node:sqlite';
-      const db = new DatabaseSync(process.argv[1]);
-      db.exec("PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'; UPDATE payload SET data=zeroblob(16384);");
-      process.kill(process.pid, 'SIGKILL');
-    `,
-          pathname,
-        ],
-        { encoding: "utf8", timeout: 5000 },
-      );
-      expect(crashed.signal, crashed.stderr).toBe("SIGKILL");
-      const before = [pathname, pathname + "-journal"].map((file) => fs.readFileSync(file));
+      createHotSqliteRollbackJournal({
+        path: pathname,
+        mutationSql: "PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted'",
+      });
+      const before = readFamily(pathname, "-journal");
       const cacheRoot = dirs.make("sqlite-header-journal-cache-");
       vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
       await using schemaReader = createAgentSchemaInspectionWorker();
-      await expect(
-        schemaReader.inspect({
-          pathname,
-          supportedVersion: 7,
-          requireStartupMigrationReadiness: true,
-        }),
-      ).resolves.toBeNull();
+      await expectMigrationNotReady(schemaReader, pathname, 7);
       expect(await inspectSqliteSchemaHeaderInProcess(pathname)).toEqual({
         userVersion: 7,
         writerAppVersion: "committed",
       });
-      expect([pathname, pathname + "-journal"].map((file) => fs.readFileSync(file))).toEqual(
-        before,
-      );
-      expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+      expect(readFamily(pathname, "-journal")).toEqual(before);
+      expect(fs.readdirSync(resolvePrivateSqliteSnapshotStagingRoot())).toEqual([]);
     },
   );
   it.each([false, true])(
@@ -150,16 +150,10 @@ describe("schema-header native reader lifetime", () => {
       } finally {
         writer.close();
       }
-      const before = [pathname, pathname + "-wal"].map((file) => fs.readFileSync(file));
+      const before = readFamily(pathname, "-wal");
       if (!includeShm) {
         await using schemaReader = createAgentSchemaInspectionWorker();
-        await expect(
-          schemaReader.inspect({
-            pathname,
-            supportedVersion: 9,
-            requireStartupMigrationReadiness: true,
-          }),
-        ).resolves.toBeNull();
+        await expectMigrationNotReady(schemaReader, pathname, 9);
       }
       expect(await inspectSqliteSchemaHeaderInProcess(pathname)).toEqual({
         userVersion: 9,
@@ -174,7 +168,7 @@ describe("schema-header native reader lifetime", () => {
           ...(includeShm ? ["source.sqlite-shm"] : []),
         ].toSorted(),
       );
-      expect([pathname, pathname + "-wal"].map((file) => fs.readFileSync(file))).toEqual(before);
+      expect(readFamily(pathname, "-wal")).toEqual(before);
     },
   );
 
@@ -270,8 +264,9 @@ describe("schema-header native reader lifetime", () => {
         vi.stubEnv(key, value);
       }
       let nativePipe: Duplex | undefined;
-      const fork = childProcess.fork;
-      vi.spyOn(childProcess, "fork").mockImplementation((modulePath, args, options) => {
+      const { fork } =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
+      vi.mocked(childProcess.fork).mockImplementation((modulePath, args, options) => {
         const child = fork(modulePath, args, {
           ...options,
           stdio: ["ignore", "ignore", "ignore", "ipc", "pipe"],
@@ -284,7 +279,6 @@ describe("schema-header native reader lifetime", () => {
         nativePipe = pipe;
         return child;
       });
-      syncBuiltinESMExports();
       const release = () => {
         if (!nativePipe) {
           throw new Error("Native inspection fixture pipe was not observed");
@@ -293,7 +287,7 @@ describe("schema-header native reader lifetime", () => {
       };
       const controller = new AbortController();
       const cancellation = new Error("header inspection cancelled");
-      let settled = false;
+      const settled = vi.fn();
       await using schemaReader = createAgentSchemaInspectionWorker();
       const operation = schemaReader.inspect(
         {
@@ -304,26 +298,16 @@ describe("schema-header native reader lifetime", () => {
         },
         controller.signal,
       );
-      void operation.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      void operation.then(settled, settled);
       const waitForPhase = (phase: string) => {
+        const assertPhase = (error: unknown) => {
+          if (!fs.existsSync(marker(phase))) {
+            throw error;
+          }
+        };
         const settledBeforeReceipt = operation.then(
-          () => {
-            if (!fs.existsSync(marker(phase))) {
-              throw new Error(`Native inspection settled before ${phase}`);
-            }
-          },
-          (error: unknown) => {
-            if (!fs.existsSync(marker(phase))) {
-              throw error;
-            }
-          },
+          () => assertPhase(new Error(`Native inspection settled before ${phase}`)),
+          assertPhase,
         );
         return withinTest(
           Promise.race([receipts.waitFor(root, phase), settledBeforeReceipt]),
@@ -339,7 +323,7 @@ describe("schema-header native reader lifetime", () => {
         );
         release();
         await waitForPhase("close");
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         if (outcome === "cancel") {
           controller.abort(cancellation);
           await expect(operation).rejects.toBe(cancellation);
@@ -347,7 +331,7 @@ describe("schema-header native reader lifetime", () => {
           release();
           if (outcome === "close-failure") {
             await waitForPhase("failed-close");
-            expect(settled).toBe(false);
+            expect(settled).not.toHaveBeenCalled();
             release();
             await expect(operation).rejects.toThrow("native close failure");
           } else if (outcome === "read-failure") {

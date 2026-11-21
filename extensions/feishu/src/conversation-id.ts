@@ -3,12 +3,9 @@ import {
   normalizeOptionalString as normalizeText,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeFeishuTarget, stripFeishuProviderPrefix } from "./targets.js";
+import type { FeishuConfig } from "./types.js";
 
-export type FeishuGroupSessionScope =
-  | "group"
-  | "group_sender"
-  | "group_topic"
-  | "group_topic_sender";
+export type FeishuGroupSessionScope = NonNullable<FeishuConfig["groupSessionScope"]>;
 
 const SCOPED_CONVERSATION_PATTERNS = [
   ["group_topic_sender", /^(?<chatId>.+):topic:(?<topicId>[^:]+):sender:(?<senderOpenId>[^:]+)$/i],
@@ -69,10 +66,7 @@ export function parseFeishuDirectConversationId(raw: unknown): string | undefine
     return undefined;
   }
   const withoutProvider = stripFeishuProviderPrefix(target);
-  if (!withoutProvider) {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(withoutProvider);
+  const lowered = withoutProvider.toLowerCase();
   for (const prefix of ["user:", "dm:", "open_id:"]) {
     if (lowered.startsWith(prefix)) {
       return normalizeText(withoutProvider.slice(prefix.length));

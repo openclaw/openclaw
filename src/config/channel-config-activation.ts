@@ -28,10 +28,13 @@ export function hasMeaningfulChannelConfigShallow(value: unknown, channelId?: st
 
 /** Channel configuration can admit bundled plugin capabilities through an allowlist. */
 export function resolveChannelConfigActivationFacts(config: OpenClawConfig): string[] {
-  return Object.keys(config.channels ?? {})
-    .filter((channelId) => {
-      const channel = resolveChannelConfigRecord(config, channelId);
-      return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel, channelId);
-    })
-    .toSorted();
+  return (
+    Object.keys(config.channels ?? {})
+      .filter((channelId) => {
+        const channel = resolveChannelConfigRecord(config, channelId);
+        return channel?.enabled !== false && hasMeaningfulChannelConfigShallow(channel, channelId);
+      })
+      // oxlint-disable-next-line unicorn/no-array-sort -- filter created a private array.
+      .sort()
+  );
 }

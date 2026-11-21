@@ -2,8 +2,16 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { getChannelPlugin } from "./registry.js";
 import type { ChannelId } from "./types.public.js";
 
+function warnLegacyBindingMethod(method: string): void {
+  warnPluginSdkDeprecation({
+    family: "channel-conversation-bindings",
+    method,
+    replacement: `${method}Async`,
+  });
+}
+
 /**
- * @deprecated Use setChannelConversationBindingIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31.
+ * @deprecated Use setChannelConversationBindingIdleTimeoutBySessionKeyAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  *
  * Missing plugin support is a no-op because session commands fan out through
  * generic channel helpers while only some channels keep conversation bindings.
@@ -14,11 +22,7 @@ export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
   accountId?: string | null;
   idleTimeoutMs: number;
 }) {
-  warnPluginSdkDeprecation({
-    family: "channel-conversation-bindings",
-    method: "setChannelConversationBindingIdleTimeoutBySessionKey",
-    replacement: "setChannelConversationBindingIdleTimeoutBySessionKeyAsync",
-  });
+  warnLegacyBindingMethod("setChannelConversationBindingIdleTimeoutBySessionKey");
   const setIdleTimeoutBySessionKey = getChannelPlugin(params.channelId)?.conversationBindings
     ?.setIdleTimeoutBySessionKey;
   if (!setIdleTimeoutBySessionKey) {
@@ -32,7 +36,7 @@ export function setChannelConversationBindingIdleTimeoutBySessionKey(params: {
 }
 
 /**
- * @deprecated Use setChannelConversationBindingMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31.
+ * @deprecated Use setChannelConversationBindingMaxAgeBySessionKeyAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release.
  *
  * Returns the modified binding snapshots so command handlers can report the
  * concrete sessions affected by the generic channel command.
@@ -43,11 +47,7 @@ export function setChannelConversationBindingMaxAgeBySessionKey(params: {
   accountId?: string | null;
   maxAgeMs: number;
 }) {
-  warnPluginSdkDeprecation({
-    family: "channel-conversation-bindings",
-    method: "setChannelConversationBindingMaxAgeBySessionKey",
-    replacement: "setChannelConversationBindingMaxAgeBySessionKeyAsync",
-  });
+  warnLegacyBindingMethod("setChannelConversationBindingMaxAgeBySessionKey");
   const setMaxAgeBySessionKey = getChannelPlugin(params.channelId)?.conversationBindings
     ?.setMaxAgeBySessionKey;
   if (!setMaxAgeBySessionKey) {
@@ -74,11 +74,7 @@ export async function setChannelConversationBindingIdleTimeoutBySessionKeyAsync(
     return await adapter.setIdleTimeoutBySessionKeyAsync(input);
   }
   if (adapter?.setIdleTimeoutBySessionKey) {
-    warnPluginSdkDeprecation({
-      family: "channel-conversation-bindings",
-      method: "ChannelConversationBindingSupport.setIdleTimeoutBySessionKey",
-      replacement: "ChannelConversationBindingSupport.setIdleTimeoutBySessionKeyAsync",
-    });
+    warnLegacyBindingMethod("ChannelConversationBindingSupport.setIdleTimeoutBySessionKey");
     return adapter.setIdleTimeoutBySessionKey(input);
   }
   return [];
@@ -98,11 +94,7 @@ export async function setChannelConversationBindingMaxAgeBySessionKeyAsync(
     return await adapter.setMaxAgeBySessionKeyAsync(input);
   }
   if (adapter?.setMaxAgeBySessionKey) {
-    warnPluginSdkDeprecation({
-      family: "channel-conversation-bindings",
-      method: "ChannelConversationBindingSupport.setMaxAgeBySessionKey",
-      replacement: "ChannelConversationBindingSupport.setMaxAgeBySessionKeyAsync",
-    });
+    warnLegacyBindingMethod("ChannelConversationBindingSupport.setMaxAgeBySessionKey");
     return adapter.setMaxAgeBySessionKey(input);
   }
   return [];

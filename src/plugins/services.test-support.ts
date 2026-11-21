@@ -1,5 +1,4 @@
 import { onTestFinished, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
@@ -39,6 +38,7 @@ export const createServiceCronHost = (): PluginServiceCronHost => ({
     storage: "sqlite",
     sqlitePath: "/synthetic/openclaw.sqlite",
     jobs: 0,
+    reauthorizationRequired: 0,
     nextWakeAtMs: null,
   })),
   list: vi.fn<PluginServiceCronHost["list"]>(),
@@ -77,8 +77,6 @@ export function createRegistry(
   );
   return registry;
 }
-
-export const createServiceConfig = (): OpenClawConfig => ({});
 
 export function subscribePluginSessionsChanged(
   handler: (event: OpenClawPluginSessionsChangedEvent) => void,

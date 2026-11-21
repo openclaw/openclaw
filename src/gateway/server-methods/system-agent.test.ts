@@ -14,13 +14,14 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { defaultRuntime } from "../../runtime.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
+import * as hostedSetup from "../../system-agent/hosted-setup.runtime.js";
 import { SystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { detectSetupInference } from "../../system-agent/setup-inference-detect.js";
 import type { ActivateSetupInferenceParams } from "../../system-agent/setup-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { WizardSession } from "../../wizard/session.js";
 import * as setupAdmission from "./setup-admission.js";
 import { activateGatewaySetupInference } from "./system-agent-execution.js";
+import { makeContext as makeWizardContext } from "./system-agent-setup.test-support.js";
 import type { SystemAgentChatSession } from "./system-agent.js";
 import {
   callChat,
@@ -36,27 +37,14 @@ import {
   useSystemAgentGatewayTestFixture,
   verifiedConfig,
 } from "./system-agent.test-support.js";
-import type { GatewayRequestContext } from "./types.js";
 
 const {
   systemAgentTempDirs,
   requireVerifiedInferenceFixture,
-  requireVerifiedInferenceDeps,
+  installVerifiedConfigReader,
   makeVerifiedEngine,
   seededSession,
 } = useSystemAgentGatewayTestFixture();
-
-function makeWizardContext() {
-  const wizardSessions = new Map<string, WizardSession>();
-  return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
-  };
-}
 
 const waitOneTask = () =>
   new Promise<void>((resolve) => {
@@ -80,6 +68,7 @@ async function makeVerificationContext() {
 
 async function runSensitiveChannelSetup(_channel: string, prompter: WizardPrompter) {
   await prompter.text({ message: "Bot token", sensitive: true });
+  return "applied" as const;
 }
 
 function stubEngineOverview() {
@@ -341,16 +330,14 @@ describe("openclaw.chat", () => {
           }),
         );
         const before = fs.readFileSync(configPath, "utf8");
-        const detectInferenceBackends = vi.fn(async () => []);
+        const backends = await import("../../commands/onboard-inference.js");
+        const providerChoices = await import("../../plugins/provider-auth-choices.js");
+        const detectInferenceBackends = vi
+          .spyOn(backends, "detectInferenceBackends")
+          .mockResolvedValue([]);
+        vi.spyOn(providerChoices, "resolveManifestProviderAuthChoices").mockReturnValue([]);
         setupInferenceDetectionMocks.detectSetupInferenceIsolated.mockImplementation(
-          async (params) =>
-            detectSetupInference(
-              {
-                detectInferenceBackends,
-                resolveManifestProviderAuthChoices: () => [],
-              },
-              params?.agentId,
-            ),
+          async (params) => detectSetupInference(params?.agentId),
         );
         const { calls, respond } = makeRespond();
         await systemAgentHandler("openclaw.setup.detect")({
@@ -777,9 +764,9 @@ describe("openclaw.chat", () => {
   });
 
   it("persists completed turns from the engine's sanitized history", async () => {
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
       runAgentTurn: async () => ({ text: "Everything is healthy." }),
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -806,15 +793,13 @@ describe("openclaw.chat", () => {
   });
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
-    const engine = new SystemAgentChatEngine(
-      {
-        surface: "gateway",
-        verifiedInference: requireVerifiedInferenceFixture(),
-        deps: requireVerifiedInferenceDeps(),
-        runAgentTurn: async () => null,
-      },
-      { wizardDependencies: { runChannelSetupWizard: runSensitiveChannelSetup } },
-    );
+    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(runSensitiveChannelSetup);
+    installVerifiedConfigReader();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      verifiedInference: requireVerifiedInferenceFixture(),
+      runAgentTurn: async () => null,
+    });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
     const context = makeContext(sessions);
 
@@ -885,6 +870,7 @@ describe("openclaw.chat", () => {
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
       runAgentTurn: async () => {
@@ -892,7 +878,6 @@ describe("openclaw.chat", () => {
           new Error("workspace owner openclaw is missing from the roster"),
         ]);
       },
-      deps: requireVerifiedInferenceDeps(),
     });
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);

@@ -8,8 +8,8 @@ import {
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import type { TelegramBotDeps } from "./bot-deps.js";
 import { deliverFallback } from "./bot-message-dispatch-delivery.js";
 import {
   enqueueDraftEvent,
@@ -26,10 +26,9 @@ import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
 import { hasTelegramNetworkErrorCode, TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { editMessageTelegram } from "./send.js";
 
-type BufferedDispatchParams = Parameters<
-  TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
->[0];
+type BufferedDispatchParams = Parameters<typeof dispatchReplyWithBufferedBlockDispatcher>[0];
 type ReplyOptions = NonNullable<BufferedDispatchParams["replyOptions"]>;
 type CallbackPayload<K extends keyof ReplyOptions> =
   NonNullable<ReplyOptions[K]> extends (...args: infer Args) => unknown ? Args[0] : never;
@@ -81,9 +80,12 @@ export function createProgressState(
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
     toolIcons: true,
+    compactToolRuns: true,
     commentaryItalics: false,
     updateOnLineChange: true,
-    shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
+    // Tool-log rows start the card; quiet work status keeps the startup delay.
+    shouldStartNow: (line) =>
+      typeof line === "object" && line.kind !== "operation-status" && Boolean(line.toolName),
     update: async (streamText, options) => {
       if (
         config.streamMode === "progress" &&
@@ -153,7 +155,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
   if (
     turn.isSuperseded() ||
     turn.previewLifecycle.finalSucceeded ||
-    turn.progressContinuationAdopted ||
+    turn.finalHandoff !== undefined ||
     turn.context.ctxPayload.InboundEventKind === "room_event" ||
     !turn.previewLifecycle.finalFailed
   ) {
@@ -183,7 +185,7 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     if (turn.isSuperseded()) {
       return;
     }
-    await turn.telegramDeps.editMessageTelegram(turn.context.chatId, messageId, text, {
+    await editMessageTelegram(turn.context.chatId, messageId, text, {
       api: turn.bot.api,
       cfg: turn.cfg,
       accountId: turn.context.route.accountId,
@@ -229,6 +231,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
     reasoningGate: false,
     toolIcons: true,
+    compactToolRuns: true,
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {

@@ -53,7 +53,7 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 - Do not run the aggregate `pnpm test:parallels:npm-update` wrapper in parallel with individual macOS/Windows/Linux smoke lanes; it touches the same guest families and snapshots.
 - Do not start Parallels lanes while any unrelated host command may rebuild, clean, or restage `dist` (`pnpm build`, `pnpm ui:build`, `pnpm release:check`, `pnpm test:install:smoke`, npm pack/install smoke, or Docker lanes that run package/build prep). Run unrelated build/package gates first, let them finish, then start the VM matrix. Concurrent `dist` mutation can make host `npm pack` fail with missing files and wastes a full VM cycle.
 - While running or optimizing the matrix, record wall-clock duration per lane and the slowest phase from `/tmp/openclaw-parallels-*` logs. Use that timing before changing smoke order, timeouts, or helper behavior.
-- If a host build changes tracked generated files such as `src/canvas-host/a2ui/.bundle.hash`, stop before spending VM time. Commit the generated artifact separately or fix the generator drift, then rerun the smallest affected lane.
+- If a host build changes tracked generated files, stop before spending VM time. Commit the generated artifact separately or fix the generator drift, then rerun the smallest affected lane.
 - If `main` is moving under active multi-agent work, prefer a detached worktree pinned to one commit for long Parallels suites. The smoke scripts now verify the packed tgz commit instead of live `git rev-parse HEAD`, but a pinned worktree still avoids noisy rebuild/version drift during reruns.
 - For `openclaw update --channel dev` lanes, remember the guest clones GitHub `main`, not your local worktree. If a local fix exists but the rerun still fails inside the cloned dev checkout, do not treat that as disproof of the fix until the branch has been pushed.
 - For `prlctl exec`, pass the VM name before `--current-user` (`prlctl exec "$VM" --current-user ...`), not the other way around.
@@ -104,11 +104,12 @@ Use this skill for Parallels guest workflows and smoke interpretation. Do not lo
 
 - The Parallels smoke shell scripts should tolerate a literal bare `--` arg so `pnpm test:parallels:* -- --json` and similar forwarded invocations work without needing to call `bash scripts/e2e/...` directly.
 
-## macOS guest-command transport
+## macOS and Windows guest-command transport
 
-The macOS smoke and same-guest update lanes route guest commands through
+The macOS and Windows smoke and same-guest update lanes route guest commands through
 `scripts/e2e/parallels/parallels-exec.py`; macOS hosts need `python3` with its standard
-library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations, the
+library. On verified Parallels 27.0.0 (58628) and 27.0.2 (58673) Apple-silicon installations for macOS guests,
+and 27.1.0 (58756) for Windows guests, the
 client retains SDK login-job handles through result extraction, avoiding the
 host CLI's intermittent `PrlJob_GetRetCode: Invalid argument` failure. This error
 is not proof that the guest needs reinstallation or another Tools update.
@@ -116,11 +117,12 @@ is not proof that the guest needs reinstallation or another Tools update.
 Selection checks the actual `prlctl` on PATH and the installed CLI digest before
 execution. Other binaries retain ordinary `prlctl`; an SDK failure never retries
 through another transport. Root/current-user choice, raw shell-argument joining,
-stdin, stdout/stderr, and guest exit status are preserved. Callers still own shell
-quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
+stdin, stdout/stderr, and guest exit status are preserved. Windows calls pass `--windows`
+to keep the program separate from its raw arguments; POSIX calls retain shell joining.
+Callers still own shell quoting. Bare UUIDs use the CLI's braced lookup form; when that UUID is absent,
 the client checks the original literal VM name once before any guest execution.
 Other lookup failures are terminal. Snapshot/start/stop/input/capture and
-Linux/Windows execution are unchanged.
+Linux execution are unchanged.
 
 For an already-owned, running macOS guest, the same transport can be checked directly:
 
@@ -169,7 +171,7 @@ is verified. Restore the original snapshot and stop the guest after ad-hoc proof
   pnpm test:parallels:windows:prepare -- verify
   ```
 
-- `prepare` inventories before mutation, requires Parallels Tools and a logged-in desktop session, rejects OpenClaw CLI/app/tray/process state and WSL distros, creates a dated power-off clean-OS snapshot only on an unprepared guest, enables WSL/Virtual Machine Platform, installs the signed Microsoft WSL package, sets WSL 2 as default, installs Git and Node/npm, verifies the Windows hypervisor is active and no reboot is pending, and creates a power-off `pre-openclaw-native-e2e-<date>` snapshot.
+- `prepare` inventories before mutation, requires Parallels Tools and a logged-in desktop session, rejects OpenClaw CLI/app/tray/process state and WSL distros, creates a dated power-off clean-OS snapshot only on an unprepared guest, enables WSL/Virtual Machine Platform, installs the signed Microsoft WSL package, sets WSL 2 as default, installs Git, Node/npm, and the native addons' Visual C++ runtime, verifies the Windows hypervisor is active and no reboot is pending, and creates a power-off `pre-openclaw-native-e2e-<date>` snapshot. Existing baselines without `vcruntime140.dll` fail verification; prepare a new baseline name to upgrade them.
 - When today's E2E snapshot already exists, `prepare` restores and verifies that snapshot instead of trusting its name. Treat `prepare` as destructive to post-snapshot guest changes, just like an explicit restore.
 - Package elevation resolves the exact version and SHA-256 from Microsoft's official WinGet manifests, validates the expected Authenticode publisher, and copies into a freshly ACL-restricted SYSTEM directory before execution. Keep this generic mechanism here; companion-specific package choices stay in the Windows app repo.
 - Restore `clean`, `e2e`, an exact name, or an id:
@@ -198,7 +200,8 @@ is verified. Restore the original snapshot and stop the guest after ad-hoc proof
 - The Windows baseline-package helpers now auto-dump the latest guest `npm-cache/_logs/*-debug-0.log` tail on timeout or nonzero completion. Read that tail in the phase log before opening a second guest shell.
 - The same incremental npm-debug streaming also applies to `--upgrade-from-packed-main` / packaged-install baseline phases. A phase log that still says only `install.start`, `install.download-tgz`, `install.install-tgz` can still be healthy if the streamed npm-debug section shows registry fetches or bundled-plugin postinstall work.
 - Fresh Windows tgz install phases should also use the background PowerShell runner plus done-file/log-drain pattern; do not rely on one long-lived `prlctl exec ... powershell ... npm install -g` transport for package installs.
-- Windows release-to-dev helpers should log `where pnpm` before and after the update and require `where pnpm` to succeed post-update. That proves the updater installed or enabled `pnpm` itself instead of depending on a smoke-only bootstrap.
+- Windows release-to-dev helpers may log `where pnpm` diagnostically. The updater deliberately bootstraps a temporary pinned pnpm and cleans it up; permanent pnpm availability is not a post-update requirement. Require the installed OpenClaw CLI to resolve in a fresh shell using persisted Machine + User PATH.
+- Keep the CLI update deadline inside the Windows phase envelope, with separate setup/reporting and cleanup allowances. If setup consumes the command's reserved budget, refuse before launching the updater. Verify version, status, and fresh-shell CLI in the subsequent verification phase; retain the top-level host hard cap.
 - Fresh Windows ref-mode onboard should use the same background PowerShell runner plus done-file/log-drain pattern as the npm-update helper, including startup materialization checks, host-side timeouts on short poll `prlctl exec` calls, and retry-on-poll-failure behavior for transient transport flakes.
 - Fresh Windows daemon-health reachability should use `openclaw gateway probe --json` with a longer timeout and treat `ok: true` as success; full `gateway status --require-rpc` checks are too eager during initial startup on current main.
 - Fresh Windows ref-mode agent verification should set `OPENAI_API_KEY` in the PowerShell environment before invoking `openclaw.cmd agent`, for the same pairing-required fallback reason as macOS.

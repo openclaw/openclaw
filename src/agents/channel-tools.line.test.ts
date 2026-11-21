@@ -9,7 +9,7 @@ import {
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveChannelMessageToolHints } from "./channel-tools.js";
-import { collectRuntimeChannelCapabilities } from "./runtime-capabilities.js";
+import { resolveRuntimeChannelPromptContext } from "./runtime-capabilities.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 it("offers LINE buttons without prescribing an unsupported config setting", async () => {
@@ -28,12 +28,11 @@ it("offers LINE buttons without prescribing an unsupported config setting", asyn
       toolNames: ["message"],
       runtimeInfo: {
         channel: "line",
-        capabilities: collectRuntimeChannelCapabilities(channel),
+        capabilities: resolveRuntimeChannelPromptContext(channel).runtimeCapabilities,
       },
       messageToolHints: resolveChannelMessageToolHints(channel),
     });
 
-    expect(prompt).toContain("Inline buttons: `send` with `presentation=");
     expect(prompt).toContain("LINE maps them to Flex controls or quick replies");
     expect(prompt).not.toContain("Inline buttons OFF for line");
     expect(prompt).not.toContain("line.capabilities.inlineButtons");

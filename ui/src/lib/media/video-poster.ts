@@ -1,3 +1,5 @@
+import { listen } from "../reactive/listener.ts";
+
 type PosterEntry = {
   controller: AbortController;
   owners: Set<AbortSignal>;
@@ -35,9 +37,7 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
   const controller = new AbortController();
   const { signal } = controller;
   const promise = new Promise<Blob | null>((resolve) => {
-    let cleanup = () => {
-      queue.delete(start);
-    };
+    let cleanup: () => void = () => queue.delete(start);
     let settled = false;
     const finish = (blob: Blob | null) => {
       if (settled) {
@@ -49,7 +49,7 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
       resolve(blob);
     };
     const abort = () => finish(null);
-    signal.addEventListener("abort", abort, { once: true });
+    listen(signal, "abort", abort, { once: true });
     const start = () => {
       active += 1;
       const video = document.createElement("video");
@@ -67,6 +67,7 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
         active -= 1;
         schedule();
       };
+      // Completion aborts this signal, releasing every listener for the private video.
       const options = { once: true, signal };
       // Consume the initial compositor frame before waiting for the sought frame.
       const waitForFrame = (event: "loadedmetadata" | "seeked", next: () => void) => {
@@ -76,7 +77,7 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
             next();
           }
         };
-        video.addEventListener(event, ready, options);
+        listen(video, event, ready, options);
         frameCallback = video.requestVideoFrameCallback(ready);
       };
       const capture = () => {
@@ -100,8 +101,9 @@ function createPoster(src: string, width: number, height: number): PosterEntry {
       video.muted = true;
       video.playsInline = true;
       video.crossOrigin = "anonymous";
-      video.addEventListener("error", abort, options);
-      video.addEventListener(
+      listen(video, "error", abort, options);
+      listen(
+        video,
         "loadedmetadata",
         () => {
           if (
@@ -150,7 +152,8 @@ export function requestVideoPoster(params: {
   posters.set(key, owned);
   if (!owned.owners.has(signal)) {
     owned.owners.add(signal);
-    signal.addEventListener(
+    listen(
+      signal,
       "abort",
       () => {
         owned.owners.delete(signal);

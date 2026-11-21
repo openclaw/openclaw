@@ -3,7 +3,9 @@ import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
@@ -23,16 +25,26 @@ async function runSystemGatewayCommand(
   opts: SystemGatewayOpts,
   action: () => Promise<unknown>,
   successText?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
   const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
+    if (signal?.aborted) {
+      return;
+    }
     if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
+    if (signal?.aborted) {
+      return;
+    }
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (machineOutput) {
@@ -69,13 +81,13 @@ export function registerSystemCli(program: Command) {
       async () => {
         const text = normalizeOptionalString(opts.text) ?? "";
         if (!text) {
-          throw new Error(
+          throwExpectedCliError(
             `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
           );
         }
         const mode = normalizeOptionalString(opts.mode) ?? "next-heartbeat";
         if (mode !== "now" && mode !== "next-heartbeat") {
-          throw new Error("--mode must be now or next-heartbeat");
+          throwExpectedCliError("--mode must be now or next-heartbeat");
         }
         const sessionKey = normalizeOptionalString(opts.sessionKey);
         const result = await callGatewayFromCli(
@@ -108,8 +120,12 @@ export function registerSystemCli(program: Command) {
     addGatewayClientOptions(
       parent.command(name).description(description).option("--json", "Output JSON", false),
     ).action(async (opts: SystemGatewayOpts) => {
-      await runSystemGatewayCommand(opts, () =>
-        callGatewayFromCli(method, opts, params, { expectFinal: false }),
+      const signal = method === "set-heartbeats" ? undefined : getAsyncWorkSignal();
+      await runSystemGatewayCommand(
+        opts,
+        () => callGatewayFromCli(method, opts, params, { expectFinal: false }),
+        undefined,
+        signal,
       );
     });
   }

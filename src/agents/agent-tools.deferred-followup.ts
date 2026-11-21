@@ -17,12 +17,6 @@ function replaceDescription(tool: AnyAgentTool, description: string): AnyAgentTo
 
 const TOOL_FOLLOWUPS = [
   [
-    "gateway",
-    "openclaw",
-    "Never via shell.",
-    "Never via shell. Other system changes: use openclaw tool.",
-  ],
-  [
     "sessions_search",
     "sessions_history",
     "Search visible past sessions for matching user and assistant text.",
@@ -35,12 +29,6 @@ const TOOL_FOLLOWUPS = [
     "through a conversationRef from conversations_list.",
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
-  [
-    "sessions_yield",
-    "agents_wait",
-    "Collector runs require explicit collection instead.",
-    "Collector runs require agents_wait instead.",
-  ],
   [
     "nodes",
     "exec",

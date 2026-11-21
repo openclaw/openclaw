@@ -5,7 +5,6 @@ import {
   createUpstreamProviderCatalog,
   listProviderCatalogSnapshotEntries,
   projectProviderCatalogSnapshotRows,
-  type LiveModelCatalogFetchGuard,
   type ProviderCatalogSnapshot,
   type ProjectedUpstreamProviderCatalogModel as OpencodeZenModelDefinition,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -96,10 +95,8 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
 
 export async function prepareOpencodeZenModel(params: {
   modelId: string;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<ProviderRuntimeModel | undefined> {
-  const snapshot = await opencodeZenCatalog.refreshMetadata(params);
+  const snapshot = await opencodeZenCatalog.refreshMetadata({});
   return snapshot?.get(params.modelId.trim().toLowerCase())?.model;
 }
 

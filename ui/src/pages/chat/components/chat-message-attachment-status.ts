@@ -1,5 +1,9 @@
 import { t } from "../../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
+
+registerChatComposerEnglish();
+
 type AttachmentFailureCode = Extract<
   MessageContentItem,
   { type: "attachment_error" }
@@ -8,9 +12,11 @@ type AttachmentFailureCode = Extract<
 export function attachmentFailureReason(code: AttachmentFailureCode): string {
   return code === "file-not-found"
     ? t("chat.attachments.failureFileNotFound")
-    : code === "unsupported-format"
-      ? t("chat.attachments.failureUnsupportedFormat")
-      : code === "invalid-reference"
-        ? t("chat.attachments.failureInvalidReference")
-        : t("chat.attachments.failureDeliveryFailed");
+    : code === "file-too-large"
+      ? t("chat.attachments.failureFileTooLarge")
+      : code === "unsupported-format"
+        ? t("chat.attachments.failureUnsupportedFormat")
+        : code === "invalid-reference"
+          ? t("chat.attachments.failureInvalidReference")
+          : t("chat.attachments.failureDeliveryFailed");
 }

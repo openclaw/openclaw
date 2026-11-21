@@ -64,12 +64,14 @@ export async function prepareCurrentSessionEntry(params: {
   );
 }
 
+export { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 export {
-  abortEmbeddedAgentRun,
-  compactEmbeddedAgentSession,
-  isEmbeddedAgentRunAbortableForCompaction,
-  waitForEmbeddedAgentRunEnd,
-} from "../../agents/embedded-agent.js";
+  captureSessionTarget,
+  runSessionMutation,
+  SessionMutationPreemptTimeoutError,
+  waitForSessionControllerSettlement,
+} from "../../sessions/session-controller.lifecycle.js";
+export { isReplyOperationAbortable } from "../../sessions/session-controller.state.js";
 export { resolveFreshSessionTotalTokens } from "../../config/sessions.js";
 export { enqueueSystemEvent } from "../../infra/system-events.js";
 export { formatContextUsageShort, formatTokenCount } from "../status.js";

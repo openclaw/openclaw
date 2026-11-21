@@ -11,11 +11,12 @@ import {
 } from "../../infra/outbound/channel-target.js";
 export { optionalStringEnum, stringEnum } from "./string-enum.js";
 
-export function requesterProfileSchema() {
+export function requesterProfileSchema(options: { defaultToTurnOwner?: boolean } = {}) {
   return Type.Optional(
     Type.String({
-      description:
-        "The person's requester_profile.id, required when several people have steered this turn.",
+      description: options.defaultToTurnOwner
+        ? "An admitted participant's requester_profile.id. Omit to use the turn's original requester; selection does not establish human intent or approval."
+        : "The person's requester_profile.id, required when several people have steered this turn.",
     }),
   );
 }

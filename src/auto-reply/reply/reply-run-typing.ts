@@ -1,4 +1,7 @@
-import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-registry.js";
+import {
+  runAfterReplyOperationClear,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
 import type { TypingController } from "./typing.js";
 
 const typingByReplyOperation = new WeakMap<ReplyOperation, TypingController>();

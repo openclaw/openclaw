@@ -30,21 +30,6 @@ const MEDIA_URL_CAP = 25;
 // Hard timeout for gateway-side archive extraction.
 const TAR_UNPACK_TIMEOUT_MS = 60_000;
 
-function classifyArchiveFailure(error: unknown): {
-  auditCode: "TREE_TOO_LARGE" | "UNSAFE_ARCHIVE";
-  publicCode: "UNCOMPRESSED_TOO_LARGE" | "UNSAFE_ARCHIVE";
-  reason: string;
-} {
-  const reason = error instanceof Error ? error.message : String(error);
-  if (
-    error instanceof ArchiveLimitError &&
-    error.code !== ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT
-  ) {
-    return { auditCode: "TREE_TOO_LARGE", publicCode: "UNCOMPRESSED_TOO_LARGE", reason };
-  }
-  return { auditCode: "UNSAFE_ARCHIVE", publicCode: "UNSAFE_ARCHIVE", reason };
-}
-
 type UnpackedFileEntry = {
   relPath: string;
   size: number;
@@ -52,23 +37,6 @@ type UnpackedFileEntry = {
   sha256: string;
   localPath: string;
 };
-
-function savedDirectoryText(rootDir: string, files: UnpackedFileEntry[]): string {
-  const header = JSON.stringify({ rootDir, fileCount: files.length }).slice(0, -1);
-  return renderDirectoryText({
-    // Sort only the text projection; manifest and attachment order are unchanged.
-    entries: files.toSorted((a, b) => (a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0)),
-    project: ({ relPath, size }) => ({ relPath, size }),
-    render: (visible) => {
-      const manifest = `${header},"displayedCount":${visible.length},"files":[${visible.join(",")}]}`;
-      const omitted = files.length - visible.length;
-      // A stable footer lets each complete record consume more bytes, including the last one.
-      const note = `${omitted} saved files omitted from this text (byte limit or reserved path markers). All remain under rootDir; inspect them with available local file or directory capabilities.`;
-      return { manifest, text: `Fetched ${files.length} files.\n${manifest}\n${note}` };
-    },
-    fallback: `Fetched ${files.length} files. Saved paths omitted: rootDir cannot be represented safely within the 8192-byte text limit. No usable local path is shown.`,
-  });
-}
 
 export function createDirFetchTool(): AnyAgentTool {
   return {
@@ -130,16 +98,20 @@ export function createDirFetchTool(): AnyAgentTool {
           fs.rm(rootDir, { recursive: true, force: true }).catch(() => undefined),
           fs.rm(savedTar.path, { force: true }).catch(() => undefined),
         ]);
-        const failure = classifyArchiveFailure(error);
+        const reason = error instanceof Error ? error.message : String(error);
+        const tooLarge =
+          error instanceof ArchiveLimitError &&
+          error.code !== ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT;
         await audit({
           canonicalPath,
           decision: "error",
-          errorCode: failure.auditCode,
-          errorMessage: failure.reason,
+          errorCode: tooLarge ? "TREE_TOO_LARGE" : "UNSAFE_ARCHIVE",
+          errorMessage: reason,
           sizeBytes: tarBytes,
           sha256,
         });
-        throw new Error(`dir.fetch ${failure.publicCode}: ${failure.reason}`, { cause: error });
+        const code = tooLarge ? "UNCOMPRESSED_TOO_LARGE" : "UNSAFE_ARCHIVE";
+        throw new Error(`dir.fetch ${code}: ${reason}`, { cause: error });
       }
 
       const walked = await walkDirectory(rootDir, {
@@ -170,7 +142,23 @@ export function createDirFetchTool(): AnyAgentTool {
         sha256,
       });
 
-      return textResult(savedDirectoryText(rootDir, files), {
+      const header = JSON.stringify({ rootDir, fileCount: files.length }).slice(0, -1);
+      const text = renderDirectoryText({
+        // Sort only the text projection; manifest and attachment order are unchanged.
+        entries: files.toSorted((a, b) =>
+          a.relPath < b.relPath ? -1 : a.relPath > b.relPath ? 1 : 0,
+        ),
+        project: ({ relPath, size }) => ({ relPath, size }),
+        render: (visible) => {
+          const manifest = `${header},"displayedCount":${visible.length},"files":[${visible.join(",")}]}`;
+          const omitted = files.length - visible.length;
+          // A stable footer lets each complete record consume more bytes, including the last one.
+          const note = `${omitted} saved files omitted from this text (byte limit or reserved path markers). All remain under rootDir; inspect them with available local file or directory capabilities.`;
+          return { manifest, text: `Fetched ${files.length} files.\n${manifest}\n${note}` };
+        },
+        fallback: `Fetched ${files.length} files. Saved paths omitted: rootDir cannot be represented safely within the 8192-byte text limit. No usable local path is shown.`,
+      });
+      return textResult(text, {
         path: canonicalPath,
         rootDir,
         fileCount,

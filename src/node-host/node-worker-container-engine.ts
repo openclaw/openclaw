@@ -25,7 +25,7 @@ type NodeWorkerContainerExpectedOwner = {
   launchId: string;
 };
 
-const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.21.0-slim";
+const DEFAULT_NODE_WORKER_CONTAINER_IMAGE = "node:24.22.1-slim";
 // Burst launches can delay a healthy daemon's identity response; keep revalidation
 // fail-closed without treating temporary daemon contention as an unavailable engine.
 const CONTAINER_REVALIDATION_TIMEOUT_MS = 30_000;
@@ -216,7 +216,7 @@ async function resolveContainerEngineTarget(
 export async function resolveNodeWorkerContainerEngine(
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<NodeWorkerContainerEngine> {
-  const env = options.env ? Object.freeze({ ...process.env, ...options.env }) : process.env;
+  const env = options.env ? { ...process.env, ...options.env } : process.env;
   const failures: string[] = [];
   for (const id of ["docker", "podman"] as const) {
     const command = resolveExecutableFromPathEnv(id, env.PATH ?? process.env.PATH ?? "", env);
@@ -246,6 +246,22 @@ export async function resolveNodeWorkerContainerEngine(
   throw new Error(
     `nodeHost.workerRuns.isolation=container requires a working Docker-compatible engine; install and start Docker, OrbStack, or Podman, or set isolation to "none" (${failures.join("; ")})`,
   );
+}
+
+// A comma separates `--mount` fields, so a whole `key=value` field holding one has to be quoted
+// the way that parser reads it, with interior quotes doubled. Engine arguments are spawned
+// without a shell, so nothing else adds this quoting. Only comma-bearing fields are quoted:
+// those paths already fail on every engine, so no launch that works today changes shape. A path
+// holding a quote but no comma still fails on Docker as it does today; quoting it would break
+// Podman, which accepts that path, so that conflict is not settled here.
+function mountField(key: string, value: string): string {
+  const field = `${key}=${value}`;
+  return value.includes(",") ? `"${field.replaceAll('"', '""')}"` : field;
+}
+
+function bindMount(source: string, target: string, options: { readOnly?: boolean } = {}): string {
+  const spec = `type=bind,${mountField("source", source)},${mountField("target", target)}`;
+  return options.readOnly ? `${spec},readonly` : spec;
 }
 
 /** Create a labeled, stopped container so its durable identity exists before worker admission. */
@@ -281,14 +297,14 @@ export async function createNodeWorkerContainer(
     "--label",
     `${LAUNCH_LABEL}=${encodeLaunchLabel(params.launchId)}`,
     "--mount",
-    `type=bind,source=${bundleDir},target=${bundleDir},readonly`,
+    bindMount(bundleDir, bundleDir, { readOnly: true }),
     "--mount",
-    `type=bind,source=${params.workspaceDir},target=${params.workspaceDir}`,
+    bindMount(params.workspaceDir, params.workspaceDir),
     "--workdir",
     params.workspaceDir,
   ];
   if (params.homeDir && params.homeDir !== params.workspaceDir) {
-    args.push("--mount", `type=bind,source=${params.homeDir},target=${params.homeDir}`);
+    args.push("--mount", bindMount(params.homeDir, params.homeDir));
   }
   if (engine.id === "docker" && process.getuid && process.getgid) {
     args.push("--user", `${process.getuid()}:${process.getgid()}`);

@@ -60,16 +60,19 @@ enum AppKitTestSupport {
         diagnosticContext: String? = nil) async throws -> [AnyObject]
     {
         let before = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        // Prime SwiftUI's virtual children without depending on the application's changing window list.
+        // Prime SwiftUI's virtual children through the stable application role. Other suites can
+        // close windows while this request runs, making child/window attributes unavailable.
         let result = await Task.detached {
             let application = AXUIElementCreateApplication(ProcessInfo.processInfo.processIdentifier)
-            var children: CFTypeRef?
-            return AXUIElementCopyAttributeValue(application, kAXChildrenAttribute as CFString, &children)
+            var role: CFTypeRef?
+            let error = AXUIElementCopyAttributeValue(application, kAXRoleAttribute as CFString, &role)
+            return (error, role as? String)
         }.value
         let after = diagnosticContext.map { _ in self.accessibilityDiagnosticState(in: root) }
-        try #require(result == .success, diagnosticContext.map {
+        try #require(result.0 == .success, diagnosticContext.map {
             Comment(rawValue: "\($0) before=[\(before ?? "")] after=[\(after ?? "")]")
         })
+        try #require(result.1 == kAXApplicationRole as String)
         var elements: [AnyObject] = []
         var visited = Set<ObjectIdentifier>()
         func visit(_ element: AnyObject) {

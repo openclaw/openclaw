@@ -14,6 +14,7 @@ type OperationReply = Exclude<WorkerReply, { kind: "error" }>;
 type Task = {
   request: Operation;
   signal: AbortSignal;
+  isAdmissible?: () => boolean;
   abort: () => void;
   resolve: (reply: OperationReply) => void;
   reject: (error: unknown) => void;
@@ -55,6 +56,7 @@ export class InferenceWorkerClient {
     model: string,
     inputs: ClassificationInput[],
     signal: AbortSignal,
+    isAdmissible?: () => boolean,
   ): Promise<ClassificationResult[]> {
     signal.throwIfAborted();
     if (
@@ -89,6 +91,7 @@ export class InferenceWorkerClient {
         inputs,
       },
       signal,
+      isAdmissible,
     );
     return reply.results;
   }
@@ -115,12 +118,17 @@ export class InferenceWorkerClient {
   private enqueue(
     request: Extract<Operation, { kind: "classify" }>,
     signal: AbortSignal,
+    isAdmissible?: () => boolean,
   ): Promise<Extract<OperationReply, { kind: "results" }>>;
   private enqueue(
     request: Extract<Operation, { kind: "warm" }>,
     signal: AbortSignal,
   ): Promise<Extract<OperationReply, { kind: "warmed" }>>;
-  private enqueue(request: Operation, signal: AbortSignal): Promise<OperationReply> {
+  private enqueue(
+    request: Operation,
+    signal: AbortSignal,
+    isAdmissible?: () => boolean,
+  ): Promise<OperationReply> {
     signal.throwIfAborted();
     if (this.closed || this.queue.length + (this.active ? 1 : 0) >= 4) {
       return Promise.reject(new OnnxWorkerError("runtime"));
@@ -129,6 +137,7 @@ export class InferenceWorkerClient {
       const task: Task = {
         request,
         signal,
+        isAdmissible,
         resolve,
         reject,
         abort: () => this.cancel(task),
@@ -165,6 +174,16 @@ export class InferenceWorkerClient {
       return;
     }
     this.active = task;
+    try {
+      // Admission can close while queued. Reject only this task so unrelated
+      // requests keep their warm worker and FIFO position.
+      if (task.isAdmissible && !task.isAdmissible()) {
+        throw new OnnxWorkerError("runtime");
+      }
+    } catch (error) {
+      this.finish(undefined, error);
+      return;
+    }
     if (!this.worker) {
       try {
         this.start(task.request);

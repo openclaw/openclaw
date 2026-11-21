@@ -1,15 +1,9 @@
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeReactionScenario } from "./scenario-runtime-reaction.js";
 
 const baseUrl = "http://127.0.0.1:28008";
 const roomId = "!room:matrix-qa.test";
-
-function jsonResponse(body: unknown) {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
 
 describe("Matrix reaction scenarios", () => {
   afterEach(() => {
@@ -65,7 +59,6 @@ describe("Matrix reaction scenarios", () => {
     const observedEvents: Parameters<typeof observeReactionScenario>[0]["observedEvents"] = [];
     const result = await observeReactionScenario({
       accessToken: "driver-token",
-      actorId: "driver",
       actorUserId: "@driver:matrix-qa.test",
       baseUrl,
       observedEvents,

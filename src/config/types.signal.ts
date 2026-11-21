@@ -1,13 +1,15 @@
+import type { ReactionLevel } from "../utils/reaction-level.js";
 import type { ReplyToMode } from "./types.base.js";
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
-export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalReactionLevel = ReactionLevel;
 export type SignalTransportConfig =
   | {
       kind: "managed-native";
@@ -71,8 +73,4 @@ export type SignalAccountConfig = Omit<CommonChannelMessagingConfig, "mentionPat
     };
   };
 
-export type SignalConfig = {
-  accounts?: Record<string, SignalAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & SignalAccountConfig;
+export type SignalConfig = MultiAccountChannelConfig<SignalAccountConfig>;

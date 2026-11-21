@@ -1,12 +1,5 @@
-import type {
-  CreateGhosttyTerminalOptions,
-  GhosttyTerminalController,
-} from "@openclaw/libterminal/browser";
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import type { Locator, Page } from "playwright";
-
-type TerminalFactory = (
-  options: CreateGhosttyTerminalOptions,
-) => Promise<GhosttyTerminalController>;
 
 declare global {
   interface Window {
@@ -14,36 +7,32 @@ declare global {
   }
 }
 
-/** Observe the public factory before connection, including after full-page navigation. */
+/** Observe the real source runtime at its module boundary, including after navigation. */
 export async function observeTerminalControllers(page: Page): Promise<void> {
   await page.addInitScript(() => {
-    const controllers = new WeakMap<HTMLElement, GhosttyTerminalController>();
-    const observedHosts = new WeakSet<HTMLElement>();
-    Object.defineProperty(window, "terminalControllersForTest", { value: controllers });
-    const define = customElements.define.bind(customElements);
-    customElements.define = function (name, constructor, options) {
-      if (name === "openclaw-terminal-panel") {
-        const prototype = constructor.prototype as HTMLElement & {
-          connectedCallback?: (this: HTMLElement) => void;
-        };
-        const connected = prototype.connectedCallback;
-        prototype.connectedCallback = function () {
-          const host = this as HTMLElement & { createTerminalController: TerminalFactory };
-          if (!observedHosts.has(host)) {
-            observedHosts.add(host);
-            const create = host.createTerminalController;
-            host.createTerminalController = async function (terminalOptions) {
-              const controller = await create.call(this, terminalOptions);
-              controllers.set(terminalOptions.parent, controller);
-              return controller;
-            };
-          }
-          connected?.call(this);
-        };
-        customElements.define = define;
-      }
-      define(name, constructor, options);
-    };
+    Object.defineProperty(window, "terminalControllersForTest", {
+      value: new WeakMap<HTMLElement, GhosttyTerminalController>(),
+    });
+  });
+  await page.route(/\/src\/components\/terminal\/terminal-runtime\.ts(?:\?|$)/, (route) => {
+    const original = new URL(route.request().url());
+    if (original.searchParams.has("terminal-observer-original")) {
+      return route.continue();
+    }
+    original.searchParams.set("terminal-observer-original", "1");
+    const source = JSON.stringify(original.href);
+    return route.fulfill({
+      contentType: "text/javascript",
+      body: `
+        export * from ${source};
+        import { createIsolatedGhosttyTerminal as create } from ${source};
+        export async function createIsolatedGhosttyTerminal(...args) {
+          const controller = await create(...args);
+          window.terminalControllersForTest.set(args[0].parent, controller);
+          return controller;
+        }
+      `,
+    });
   });
 }
 

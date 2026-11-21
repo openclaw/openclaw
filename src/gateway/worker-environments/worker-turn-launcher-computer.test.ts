@@ -27,29 +27,13 @@ import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-con
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import * as githubBinding from "./worker-github-binding.js";
 import {
-  createWorkerTurnTunnel,
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  root,
-  sessionTarget,
-  withWorkerCompactionAdoption,
-  type WorkerTurnEnvironmentService,
-  OWNER_EPOCH,
-  SESSION_ID,
-  SESSION_KEY,
-  attachedEnvironment,
-  credential,
-  cleanupWorkerTurnLauncherTest,
-  computerDescriptor,
-  createWorkerSessionTurnPlacementProvider,
-  readLaunchToolNames,
-  measureLaunchTurn,
-  placements,
-  seedActivePlacement,
-  setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
-} from "./worker-turn-launcher.test-support.js";
+  createLauncher,
+  executeTurn,
+  expectUncalled,
+  localResult as defaultLocalResult,
+  runIdentity,
+} from "./worker-turn-launcher-flow.test-support.js";
+import * as fx from "./worker-turn-launcher.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -59,12 +43,47 @@ vi.mock("../github-publication-discovery.js", () => ({
   readGitHubPublicationFact: readGitHubFact,
 }));
 
+const primaryModes = [
+  "provider",
+  "overload",
+  "http-507",
+  "abort",
+  "timeout",
+  "returned",
+  "returned-abort",
+  "returned-timeout",
+  "returned-success",
+] as const;
+const remoteCase = (
+  label: string,
+  nodeDeviceId: string | undefined,
+  providerId = "device",
+  overrides: {
+    primary?: (typeof primaryModes)[number];
+    closeFails?: boolean;
+    pauseSkillCleanup?: boolean;
+  } = {},
+) => ({ label, nodeDeviceId, providerId, closeFails: false, ...overrides });
+
+function environmentFor(
+  tunnel: WorkerTunnelHandle,
+  overrides: Partial<fx.WorkerTurnEnvironmentService> = {},
+): fx.WorkerTurnEnvironmentService {
+  return {
+    ...fx.unusedEnvironments(),
+    get: vi.fn(fx.attachedEnvironment),
+    acquireTurnCredential: vi.fn(async () => fx.credential()),
+    startTunnel: vi.fn(async () => tunnel),
+    ...overrides,
+  };
+}
+
 describe("worker launch capabilities", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  beforeEach(() => {
+  beforeEach(async () => {
+    await fx.setupWorkerTurnLauncherTest();
     readGitHubFact.mockReset().mockReturnValue({ available: false });
   });
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  afterEach(() => fx.cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { label: "available", available: true, revoked: false },
@@ -73,7 +92,7 @@ describe("worker launch capabilities", () => {
   ])(
     "carries only a current GitHub identity in the launch envelope ($label)",
     async ({ available, revoked }) => {
-      await seedActivePlacement();
+      await fx.seedActivePlacement();
       const github: WorkerGitHubLaunchBinding = {
         token: "synthetic-turn-bound-github-token",
         login: "shared-bot",
@@ -107,7 +126,7 @@ describe("worker launch capabilities", () => {
           throw new WorkerRunnerCapacityError();
         },
       );
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn: async (request) => {
           request.assertCurrent?.();
           return dispatchLaunch(request);
@@ -117,25 +136,22 @@ describe("worker launch capabilities", () => {
             expect(plan.assignment.github).toEqual(github);
             current = false;
           }
-          return measureLaunchTurn(plan, claim);
+          return fx.measureLaunchTurn(plan, claim);
         },
         stageAttachments: vi.fn(),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
       });
-      const environments = {
-        ...unusedEnvironments(),
-        get: vi.fn(() => attachedEnvironment()),
-        acquireTurnCredential: vi.fn(async () => credential()),
-        startTunnel: vi.fn(async () => tunnel),
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const execution = provider.executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
-        turn("run-github"),
-        vi.fn(),
-      );
+      let publicationOffered = false;
+      const environments = environmentFor(tunnel, {
+        createGatewayTools: async ({ prepareTools }) => {
+          const tools = (await prepareTools?.([])) ?? [];
+          publicationOffered = tools.some((tool) => tool.name === "github_publish");
+          return tools;
+        },
+      });
+      const provider = createLauncher({ environments });
+      const execution = executeTurn(provider, "run-github", vi.fn());
       if (revoked) {
         await expect(execution).rejects.toBe(revokedError);
         expect(dispatchLaunch).not.toHaveBeenCalled();
@@ -143,7 +159,9 @@ describe("worker launch capabilities", () => {
         await expect(execution).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(dispatchLaunch).toHaveBeenCalledOnce();
       }
+      expect(publicationOffered).toBe(true);
       expect(controller.signal.aborted).toBe(available);
+      expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     },
   );
 
@@ -156,12 +174,12 @@ describe("worker launch capabilities", () => {
   ])(
     "grants computer with negotiated features, supervisor vocabulary, and model vision (%j)",
     async ({ missingFeature, modelHasVision, supervisorAdmitsComputer = true, allowed }) => {
-      await seedActivePlacement();
-      const environment = attachedEnvironment();
+      await fx.seedActivePlacement();
+      const environment = fx.attachedEnvironment();
       if (!missingFeature) {
         environment.bootstrapReceipt!.protocolFeatures.push(WORKER_COMPUTER_PROTOCOL_FEATURE);
       }
-      const computer = computerDescriptor("worker-desktop");
+      const computer = fx.computerDescriptor("worker-desktop");
       const image = {
         type: "image" as const,
         data: createSolidPngBuffer(2, 2, { r: 255, g: 0, b: 0 }).toString("base64"),
@@ -181,35 +199,26 @@ describe("worker launch capabilities", () => {
         expect(plan.assignment.toolAuthority.allowedToolNames.includes("computer")).toBe(allowed);
         throw new WorkerRunnerCapacityError();
       });
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
         readLaunchToolNames: async () =>
-          (await readLaunchToolNames()).filter(
+          (await fx.readLaunchToolNames()).filter(
             (name) => supervisorAdmitsComputer || name !== "computer",
           ),
         stageAttachments: vi.fn(async () => {}),
-        quiesceWorkspace: vi.fn(),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(fx.reconcileUnchangedLocalWorkspace),
       });
-      const environments = {
-        ...unusedEnvironments(),
+      const environments = environmentFor(tunnel, {
         get: vi.fn(() => environment),
-        acquireTurnCredential: vi.fn(async () => credential()),
-        startTunnel: vi.fn(async () => tunnel),
         prepareComputer,
-      };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      });
+      const provider = createLauncher({ environments });
       await expect(
         provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-computer",
-          },
-          { ...turn("run-computer"), toolsAllow: ["computer"], modelHasVision, images: [image] },
-          async () => ({ meta: { durationMs: 1 } }),
+          runIdentity("run-computer"),
+          { ...fx.turn("run-computer"), toolsAllow: ["computer"], modelHasVision, images: [image] },
+          defaultLocalResult,
         ),
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
@@ -218,102 +227,61 @@ describe("worker launch capabilities", () => {
         !missingFeature && modelHasVision !== false ? 1 : 0,
       );
       expect(bind).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
     },
   );
 
-  it.each<{
-    label: string;
-    nodeDeviceId?: string;
-    providerId: string;
-    closeFails: boolean;
-    primary?:
-      | "provider"
-      | "overload"
-      | "http-507"
-      | "abort"
-      | "timeout"
-      | "returned"
-      | "returned-abort"
-      | "returned-timeout"
-      | "returned-success";
-    pauseSkillCleanup?: boolean;
-  }>([
-    { label: "SSH", providerId: "fake", closeFails: false },
-    {
-      label: "paired-device",
-      nodeDeviceId: "paired-node-1",
-      providerId: "device",
-      closeFails: false,
-    },
-    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox", closeFails: false },
-    { label: "cloud-node", nodeDeviceId: "cloud-node-1", providerId: "crabbox", closeFails: true },
-    {
-      label: "paused skill cleanup",
-      nodeDeviceId: "paired-node-1",
-      providerId: "device",
-      closeFails: false,
-      pauseSkillCleanup: true,
-    },
-    ...(
-      [
-        "provider",
-        "overload",
-        "http-507",
-        "abort",
-        "timeout",
-        "returned",
-        "returned-abort",
-        "returned-timeout",
-        "returned-success",
-      ] as const
-    ).flatMap((primary) =>
-      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) => ({
-        label: primary,
-        nodeDeviceId: "paired-node-1",
-        providerId: "device",
-        primary,
-        closeFails,
-      })),
+  it.each([
+    remoteCase("SSH", undefined, "fake"),
+    remoteCase("paired-device", "paired-node-1"),
+    remoteCase("cloud-node", "cloud-node-1", "crabbox"),
+    remoteCase("cloud-node", "cloud-node-1", "crabbox", { closeFails: true }),
+    remoteCase("paused skill cleanup", "paired-node-1", "device", { pauseSkillCleanup: true }),
+    ...primaryModes.flatMap((primary) =>
+      (primary.startsWith("returned") ? [true] : [false, true]).map((closeFails) =>
+        remoteCase(primary, "paired-node-1", "device", { primary, closeFails }),
+      ),
     ),
   ])(
     "settles $label remote-exec output and restores attachment prompts before cleanup (close fails: $closeFails)",
     async ({ nodeDeviceId, providerId, closeFails, primary, pauseSkillCleanup }) => {
       const returnedInterruption = primary === "returned-abort" || primary === "returned-timeout";
+      const returnedError = {
+        kind: "incomplete_turn" as const,
+        message: "recorded primary failure",
+        fallbackSafe: true,
+      };
       const localResult: EmbeddedAgentRunResult = {
         payloads: [
-          {
-            text: primary === "returned" ? "recorded primary failure" : "local remote reply",
-            ...(primary === "returned" ? { isError: true } : {}),
-          },
+          primary === "returned"
+            ? { text: returnedError.message, isError: true }
+            : { text: "local remote reply" },
         ],
-        ...(returnedInterruption || primary === "returned-success"
-          ? { didSendViaMessagingTool: true, messagingToolSentTexts: ["already delivered"] }
-          : {}),
-        meta: {
-          durationMs: 17,
-          ...(primary === "returned"
-            ? {
-                error: {
-                  kind: "incomplete_turn",
-                  message: "recorded primary failure",
-                  fallbackSafe: true,
-                },
-                replayInvalid: false,
-                livenessState: "blocked",
-                toolSummary: { calls: 1, tools: ["computer"], failures: 1 },
-              }
-            : {}),
-          ...(returnedInterruption
-            ? {
-                aborted: true,
-                replayInvalid: true,
-                providerStarted: true,
-                stopReason: primary === "returned-timeout" ? "timeout" : "aborted",
-                ...(primary === "returned-timeout" ? { timeoutPhase: "provider" } : {}),
-              }
-            : {}),
-        },
+        meta: { durationMs: 17 },
       };
+      if (returnedInterruption || primary === "returned-success") {
+        localResult.didSendViaMessagingTool = true;
+        localResult.messagingToolSentTexts = ["already delivered"];
+      }
+      if (primary === "returned") {
+        Object.assign(localResult.meta, {
+          error: returnedError,
+          replayInvalid: false,
+          livenessState: "blocked",
+          toolSummary: { calls: 1, tools: ["computer"], failures: 1 },
+        });
+      }
+      if (returnedInterruption) {
+        Object.assign(localResult.meta, {
+          aborted: true,
+          replayInvalid: true,
+          providerStarted: true,
+          stopReason: primary === "returned-timeout" ? "timeout" : "aborted",
+        });
+        if (primary === "returned-timeout") {
+          localResult.meta.timeoutPhase = "provider";
+        }
+      }
       const providerFailure =
         primary === "provider"
           ? ({ reason: "auth", status: 401 } as const)
@@ -343,46 +311,27 @@ describe("worker launch capabilities", () => {
         attachErrorDiagnostic(primaryError, "original provider diagnostic");
         Object.freeze(primaryError);
       }
-      const remote = path.join(await realpath(root), "remote");
+      const remote = path.join(await realpath(fx.root), "remote");
       await mkdir(remote);
       const bytes = Buffer.from("remote attachment");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
       const inputTurn = {
-        ...turn("run-remote-exec"),
+        ...fx.turn("run-remote-exec"),
         transcriptPrompt: "Canonical transcript request",
         media: [{ path: saved.path, contentType: "text/plain" }],
       };
       const originalPrompt = inputTurn.prompt;
-      await seedActivePlacement("remote-exec", remote);
+      const expectRestoredPrompts = () =>
+        expect(inputTurn).toMatchObject({
+          prompt: originalPrompt,
+          transcriptPrompt: "Canonical transcript request",
+        });
+      await fx.seedActivePlacement("remote-exec", remote);
       const order: string[] = [];
+      let quiescenceCalls = 0;
+      let reconciliationCalls = 0;
       const launchTurn = vi.fn();
-      const quiesceWorkspace = vi.fn(async () => {
-        order.push("quiesce");
-        return {
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {
-            order.push("resume");
-          }),
-        };
-      });
-      const reconcileWorkspace = vi.fn(
-        async (request: Parameters<WorkerTunnelHandle["reconcileWorkspace"]>[0]) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          order.push("reconcile");
-          await request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: vi.fn(async () => {}),
-            verifyLocalStable: vi.fn(async () => {}),
-            publishStagedResult: async () => {},
-            discardPreparedStagedResult: async () => {},
-          };
-        },
-      );
-      const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
+      const tunnel: WorkerTunnelHandle = fx.createWorkerTurnTunnel({
         launchTurn,
         runWorkspaceCommand: async (command) =>
           await runCommandWithTimeout([...command.argv], {
@@ -391,60 +340,78 @@ describe("worker launch capabilities", () => {
             timeoutMs: 5_000,
             signal: command.signal,
           }),
-        quiesceWorkspace,
+        quiesceWorkspace: vi.fn(async () => {
+          const phase = quiescenceCalls++ === 0 ? "pre-turn" : "completed-turn";
+          order.push(`${phase}:quiesce`);
+          return {
+            assertActive: vi.fn(async () => {}),
+            resume: vi.fn(async () => {
+              order.push(`${phase}:resume`);
+            }),
+          };
+        }),
         syncWorkspace: vi.fn(),
-        reconcileWorkspace,
+        reconcileWorkspace: vi.fn(async (request) => {
+          const phase = reconciliationCalls++ === 0 ? "pre-turn" : "completed-turn";
+          order.push(`${phase}:reconcile`);
+          return fx.reconcileUnchangedLocalWorkspace(request);
+        }),
       });
       const secret = ["synthetic", "cleanup", "credential"].join("-");
       const cleanupDetail = `native close failed: HTTP 401 request timed out Authorization: Bearer ${secret} ${"x".repeat(3000)}`;
       const cleanupError = new AggregateError([new Error(cleanupDetail)], "computer close failed");
       const closeComputer = vi.fn(async () => {
-        expect(inputTurn.prompt).toBe(originalPrompt);
-        expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+        expectRestoredPrompts();
         order.push("close");
         if (closeFails) {
           throw cleanupError;
         }
       });
       const computer: PreparedWorkerComputer = {
-        descriptor: computerDescriptor(nodeDeviceId ?? "unused-ssh-node"),
+        descriptor: fx.computerDescriptor(nodeDeviceId ?? "unused-ssh-node"),
         bind: () => {
           throw new Error("unexpected computer binding");
         },
         close: closeComputer,
       };
-      const environments: WorkerTurnEnvironmentService = {
-        ...unusedEnvironments(),
+      const environments = environmentFor(tunnel, {
         get: vi.fn(() =>
           nodeDeviceId
-            ? { ...attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
-            : attachedEnvironment(),
+            ? { ...fx.attachedEnvironment(), providerId, nodeDeviceId, sshEndpoint: null }
+            : fx.attachedEnvironment(),
         ),
-        startTunnel: vi.fn(async () => tunnel),
+        acquireTurnCredential: fx.unusedEnvironments().acquireTurnCredential,
         prepareComputer: vi.fn(async () => (nodeDeviceId ? computer : undefined)),
+      });
+      const provider = createLauncher({ environments });
+      const selection = {
+        cfg: {},
+        manifestPlugins: [],
+        provider: "fixture-provider",
+        model: "fixture-model",
+        fallbacksOverride: ["fixture-next/fixture-model"],
       };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
       const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
       const runLocal = vi.fn(() =>
-        withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
+        fx.withWorkerCompactionAdoption("run-remote-exec", async (adopt) => {
           order.push("local");
           expect(inputTurn.prompt).toContain(`${originalPrompt}\n\nCurrent attachment originals`);
           expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
-          const placementBefore = placements.get(SESSION_ID);
-          const entryBefore = loadSessionEntry(sessionTarget);
+          const placementBefore = fx.placements.get(fx.SESSION_ID);
+          const entryBefore = loadSessionEntry(fx.sessionTarget);
           expect(placementBefore?.turnClaim).toMatchObject({
             owner: "local",
             runId: "run-remote-exec",
           });
-          await expect(adopt(SESSION_ID)).resolves.toBeUndefined();
+          await expect(adopt(fx.SESSION_ID)).resolves.toBeUndefined();
           expect(successorGate).not.toHaveBeenCalled();
           await expect(adopt("session-remote-successor")).rejects.toThrow(
             /worker placement.*same session ID/u,
           );
-          expect(placements.get(SESSION_ID)).toEqual(placementBefore);
-          expect(loadSessionEntry(sessionTarget)).toEqual(entryBefore);
-          expect(await placements.getAsync("session-remote-successor")).toBeUndefined();
+          expect(fx.placements.get(fx.SESSION_ID)).toEqual(placementBefore);
+          expect(loadSessionEntry(fx.sessionTarget)).toEqual(entryBefore);
+          expect(await fx.placements.getAsync("session-remote-successor")).toBeUndefined();
           if (nodeDeviceId) {
             const assertCurrent = getPluginRuntimeGatewayRequestScope()?.assertNodeExecutionCurrent;
             expect(assertCurrent).toBeTypeOf("function");
@@ -454,10 +421,10 @@ describe("worker launch capabilities", () => {
               nodeId: nodeDeviceId,
               workspace: {
                 workspaceDir: remote,
-                environmentId: ENVIRONMENT_ID,
-                sessionId: SESSION_ID,
-                sessionKey: SESSION_KEY,
-                ownerEpoch: OWNER_EPOCH,
+                environmentId: fx.ENVIRONMENT_ID,
+                sessionId: fx.SESSION_ID,
+                sessionKey: fx.SESSION_KEY,
+                ownerEpoch: fx.OWNER_EPOCH,
               },
             };
             retainedNodeAuthority = () => assertCurrent!(request);
@@ -466,7 +433,7 @@ describe("worker launch capabilities", () => {
               { ...request, runId: "other" },
               { ...request, nodeId: "other" },
               ...[
-                { ownerEpoch: OWNER_EPOCH + 1 },
+                { ownerEpoch: fx.OWNER_EPOCH + 1 },
                 { environmentId: "other" },
                 { sessionId: "other" },
                 { workspaceDir: "/other" },
@@ -478,7 +445,7 @@ describe("worker launch capabilities", () => {
             ]) {
               expect(() => assertCurrent!(changed)).toThrow("no longer current");
             }
-            const original = environments.get(ENVIRONMENT_ID)!;
+            const original = environments.get(fx.ENVIRONMENT_ID)!;
             if (original.state !== "attached") {
               throw new Error("expected an attached environment");
             }
@@ -501,7 +468,7 @@ describe("worker launch capabilities", () => {
         ? { entered: createDeferred(), release: createDeferred() }
         : undefined;
       const skillCleanupError = new Error("synthetic security cleanup failure");
-      const snapshot = { skills: [], resolvedSkills: [], prompt: "" };
+      const snapshot = { skills: [], resolvedSkills: [], discoverySkills: [], prompt: "" };
       const transfer = resourceCleanup
         ? vi.spyOn(skillTransfer, "transferSkillResources").mockResolvedValue({
             source: snapshot,
@@ -516,20 +483,11 @@ describe("worker launch capabilities", () => {
           })
         : undefined;
       const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const operation = provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-remote-exec",
-        },
-        inputTurn,
-        runLocal,
-      );
+      const operation = provider.executeTurn(runIdentity("run-remote-exec"), inputTurn, runLocal);
       try {
         if (resourceCleanup) {
           await resourceCleanup.entered.promise;
-          expect(placements.get(SESSION_ID)?.turnClaim).not.toBeNull();
+          expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).not.toBeNull();
           expect(retainedNodeAuthority).toThrow("no longer current");
           expect(closeComputer).not.toHaveBeenCalled();
           resourceCleanup.release.resolve();
@@ -567,12 +525,9 @@ describe("worker launch capabilities", () => {
           for (const error of failures) {
             const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce(localResult);
             const fallback = runWithModelFallback({
+              ...selection,
               cfg: undefined,
-              manifestPlugins: [],
               run,
-              provider: "fixture-provider",
-              model: "fixture-model",
-              fallbacksOverride: ["fixture-next/fixture-model"],
             });
             if (providerFailure && !closeFails) {
               await expect(fallback).resolves.toMatchObject({
@@ -606,28 +561,19 @@ describe("worker launch capabilities", () => {
             if (localResult.meta.error) {
               expect(result.meta.error?.message).toContain(localResult.meta.error.message);
             }
-            expect(result.meta).toEqual({
-              ...localResult.meta,
-              error: result.meta.error,
-              replayInvalid: true,
+            expect(result).toEqual({
+              ...localResult,
+              payloads: [...(localResult.payloads ?? []), diagnostic],
+              meta: { ...localResult.meta, error: result.meta.error, replayInvalid: true },
             });
-            expect(result.payloads?.slice(0, -1)).toEqual(localResult.payloads);
-            expect(result.didSendViaMessagingTool).toBe(localResult.didSendViaMessagingTool);
-            expect(result.messagingToolSentTexts).toEqual(localResult.messagingToolSentTexts);
             expect(JSON.stringify(result)).not.toContain(secret);
             const runCandidate = vi.fn(async () => result);
             const entry = await runEmbeddedAgentEntry({
-              selection: {
-                cfg: {},
-                provider: "fixture-provider",
-                model: "fixture-model",
-                manifestPlugins: [],
-                fallbacksOverride: ["fixture-next/fixture-model"],
-              },
-              identity: { runId: "settlement-entry", agentId: "main", sessionId: SESSION_ID },
+              selection,
+              identity: { runId: "settlement-entry", agentId: "main", sessionId: fx.SESSION_ID },
               harness: {
-                workspaceDir: root,
-                sessionKey: SESSION_KEY,
+                workspaceDir: fx.root,
+                sessionKey: fx.SESSION_KEY,
                 preparation: { kind: "direct" },
                 resolveRuntimeOverride: () => "openclaw",
               },
@@ -637,13 +583,15 @@ describe("worker launch capabilities", () => {
             });
             expect(runCandidate).toHaveBeenCalledOnce();
             expect(entry.attempts).toEqual([]);
-            expect(entry.terminal.outcome.status).toBe(
-              primary === "returned-timeout" ? "timeout" : "error",
-            );
-            expect(entry.terminal.metadata.replayInvalid).toBe(true);
+            expect(entry.terminal).toMatchObject({
+              outcome: { status: primary === "returned-timeout" ? "timeout" : "error" },
+              metadata: { replayInvalid: true },
+            });
             if (returnedInterruption) {
-              expect(entry.terminal.metadata.aborted).toBe(true);
-              expect(entry.terminal.metadata.stopReason).toBe(localResult.meta.stopReason);
+              expect(entry.terminal.metadata).toMatchObject({
+                aborted: true,
+                stopReason: localResult.meta.stopReason,
+              });
             }
           }
         }
@@ -654,20 +602,21 @@ describe("worker launch capabilities", () => {
         uninstall();
         inputTurn.preparedRunAdmission.close();
       }
-      expect(inputTurn.prompt).toBe(originalPrompt);
-      expect(inputTurn.transcriptPrompt).toBe("Canonical transcript request");
+      expectRestoredPrompts();
       expect(closeComputer).toHaveBeenCalledTimes(nodeDeviceId ? 1 : 0);
       expect(order).toEqual([
+        "pre-turn:quiesce",
+        "pre-turn:reconcile",
+        "pre-turn:resume",
         "local",
         ...(nodeDeviceId ? ["close"] : []),
-        "quiesce",
-        "reconcile",
-        "resume",
+        "completed-turn:quiesce",
+        "completed-turn:reconcile",
+        "completed-turn:resume",
       ]);
-      expect(launchTurn).not.toHaveBeenCalled();
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
-      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
-      const placement = placements.get(SESSION_ID);
+      expectUncalled(launchTurn, environments.acquireTurnCredential);
+      expect(await fx.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
+      const placement = fx.placements.get(fx.SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
       if (retainedNodeAuthority) {
         expect(retainedNodeAuthority).toThrow("no longer current");

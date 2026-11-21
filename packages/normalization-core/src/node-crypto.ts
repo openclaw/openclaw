@@ -7,28 +7,27 @@ export function sha256Hex(input: string | Uint8Array): string {
   return hash("sha256", input, "hex");
 }
 
-export function sha256StableValue(value: unknown): { digest: string; byteWeight: number } {
+export function sha256StableValue(
+  value: unknown,
+  normalizeString?: (value: string) => string,
+): { digest: string; byteWeight: number } {
   let digest: Hash | undefined;
-  let chunks: string[] = [];
-  let characterCount = 0;
+  let text = "";
   let byteWeight = 0;
-  writeStableStringify(value, (chunk) => {
-    if (chunk.length === 0) {
-      return;
-    }
-    chunks.push(chunk);
-    characterCount += chunk.length;
-    if (characterCount >= 16_384) {
-      const text = chunks.join("");
-      digest ??= createHash("sha256");
-      digest.update(text);
-      byteWeight += Buffer.byteLength(text);
-      chunks = [];
-      characterCount = 0;
-    }
-  });
+  writeStableStringify(
+    value,
+    (chunk) => {
+      text += chunk;
+      if (text.length >= 16_384) {
+        digest ??= createHash("sha256");
+        digest.update(text);
+        byteWeight += Buffer.byteLength(text);
+        text = "";
+      }
+    },
+    normalizeString,
+  );
   // Whole JSON string tokens keep surrogate pairs together at every UTF-8 boundary.
-  const text = chunks.join("");
   byteWeight += Buffer.byteLength(text);
   return {
     digest: digest ? digest.update(text).digest("hex") : sha256Hex(text),

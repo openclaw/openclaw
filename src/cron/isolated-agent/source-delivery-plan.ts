@@ -3,7 +3,10 @@ import type { CronDeliveryPlan } from "../delivery-plan.js";
 
 export function resolveCronSourceDeliveryPlan(params: {
   deliveryPlan: CronDeliveryPlan;
-  resolvedDelivery: SourceDeliveryPlan["target"] & { ok?: boolean };
+  resolvedDelivery: SourceDeliveryPlan["target"] & {
+    ok?: boolean;
+    deliverySuppressionReason?: "channel_transform";
+  };
 }): SourceDeliveryPlan {
   const webhook = params.deliveryPlan.mode === "webhook";
   const announce = !webhook && params.deliveryPlan.mode !== "none";
@@ -21,10 +24,18 @@ export function resolveCronSourceDeliveryPlan(params: {
     normalFinal: announce ? "visible" : "private",
     sourceReplyDeliveryMode: undefined,
     messageTool: {
-      enabled: !webhook,
+      enabled:
+        !webhook &&
+        !params.resolvedDelivery.deliverySuppressionReason &&
+        (!announce ||
+          params.deliveryPlan.target !== "owner" ||
+          params.resolvedDelivery.ok === true),
       force: false,
       requireExplicitTarget: announce,
       requireExplicitTargetEvidence: announce,
+      // The target is configured, not a conversation to answer: a send to it is
+      // delivery, and the job's post-send work must still run.
+      finalByDefault: false,
     },
     fallback: {
       directDelivery: announce,

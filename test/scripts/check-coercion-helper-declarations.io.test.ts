@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import type { API } from "typescript/unstable/sync";
+import type { API } from "typescript/sync";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCoercionHelperDeclarationGuard } from "../../scripts/check-coercion-helper-declarations.mts";
 import { createDeferred } from "../helpers/promise.js";
@@ -9,8 +9,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const parseError = vi.hoisted(() => new Error("first source parse failed"));
 
-vi.mock("typescript/unstable/sync", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("typescript/unstable/sync")>();
+vi.mock("typescript/sync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("typescript/sync")>();
   return {
     ...actual,
     API: class extends actual.API {

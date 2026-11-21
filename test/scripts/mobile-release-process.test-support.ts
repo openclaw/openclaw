@@ -15,8 +15,7 @@ type SignalFault = (signal: Signal, forward: () => ReturnType<Kill>) => ReturnTy
 type Outcome = PromiseSettledResult<Awaited<ReturnType<typeof runBounded>>>;
 
 type NativeBoundedFixture = {
-  // Verifiers await only this cancellation-aware result; no external async work.
-  waitForOutcome: () => Promise<Outcome>;
+  waitForFailure: () => Promise<unknown>;
   exited: () => boolean;
   interceptSignals: (fault: SignalFault) => void;
   release: () => void;
@@ -34,89 +33,14 @@ async function withNativeBoundedFixture(
   const finished = new AbortController();
   const signal = AbortSignal.any([context.signal, finished.signal]);
   const originalKill = process.kill.bind(process);
-  let child: ChildProcess | undefined;
-  let closed: Promise<void> | undefined;
-  let childClosed = false;
-  let childExited = false;
-  let groupRetired = false;
-  let outcome: Promise<Outcome> | undefined;
-  let verification: Promise<void> | undefined;
-  let root: string | undefined;
-  let fault: SignalFault | undefined;
-  let restoreSignalObserver: (() => void) | undefined;
-  let pendingStop: Promise<void> | undefined;
-
-  const inspectGroup = () => {
-    if (groupRetired || !child?.pid) {
-      return;
-    }
-    try {
-      originalKill(-child.pid, 0);
-    } catch (error) {
-      if (hasErrnoCode(error, "ESRCH")) {
-        groupRetired = true;
-      } else if (!hasErrnoCode(error, "EPERM")) {
-        throw error;
-      }
-    }
-  };
-
-  const stop = () =>
-    (pendingStop ??= lifetime.verifyCleanup(async () => {
-      finished.abort();
-      fault = undefined;
-      try {
-        if (outcome && !child) {
-          throw new Error("Native fixture child identity was not captured");
-        }
-        // These regression programs contain one process and no descendant launches.
-        if (child && !childClosed) {
-          child.kill("SIGKILL");
-        }
-        if (closed) {
-          await closed;
-        }
-        if (child?.pid) {
-          // The exact child close reaps the only process in this fixture's group.
-          inspectGroup();
-          if (!groupRetired) {
-            throw new Error("Native fixture group exit was not confirmed");
-          }
-        }
-        if (outcome) {
-          await outcome;
-        }
-        if (verification) {
-          await verification.then(
-            () => {},
-            () => {},
-          );
-        }
-      } finally {
-        restoreSignalObserver?.();
-      }
-    }));
-  const onAbort = () => {
-    void stop().catch(() => {});
-  };
-  context.signal.addEventListener("abort", onAbort, { once: true });
   context.onTestFinished(async () => {
-    context.signal.removeEventListener("abort", onAbort);
-    try {
-      await stop();
-    } catch (cause) {
-      // A pending tracked verifier must not turn failed bounded teardown into an
-      // unbounded lifetime drain. Keep the root and containing resource claim.
-      throw new Error(`Native fixture cleanup unverified; retained ${root ?? "resource claim"}`, {
-        cause,
-      });
-    }
+    finished.abort();
     await lifetime.cleanup();
   });
 
-  await lifetime.run(async () => {
+  const fixture = await lifetime.acquire(async (rejectAfterCleanup) => {
     signal.throwIfAborted();
-    root = lifetime.createTempDir("ios-keychain-signal-fixture-");
+    const root = lifetime.createTempDir("ios-keychain-signal-fixture-");
     const script = path.join(root, "fixture.cjs");
     const gate = path.join(root, "exit");
     fs.writeFileSync(script, options.source);
@@ -133,6 +57,7 @@ async function withNativeBoundedFixture(
       }
     };
     children.subscribe(capture);
+    let outcome: Promise<Outcome>;
     try {
       outcome = runBounded(testNodeExecPath, [script], {
         env: { PATH: process.env.PATH, EXIT_GATE: gate, NODE_OPTIONS: "" },
@@ -145,32 +70,72 @@ async function withNativeBoundedFixture(
     } finally {
       children.unsubscribe(capture);
     }
-    child = observed.find(
+    const child = observed.find(
       (candidate) =>
         candidate.spawnargs[0] === testNodeExecPath && candidate.spawnargs[1] === script,
     );
-    try {
-      if (!child) {
-        throw new Error("Expected the exact native fixture child");
-      }
-      const owned = child;
-      const commandOutcome = outcome;
-      closed = new Promise<void>((resolve) => {
-        owned.once("close", () => {
-          childClosed = true;
-          resolve();
-        });
+    if (!child) {
+      // Unknown process ownership cannot certify cleanup or release the root.
+      return rejectAfterCleanup(new Error("Expected the exact native fixture child"), async () => {
+        throw new Error("Native fixture child identity was not captured");
       });
-      if (options.bufferOutputUntilExit) {
-        owned.stdout?.pause();
+    }
+    let childClosed = false;
+    let childExited = false;
+    let groupRetired = false;
+    let fault: SignalFault | undefined;
+    let restoreSignalObserver = () => {};
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => {
+        childClosed = true;
+        resolve();
+      });
+    });
+    const groupAbsent = (toleratePermission = false) => {
+      const pid = child.pid;
+      if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) {
+        throw new Error("Native fixture did not acquire a process group");
       }
-      owned.once("exit", () => {
+      try {
+        originalKill(-pid, 0);
+      } catch (error) {
+        if (hasErrnoCode(error, "ESRCH")) {
+          return (groupRetired = true);
+        }
+        if (!toleratePermission || !hasErrnoCode(error, "EPERM")) {
+          throw error;
+        }
+      }
+      return false;
+    };
+    const cleanup = async () => {
+      finished.abort();
+      fault = undefined;
+      try {
+        // These fixtures never fork; exact-child close reaps their only process.
+        if (!childClosed) {
+          child.kill("SIGKILL");
+        }
+        await closed;
+        if (!groupRetired && !groupAbsent(true)) {
+          throw new Error("Native fixture group exit was not confirmed");
+        }
+        await outcome;
+      } finally {
+        restoreSignalObserver();
+      }
+    };
+    try {
+      if (options.bufferOutputUntilExit) {
+        child.stdout?.pause();
+      }
+      child.once("exit", () => {
         childExited = true;
         if (options.bufferOutputUntilExit) {
-          owned.stdout?.resume();
+          child.stdout?.resume();
         }
       });
-      const pid = owned.pid;
+      const pid = child.pid;
       if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 1) {
         throw new Error("Native fixture did not acquire a process group");
       }
@@ -182,8 +147,7 @@ async function withNativeBoundedFixture(
           if (sig !== 0 && childExited && !groupRetired) {
             // These fixtures never fork: a group surviving the sole child's exit
             // is not fresh authority to signal that numeric PGID again.
-            inspectGroup();
-            if (!groupRetired) {
+            if (!groupAbsent(true)) {
               throw new Error("Native fixture group identity unavailable after child exit");
             }
           }
@@ -202,10 +166,18 @@ async function withNativeBoundedFixture(
         return fault ? fault(sig, forward) : forward();
       });
       restoreSignalObserver = () => signalObserver.mockRestore();
-      const fixture: NativeBoundedFixture = {
-        waitForOutcome: () => racePromiseWithAbortSignal(commandOutcome, signal),
+      return {
+        cleanup,
+        waitForFailure: async () => {
+          const result = await racePromiseWithAbortSignal(outcome, signal);
+          expect(result.status).toBe("rejected");
+          if (result.status !== "rejected") {
+            throw new Error("Expected bounded command rejection");
+          }
+          return result.reason;
+        },
         exited: () => childExited,
-        interceptSignals: (next) => {
+        interceptSignals: (next: SignalFault) => {
           signal.throwIfAborted();
           fault = next;
         },
@@ -214,29 +186,23 @@ async function withNativeBoundedFixture(
           fs.writeFileSync(gate, "exit\n");
         },
         assertGroupAbsent: () => {
-          try {
-            originalKill(-pid, 0);
-          } catch (error) {
-            if (hasErrnoCode(error, "ESRCH")) {
-              groupRetired = true;
-              return;
-            }
-            throw error;
+          if (!groupAbsent()) {
+            throw new Error("Native fixture group still exists");
           }
-          throw new Error("Native fixture group still exists");
         },
       };
-      verification = lifetime.track(
-        Promise.resolve().then(() => {
-          signal.throwIfAborted();
-          return verify(fixture);
-        }),
-      );
-      await verification;
-    } finally {
-      await stop();
+    } catch (error) {
+      return rejectAfterCleanup(error, cleanup);
     }
   });
+  try {
+    await lifetime.run(async () => {
+      signal.throwIfAborted();
+      await verify(fixture);
+    });
+  } finally {
+    await fixture.cleanup();
+  }
 }
 
 const EXIT_WITH_OUTPUT = 'require("node:fs").writeSync(1, "x".repeat(8192));';
@@ -256,7 +222,6 @@ function signalError(code: string) {
   return Object.assign(new Error(`injected kill ${code}`), { code });
 }
 
-// Four independent owner/error contracts; none adds a production injection seam.
 export function registerBoundedSignalTests() {
   if (process.platform === "win32") {
     return;
@@ -287,21 +252,14 @@ export function registerBoundedSignalTests() {
             throw error;
           }
         });
-        const outcome = await fixture.waitForOutcome();
-        expect(outcome.status).toBe("rejected");
-        if (outcome.status !== "rejected") {
-          throw new Error("Expected bounded command rejection");
-        }
-        if (persistent) {
-          expect(outcome.reason).toMatchObject({
-            message: expect.stringContaining("owned process group did not terminate"),
-            cause: permission,
-          });
-        } else {
-          expect(outcome.reason).toMatchObject({
-            message: expect.stringContaining("exceeded the 4096-byte output limit"),
-          });
-        }
+        expect(await fixture.waitForFailure()).toMatchObject({
+          message: expect.stringContaining(
+            persistent
+              ? "owned process group did not terminate"
+              : "exceeded the 4096-byte output limit",
+          ),
+          ...(persistent ? { cause: permission } : {}),
+        });
         expect(probes).toBeGreaterThanOrEqual(3);
         expect(nonzeroAfterFault).toBe(0);
         fixture.assertGroupAbsent();
@@ -328,13 +286,13 @@ export function registerBoundedSignalTests() {
             throw error;
           }
         });
-        const outcome = await fixture.waitForOutcome();
-        expect(outcome).toMatchObject({
-          status: "rejected",
-          reason: { message: expect.stringContaining("exceeded the 4096-byte output limit") },
+        expect(await fixture.waitForFailure()).toMatchObject({
+          message: expect.stringContaining("exceeded the 4096-byte output limit"),
         });
-        expect(exitedBeforeSignal).toBe(true);
-        expect(permissionFaults).toBe(1);
+        expect({ exitedBeforeSignal, permissionFaults }).toEqual({
+          exitedBeforeSignal: true,
+          permissionFaults: 1,
+        });
         fixture.assertGroupAbsent();
       },
     );
@@ -357,12 +315,7 @@ export function registerBoundedSignalTests() {
         }
         return forward();
       });
-      const outcome = await fixture.waitForOutcome();
-      expect(outcome.status).toBe("rejected");
-      if (outcome.status !== "rejected") {
-        throw new Error("Expected bounded command rejection");
-      }
-      expect(outcome.reason).toBe(ioFailure);
+      expect(await fixture.waitForFailure()).toBe(ioFailure);
       expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
       fixture.assertGroupAbsent();
     });

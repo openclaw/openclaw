@@ -11,6 +11,7 @@ import {
   WORKBOARD_PRIORITIES,
   WORKBOARD_PROOF_STATUSES,
   WORKBOARD_STATUSES,
+  WORKBOARD_WORKER_STATES,
   WORKBOARD_TEMPLATE_IDS,
   type WorkboardArtifact,
   type WorkboardAttachment,
@@ -531,11 +532,7 @@ function normalizeWorkerProtocol(
   if (!isRecord(record)) {
     return fallback;
   }
-  const state = normalizeEnumValue(
-    record.state,
-    ["idle", "running", "completed", "blocked", "violated"],
-    fallback?.state,
-  );
+  const state = normalizeEnumValue(record.state, WORKBOARD_WORKER_STATES, fallback?.state);
   if (!state) {
     return undefined;
   }

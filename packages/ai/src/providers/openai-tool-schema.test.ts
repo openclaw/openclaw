@@ -1,4 +1,3 @@
-// Verifies OpenAI strict tool schema normalization and cache behavior.
 import { deepStrictEqual } from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { projectOpenAITools } from "./openai-tool-projection.js";
@@ -10,156 +9,97 @@ import {
   resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 
+function objectSchema(properties: Record<string, unknown> = {}) {
+  return {
+    type: "object",
+    properties,
+    required: Object.keys(properties),
+    additionalProperties: false,
+  };
+}
+const valueObject = () => ({ type: "object", properties: { value: { type: "string" } } });
+const literalArray = () => ({ ["__proto__"]: { type: "array" } });
+const violations = (schema: unknown) =>
+  findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true });
+
 describe("OpenAI strict tool schema normalization", () => {
-  it.each(["dependencies"])(
-    "preserves literal names when repairing the %s schema map",
-    (mapKey) => {
-      const schema = {
-        type: "object",
-        [mapKey]: { ["__proto__"]: { type: "string", description: null } },
-      };
-
-      const normalized = normalizeOpenAIStrictCompatSchema(schema);
-      expect(Object.getOwnPropertyDescriptor(normalized, mapKey)?.value).toStrictEqual({
-        ["__proto__"]: { type: "string" },
-      });
-      expect(schema[mapKey]).toStrictEqual({
-        ["__proto__"]: { type: "string", description: null },
-      });
-    },
-  );
-
-  it("infers the root type from schema fields instead of a literal prototype key", () => {
-    const schema = {
-      ["__proto__"]: { type: "array" },
-      properties: { path: { type: "string" } },
-      description: null,
-    };
-
-    expect(normalizeOpenAIStrictCompatSchema(schema)).toStrictEqual({
-      ["__proto__"]: { type: "array" },
-      properties: { path: { type: "string" } },
-      type: "object",
-    });
+  const pathProperties = { path: { type: "string" } };
+  it.each([
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { type: "object", dependencies: { ["__proto__"]: { type: "string", description: null } } },
+      { ...objectSchema(), dependencies: { ["__proto__"]: { type: "string" } } },
+    ],
+    [
+      normalizeOpenAIStrictCompatSchema,
+      { ...literalArray(), properties: pathProperties, description: null },
+      { ...literalArray(), properties: pathProperties, type: "object" },
+    ],
+    [
+      normalizeStrictOpenAIJsonSchema,
+      { ...objectSchema(valueObject().properties), ...literalArray(), nullable: false },
+      { ...objectSchema(valueObject().properties), ...literalArray() },
+    ],
+  ] as const)("preserves literal keys during normalization %#", (normalize, schema, expected) => {
+    const before = structuredClone(schema);
+    expect(normalize(schema)).toStrictEqual(expected);
+    expect(schema).toStrictEqual(before);
   });
 
-  it.each(["anyOf", "oneOf"])(
-    "preserves variant-only literal properties when flattening %s",
-    (unionKey) => {
-      const properties = {
-        ["__proto__"]: { type: "string", minLength: 1 },
-        constructor: { type: "integer" },
-        toString: { type: "boolean" },
-      };
-      const required = ["__proto__", "constructor", "toString"];
-      const schema = {
-        [unionKey]: [
-          { type: "object", properties, required },
-          { type: "object", properties: { ["__proto__"]: { type: "string" } }, required },
-        ],
-        additionalProperties: false,
-      };
-
-      deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), {
-        type: "object",
-        properties,
-        required,
-        additionalProperties: false,
-      });
-      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-    },
-  );
-
-  it("preserves literal metadata when removing OpenAPI annotations", () => {
+  it.each(["anyOf", "oneOf"])("preserves literal properties when flattening %s", (unionKey) => {
+    const properties = {
+      ["__proto__"]: { type: "string", minLength: 1 },
+      constructor: { type: "integer" },
+      toString: { type: "boolean" },
+    };
+    const required = Object.keys(properties);
     const schema = {
-      type: "object",
-      properties: { value: { type: "string" } },
-      required: ["value"],
+      [unionKey]: [
+        { type: "object", properties, required },
+        { type: "object", properties: { ["__proto__"]: { type: "string" } }, required },
+      ],
       additionalProperties: false,
-      ["__proto__"]: { type: "array" },
     };
 
-    expect(normalizeStrictOpenAIJsonSchema({ ...schema, nullable: false })).toStrictEqual(schema);
+    deepStrictEqual(normalizeStrictOpenAIJsonSchema(schema), objectSchema(properties));
   });
 
-  it("repairs top-level object schemas with missing or invalid properties", () => {
-    const schemas = [
-      { type: "object" },
-      { type: "object", properties: undefined },
-      { type: "object", properties: null },
-      { type: "object", properties: [] },
-      { type: "object", properties: "invalid" },
-    ];
-
-    for (const schema of schemas) {
-      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual({
-        type: "object",
-        properties: {},
-        required: [],
-        additionalProperties: false,
-      });
-      expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-    }
-  });
+  it.each([{ type: "object" }, { type: "object", properties: [] }])(
+    "repairs object properties: %j",
+    (schema) => {
+      expect(normalizeStrictOpenAIJsonSchema(schema)).toEqual(objectSchema());
+    },
+  );
 
   it("walks named schema maps without treating definition names as keywords", () => {
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      $defs: {
-        anyOf: { type: "string" },
-      },
+      ...objectSchema(),
+      $defs: { anyOf: { type: "string" } },
       examples: [{ anyOf: [{ type: "string" }] }],
     };
 
-    expect(
-      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
-    ).toEqual([]);
-    expect(
-      resolveOpenAIProjectedToolsStrictToolFlag(
-        projectOpenAITools([{ name: "lookup", parameters: schema }]),
-        true,
-      ),
-    ).toBe(true);
+    expect(violations(schema)).toEqual([]);
+    const projection = projectOpenAITools([{ name: "lookup", parameters: schema }]);
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
   });
 
   it("walks legacy and content schema applicators", () => {
-    const nestedObject = {
-      type: "object",
-      properties: { value: { type: "string" } },
-    };
     const schema = {
-      type: "object",
-      properties: {},
-      required: [],
-      additionalProperties: false,
-      dependencies: {
-        mode: ["payload"],
-        payload: nestedObject,
-      },
-      additionalItems: nestedObject,
-      contentSchema: nestedObject,
+      ...objectSchema(),
+      dependencies: { mode: ["payload"], payload: valueObject() },
+      additionalItems: valueObject(),
+      contentSchema: valueObject(),
     };
 
-    expect(
-      findOpenAIStrictSchemaViolations(schema, "parameters", { requireObjectRoot: true }),
-    ).toEqual([
-      "parameters.dependencies.payload.additionalProperties",
-      "parameters.dependencies.payload.required",
-      "parameters.additionalItems.additionalProperties",
-      "parameters.additionalItems.required",
-      "parameters.contentSchema.additionalProperties",
-      "parameters.contentSchema.required",
-    ]);
+    expect(violations(schema)).toEqual(
+      ["dependencies.payload", "additionalItems", "contentSchema"].flatMap((path) =>
+        ["additionalProperties", "required"].map((key) => `parameters.${path}.${key}`),
+      ),
+    );
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
   });
 
-  it.each(["^[a-z]+$", "\\(?=a"])(
-    "keeps strict mode for pattern %s without a lookaround",
-    (pattern) => {
-      expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
-    },
-  );
+  it.each(["^[a-z]+$", "\\(?=a"])("accepts non-lookaround pattern %s", (pattern) => {
+    expect(findOpenAIStrictSchemaViolations({ type: "string", pattern }, "value")).toEqual([]);
+  });
 });

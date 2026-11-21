@@ -9,16 +9,14 @@ import {
 } from "./runtime-snapshots.js";
 import type { AuthProfileStore } from "./types.js";
 
-const observation = vi.hoisted(() => ({
-  listeners: new Set<
-    (change: {
-      directory: string;
-      identityChanged: boolean;
-      sourcesChanged: boolean;
-      createdPaths: readonly string[];
-    }) => void | Promise<void>
-  >(),
-}));
+const observation = vi.hoisted<{
+  onChange?: (change: {
+    directory: string;
+    identityChanged: boolean;
+    sourcesChanged: boolean;
+    createdPaths: readonly string[];
+  }) => void | Promise<void>;
+}>(() => ({}));
 
 // mock-isolation: Supply file events without native watches to prove snapshot retirement and refresh settlement.
 vi.mock("./file-state.js", () => ({
@@ -26,18 +24,8 @@ vi.mock("./file-state.js", () => ({
   refreshAuthProfileFileState: async () => {},
   authProfileSourceExists: () => false,
   readAuthProfileDatabaseIdentity: vi.fn(),
-  captureAuthProfileFileIdentity: vi.fn(),
-  registerAuthProfileFileChangeListener: (
-    listener: (change: {
-      directory: string;
-      identityChanged: boolean;
-      sourcesChanged: boolean;
-      createdPaths: readonly string[];
-    }) => void | Promise<void>,
-  ) => {
-    observation.listeners.add(listener);
-    return () => observation.listeners.delete(listener);
-  },
+  captureAuthProfileFileIdentityAsync: vi.fn(),
+  authProfileFileChanges: observation,
 }));
 
 const sharedDatabase = "/tmp/auth-file-invalidation/shared/openclaw-agent.sqlite";
@@ -57,14 +45,12 @@ function publishAgent(key: string): void {
 }
 
 function observeSharedReplacement(): void {
-  for (const listener of observation.listeners) {
-    void listener({
-      directory: path.dirname(sharedDatabase),
-      identityChanged: true,
-      sourcesChanged: false,
-      createdPaths: [],
-    });
-  }
+  void observation.onChange?.({
+    directory: path.dirname(sharedDatabase),
+    identityChanged: true,
+    sourcesChanged: false,
+    createdPaths: [],
+  });
 }
 
 beforeEach(() => clearRuntimeAuthProfileStoreSnapshots());
@@ -131,18 +117,12 @@ it.each([false, true])(
     if (knownSource) {
       runtimeAuthProfileRowsCache.recordSource(sharedDatabase, "absent", null);
     }
-    await Promise.all(
-      [...observation.listeners].map((listener) =>
-        Promise.resolve(
-          listener({
-            directory: path.dirname(sharedDatabase),
-            identityChanged: false,
-            sourcesChanged: false,
-            createdPaths: [sharedDatabase],
-          }),
-        ),
-      ),
-    );
+    await observation.onChange?.({
+      directory: path.dirname(sharedDatabase),
+      identityChanged: false,
+      sourcesChanged: false,
+      createdPaths: [sharedDatabase],
+    });
     expect(getRuntimeAuthProfileStoreSnapshotAtDatabasePath(agentDatabase) !== undefined).toBe(
       knownSource,
     );

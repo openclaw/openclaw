@@ -41,11 +41,7 @@ export function captureMemoryExactSessionReader(
     captured.binding?.agentId === agentId && captured.binding.path === captured.path
       ? captured.binding
       : undefined;
-  const identity =
-    owner?.identity ??
-    (binding?.agentId === agentId && binding.path === captured.path
-      ? binding.actor.target.database
-      : undefined);
+  const identity = owner?.identity ?? binding?.actor.target.database;
   const source: CapturedSessionEntryReadSource | undefined =
     identity?.kind === "memory"
       ? { agentId, path: captured.path, databaseIdentity: identity.incarnation }

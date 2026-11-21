@@ -23,6 +23,7 @@ it("reads an empty schema inventory without loading retained-store discovery", a
       path: path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       userVersion: null,
     },
+    { path: path.join(stateDir, "client", "credentials.sqlite"), userVersion: null },
     { path: path.join(stateDir, "control", "services.sqlite"), userVersion: null },
     { path: path.join(stateDir, "state", "openclaw.sqlite"), userVersion: null },
   ]);

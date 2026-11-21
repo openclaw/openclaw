@@ -67,6 +67,7 @@ export type CodexPluginOwnedApp = {
   id: string;
   name: string;
   accessible: boolean;
+  toolSummaries?: CodexAppInventorySnapshot["apps"][number]["toolSummaries"];
   /** Current non-read-only tool keys; absent when Codex omits tool metadata. */
   approvalOverrideToolConfigKeys?: readonly string[];
 };
@@ -493,6 +494,7 @@ export function toCodexPluginOwnedAccountApp(
     id: app.id,
     name: app.name,
     accessible: true,
+    ...(app.toolSummaries ? { toolSummaries: app.toolSummaries } : {}),
     ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }

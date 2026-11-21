@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type { scanInstalledApps } from "../infra/installed-apps.js";
+import { scanInstalledApps } from "../infra/installed-apps.js";
 import { invokeDeviceApps } from "./invoke-device-apps.js";
 
-const scan = vi.fn<typeof scanInstalledApps>(async () => ({
+vi.mock("../infra/installed-apps.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/installed-apps.js")>()),
+  scanInstalledApps: vi.fn(),
+}));
+
+const scan = vi.mocked(scanInstalledApps).mockImplementation(async () => ({
   status: "ok",
   apps: [
     { label: "Calendar", bundleId: "com.apple.iCal", path: "/System/Calendar.app", system: true },
@@ -18,9 +23,7 @@ const scan = vi.fn<typeof scanInstalledApps>(async () => ({
 
 describe("invokeDeviceApps", () => {
   it("returns the typed privacy error while sharing is disabled", async () => {
-    await expect(
-      invokeDeviceApps({ sharingEnabled: false, platform: "darwin", scan }),
-    ).resolves.toEqual({
+    await expect(invokeDeviceApps({ sharingEnabled: false })).resolves.toEqual({
       ok: false,
       code: "INSTALLED_APPS_SHARING_DISABLED",
       message: "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in node-host settings",
@@ -31,9 +34,7 @@ describe("invokeDeviceApps", () => {
   it("matches the Android count envelope with macOS app fields", async () => {
     const result = await invokeDeviceApps({
       sharingEnabled: true,
-      platform: "darwin",
       paramsJSON: JSON.stringify({ query: "app", limit: 1, includeSystem: false }),
-      scan,
     });
     expect(result).toEqual({
       ok: true,

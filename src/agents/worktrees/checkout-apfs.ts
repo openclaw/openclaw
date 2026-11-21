@@ -6,6 +6,7 @@ import { setImmediate, setTimeout } from "node:timers/promises";
 import type { CloneFileMetadata } from "../../infra/fs-safe-copy-worker-contract.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 
 type IndexEntry = { offset: number; name: string };
 
@@ -140,7 +141,9 @@ export async function copyApfsCloneIndex(
   const deadline = (Math.floor(options.cloneCompletedAtMs / 1_000) + 1) * 1_000;
   const remainingMs = Math.min(1_000, deadline - Date.now());
   if (remainingMs > 0) {
-    await setTimeout(remainingMs, undefined, { signal: options.signal });
+    await timeWorktreePreparationPhase("indexCloneWait", () =>
+      setTimeout(remainingMs, undefined, { signal: options.signal }),
+    );
   }
   const bodySize =
     parsed.entriesEnd + parsed.extensions.reduce((size, extension) => size + extension.length, 0);
@@ -154,9 +157,9 @@ export async function copyApfsCloneIndex(
   const sourcePrefix = path.join(source, ".") + path.sep;
   const destinationPrefix = path.join(destination, ".") + path.sep;
   const indexSecond = Number(stamp.mtimeNs / 1_000_000_000n);
-  for (let start = 0; start < parsed.entries.length; start += 256) {
+  for (let start = 0; start < parsed.entries.length; start += 4096) {
     const entries: IndexEntry[] = [];
-    const end = Math.min(start + 256, parsed.entries.length);
+    const end = Math.min(start + 4096, parsed.entries.length);
     for (let index = start; index < end; index++) {
       const entry = parsed.entries[index]!;
       if (
@@ -177,7 +180,9 @@ export async function copyApfsCloneIndex(
     for (const entry of entries) {
       paths.push(sourcePrefix + entry.name, destinationPrefix + entry.name);
     }
-    const metadata = await nativeWorktreeFilesystem.readMetadata(paths, options);
+    const metadata = await timeWorktreePreparationPhase("indexMetadata", () =>
+      nativeWorktreeFilesystem.readMetadata(paths, options),
+    );
     options.signal?.throwIfAborted();
     options.commitGuard();
     for (let index = 0; index < entries.length; index++) {

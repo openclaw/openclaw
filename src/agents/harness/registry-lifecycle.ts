@@ -5,7 +5,11 @@ import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/genera
 
 /** Capture exact lifecycle hooks before their caller can leave its runtime scope. */
 export function captureAgentHarnessLifecycleHooks<
-  Hook extends "withDescendantCancellation" | "withSessionDeletion" | "withSessionContextReset",
+  Hook extends
+    | "withDescendantCancellation"
+    | "withSessionDeletion"
+    | "withSessionContextReset"
+    | "readNativeSubagents",
 >(hook: Hook) {
   const scopedRegistry = () =>
     getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;

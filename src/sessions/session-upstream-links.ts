@@ -12,6 +12,7 @@ import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { withSessionUpstreamPublication } from "./session-upstream-links-publication.js";
 import {
   emptyWatchedSessionUpstreamLinksAdmission,
   upsertSessionUpstreamLinkInDatabase,
@@ -25,7 +26,7 @@ export type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 const log = createSubsystemLogger("sessions/upstream-links");
 
-/** @deprecated Await upsertSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await upsertSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function upsertSessionUpstreamLink(
   input: SessionUpstreamLinkInput,
   options: OpenClawStateDatabaseOptions & {
@@ -55,7 +56,7 @@ export function upsertSessionUpstreamLink(
   }
 }
 
-/** @deprecated Await deleteSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await deleteSessionUpstreamLinkAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function deleteSessionUpstreamLink(
   sessionKey: string,
   agentId: string,
@@ -128,9 +129,10 @@ export async function upsertSessionUpstreamLinkWithCurrentSource(
     };
     return await runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
       assertCurrent,
-      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-        context.admission.databasePath,
-      ]),
+      createAdmission: withSessionUpstreamPublication(
+        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+        context,
+      ),
     });
   } catch (error) {
     if (options.ifAbsent) {
@@ -161,9 +163,10 @@ export async function deleteSessionUpstreamLinkAsync(
       (scope) => scope.execute({ type: "sessionUpstream.delete", input }),
       {
         assertCurrent,
-        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-          context.admission.databasePath,
-        ]),
+        createAdmission: withSessionUpstreamPublication(
+          createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+          context,
+        ),
       },
     );
   } catch (error) {

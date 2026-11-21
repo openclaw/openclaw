@@ -11,7 +11,7 @@ import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js"
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreCandidateIdentities } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import type { SessionStoreTarget } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -66,6 +66,7 @@ export function withSessionCleanupStore<T>(
         read: async (fixMissing = false) => {
           assertCurrent();
           const snapshot = await reader.readCleanup({
+            target,
             env: database.env,
             expectedIdentity: identity && { ...identity, canonicalPath: database.path },
             continuation,
@@ -85,7 +86,7 @@ export function withSessionCleanupStore<T>(
       return result;
     },
     {
-      lane: maintenanceLane,
+      lane: sessionStoreLane,
       logical: { assertCurrent: options.assertCurrent },
       prepareSource: (database, captured) => {
         const original = identities.get(captured.canonicalPath);
@@ -156,7 +157,7 @@ async function withMemorySessionCleanupStore<T>(
           }
         }
       }
-      return { kind: "session-cleanup", store, missing };
+      return { kind: "session-cleanup", store, missing, retainedArtifactPaths: [] };
     },
   });
 }

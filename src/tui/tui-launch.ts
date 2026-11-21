@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
+import {
+  isStandaloneRuntimeExecutable,
+  resolveOpenClawCliInvocation,
+} from "../../cli-invocation.mjs";
 import { formatErrorMessage } from "../infra/errors.js";
 import { filterOpenClawChildExecArgv } from "../infra/openclaw-cli-invocation.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
@@ -12,9 +15,9 @@ function appendOption(args: string[], flag: string, value: string | number | und
   args.push(flag, String(value));
 }
 
-function buildTuiCliArgs(opts: TuiOptions): string[] {
+export async function launchTuiCli(opts: TuiOptions): Promise<void> {
   const entry = process.argv[1]?.trim();
-  if (!entry) {
+  if (!entry && !isStandaloneRuntimeExecutable()) {
     throw new Error("unable to relaunch TUI: current CLI entry path is unavailable");
   }
   const args = ["tui"];
@@ -33,11 +36,6 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   if (opts.deliver) {
     args.push("--deliver");
   }
-  return args;
-}
-
-export async function launchTuiCli(opts: TuiOptions): Promise<void> {
-  const args = buildTuiCliArgs(opts);
   const invocation = resolveOpenClawCliInvocation({
     args,
     execArgv: filterOpenClawChildExecArgv(process.execArgv),

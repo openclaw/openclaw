@@ -9,7 +9,6 @@ export type DroppedTail = false | "clean" | "midline";
 export type BufferedOutput = {
   channel: StreamOutputChannel;
   chunk: string;
-  generation: number;
   truncatedTail: boolean;
   truncatedTailContinuesLine: boolean;
   precededByDrop: DroppedTail;

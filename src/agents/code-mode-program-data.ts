@@ -1,4 +1,4 @@
-import { boundCodeModeError, toCodeModeJsonSafe } from "./code-mode-json.js";
+import { boundCodeModeError, stringifyCodeModeJsonSafe } from "./code-mode-json.js";
 import type { CodeModeConfig, SettledBridgeRequest } from "./code-mode-worker-types.js";
 
 // A fixed control diagnostic is always available, even when payload admission is
@@ -11,6 +11,8 @@ const CANCELED_JSON = JSON.stringify("Code Mode tool canceled.");
 
 export type CodeModeReplyLease = {
   settle: (ok: boolean, value: unknown) => void;
+  /** JSON already normalized by the result-store owner or settle(). */
+  settleJson: (ok: boolean, json: string) => void;
   take: () => SettledBridgeRequest;
   release: () => void;
   cancel: () => void;
@@ -64,11 +66,12 @@ export class CodeModeProgramDataInbox {
         if (this.closed || state !== "pending") {
           return;
         }
-        const json =
-          JSON.stringify(
-            ok ? toCodeModeJsonSafe(value) : normalizeReplyError(value, this.errorBytes),
-          ) ?? "null";
-        // Normalization may invoke tool-owned toJSON code, including cancellation.
+        lease.settleJson(
+          ok,
+          stringifyCodeModeJsonSafe(ok ? value : normalizeReplyError(value, this.errorBytes)),
+        );
+      },
+      settleJson: (ok, json) => {
         if (this.closed || state !== "pending") {
           return;
         }

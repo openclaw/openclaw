@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readdirSync } from "node:fs";
 import fs from "node:fs/promises";
 import { endianness } from "node:os";
 import path from "node:path";
@@ -27,21 +26,12 @@ const SQLITE_SHM_VOLATILE_RANGES = [
 ] as const;
 const SNAPSHOT_HASH_BUFFER_BYTES = 1024 * 1024;
 
-type SnapshotEntry = {
-  path: string;
-  stat: Awaited<ReturnType<typeof fs.lstat>>;
-  children?: string[];
-};
 export type ConfigInputHashes = {
   root: string;
   includes: readonly { path: string; hash: string }[];
 };
 
-async function digestFile(
-  filePath: string,
-  observedEntries: SnapshotEntry[],
-  hashPrefix = "",
-): Promise<string> {
+async function digestFile(filePath: string, hashPrefix = ""): Promise<string> {
   const before = await fs.lstat(filePath);
   if (!before.isFile()) {
     throw new Error(`Snapshot path is not a regular file: ${filePath}`);
@@ -49,7 +39,6 @@ async function digestFile(
   if (before.nlink !== 1) {
     throw new Error(`Snapshot path has unbound hard links: ${filePath}`);
   }
-  observedEntries.push({ path: filePath, stat: before });
   const handle = await openSnapshotRegularFile(filePath);
   if (!handle) {
     throw new Error(`Snapshot path is not a regular file: ${filePath}`);
@@ -202,7 +191,10 @@ async function digestSnapshotFileHandle(
   const hash = createHash("sha256").update(hashPrefix);
   const buffer = Buffer.alloc(SNAPSHOT_HASH_BUFFER_BYTES);
   let position = 0;
-  const assertUnchanged = (current: SnapshotEntry["stat"], phase: "before" | "while") => {
+  const assertUnchanged = (
+    current: Awaited<ReturnType<typeof fs.lstat>>,
+    phase: "before" | "while",
+  ) => {
     if (
       (["dev", "ino", "size", "mtimeMs"] as const).some(
         (field) => expectedStat[field] !== current[field],
@@ -236,10 +228,7 @@ async function digestSnapshotFileHandle(
   return hash.digest("hex");
 }
 
-async function digestDirectory(
-  directory: string,
-  observedEntries: SnapshotEntry[],
-): Promise<string> {
+async function digestDirectory(directory: string): Promise<string> {
   const rootStat = await fs.lstat(directory);
   if (!rootStat.isDirectory()) {
     throw new Error(`Snapshot state path is not a directory: ${directory}`);
@@ -258,7 +247,6 @@ async function digestDirectory(
     }
     const portableRelative = relative.split(path.sep).join("/");
     if (stat.isFile()) {
-      observedEntries.push({ path: current, stat });
       const hardLinkKey = `${stat.dev}:${stat.ino}`;
       const existingHardLink = hardLinks.get(hardLinkKey);
       if (existingHardLink) {
@@ -305,7 +293,6 @@ async function digestDirectory(
     }
     hash.update("directory\0").update(portableRelative).update("\0");
     const entries = (await fs.readdir(current)).toSorted();
-    observedEntries.push({ path: current, stat, children: entries });
     for (const entry of entries) {
       await visit(path.join(current, entry), path.join(relative, entry));
     }
@@ -317,36 +304,6 @@ async function digestDirectory(
     }
   }
   return `sha256:${hash.digest("hex")}`;
-}
-
-function verifySnapshotEntries(observedEntries: readonly SnapshotEntry[]): void {
-  // Earlier entries can change while later files are hashed. Validate the whole
-  // observed set without yielding before returning its identity, not per subtree.
-  for (const entry of observedEntries) {
-    const after = lstatSync(entry.path);
-    const before = entry.stat;
-    if (
-      before.isFile() !== after.isFile() ||
-      before.isDirectory() !== after.isDirectory() ||
-      before.dev !== after.dev ||
-      before.ino !== after.ino ||
-      before.nlink !== after.nlink ||
-      before.size !== after.size ||
-      before.mtimeMs !== after.mtimeMs ||
-      before.ctimeMs !== after.ctimeMs
-    ) {
-      throw new Error(`Snapshot entry changed while hashing: ${entry.path}`);
-    }
-    if (entry.children) {
-      const children = readdirSync(entry.path).toSorted();
-      if (
-        entry.children.length !== children.length ||
-        entry.children.some((child, index) => child !== children[index])
-      ) {
-        throw new Error(`Snapshot directory changed while hashing: ${entry.path}`);
-      }
-    }
-  }
 }
 
 export type LegacyStateSnapshotInput = {
@@ -366,7 +323,6 @@ export async function captureLegacyStateSnapshotIdentityInProcess(
   params: LegacyStateSnapshotInput,
 ): Promise<LegacyStateSnapshotIdentity> {
   const warnings: string[] = [];
-  const observedEntries: SnapshotEntry[] = [];
   const capture = async (label: string, pathname: string, read: () => Promise<string>) => {
     try {
       return await read();
@@ -378,15 +334,15 @@ export async function captureLegacyStateSnapshotIdentityInProcess(
   };
   const configPath = path.resolve(params.configPath);
   const stateDir = path.resolve(params.stateDir);
-  let configDigest = await capture("config", configPath, async () => {
-    const rootDigest = await digestFile(configPath, observedEntries);
+  const configDigest = await capture("config", configPath, async () => {
+    const rootDigest = await digestFile(configPath);
     if (params.configInputHashes) {
       if (rootDigest !== `sha256:${params.configInputHashes.root}`) {
         throw new Error(`Snapshot config changed while planning: ${configPath}`);
       }
       for (const input of params.configInputHashes.includes) {
         // The config owner hashes present includes with this domain prefix.
-        const actual = await digestFile(input.path, observedEntries, "present\0");
+        const actual = await digestFile(input.path, "present\0");
         if (actual !== `sha256:${input.hash}`) {
           throw new Error(`Snapshot config input changed while planning: ${input.path}`);
         }
@@ -394,18 +350,9 @@ export async function captureLegacyStateSnapshotIdentityInProcess(
     }
     return rootDigest;
   });
-  let stateDigest = await capture("state", stateDir, () =>
-    digestDirectory(stateDir, observedEntries),
-  );
-  if (warnings.length === 0) {
-    try {
-      verifySnapshotEntries(observedEntries);
-    } catch (error) {
-      warnings.push(`Could not bind copied snapshot: ${formatErrorMessage(error)}`);
-      configDigest = undefined;
-      stateDigest = undefined;
-    }
-  }
+  // The planner compares captures around its work. Each capture binds files while
+  // reading them; concurrent edits after an earlier file's read are best effort.
+  const stateDigest = await capture("state", stateDir, () => digestDirectory(stateDir));
   return {
     ...(configDigest ? { configDigest } : {}),
     ...(stateDigest ? { stateDigest } : {}),

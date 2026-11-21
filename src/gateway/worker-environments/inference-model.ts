@@ -142,7 +142,6 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
       provider: resolved.ref.provider,
       modelId: resolved.ref.model,
       agentId: target.agentId,
-      harnessRuntime: harnessPolicy.runtime,
       agentDir,
       sessionEntry,
       sessionStore: { [target.sessionKey]: sessionEntry },

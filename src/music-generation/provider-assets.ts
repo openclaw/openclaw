@@ -13,17 +13,6 @@ import {
 } from "../media-understanding/shared.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
-type GeneratedMusicResponseHandle = {
-  response: Response;
-  release?: () => Promise<void>;
-  mimeType?: string;
-};
-
-type GeneratedMusicResponseFactory = (params: {
-  deadline: ProviderOperationDeadline;
-  timeoutMs: () => number;
-}) => Promise<GeneratedMusicResponseHandle>;
-
 /** Candidate audio file returned by a provider before download. */
 type GeneratedMusicFileCandidate = {
   url: string;
@@ -65,14 +54,12 @@ export function extractGeneratedMusicFileCandidates(
     if (!url) {
       continue;
     }
+    const mimeType = normalizeOptionalString(value.content_type);
+    const fileName = normalizeOptionalString(value.file_name);
     candidates.push({
       url,
-      ...(normalizeOptionalString(value.content_type)
-        ? { mimeType: normalizeOptionalString(value.content_type) }
-        : {}),
-      ...(normalizeOptionalString(value.file_name)
-        ? { fileName: normalizeOptionalString(value.file_name) }
-        : {}),
+      ...(mimeType ? { mimeType } : {}),
+      ...(fileName ? { fileName } : {}),
     });
   }
   return candidates;
@@ -107,8 +94,17 @@ export async function downloadGeneratedMusicAsset(params: {
   index?: number;
   maxBytes?: number;
   validateBinaryResponse?: boolean;
+  /** Zero disables the binary reader's idle timeout without changing the total deadline. */
+  chunkTimeoutMs?: number;
   includeSourceUrl?: boolean;
-  fetchResponse?: GeneratedMusicResponseFactory;
+  fetchResponse?: (params: {
+    deadline: ProviderOperationDeadline;
+    timeoutMs: () => number;
+  }) => Promise<{
+    response: Response;
+    release?: () => Promise<void>;
+    mimeType?: string;
+  }>;
 }): Promise<GeneratedMusicAsset> {
   const deadline = createProviderOperationDeadline({
     timeoutMs: params.timeoutMs,
@@ -140,6 +136,7 @@ export async function downloadGeneratedMusicAsset(params: {
     const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
     const readOptions = {
       maxBytes,
+      chunkTimeoutMs: params.chunkTimeoutMs,
       timeoutMs,
       onTimeout: ({ timeoutMs: bodyTimeoutMs }: { timeoutMs: number }) =>
         new Error(

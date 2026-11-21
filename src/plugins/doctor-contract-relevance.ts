@@ -3,6 +3,24 @@ import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalo
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
+
+export function hasScopedProviderAuthAlias(
+  record: PluginManifestRecord,
+  scopedProviderIds: ReadonlySet<string>,
+): boolean {
+  return Object.entries(record.providerAuthAliases ?? {}).some(([rawAlias, rawTarget]) => {
+    if (typeof rawTarget !== "string") {
+      return false;
+    }
+    const target = normalizeProviderId(rawTarget);
+    return (
+      scopedProviderIds.has(normalizeProviderId(rawAlias)) &&
+      target !== "" &&
+      record.providers.some((providerId) => normalizeProviderId(providerId) === target)
+    );
+  });
+}
 
 function hasLegacyElevenLabsTalkFields(raw: unknown): boolean {
   const talk = asNullableRecord(asNullableRecord(raw)?.talk);

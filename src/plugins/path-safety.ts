@@ -94,7 +94,7 @@ export function relativePluginPathInsideRootSync(
         normalizeWindowsPathPreservingCase(targetPath),
       );
     }
-    return path.relative(path.resolve(rootPath), path.resolve(targetPath));
+    return path.relative(rootPath, targetPath);
   }
   const physical = resolvePhysicalPathInsideRootSync(rootPath, targetPath);
   return physical ? path.relative(physical.rootPath, physical.targetPath) : undefined;

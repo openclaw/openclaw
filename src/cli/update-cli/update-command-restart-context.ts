@@ -1,11 +1,20 @@
+import { isRestartEnabled } from "../../config/commands.flags.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../../daemon/runtime-pin-state.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { resolveManagedGatewayServiceProcessEnv } from "../../daemon/service-types.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { formatCliCommand } from "../command-format.js";
+import { gatewayMaintenanceBlock } from "./update-command-handoff.js";
 import { isPackageManagerUpdateMode } from "./update-command-service-command.js";
-import type { UpdateRestartParams } from "./update-command-service-context-types.js";
+import type {
+  UpdateRestartParams,
+  UpdateServiceRestartParams,
+} from "./update-command-service-context-types.js";
 import {
   resolveServiceRefreshEnv,
   stripGatewayServiceMarkerEnv,
@@ -20,18 +29,9 @@ import {
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 
 export async function prepareUpdateRestart(
-  input: UpdateRestartParams & { assertCurrent: () => void },
+  params: UpdateRestartParams & { assertCurrent: () => void },
   restartConfigSnapshot: ConfigFileSnapshot,
 ) {
-  let params = input;
-  const original = params.originalManagedServiceRuntime;
-  if (original && !original.definition.runtimePin && params.preManagedServiceStop) {
-    params = {
-      ...params,
-      result: { ...params.result, root: original.root },
-      preManagedServiceStop: { ...params.preManagedServiceStop, ...original.service },
-    };
-  }
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayServiceInstallEnv: NodeJS.ProcessEnv | null | undefined;
@@ -54,6 +54,10 @@ export async function prepareUpdateRestart(
       resolveGatewayServiceManagementBlockMessageForUpdate(process.env) ??
       resolveGatewayServiceManagementBlockMessageForUpdate(serviceStateReadEnv))
     : undefined;
+  let gitReleaseRestartMode: NonNullable<UpdateServiceRestartParams["gitReleaseRestartMode"]> =
+    restartConfigSnapshot.valid && isRestartEnabled(restartConfigSnapshot.config)
+      ? "signal"
+      : "observe";
   let serviceStartRefused = false;
   let gatewayPort = await resolveUpdatedGatewayRestartPort({
     config: restartConfigSnapshot.valid ? restartConfigSnapshot.config : undefined,
@@ -74,6 +78,33 @@ export async function prepareUpdateRestart(
         preManagedServiceStop: params.preManagedServiceStop,
         allowInstallRootChange: true,
       });
+      // commands.restart disables the signal, not the terminal's native service command.
+      // Only select that route on a valid config and after checking actual service membership.
+      if (
+        params.result.mode === "git" &&
+        restartConfigSnapshot.valid &&
+        gitReleaseRestartMode === "observe" &&
+        serviceUpdateVerdict.kind === "owned" &&
+        !serviceUpdateVerdict.refreshDefinition &&
+        serviceState.running &&
+        serviceState.runtime?.pid &&
+        process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" &&
+        !gatewayMaintenanceBlock(serviceState, params.result.root ?? params.root)
+      ) {
+        gitReleaseRestartMode = "native";
+      }
+      const original = params.originalManagedServiceRuntime;
+      if (original && !original.definition.runtimePin) {
+        // Doctor may have completed the legacy handoff since pre-update capture.
+        // Capture that intent before the existing native rebind owner verifies it.
+        original.definition.runtimePin = await withDaemonRuntimePinMigration(serviceState.env, () =>
+          readDaemonRuntimePin(
+            { kind: "gateway", env: serviceState.env },
+            original.definition.command,
+          ),
+        );
+        params.assertCurrent();
+      }
       gatewayServiceEnv = serviceState.env;
       serviceManagerUid ??= serviceState.runtime?.systemd?.managerUid;
       const useInstalledState =
@@ -162,6 +193,7 @@ export async function prepareUpdateRestart(
     );
   }
   return {
+    gitReleaseRestartMode,
     refreshGatewayServiceEnv,
     gatewayServiceEnv,
     gatewayServiceInstallEnv,

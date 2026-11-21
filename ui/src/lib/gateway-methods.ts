@@ -8,6 +8,9 @@ import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 
 export type GatewayMethodOperatorScope = OperatorScope;
 
+// Hello and capability refreshes replace the catalog; retired connections need no cleanup.
+const advertisedMethodSets = new WeakMap<string[], ReadonlySet<string>>();
+
 export function isGatewayMethodAdvertised(
   host: {
     hello?: {
@@ -17,7 +20,15 @@ export function isGatewayMethodAdvertised(
   method: string,
 ): boolean | null {
   const methods = host.hello?.features?.methods;
-  return Array.isArray(methods) ? methods.includes(method) : null;
+  if (!Array.isArray(methods)) {
+    return null;
+  }
+  let advertised = advertisedMethodSets.get(methods);
+  if (!advertised) {
+    advertised = new Set(methods);
+    advertisedMethodSets.set(methods, advertised);
+  }
+  return advertised.has(method);
 }
 
 export function isGatewayCapabilityAdvertised(
@@ -42,13 +53,23 @@ export function canCallGatewayMethod(
   if (!snapshot?.client || snapshot.phase !== "connected") {
     return false;
   }
+  return canPresentGatewayMethod(snapshot, method, requiredScope, options);
+}
+
+/** Last-known advertisement and scopes for presentation only, never dispatch admission. */
+export function canPresentGatewayMethod(
+  snapshot: Pick<ApplicationGatewaySnapshot, "hello"> | null | undefined,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options: { requireAdvertisement?: boolean } = {},
+): boolean {
   if (
     options.requireAdvertisement !== false &&
-    isGatewayMethodAdvertised(snapshot, method) !== true
+    (!snapshot || isGatewayMethodAdvertised(snapshot, method) !== true)
   ) {
     return false;
   }
-  const auth = snapshot.hello?.auth;
+  const auth = snapshot?.hello?.auth;
   if (!auth || !Array.isArray(auth.scopes)) {
     return false;
   }

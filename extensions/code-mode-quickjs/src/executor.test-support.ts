@@ -35,11 +35,17 @@ type Input =
 export async function runQuickJsExecutor(
   input: Input,
   timeoutMs: number,
-  workerUrl = processRuntime.resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint),
+  workerUrl?: URL,
   signal?: AbortSignal,
   inlineHost?: CodeModeExecutorInlineHost,
 ) {
-  const resolver = vi.spyOn(processRuntime, "resolveRuntimeWorkerUrl").mockReturnValue(workerUrl);
+  const fixturePool = workerUrl
+    ? new processRuntime.WorkerTaskPool({ workerUrl, workerClass: "compute", sharedCompute: true })
+    : undefined;
+  const fixtureRun = fixturePool?.run.bind(fixturePool);
+  const run = fixtureRun
+    ? vi.spyOn(processRuntime.WorkerTaskPool.prototype, "run").mockImplementation(fixtureRun)
+    : undefined;
   try {
     const options = { timeoutMs, signal, inlineHost };
     let result: CodeModeWorkerResult;
@@ -57,12 +63,13 @@ export async function runQuickJsExecutor(
     }
     return result;
   } finally {
-    resolver.mockRestore();
+    run?.mockRestore();
+    await fixturePool?.close();
   }
 }
 
 const resolve = createRequire(import.meta.url).resolve;
-const modules = Promise.all([
+export const quickJsTestModules = Promise.all([
   readFile(resolve("quickjs-wasi/quickjs.wasm")).then((bytes) => WebAssembly.compile(bytes)),
   readFile(resolve("quickjs-wasi/encoding.so")).then((bytes) => WebAssembly.compile(bytes)),
 ]).then(([wasmModule, encoding]) => ({
@@ -77,7 +84,7 @@ export async function runQuickJsWire(input: CodeModeWorkerPayload<Snapshot>, tim
     maxWorkers: 1,
   });
   try {
-    return await pool.run({ ...input, ...(await modules) }, { timeoutMs });
+    return await pool.run({ ...input, ...(await quickJsTestModules) }, { timeoutMs });
   } finally {
     await pool.close();
   }

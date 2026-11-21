@@ -89,11 +89,6 @@ type MeetingRealtimeProviderSelectionConfig = {
   };
 };
 
-type ResolvedRealtimeTranscriptionProvider = {
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-};
-
 export function meetingOutputBytesPerMs(audioFormat: MeetingRealtimeAudioFormat): number {
   return audioFormat === "g711-ulaw-8khz" ? 8 : 48;
 }
@@ -121,7 +116,7 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
   config: MeetingRealtimeProviderSelectionConfig;
   fullConfig: OpenClawConfig;
   providers?: RealtimeTranscriptionProviderPlugin[];
-}): Promise<ResolvedRealtimeTranscriptionProvider> {
+}) {
   const providers = params.providers ?? listRealtimeTranscriptionProviders(params.fullConfig);
   if (providers.length === 0) {
     throw new Error("No configured realtime transcription provider registered");
@@ -147,7 +142,11 @@ export async function resolveMeetingRealtimeTranscriptionProvider(params: {
     : rawConfig;
   if (
     !(provider.isConfiguredAsync
-      ? await provider.isConfiguredAsync({ cfg: params.fullConfig, providerConfig })
+      ? await provider.isConfiguredAsync({
+          cfg: params.fullConfig,
+          providerConfig,
+          selectedExplicitly: configuredProvider !== undefined,
+        })
       : (provider.isConfigured?.({ cfg: params.fullConfig, providerConfig }) ?? false))
   ) {
     throw new Error(`Realtime transcription provider "${provider.id}" is not configured`);
@@ -211,38 +210,6 @@ export function formatMeetingAgentAudioModelLog(params: {
     "tts=telephony",
     `audioFormat=${formatLogValue(params.audioFormat)}`,
   ].join(" ");
-}
-
-type MeetingTtsResultLogFields = {
-  provider?: string;
-  providerModel?: string;
-  providerVoice?: string;
-  outputFormat?: string;
-  sampleRate?: number;
-  fallbackFrom?: string;
-};
-
-export function formatMeetingAgentTtsResultLog(
-  logScope: string,
-  prefix: string,
-  result: MeetingTtsResultLogFields,
-): string {
-  return [
-    `${logScope} ${prefix} TTS: provider=${formatLogValue(result.provider)}`,
-    `model=${formatLogValue(result.providerModel)}`,
-    `voice=${formatLogValue(result.providerVoice)}`,
-    `outputFormat=${formatLogValue(result.outputFormat)}`,
-    `sampleRate=${result.sampleRate ?? "unknown"}`,
-    ...(result.fallbackFrom ? [`fallbackFrom=${formatLogValue(result.fallbackFrom)}`] : []),
-  ].join(" ");
-}
-
-export function formatMeetingTranscriptSummaryLog(
-  logScope: string,
-  prefix: string,
-  text: string,
-): string {
-  return `${logScope} ${prefix}: chars=${text.length}`;
 }
 
 export function normalizeMeetingTtsPromptText(text: string | undefined): string | undefined {

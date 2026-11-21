@@ -11,6 +11,10 @@ import {
 import { createPersonalInstructionsTool } from "../../agents/tools/personal-instructions-tool.js";
 import { loadPersonalUserBootstrapFile } from "../../agents/workspace-personal-bootstrap.js";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -20,7 +24,9 @@ import type {
   UserProfileIdentity,
 } from "../../state/user-profiles.types.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { setOpenClawIdTunnelPrincipalLookup } from "../openclaw-id/tunnel-principal.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import type { GatewayClient } from "./client-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { usersPersonalFileHandlers } from "./users-personal-file.js";
@@ -45,6 +51,17 @@ vi.mock("../../state/user-profile-list.js", () => ({
     readCurrentIdentity: (id: string) => ({
       profileId: id === "alice-alias" ? state.canonical : id,
       role: state.role,
+    }),
+    readCurrentAuthority: (id: string) => ({
+      profileId: id === "alice-alias" ? state.canonical : id,
+      role: state.role,
+      aliases: [id],
+      display: {
+        id: id === "alice-alias" ? state.canonical : id,
+        displayName: null,
+        hasAvatar: false,
+        avatarRevision: "0",
+      },
     }),
     release: () => {},
   }),
@@ -74,6 +91,7 @@ vi.mock("../../state/user-profile-list.js", () => ({
     };
     await state.profileReady?.();
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({
@@ -111,6 +129,10 @@ vi.mock("../../infra/fs-safe.js", async (importOriginal) => {
   };
 });
 
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  clearRuntimeConfigSnapshot();
+});
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let workspace: string;
 let client: GatewayClient;
@@ -135,19 +157,8 @@ beforeEach(async () => {
   config = { agents: { defaults: { workspace } } };
   client = {
     connId: "alice-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: "alice-alias",
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: 0,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile("alice-alias", null, 0),
   };
   await fs.writeFile(path.join(workspace, "USER.md"), "Shared defaults");
 });
@@ -178,12 +189,16 @@ const save = (content: string, expectedHash: string | null = null) =>
 const personalPath = () => path.join(workspace, "users", "alice", "USER.md");
 
 describe("personal USER.md self-service", () => {
-  function toolTurn() {
+  function toolTurn(scopes = ["operator.read"]) {
+    client.connect.scopes = scopes;
     const sessionKey = "agent:main:dashboard:someone-elses-project";
     let active = true;
+    const principal = client.internal?.openclawIdPrincipal;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "alice-alias",
-      scopes: ["operator.read"],
+      scopes,
+      openclawIdPrincipal: principal,
+      readCurrentRoleFacts: principal ? () => ({ assignedRole: state.role }) : undefined,
       assertCurrent: () => {
         if (!active) {
           throw new Error("requester revoked");
@@ -226,40 +241,67 @@ describe("personal USER.md self-service", () => {
     };
   }
 
-  it("routes the read-only requester's chat tool from a foreign session to their canonical file", async () => {
-    const { identity } = toolTurn();
-    const tool = createPersonalInstructionsTool("main");
-    const execute = (params: Record<string, unknown>) =>
-      withGatewayToolCallerIdentity(identity, () =>
-        tool.execute("personal-call", params, controller.signal),
-      );
-    expect((await execute({ action: "get" })).details).toMatchObject({
-      profileId: "alice",
-      missing: true,
-      hash: null,
-    });
-    expect(
-      (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
-    ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
-    expect((await execute({ action: "get" })).details).toMatchObject({
-      profileId: "alice",
-      missing: false,
-      content: "Prefer examples.",
-    });
-    expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
-    expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
-    expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
-    expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
-      personalUser: true,
-      content: "Prefer examples.",
-      path: personalPath(),
-    });
-  });
+  it.each(["operator.read", "operator.sessions.read", "operator.admin"])(
+    "routes the %s requester's chat tool from a foreign session to their canonical file",
+    async (scope) => {
+      if (scope === "operator.admin") {
+        state.role = "admin";
+        const principal = {
+          kind: "member" as const,
+          peerKey: "admin-member",
+          accountId: "alice",
+          role: "reader",
+        };
+        client.internal = { openclawIdPrincipal: principal };
+        config.gateway = {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { scopes: [], agents: [], sessions: { others: "none" } },
+              admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+            },
+          },
+        };
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        setRuntimeConfigSnapshot(config);
+      }
+      const { identity } = toolTurn([scope]);
+      const tool = createPersonalInstructionsTool("main");
+      const execute = (params: Record<string, unknown>) =>
+        withGatewayToolCallerIdentity(identity, () =>
+          tool.execute("personal-call", params, controller.signal),
+        );
+      expect((await execute({ action: "get" })).details).toMatchObject({
+        profileId: "alice",
+        missing: true,
+        hash: null,
+      });
+      expect(
+        (await execute({ action: "set", content: "Prefer examples.", expectedHash: null })).details,
+      ).toMatchObject({ profileId: "alice", content: "Prefer examples." });
+      expect((await execute({ action: "get" })).details).toMatchObject({
+        profileId: "alice",
+        missing: false,
+        content: "Prefer examples.",
+      });
+      expect(await fs.readFile(personalPath(), "utf8")).toBe("Prefer examples.");
+      expect(await fs.readdir(path.join(workspace, "users"))).toEqual(["alice"]);
+      expect(await fs.readFile(path.join(workspace, "USER.md"), "utf8")).toBe("Shared defaults");
+      expect(await loadPersonalUserBootstrapFile(workspace, "alice")).toMatchObject({
+        personalUser: true,
+        content: "Prefer examples.",
+        path: personalPath(),
+      });
+    },
+  );
 
   function withRequesterTurn(test: Parameters<typeof withPersonalToolTurn>[1]) {
     const { identity } = toolTurn();
     return withPersonalToolTurn(
-      { owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" } },
+      {
+        owner: { profileId: "alice-alias", senderId: "alice", name: "Alice" },
+        allowCollaborativeSteering: true,
+      },
       (turn) =>
         withGatewayToolCallerIdentity(
           { ...identity, operationalRunInstance: undefined, operatorAuthority: undefined },
@@ -302,7 +344,7 @@ describe("personal USER.md self-service", () => {
                 : {}),
             }),
           ),
-        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        ).rejects.toThrow(/Ask again yourself with a new message in the OpenClaw app/);
         expect(state.rootCalls).toBe(before);
         expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
       } else {
@@ -312,7 +354,7 @@ describe("personal USER.md self-service", () => {
             action,
             ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
           }),
-        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        ).rejects.toThrow(/Ask again yourself with a new message in the OpenClaw app/);
         expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
       }
     });
@@ -538,7 +580,7 @@ describe("personal USER.md self-service", () => {
     });
   });
 
-  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node"])(
+  it.each(["single-user", "selected-profile", "anonymous", "synthetic", "node", "no-scope"])(
     "rejects personal-file requests for %s before touching files",
     async (kind) => {
       if (kind === "single-user") {
@@ -555,6 +597,9 @@ describe("personal USER.md self-service", () => {
       }
       if (kind === "node") {
         client.connect.role = "node";
+      }
+      if (kind === "no-scope") {
+        client.connect.scopes = [];
       }
       for (const method of ["get", "set"] as const) {
         expect(
@@ -582,10 +627,16 @@ describe("personal USER.md self-service", () => {
     "workspace-change",
     "cancellation",
   ])("rechecks %s inside the safe writer before mutation", async (kind) => {
+    client.connect.scopes = ["operator.sessions.read"];
     config.gateway = {
       roles: {
+        default: "reader",
         definitions: {
-          reader: { scopes: ["operator.read"], agents: ["main"], sessions: { others: "none" } },
+          reader: {
+            scopes: ["operator.sessions.read"],
+            agents: ["main"],
+            sessions: { others: "none" },
+          },
           denied: { scopes: [], agents: [], sessions: { others: "none" } },
         },
       },

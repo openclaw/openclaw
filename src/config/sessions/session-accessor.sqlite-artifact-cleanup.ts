@@ -28,13 +28,11 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { prepareCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -117,11 +115,11 @@ export async function cleanupSessionLifecycleArtifactsCore(
                     companions.settlement = capture(
                       entries.filter((entry) => removed.has(entry.sessionKey)),
                     );
-                    companions.settlement.beforeCommit();
+                    return companions.settlement.beforeCommit();
                   },
+                  settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
                 },
               );
-              companions.settlement?.settle(outcome.kind);
               const result = readSessionActorStorageResult(outcome);
               return {
                 removedEntries: result.removedSessionKeys.length,
@@ -196,7 +194,9 @@ export async function cleanupSessionLifecycleArtifactsCore(
         if (!source) {
           return prepareSessionLifecycleArtifactCleanupForMaintenance(databaseOptions, input);
         }
-        const continuation = opened ? captureCanonicalSessionReaderContinuation(opened) : undefined;
+        const continuation = opened
+          ? await prepareCanonicalSessionReaderContinuation(opened)
+          : undefined;
         try {
           assertSourceCurrent();
           const result = await withSessionHistoryWorkerDatabase(
@@ -210,8 +210,9 @@ export async function cleanupSessionLifecycleArtifactsCore(
                 },
                 signal,
               ),
-            maintenanceLane,
+            sessionStoreLane,
           );
+          await continuation?.prepareCurrent();
           assertSourceCurrent();
           continuation?.assertCurrent();
           Object.assign(artifactPreparation, result.diagnostics);
@@ -258,11 +259,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
             assertCommitAllowed,
             plan,
           });
-          if (reclaimed.kind !== plan.kind) {
-            throw new Error(
-              `SQLite session reclamation returned ${reclaimed.kind} for ${plan.kind}`,
-            );
-          }
           return reclaimed.value;
         }),
       { additionalIdentities: cleanupPlan.deletePlans.map((plan) => plan.sessionId) },

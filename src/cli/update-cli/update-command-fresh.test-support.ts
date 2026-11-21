@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
@@ -25,6 +26,32 @@ export const targetMetadata = {
   schemaVersions: { state: 16, agent: 19 },
 };
 
+export function writeFreshJson(filename: string, value: unknown) {
+  fs.writeFileSync(filename, JSON.stringify(value));
+  return filename;
+}
+
+export function expectNoFreshCalls(...spies: unknown[]) {
+  for (const spy of spies) {
+    expect(spy).not.toHaveBeenCalled();
+  }
+}
+
+export function expectFreshStatePreserved(fixture: { root: string; databasePath: string }) {
+  expect(fs.existsSync(fixture.databasePath)).toBe(false);
+  expectNoFreshCalls(packageUpdate.stagePackageInstallUpdate);
+  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
+}
+
+export function denyFreshLeaseRelease(message: string) {
+  using db = new DatabaseSync(
+    path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
+  );
+  db.exec(
+    `CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, '${message}'); END`,
+  );
+}
+
 export function installFreshUpdateFixture() {
   const dirs = createTempDirTracker();
   const fixture: { root: string; databasePath: string; managedServiceNodeRunner?: string } = {
@@ -36,17 +63,16 @@ export function installFreshUpdateFixture() {
     const home = dirs.make("openclaw-update-fresh-preview-");
     fixture.root = path.join(home, "installation");
     fs.mkdirSync(fixture.root);
-    fs.writeFileSync(
-      path.join(fixture.root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-    );
+    writeFreshJson(path.join(fixture.root, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.3",
+    });
     vi.stubEnv("HOME", home);
-    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, "profile"));
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(home, "profile", "openclaw.json"));
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", undefined);
+    for (const key of ["PROFILE", "UPDATE_RUN_ID", "UPDATE_RUN_HANDOFF", "UPDATE_POST_CORE"]) {
+      vi.stubEnv(`OPENCLAW_${key}`, undefined);
+    }
     fixture.databasePath = resolveOpenClawStateSqlitePath(process.env);
     const executorRoot = path.join(home, "executor");
     fs.mkdirSync(executorRoot);
@@ -84,7 +110,6 @@ export function installFreshUpdateFixture() {
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
     vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
       kind: "empty",
-      prefix: home,
     });
     vi.spyOn(updateGlobal, "resolveGlobalInstallTarget").mockResolvedValue({
       manager: "npm",

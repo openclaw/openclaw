@@ -1,17 +1,22 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { appendSessionTranscriptReport } from "../../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
-import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
+import { readSubagentRunAnnounceResult } from "../announce/subagent-announce-output.js";
+import { retireSubagentCompletionControllerInput } from "../registry/subagent-controller-inputs.js";
 import { ensureDeliveryState } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
+import { subagentRegistryLog } from "../registry/subagent-registry-lifecycle-log.js";
 import {
   getSubagentRunsForChildSession,
   subagentRuns,
@@ -25,6 +30,7 @@ import {
 import { isCanonicalSubagentRunRecord } from "../registry/subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
+  buildRequesterSettleWakeIdentity,
   sameRequesterSettleRunIdentity,
   captureRequesterSettleWakeProgress,
 } from "../registry/subagent-requester-settle-identity.js";
@@ -39,16 +45,135 @@ import type {
   RequesterWakeMutation,
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
-  SubagentCompletionQueueReceipt,
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
+import { buildSubagentCompletionFailureNotice } from "./subagent-completion-notice-text.js";
 
-const log = createSubsystemLogger("subagents/completion");
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
+class SubagentRequesterWakeProgressChangedError extends SubagentCompletionSourceChangedError {}
 
 type AdmissionReceipt =
   SessionDeliveryWorkerOperations["sessionDelivery.admitSubagentCompletion"]["output"];
 type MutationReceipt = SubagentCompletionMutationResult & { writeId: string };
+
+export async function recordRequiredCompletionNotice(
+  entry: SubagentRunRecord,
+  reason: string,
+  batch: readonly SubagentRunRecord[] = [entry],
+  kind: "failed" | "delayed" | "result" = "failed",
+): Promise<void> {
+  const wake = entry.requesterSettleWake;
+  if (
+    kind !== "result" &&
+    subagentRuns.get(entry.runId)?.delivery?.status === "delivered" &&
+    (kind === "delayed" || !wake?.requesterYieldBatch)
+  ) {
+    return;
+  }
+  subagentRegistryLog.warn(`Subagent completion delivery ${kind}`, {
+    runId: entry.runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason,
+  });
+  if (
+    entry.expectsCompletionMessage !== true ||
+    entry.execution.status !== "terminal" ||
+    entry.pauseReason === "sessions_yield"
+  ) {
+    return;
+  }
+  // Share the yielded requester's failure identity with its lifecycle settlement.
+  const noticeId =
+    wake?.requesterYieldBatch || batch.length > 1
+      ? (wake?.requesterRunId ??
+        buildAnnounceIdempotencyKey(
+          `${
+            buildRequesterSettleWakeIdentity({
+              requesterSessionKey: entry.requesterSessionKey,
+              requesterAgentId: entry.requesterAgentId,
+              batchRunIds: wake?.batchRunIds ?? batch.map((member) => member.runId),
+              rearmGeneration: wake?.rearmGeneration,
+            }).batchKey
+          }:delivery-failure`,
+        ))
+      : `subagent-delivery-failure:${entry.taskRunId ?? entry.runId}:${entry.delivery?.generation ?? 1}`;
+  // Independently admitted partitions contain different saved results, even within one wake.
+  const runId =
+    kind === "result"
+      ? buildAnnounceIdempotencyKey(
+          `${noticeId}:result:${batch
+            .map((child) => child.runId)
+            .toSorted()
+            .join(",")}`,
+        )
+      : noticeId;
+  // Report delivery state without borrowing its retired execution authority.
+  // Address the current chat, including a compaction successor; deletion and Stop get no notice.
+  const requester = {
+    agentId: entry.requesterAgentId,
+    sessionKey: entry.requesterSessionKey,
+    storePath: entry.requesterStorePath,
+  };
+  const current = await readSessionEntryReadOnlyInWorker(requester);
+  if (!current?.sessionId || current.status === "killed") {
+    return;
+  }
+  const customType =
+    kind === "delayed"
+      ? "subagent-delivery-delayed"
+      : kind === "result"
+        ? "subagent-completion"
+        : "run-failed-before-reply";
+  const findings =
+    kind === "result"
+      ? (
+          await Promise.all(
+            batch.map(async (child) => {
+              const outcome = child.execution.outcome;
+              return [
+                `Child ${child.childSessionKey} (run ${child.runId})`,
+                outcome?.status === "error"
+                  ? outcome.error === "Gateway stopped"
+                    ? "Interrupted by Gateway restart; not resumed."
+                    : outcome.error
+                  : outcome?.status,
+                (await readSubagentRunAnnounceResult(child)).text,
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+            }),
+          )
+        ).join("\n\n")
+      : buildSubagentCompletionFailureNotice(batch, kind);
+  const result = await runWithoutOwnedSessionTranscriptWrites(() =>
+    appendSessionTranscriptReport(
+      {
+        ...requester,
+        sessionId: current.sessionId,
+        expectedLifecycleRevision: current.lifecycleRevision,
+      },
+      {
+        kind: "custom",
+        customTypes: [customType],
+        selectReport: (latest) =>
+          isRecord(latest?.details) && latest.details.runId === runId
+            ? undefined
+            : {
+                customType,
+                display: true,
+                excludeFromContext:
+                  kind !== "failed" ||
+                  batch.every((child) => child.delivery?.requesterDelivery?.state === "consumed"),
+                content: findings,
+                details: { runId, childRunId: entry.runId, error: reason },
+              },
+      },
+    ),
+  );
+  if (!result.ok) {
+    throw new Error(`Child result failure notice could not be appended: ${result.error.code}`);
+  }
+}
 
 function parseAcknowledgedRecord(value: unknown): SubagentCompletionRecord {
   if (
@@ -97,44 +222,9 @@ function parseMutationReceipt(
     (typeof value.applied !== "boolean" && value.applied !== null) ||
     !Array.isArray(value.records) ||
     !Array.isArray(value.retiredRunIds) ||
-    !Array.isArray(value.queueIds) ||
-    !value.retiredRunIds.every(
-      (id): id is string => typeof id === "string" && runIds.includes(id),
-    ) ||
-    !value.queueIds.every((id): id is string => typeof id === "string")
+    !value.retiredRunIds.every((id): id is string => typeof id === "string" && runIds.includes(id))
   ) {
     throw new Error("Subagent completion mutation acknowledgment does not identify its write");
-  }
-  const queueIds = value.queueIds;
-  const queueReceipts = (Array.isArray(value.queueReceipts) ? value.queueReceipts : []).map(
-    (receipt): SubagentCompletionQueueReceipt => {
-      if (!isRecord(receipt) || typeof receipt.id !== "string" || !queueIds.includes(receipt.id)) {
-        throw new Error("Subagent completion acknowledged another queue intent");
-      }
-      if (receipt.status === "completed" || receipt.status === "failed") {
-        return { id: receipt.id, status: receipt.status };
-      }
-      if (
-        receipt.status !== "pending" ||
-        typeof receipt.enqueuedAt !== "number" ||
-        !Number.isFinite(receipt.enqueuedAt) ||
-        typeof receipt.payloadJson !== "string"
-      ) {
-        throw new Error("Subagent completion acknowledged an invalid pending queue intent");
-      }
-      return {
-        id: receipt.id,
-        status: "pending",
-        enqueuedAt: receipt.enqueuedAt,
-        payloadJson: receipt.payloadJson,
-      };
-    },
-  );
-  if (
-    queueReceipts.length !== value.queueIds.length ||
-    new Set(queueReceipts.map(({ id }) => id)).size !== queueReceipts.length
-  ) {
-    throw new Error("Subagent completion acknowledged incomplete queue intents");
   }
   const records = value.records.map((record) => {
     const acknowledged = parseAcknowledgedRecord(record);
@@ -148,8 +238,6 @@ function parseMutationReceipt(
     applied: value.applied,
     records,
     retiredRunIds: value.retiredRunIds,
-    queueIds: value.queueIds,
-    ...(queueReceipts.length > 0 ? { queueReceipts } : {}),
   };
 }
 
@@ -207,20 +295,23 @@ export async function admitSubagentCompletionDelivery(params: {
         }
       },
       async commit(planned, authority) {
-        const input = structuredClone({
+        const input = {
           writeId: randomUUID(),
           expected: planned.expected,
           subagent: planned.subagent,
           queueEntry: planned.queueEntry,
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(params.context, () => ({
-          kind: "completion",
-          writeId: input.writeId,
-          assertCurrent: authority.assertCurrent,
-          execute: (scope) =>
-            scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
-          decode: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
-        }));
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<AdmissionReceipt>(
+          params.context,
+          () => ({
+            kind: "completion",
+            writeId: input.writeId,
+            assertCurrent: authority.assertCurrent,
+            execute: (scope) =>
+              scope.execute({ type: "sessionDelivery.admitSubagentCompletion", input }),
+            decodeCommitted: (value) => parseAdmissionReceipt(value, input.writeId, params.runId),
+          }),
+        );
         const subagent = {
           ...receipt.record.subagent,
           cleanupHandled: planned.expected.cleanupHandled,
@@ -250,6 +341,23 @@ type CompletionMutationPublication = {
   publication: "published" | "unchanged";
 };
 
+function sameCompletionCancellationOwner(
+  current: SubagentRunRecord,
+  expected: SubagentRunRecord,
+): boolean {
+  return (
+    isDeepStrictEqual(current.killIntent, expected.killIntent) &&
+    current.killReconciliation?.killedAt === expected.killReconciliation?.killedAt &&
+    Boolean(current.killReconciliation?.taskCancellationAccepted) ===
+      Boolean(expected.killReconciliation?.taskCancellationAccepted) &&
+    Boolean(current.killReconciliation?.suppressTaskDelivery) ===
+      Boolean(expected.killReconciliation?.suppressTaskDelivery) &&
+    current.killReconciliation?.supersededAt === expected.killReconciliation?.supersededAt &&
+    (current.endedReason === SUBAGENT_ENDED_REASON_KILLED) ===
+      (expected.endedReason === SUBAGENT_ENDED_REASON_KILLED)
+  );
+}
+
 function currentCompletionOwner(
   rows: ReadonlyMap<string, SubagentRunRecord>,
   expected: SubagentRunRecord,
@@ -261,16 +369,7 @@ function currentCompletionOwner(
     !sameRequesterSettleRunIdentity(current, expected) ||
     current.execution.lifecycleGeneration !== expected.execution.lifecycleGeneration ||
     !isDeepStrictEqual(current.childSessionIdentity, expected.childSessionIdentity) ||
-    !isDeepStrictEqual(current.killIntent, expected.killIntent) ||
-    current.killReconciliation?.killedAt !== expected.killReconciliation?.killedAt ||
-    Boolean(current.killReconciliation?.taskCancellationAccepted) !==
-      Boolean(expected.killReconciliation?.taskCancellationAccepted) ||
-    Boolean(current.killReconciliation?.suppressTaskDelivery) !==
-      Boolean(expected.killReconciliation?.suppressTaskDelivery) ||
-    current.killReconciliation?.supersededAt !== expected.killReconciliation?.supersededAt ||
-    (current.endedReason === SUBAGENT_ENDED_REASON_KILLED) !==
-      (expected.endedReason === SUBAGENT_ENDED_REASON_KILLED) ||
-    current.terminalOwner !== expected.terminalOwner ||
+    !sameCompletionCancellationOwner(current, expected) ||
     current.suppressAnnounceReason !== expected.suppressAnnounceReason
   ) {
     throw new SubagentCompletionSourceChangedError(
@@ -288,7 +387,7 @@ async function mutateCompletion(
       receipt: SubagentCompletionMutationResult,
       mutation: SubagentCompletionMutation,
     ) => void;
-    onPublished?: () => void;
+    onPublished?: (applied: boolean | null) => void;
   } = {},
 ): Promise<CompletionMutationPublication> {
   const runIds = entries.map((entry) => entry.runId);
@@ -303,9 +402,8 @@ async function mutateCompletion(
     (rows) => {
       const value: {
         applied: boolean | null;
-        queueIds: string[];
         receiptRetentionFailure?: { error: unknown };
-      } = { applied: null, queueIds: [] };
+      } = { applied: null };
       return { value, mutation: plan(rows) };
     },
     {
@@ -325,20 +423,20 @@ async function mutateCompletion(
         if (value.receiptRetentionFailure) {
           throw value.receiptRetentionFailure.error;
         }
-        options.onPublished?.();
+        options.onPublished?.(value.applied);
       },
       async commit(planned, authority) {
-        const input = structuredClone({
+        const input = {
           writeId: randomUUID(),
           mutation: planned.mutation,
-        });
-        const receipt = await runSubagentRegistryWorkerWrite(context, () => ({
+        };
+        const receipt = await runSubagentRegistryWorkerWrite<MutationReceipt>(context, () => ({
           kind: "completion",
           writeId: input.writeId,
           assertCurrent: authority.assertCurrent,
           execute: (scope) =>
             scope.execute({ type: "sessionDelivery.mutateSubagentCompletion", input }),
-          decode: (value) => parseMutationReceipt(value, input.writeId, runIds),
+          decodeCommitted: (value) => parseMutationReceipt(value, input.writeId, runIds),
         }));
         const postimages = new Map<string, SubagentRunRecord | null>();
         for (const runId of receipt.retiredRunIds) {
@@ -363,7 +461,6 @@ async function mutateCompletion(
         return {
           value: {
             applied: receipt.applied,
-            queueIds: receipt.queueIds,
             receiptRetentionFailure,
           },
           postimages,
@@ -371,16 +468,6 @@ async function mutateCompletion(
       },
     },
   );
-  for (const id of result.queueIds) {
-    try {
-      await scheduleSessionDelivery(id, context);
-    } catch (error) {
-      log.warn("Subagent completion remains queued after scheduling failed", {
-        queueId: id,
-        error,
-      });
-    }
-  }
   return {
     applied: result.applied,
     publication: result.applied === true ? "published" : "unchanged",
@@ -399,7 +486,11 @@ export async function settleSubagentCompletionDelivery(
           "Subagent completion delivery generation changed",
         );
       }
-      const subagent = structuredClone(current);
+      // The registry freezes the source row; only delivery changes here.
+      const subagent = {
+        ...current,
+        delivery: current.delivery && { ...current.delivery },
+      };
       const delivery = ensureDeliveryState(subagent);
       if (delivery.status !== "delivered" || delivery.queueId !== undefined) {
         const now = Date.now();
@@ -421,18 +512,16 @@ export async function settleSubagentCompletionDelivery(
 }
 
 export async function blockSubagentCompletionDelivery(
-  params: BlockSubagentCompletionRequest & CompletionMutationOptions,
+  params: BlockSubagentCompletionRequest &
+    CompletionMutationOptions & { requesterBatch?: readonly SubagentRunRecord[] },
 ): Promise<boolean> {
   const {
     context: _context,
     databaseOptions: _databaseOptions,
     assertCurrent: _assertCurrent,
+    requesterBatch: _requesterBatch,
     ...request
   } = params;
-  if (params.storeReplaced) {
-    const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
-  }
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -444,8 +533,29 @@ export async function blockSubagentCompletionDelivery(
       }
       return { kind: "block", params: { ...request, subagent: current }, now: Date.now() };
     },
-    params,
+    {
+      ...params,
+      onPublished(applied) {
+        if (
+          applied === true &&
+          (params.suspendedReason ||
+            params.operatorAuthorityUnavailable ||
+            params.disposition === "permanent_failure")
+        ) {
+          // The durable outcome precedes releasing the completion input.
+          retireSubagentCompletionControllerInput(params.subagent);
+        }
+      },
+    },
   );
+  if (result.applied && (params.suspendedReason || params.disposition === "permanent_failure")) {
+    await recordRequiredCompletionNotice(
+      params.subagent,
+      params.reason,
+      params.requesterBatch,
+      params.suspendedReason === "expiry" ? "delayed" : "failed",
+    );
+  }
   return result.applied === true;
 }
 
@@ -477,22 +587,62 @@ export async function reconcileRetiredSubagentCancellation(
 function currentRequesterEntries(
   rows: ReadonlyMap<string, SubagentRunRecord>,
   entries: readonly SubagentRunRecord[],
+  operation: RequesterWakeMutation["kind"] | "settle",
   committed?: RequesterWakeCommittedWrite,
 ): Array<{ subagent: SubagentRunRecord }> {
   return entries.map((expected) => {
     if (!rows.has(expected.runId) && committed?.result.retiredRunIds.includes(expected.runId)) {
       return { subagent: expected };
     }
-    const current = currentCompletionOwner(rows, expected);
+    // Terminal bookkeeping settles the owed wake, not the child's old execution custody.
+    // Cleanup can change that custody while this exact wave remains owed.
+    // Committed receipts validate their own postimages in the transaction owner.
+    const current =
+      operation === "transition" && !committed
+        ? currentCompletionOwner(rows, expected)
+        : rows.get(expected.runId);
+    // A pause notice belongs to this child, even when a resumed sibling rekeys the cohort.
+    const settlesPauseNotice =
+      operation === "settle" &&
+      current?.pauseReason === "sessions_yield" &&
+      expected.pauseReason === "sessions_yield" &&
+      current.requesterSettleWake?.pauseNotice;
+    if (
+      !current ||
+      !isSameSubagentRunOwner(current, expected) ||
+      !sameRequesterSettleRunIdentity(current, expected) ||
+      (operation !== "transition" &&
+        !committed &&
+        (!current.requesterSettleWake ||
+          current.requesterSettleWake.rearmGeneration !==
+            expected.requesterSettleWake?.rearmGeneration ||
+          (!settlesPauseNotice &&
+            !isDeepStrictEqual(
+              current.requesterSettleWake.batchRunIds?.toSorted(),
+              expected.requesterSettleWake?.batchRunIds?.toSorted(),
+            )) ||
+          !isDeepStrictEqual(
+            current.requesterSettleWake.pauseNotice,
+            expected.requesterSettleWake?.pauseNotice,
+          ) ||
+          (current.requesterSettleWake.yieldedFinalDeliverable === true) !==
+            (expected.requesterSettleWake?.yieldedFinalDeliverable === true)))
+    ) {
+      throw new SubagentCompletionSourceChangedError(
+        "Subagent requester wake owner changed before settlement",
+      );
+    }
     if (
       !committed &&
       (current.delivery?.generation !== expected.delivery?.generation ||
-        !isDeepStrictEqual(
-          captureRequesterSettleWakeProgress(current),
-          captureRequesterSettleWakeProgress(expected),
-        ))
+        !sameCompletionCancellationOwner(current, expected) ||
+        (operation !== "settle" &&
+          !isDeepStrictEqual(
+            captureRequesterSettleWakeProgress(current),
+            captureRequesterSettleWakeProgress(expected),
+          )))
     ) {
-      throw new SubagentCompletionSourceChangedError(
+      throw new SubagentRequesterWakeProgressChangedError(
         "Subagent requester wake cohort changed before mutation",
       );
     }
@@ -514,11 +664,27 @@ export async function mutateRequesterCompletionBatch(
     operation: RequesterWakeMutation | { kind: "settle"; outcome: SubagentAnnounceDeliveryResult };
   },
 ): Promise<CompletionMutationPublication> {
-  return mutateCompletion(
+  if (params.operation.kind === "settle" && !params.operation.outcome.delivered) {
+    params.assertCurrent();
+    // Delete cleanup may retire the last result row. Its visible outcome must commit first.
+    for (const entry of params.entries) {
+      await recordRequiredCompletionNotice(
+        entry,
+        params.operation.outcome.error ?? params.operation.outcome.disposition ?? "not delivered",
+        params.entries,
+      );
+    }
+  }
+  const publication = await mutateCompletion(
     params.entries,
     (rows) => {
       const cohort = {
-        entries: currentRequesterEntries(rows, params.entries, params.committed),
+        entries: currentRequesterEntries(
+          rows,
+          params.entries,
+          params.operation.kind,
+          params.committed,
+        ),
         committed: params.committed,
       };
       return params.operation.kind === "settle"
@@ -527,6 +693,7 @@ export async function mutateRequesterCompletionBatch(
     },
     {
       ...params,
+      onPublished: () => params.onPublished?.(),
       onCommitted(result, mutation) {
         if (
           !params.committed &&
@@ -537,4 +704,5 @@ export async function mutateRequesterCompletionBatch(
       },
     },
   );
+  return publication;
 }

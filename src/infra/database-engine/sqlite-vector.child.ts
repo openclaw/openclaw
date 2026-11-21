@@ -2,6 +2,7 @@
 import { deserialize } from "node:v8";
 import { ensureSqliteLibrarySelected } from "../bun-sqlite-library.js";
 import { openNodeSqliteDatabase, supportsNodeSqliteExtensionLoading } from "../node-sqlite.js";
+import { configureSqliteMaintenanceCache } from "../sqlite-maintenance-cache.js";
 import { loadSqliteVecExtension } from "./sqlite-vec.js";
 import type { VectorKnnChildInput, VectorKnnResponse } from "./sqlite-vector-types.js";
 import { runSqliteVectorQuery } from "./sqlite-vector.js";
@@ -37,6 +38,10 @@ async function run(input: VectorKnnChildInput): Promise<VectorKnnResponse> {
   });
   try {
     db.exec("PRAGMA query_only = ON; PRAGMA busy_timeout = 5000");
+    // The cosine rerank reads each candidate's float32 vector out of a vec0 chunk blob
+    // (16 MiB at 4096 dims), far more than the default 2 MiB page cache holds, so deep
+    // candidate reads repeat instead of hitting cache. The budget ends with this handle.
+    configureSqliteMaintenanceCache(db);
     if (extensionLoadingSupported) {
       const loaded = await loadSqliteVecExtension({ db, extensionPath: input.extensionPath });
       if (loaded.ok) {

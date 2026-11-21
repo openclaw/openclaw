@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { isRetiredFetchInterceptionError } from "../cdp-fetch-interception.js";
 import { RelayFetch } from "./relay-fetch.js";
 import { RelayRuntime } from "./relay-runtime.js";
 import { RelayTarget } from "./relay-target.js";
@@ -128,9 +129,14 @@ export class RelaySessionOwner {
       }
       return result;
     } catch (error) {
-      if (domain && !physical.active.signal.aborted) {
+      if (
+        domain &&
+        !physical.active.signal.aborted &&
+        !(domain === "fetch" && isRetiredFetchInterceptionError(error))
+      ) {
         // Only an actual sender failure retires the scope. Local ownership/stage
-        // rejections never pass here and cannot evict another logical user.
+        // rejections never pass here and cannot evict another logical user. A
+        // request Chromium already ended is retired by RelayFetch alone.
         void this.retireAttachment(physical.rootSessionId).catch(this.report);
       }
       throw error;

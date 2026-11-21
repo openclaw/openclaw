@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for temporary file and workspace helpers.
- */
 export {
   buildRandomTempFilePath,
   createTempDownloadTarget,

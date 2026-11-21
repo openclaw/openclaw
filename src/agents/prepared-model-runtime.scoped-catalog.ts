@@ -6,7 +6,11 @@ import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import { captureModelsJsonSource } from "./models-config-state.js";
+import {
+  ensureOpenClawModelsJsonWithInput,
+  planOpenClawModelsJsonSourceWithInput,
+} from "./models-config.core.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import type {
   PreparedModelRuntimeAgentFacts,
@@ -67,7 +71,10 @@ export async function prepareScopedReadOnlyModelCatalog(
 
 export async function prepareAgentCatalogSource(
   agentFacts: Pick<PreparedModelRuntimeAgentFacts, "input" | "env" | "providerIds">,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  pluginGeneration: Pick<
+    PreparedModelRuntimePluginGeneration,
+    "pluginMetadataSnapshot" | "pluginRegistry" | "preparedStaticProviderCatalog"
+  >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   persist = true,
   sourceOptions: {
@@ -116,7 +123,7 @@ export async function prepareAgentCatalogSource(
   };
   const prepareSource = async () => {
     if (!persist) {
-      const source = await planOpenClawModelsJsonSource(input.config, input.agentDir, {
+      const source = await planOpenClawModelsJsonSourceWithInput(input.config, input.agentDir, {
         ...options,
         ...(sourceOptions.authStore ? { authStore: sourceOptions.authStore } : {}),
       });
@@ -126,14 +133,18 @@ export async function prepareAgentCatalogSource(
         providerOutcomes: resultOutcomes(),
       };
     }
-    const { captureModelsJsonContents } = await import("./prepared-model-runtime.facts.js");
     if (!input.readOnly) {
-      await ensureOpenClawModelsJson(input.config, input.agentDir, options);
+      const { publishedSource } = await ensureOpenClawModelsJsonWithInput(
+        input.config,
+        input.agentDir,
+        options,
+      );
+      if (publishedSource) {
+        return { ...publishedSource, providerOutcomes: resultOutcomes() };
+      }
     }
-    // Capture immediately after the serialized write. Another owner may share this directory and
-    // publish a different workspace generation before full-catalog parsing begins.
     return {
-      modelsJsonContents: captureModelsJsonContents(input.agentDir),
+      modelsJsonContents: (await captureModelsJsonSource(input.agentDir)).contents,
       pluginCatalogs: await loadPersistedPluginModelCatalogs(input.agentDir, undefined, env),
       providerOutcomes: resultOutcomes(),
     };

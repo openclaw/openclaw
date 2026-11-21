@@ -1,6 +1,5 @@
 /** Resolves agent runtime metadata from model/provider policy and ACP session overlays. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { applyAcpRuntimeOverlay, type AgentRuntimeMetadata } from "./acp-runtime-overlay.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/availability.js";
 import type { AgentRuntimePolicyScope } from "./model-runtime-policy.js";
@@ -9,6 +8,11 @@ import {
   resolvePersistedSessionRuntimeId,
   resolveSessionRuntimeOverrideForProvider,
 } from "./session-runtime-compat.js";
+
+type AgentRuntimeMetadata = {
+  id: string;
+  source: "implicit" | "model" | "provider" | "session" | "session-key";
+};
 
 type ModelAgentRuntimeMetadataParams = {
   cfg: OpenClawConfig;
@@ -30,13 +34,13 @@ type ModelAgentRuntimeMetadataParams = {
 export function resolveModelAgentRuntimeMetadata(
   params: ModelAgentRuntimeMetadataParams,
 ): AgentRuntimeMetadata {
+  // Persisted ACP ownership is authoritative; configured policy cannot change it.
+  if (params.acpRuntime === true) {
+    return { id: params.acpBackend || "acpx", source: "session-key" };
+  }
   const persistedRuntimeId = resolvePersistedSessionRuntimeId(params.sessionEntry);
   if (persistedRuntimeId && !isDefaultAgentRuntimeId(persistedRuntimeId)) {
-    return applyAcpRuntimeOverlay(
-      { id: persistedRuntimeId, source: "session" },
-      params.acpRuntime,
-      params.acpBackend,
-    );
+    return { id: persistedRuntimeId, source: "session" };
   }
   const agentId = params.agentScope ? params.agentScope.agentId : params.agentId;
   const resolved =
@@ -52,24 +56,26 @@ export function resolveModelAgentRuntimeMetadata(
     sessionKey: params.sessionKey,
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
-  const meta: AgentRuntimeMetadata = {
+  return {
     id: policy.runtime,
     source: policy.runtimeSource ?? "implicit",
   };
-  return applyAcpRuntimeOverlay(meta, params.acpRuntime, params.acpBackend);
 }
 
 /** Resolves the runtime selected for the next turn, excluding historical producer metadata. */
 export function resolveCurrentSessionAgentRuntimeMetadata(
   params: ModelAgentRuntimeMetadataParams,
 ): AgentRuntimeMetadata {
+  if (params.acpRuntime) {
+    return resolveModelAgentRuntimeMetadata(params);
+  }
   const { sessionEntry, ...configuredParams } = params;
   const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
     provider: params.provider,
     entry: sessionEntry,
     cfg: params.cfg,
   });
-  if (params.acpRuntime || !sessionRuntime) {
+  if (!sessionRuntime) {
     return resolveModelAgentRuntimeMetadata(configuredParams);
   }
   const runtime = resolveModelAgentRuntimeMetadata({

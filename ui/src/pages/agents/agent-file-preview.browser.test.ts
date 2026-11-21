@@ -1,16 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
+import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { AgentFiles } from "./panels-files.tsx";
 
 const browserMode = "__vitest_browser__" in globalThis;
 let container: HTMLDivElement;
+type Params = Parameters<typeof AgentFiles>[0] &
+  Pick<
+    ReturnType<Parameters<typeof AgentFiles>[0]["readData"]>,
+    | "agentFilesList"
+    | "agentFileActive"
+    | "agentFileEditors"
+    | "agentFilesLoading"
+    | "agentFileRead"
+    | "agentFileOutcome"
+    | "agentFileSaving"
+    | "agentFileConflict"
+  >;
+
 let mounted: ReturnType<typeof mountSolid<Parameters<typeof AgentFiles>[0]>> | undefined;
 let tooltipProvider: HTMLElement;
 let viewport: { width: number; height: number };
@@ -63,17 +77,23 @@ function requireButton(selector: string): HTMLButtonElement {
 function renderPreview(
   draft: string,
   onChange = (_name: string, _content: string) => {},
-  overrides: Partial<Parameters<typeof AgentFiles>[0]> = {},
+  overrides: Partial<Params> = {},
 ) {
-  const props: Parameters<typeof AgentFiles>[0] = {
+  const props: Params = {
+    readData() {
+      return { ...createAgentViewTestProps().readData(), ...this };
+    },
+    presentationRetired: createAgentViewTestProps().presentationRetired,
     agentId: "main",
+    listRead: null,
     agentFilesList: {
       agentId: "main",
       workspace: "/synthetic/workspace",
       files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
     },
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileActive: "AGENTS.md",
 
     agentFileSaving: false,
@@ -107,10 +127,10 @@ function renderPreview(
 
 describe.runIf(browserMode)("agent file preview", () => {
   it.each([
-    [false, null, "Saved Preview", "Updated Unknown"],
-    [true, null, "Will Create on Save", "Not Created Yet"],
-    [true, "AGENTS.md", "Live Draft Preview", "Updated Unknown"],
-    [true, "SOUL.md", "Will Create on Save", "Not Created Yet"],
+    [false, null, "Saved", "Update time unknown"],
+    [true, null, "Will create on save", "Not created yet"],
+    [true, "AGENTS.md", "Live draft", "Update time unknown"],
+    [true, "SOUL.md", "Will create on save", "Not created yet"],
   ] as const)(
     "opens a sanitized document with current metadata (missing %s, conflict %s)",
     async (missing, conflict, status, updated) => {
@@ -132,14 +152,10 @@ describe.runIf(browserMode)("agent file preview", () => {
       const shown = afterOwnTransition(modal, "overlay-after-show");
       await userEvent.click(requireButton(".agent-file-header .agent-file-actions button"));
       await shown;
-      expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-        "AGENTS.md",
-      );
-      expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(status);
+      // A root file's path would only repeat its name.
+      expect(container.querySelector(".md-preview-dialog__path")).toBeNull();
+      expect(container.querySelector(".md-preview-dialog__chip")?.textContent?.trim()).toBe(status);
       expect(container.querySelector(".md-preview-dialog__meta")?.textContent).toContain(updated);
-      expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-        "Markdown Preview",
-      );
       const reader = container.querySelector(".md-preview-dialog__reader")!;
       expect(reader.querySelector("img")?.getAttribute("src")).toBe(
         "https://example.invalid/image.png",
@@ -206,6 +222,14 @@ describe.runIf(browserMode)("agent file preview", () => {
         expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom + 1);
         expect(body.clientHeight).toBeGreaterThan(0);
         expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
+        const expand = requireButton(".md-preview-expand-btn");
+        expect(expand.getAttribute("aria-pressed")).toBe("false");
+        expect(panel.classList.contains("fullscreen")).toBe(false);
+        await userEvent.click(expand);
+        expect(expand.getAttribute("aria-pressed")).toBe("true");
+        expect(expand.getAttribute("aria-label")).toBe("Collapse preview");
+        expect(panel.classList.contains("fullscreen")).toBe(true);
+        expect(modal.classList.contains("fullscreen")).toBe(true);
         const closed = afterOwnTransition(modal, "overlay-after-hide");
         await userEvent.click(
           requireButton(
@@ -253,15 +277,13 @@ describe.runIf(browserMode)("agent file preview", () => {
       await userEvent.click(preview);
       await shown;
       expect(dialog.open).toBe(true);
-      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__header-main")!;
+      const identity = container.querySelector<HTMLElement>(".md-preview-dialog__title")!;
       const actions = container.querySelector<HTMLElement>(".md-preview-dialog__actions")!;
       const meta = container.querySelector<HTMLElement>(".md-preview-dialog__meta")!;
       const essentialChips = meta.querySelectorAll<HTMLDivElement>('[data-priority="essential"]');
-      const secondaryMetadata = meta.querySelectorAll<HTMLElement>(
-        '[data-priority="secondary"], .md-preview-dialog__chip > span',
-      );
+      const secondaryMetadata = meta.querySelectorAll<HTMLElement>('[data-priority="secondary"]');
       expect(essentialChips).toHaveLength(3);
-      expect(secondaryMetadata).toHaveLength(4);
+      expect(secondaryMetadata).toHaveLength(3);
       const body = container.querySelector<HTMLElement>(".md-preview-dialog__body")!;
       const normalInset = getComputedStyle(body).paddingInlineStart;
       const footer = container.querySelector<HTMLElement>(".md-preview-dialog__footer")!;

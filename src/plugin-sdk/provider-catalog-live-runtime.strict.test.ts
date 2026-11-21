@@ -14,6 +14,7 @@ import {
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
 import { getCachedLiveCatalogValue } from "./provider-catalog-shared.js";
+import { buildCatalogModel } from "./provider-catalog.test-support.js";
 
 const { fetchGuard } = vi.hoisted(() => ({ fetchGuard: vi.fn<LiveModelCatalogFetchGuard>() }));
 vi.mock("./ssrf-runtime.js", async (importOriginal) => ({
@@ -24,17 +25,7 @@ vi.mock("./ssrf-runtime.js", async (importOriginal) => ({
 const seed: ModelProviderConfig = {
   baseUrl: "https://catalog.example/v1",
   api: "openai-completions",
-  models: [
-    {
-      id: "known",
-      name: "Known",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8_192,
-    },
-  ],
+  models: [buildCatalogModel("known", { name: "Known" })],
 };
 
 const catalogParams = {

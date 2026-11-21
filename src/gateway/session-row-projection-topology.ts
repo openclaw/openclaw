@@ -13,7 +13,7 @@ export async function prepareSessionRowTopologySources() {
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const profileCatalogPath = resolveOpenClawStateSqlitePath(env);
-  const discoveryRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime");
+  const discoveryRead = prepareAgentDatabaseDeletionSnapshotRead({ env }, "runtime-discovery");
   const subagents = createSubagentSessionListReadView({ env });
   if (!subagents.snapshotIdentity()) {
     await subagents.prepare();
@@ -106,15 +106,16 @@ export function createSessionRowTopology(owner: {
                 prepareSessionRowScopes(
                   nextConfig,
                   owner.byAgent.keys(),
-                  new Map(
-                    [...storeRead.sources].map(([locator, source]) => [source.filename, locator]),
-                  ),
+                  new Map(Array.from(storeRead.sources, ([key, { filename }]) => [filename, key])),
                   scopes,
                 ),
               );
             });
             break;
           } catch (error) {
+            if (!isCurrent()) {
+              break;
+            }
             if (!(error instanceof SessionRowFactsPending)) {
               throw error;
             }

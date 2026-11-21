@@ -3,6 +3,30 @@ import { vi } from "vitest";
 import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
+const results = vi.hoisted(() => ({
+  poll: {
+    eventId: "evt-poll-vote",
+    roomId: "!room:example",
+    pollId: "$poll",
+    answerIds: ["a1", "a2"],
+    labels: ["Pizza", "Sushi"],
+    maxSelections: 2,
+  },
+  profile: {
+    accountId: "ops",
+    displayName: "Ops Bot",
+    avatarUrl: "mxc://example/avatar",
+    profile: {
+      displayNameUpdated: true,
+      avatarUpdated: true,
+      resolvedAvatarUrl: "mxc://example/avatar",
+      uploadedAvatarSource: null,
+      convertedAvatarFromHttp: false,
+    },
+    configPath: "channels.matrix.accounts.ops",
+  },
+}));
+
 const mocks = vi.hoisted(() => ({
   voteMatrixPoll: vi.fn(),
   reactMatrixMessage: vi.fn(),
@@ -69,6 +93,8 @@ vi.mock("./profile-update.js", () => ({
 
 // Load the adapter only after its lower-operation and read-policy mocks are registered.
 const { matrixMessageActions } = await import("./actions.js");
+
+export const matrixActionResults = results;
 
 export function getMatrixActionMocks() {
   return mocks;

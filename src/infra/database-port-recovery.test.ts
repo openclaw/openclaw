@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readEngineAnchorIdentity } from "./database-engine/physical-store-inspection.js";
 import {
   archiveDatabasePortManifest,
   assertDatabasePortRecoveryAllowed,
@@ -12,6 +14,7 @@ import {
   writeDatabasePortManifest,
 } from "./database-port-recovery.js";
 import { makeDatabasePortManifest } from "./database-port-recovery.test-support.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
@@ -20,6 +23,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 let stateDir: string;
 let manifest: DatabasePortManifest;
+let fixed: string;
 const custody = () => {};
 
 function write(value = manifest) {
@@ -46,15 +50,23 @@ function publishing(): DatabasePortManifest {
 
 function intent() {
   return {
-    manifestPath: databasePortManifestPath(stateDir),
+    manifestPath: fixed,
     operationId: manifest.operationId,
     action: "resume" as const,
   };
 }
 
+const startup = () => assertDatabasePortStartupAllowed(stateDir);
+const recover = (
+  overrides: Partial<Parameters<typeof assertDatabasePortRecoveryAllowed>[1]> = {},
+) => assertDatabasePortRecoveryAllowed(stateDir, { ...intent(), ...overrides });
+const archive = () => archiveDatabasePortManifest(stateDir, manifest.operationId, custody);
+const read = () => JSON.parse(fs.readFileSync(fixed, "utf8"));
+
 beforeEach(() => {
   stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "database-port-recovery-"));
   manifest = makeDatabasePortManifest(stateDir);
+  fixed = databasePortManifestPath(stateDir);
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -62,6 +74,33 @@ afterEach(() => {
 });
 
 describe("database port startup exclusion", () => {
+  it.skipIf(process.platform === "win32")(
+    "refuses a writerless FIFO and preserves recovery guidance",
+    () => {
+      fs.mkdirSync(path.dirname(fixed), { recursive: true });
+      expect(spawnSync("mkfifo", [fixed], { timeout: 5_000 }).status).toBe(0);
+      // A child bounds the synchronous hang so a regression cannot strand the test worker.
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./scripts/tsx.mjs",
+          "--input-type=module",
+          "-e",
+          'import { assertDatabasePortStartupAllowed } from "./src/infra/database-port-recovery.ts"; assertDatabasePortStartupAllowed(process.argv[1]);',
+          stateDir,
+        ],
+        { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Database port recovery required");
+      expect(result.stderr).toContain(`--resume '${fixed}'`);
+      expect(result.stderr).toContain(`--rollback '${fixed}'`);
+      expect(fs.lstatSync(fixed).isFIFO()).toBe(true);
+    },
+  );
+
   it.skipIf(process.platform === "win32").each(["preparing", "publishing"] as const)(
     "refuses %s with both recovery commands",
     (state) => {
@@ -69,11 +108,9 @@ describe("database port startup exclusion", () => {
       if (state === "publishing") {
         write(publishing());
       }
-      expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(DatabasePortRecoveryError);
-      expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(
-        `--resume '${databasePortManifestPath(stateDir)}'`,
-      );
-      expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow("--rollback");
+      expect(startup).toThrow(DatabasePortRecoveryError);
+      expect(startup).toThrow(`--resume '${fixed}'`);
+      expect(startup).toThrow("--rollback");
     },
   );
 
@@ -94,22 +131,22 @@ describe("database port startup exclusion", () => {
       "dsn-field": { dsn: "postgres://example.invalid/database" },
     };
     const raw = kind === "malformed" ? "{" : JSON.stringify({ ...manifest, ...change[kind] });
-    fs.writeFileSync(databasePortManifestPath(stateDir), raw);
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(DatabasePortRecoveryError);
+    fs.writeFileSync(fixed, raw);
+    expect(startup).toThrow(DatabasePortRecoveryError);
   });
 
   it("refuses present but unreadable manifests", () => {
     vi.spyOn(fs, "readFileSync").mockImplementation(() => {
       throw Object.assign(new Error("denied"), { code: "EACCES" });
     });
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(DatabasePortRecoveryError);
+    expect(startup).toThrow(DatabasePortRecoveryError);
   });
 
   it.skipIf(process.platform === "win32")("refuses dangling manifest symlinks", () => {
     write();
-    fs.unlinkSync(databasePortManifestPath(stateDir));
-    fs.symlinkSync(path.join(stateDir, "missing"), databasePortManifestPath(stateDir));
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(DatabasePortRecoveryError);
+    fs.unlinkSync(fixed);
+    fs.symlinkSync(path.join(stateDir, "missing"), fixed);
+    expect(startup).toThrow(DatabasePortRecoveryError);
   });
 });
 
@@ -117,7 +154,6 @@ describe("database port startup exclusion", () => {
 describe.skipIf(process.platform === "win32")("durable port manifest lifecycle", () => {
   it("writes private revisions, allows complete, then archives before clearing the guard", () => {
     write();
-    const fixed = databasePortManifestPath(stateDir);
     if (process.platform !== "win32") {
       expect(fs.statSync(fixed).mode & 0o777).toBe(0o600);
       expect(fs.statSync(path.dirname(fixed)).mode & 0o777).toBe(0o700);
@@ -131,20 +167,42 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
       outcome: "ported",
     };
     write(complete);
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).not.toThrow();
-    expect(assertDatabasePortRecoveryAllowed(stateDir, intent())).toEqual(complete);
-    expect(() =>
-      assertDatabasePortRecoveryAllowed(stateDir, { ...intent(), action: "rollback" }),
-    ).toThrow(DatabasePortRecoveryError);
-    const archived = archiveDatabasePortManifest(stateDir, manifest.operationId, custody);
+    expect(startup).not.toThrow();
+    expect(recover()).toEqual(complete);
+    expect(() => recover({ action: "rollback" })).toThrow(DatabasePortRecoveryError);
+    const archived = archive();
     expect(JSON.parse(fs.readFileSync(archived, "utf8"))).toEqual(complete);
     expect(fs.existsSync(fixed)).toBe(false);
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).not.toThrow();
+    expect(startup).not.toThrow();
   });
+
+  it.each(["dev", "ino"] as const)(
+    "preserves signed Node %s identities and still rejects a changed root",
+    (field) => {
+      // Azure NFS inode 16140959063787438087 is exposed by Node as this signed value.
+      const observed = "-2305785009922113529";
+      let current = BigInt(observed);
+      const lstat = fs.lstatSync;
+      vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+        const stat = lstat(pathname, options);
+        if (pathname === stateDir) {
+          Object.defineProperty(stat, field, { value: current });
+        }
+        return stat;
+      });
+      manifest.root[field] = observed;
+
+      write();
+      expect(read().root[field]).toBe(observed);
+      expect(recover()).toEqual(manifest);
+      current -= 1n;
+      expect(() => recover()).toThrow(DatabasePortRecoveryError);
+    },
+  );
 
   it("refuses skipped states, altered targets, and unverified publication", () => {
     write();
-    const before = fs.readFileSync(databasePortManifestPath(stateDir), "utf8");
+    const before = fs.readFileSync(fixed, "utf8");
     expect(() => write({ ...publishing(), state: "complete", outcome: "ported" })).toThrow();
     expect(() =>
       write({
@@ -161,7 +219,7 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
       }),
     ).toThrow();
     expect(() => write({ ...manifest, revision: 2, state: "publishing" })).toThrow();
-    expect(fs.readFileSync(databasePortManifestPath(stateDir), "utf8")).toBe(before);
+    expect(fs.readFileSync(fixed, "utf8")).toBe(before);
   });
 
   it("preserves the old revision if custody is lost immediately before rename", () => {
@@ -173,12 +231,8 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
         throw new Error("custody lost");
       });
     expect(() => writeDatabasePortManifest(stateDir, publishing(), check)).toThrow("custody lost");
-    expect(JSON.parse(fs.readFileSync(databasePortManifestPath(stateDir), "utf8"))).toEqual(
-      manifest,
-    );
-    expect(fs.readdirSync(path.dirname(databasePortManifestPath(stateDir)))).toEqual([
-      "manifest.json",
-    ]);
+    expect(read()).toEqual(manifest);
+    expect(fs.readdirSync(path.dirname(fixed))).toEqual(["manifest.json"]);
   });
 
   it("preserves the old revision on rename failure", () => {
@@ -202,10 +256,8 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
       sync(fd);
     });
     expect(() => write(publishing())).toThrow("directory sync failed");
-    expect(JSON.parse(fs.readFileSync(databasePortManifestPath(stateDir), "utf8"))).toEqual(
-      publishing(),
-    );
-    expect(() => assertDatabasePortStartupAllowed(stateDir)).toThrow(DatabasePortRecoveryError);
+    expect(read()).toEqual(publishing());
+    expect(startup).toThrow(DatabasePortRecoveryError);
   });
 
   it("keeps the fixed manifest if archive publication fails", () => {
@@ -215,40 +267,58 @@ describe.skipIf(process.platform === "win32")("durable port manifest lifecycle",
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("archive failed");
     });
-    expect(() => archiveDatabasePortManifest(stateDir, manifest.operationId, custody)).toThrow(
-      "archive failed",
-    );
-    expect(fs.existsSync(databasePortManifestPath(stateDir))).toBe(true);
+    expect(() => archive()).toThrow("archive failed");
+    expect(fs.existsSync(fixed)).toBe(true);
   });
 });
 
 describe.skipIf(process.platform === "win32")("manifest-bound recovery admission", () => {
+  it.each(["intended", "original"] as const)(
+    "retains a quoted Team Reports namespace in the %s location and anchor",
+    (side) => {
+      const namespace = "openclaw_team-reports_0123456789abcdef";
+      const target = manifest.targets[0]!;
+      const anchorPath = path.join(stateDir, "team-reports.sqlite");
+      if (side === "original") {
+        manifest.direction = { from: "postgres", to: "sqlite" };
+        target.intended = { engine: "sqlite", path: anchorPath };
+      }
+      target[side] = { engine: "postgres", anchorPath, namespace };
+      using anchor = openNodeSqliteDatabase(":memory:");
+      anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT, store_id TEXT, schema TEXT)");
+      const insert = anchor.prepare("INSERT INTO openclaw_engine_anchor VALUES ('postgres', ?, ?)");
+      insert.run(target.storeId, namespace);
+      expect(readEngineAnchorIdentity(anchor, anchorPath)).toMatchObject({ namespace });
+      write();
+      expect(recover().targets[0]?.[side]).toEqual(target[side]);
+      expect(startup).toThrow(DatabasePortRecoveryError);
+      for (const invalid of ['bad"schema', "schema;DROP", "schema.name", "schema\0name"]) {
+        anchor.prepare("UPDATE openclaw_engine_anchor SET schema = ?").run(invalid);
+        expect(() => readEngineAnchorIdentity(anchor, anchorPath)).toThrow(
+          "Invalid PostgreSQL anchor",
+        );
+        target[side] = { engine: "postgres", anchorPath, namespace: invalid };
+        expect(write).toThrow();
+      }
+    },
+  );
+
   it("admits only the fixed active manifest for the selected root and operation", () => {
     write();
-    expect(assertDatabasePortRecoveryAllowed(stateDir, intent())).toEqual(manifest);
-    expect(() =>
-      assertDatabasePortRecoveryAllowed(stateDir, {
-        ...intent(),
-        manifestPath: path.join(stateDir, "other.json"),
-      }),
-    ).toThrow();
-    expect(() =>
-      assertDatabasePortRecoveryAllowed(stateDir, { ...intent(), operationId: "wrong" }),
-    ).toThrow();
+    expect(recover()).toEqual(manifest);
+    expect(() => recover({ manifestPath: path.join(stateDir, "other.json") })).toThrow();
+    expect(() => recover({ operationId: "wrong" })).toThrow();
     const replaced = { ...manifest, root: { ...manifest.root, ino: "0" } };
-    fs.writeFileSync(databasePortManifestPath(stateDir), JSON.stringify(replaced));
-    expect(() => assertDatabasePortRecoveryAllowed(stateDir, intent())).toThrow(
-      DatabasePortRecoveryError,
-    );
+    fs.writeFileSync(fixed, JSON.stringify(replaced));
+    expect(() => recover()).toThrow(DatabasePortRecoveryError);
   });
 
   it.skipIf(process.platform === "win32")("refuses nonprivate or aliased manifest paths", () => {
     write();
-    const fixed = databasePortManifestPath(stateDir);
     fs.chmodSync(fixed, 0o644);
-    expect(() => assertDatabasePortRecoveryAllowed(stateDir, intent())).toThrow("privately owned");
+    expect(() => recover()).toThrow("privately owned");
     fs.chmodSync(fixed, 0o600);
     fs.linkSync(fixed, path.join(stateDir, "alias"));
-    expect(() => assertDatabasePortRecoveryAllowed(stateDir, intent())).toThrow("privately owned");
+    expect(() => recover()).toThrow("privately owned");
   });
 });

@@ -6,7 +6,6 @@ import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { ensureModelSelectionRuntimePlugins } from "../commands/runtime-plugin-install.js";
-import { applyMergePatch } from "../config/merge-patch.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -45,6 +44,7 @@ import {
 } from "./setup-inference-core.js";
 import { prepareCustomSetupCredentials } from "./setup-inference-custom.js";
 import {
+  mergeSavedSetupInferenceConfig,
   prepareSetupModelRuntime,
   projectSetupInferenceConfig,
   withCodexHomeScope,
@@ -311,9 +311,7 @@ export async function stageSavedAuthCandidate(
     };
   }
   const saved = credential.setup;
-  const choices = (
-    ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-  )({
+  const choices = resolveManifestProviderAuthChoices({
     config: ctx.cfg,
     workspaceDir: ctx.workspace,
     includeUntrustedWorkspacePlugins: false,
@@ -342,7 +340,9 @@ export async function stageSavedAuthCandidate(
     const modelRef = saved?.modelRef ?? loaded?.method.starterModel;
     const { validateConfigObjectRaw } = await import("../config/validation-core.js");
     const storedConfig = saved
-      ? validateConfigObjectRaw(applyMergePatch(ctx.cfg, JSON.parse(saved.configJson)))
+      ? validateConfigObjectRaw(
+          mergeSavedSetupInferenceConfig(ctx.cfg, JSON.parse(saved.configJson)),
+        )
       : undefined;
     if (storedConfig && !storedConfig.ok) {
       return {
@@ -382,15 +382,12 @@ export async function stageProviderAutoCandidate(
   ctx: StageContext,
   choiceId: string,
 ): Promise<StagedCandidate | StageFailure> {
-  const choice = (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-    choiceId,
-    {
-      config: ctx.cfg,
-      workspaceDir: ctx.workspace,
-      includeUntrustedWorkspacePlugins: false,
-      includeWorkspacePlugins: false,
-    },
-  );
+  const choice = resolveManifestProviderAuthChoice(choiceId, {
+    config: ctx.cfg,
+    workspaceDir: ctx.workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  });
   if (
     !choice ||
     choice.appGuidedDiscovery !== true ||
@@ -484,15 +481,12 @@ export async function stageProviderAuthCandidate(
     });
   }
   const choice = authChoice
-    ? (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-        authChoice,
-        {
-          config: ctx.cfg,
-          workspaceDir: ctx.workspace,
-          includeUntrustedWorkspacePlugins: false,
-          includeWorkspacePlugins: false,
-        },
-      )
+    ? resolveManifestProviderAuthChoice(authChoice, {
+        config: ctx.cfg,
+        workspaceDir: ctx.workspace,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      })
     : undefined;
   const installEntry = authChoice
     ? resolveProviderInstallCatalogEntry(authChoice, {

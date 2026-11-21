@@ -12,8 +12,10 @@ import {
   saveCronQuarantinedJobs,
   saveCronStore,
 } from "../../../cron/store.js";
-import { cronStoreKey } from "../../../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
+import * as quarantine from "../../../cron/store/quarantine.js";
 import * as staging from "../../../infra/sqlite-snapshot-staging.js";
+import { createNonExitingRuntime } from "../../../runtime.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -21,6 +23,9 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { admitOpenClawMaintenanceLiveAuthorityReads } from "../../../state/openclaw-state-maintenance-context.js";
+import { prepareDoctorMigrationBackups } from "../../doctor-heartbeat-migration-backup.js";
+import { createDoctorPrompter } from "../../doctor-prompter.js";
+import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import { inspectCronJobsForDoctor } from "./store-repair.js";
 
@@ -108,7 +113,12 @@ async function writeCronStore(jobs: StoredJob[]) {
   for (const { job, id } of entries) {
     db.prepare(
       "UPDATE cron_jobs SET job_json = ?, state_json = ? WHERE store_key = ? AND job_id = ?",
-    ).run(JSON.stringify(job), JSON.stringify(job.state ?? {}), cronStoreKey(storePath), id);
+    ).run(
+      JSON.stringify(job),
+      JSON.stringify(job.state ?? {}),
+      resolveCronStoreKeyInDatabase(db, storePath),
+      id,
+    );
   }
 }
 
@@ -185,6 +195,33 @@ describe("collectLegacyCronStoreHealthFindings", () => {
     });
   });
 });
+
+it.each(["structured", "interactive"])(
+  "reports the original quarantine observation failure in %s Doctor output",
+  async (mode) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.dirname(path.dirname(storePath)));
+    await writeCurrentCronStore([]);
+    const observation = vi
+      .spyOn(quarantine, "loadCronQuarantinedJobs")
+      .mockRejectedValueOnce(new Error("quarantine observation unavailable"));
+    try {
+      if (mode === "structured") {
+        expect(await collectLegacyCronStoreHealthFindings({ cfg: createCronConfig() })).toEqual([
+          expect.objectContaining({
+            requirement: "cron-store-readable",
+            fixHint: expect.stringContaining("quarantine observation unavailable"),
+          }),
+        ]);
+      } else {
+        await repairCronStore();
+        expectNoteContaining("Unable to read cron job store");
+        expectNoteContaining("quarantine observation unavailable");
+      }
+    } finally {
+      observation.mockRestore();
+    }
+  },
+);
 
 describe("maybeRepairLegacyCronStore", () => {
   it("preserves prompt-window runtime state and authority while repairing config", async () => {
@@ -866,5 +903,123 @@ it("inspects cron under offline Doctor custody when disposable snapshot allocati
   } finally {
     await maintenance.close();
     allocation.mockRestore();
+  }
+});
+
+it.each([
+  { binding: "absent", populated: false, expected: "ready" },
+  { binding: "absent", populated: true, expected: "ready" },
+  { binding: "malformed", populated: false, expected: "unresolved" },
+  { binding: "malformed", populated: true, expected: "unresolved" },
+])(
+  "classifies a $binding binding with populated=$populated without changing it",
+  async ({ binding, populated, expected }) => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(tempRoot!, "openclaw.json"));
+    if (populated) {
+      await saveCronStore(storePath, { version: 1, jobs: [createCurrentCronJob() as never] });
+    }
+    const { db } = openOpenClawStateDatabase();
+    db.prepare("DELETE FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'").run();
+    if (binding === "malformed") {
+      db.prepare(
+        "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('cron.defaultStoreKey', '17', 1)",
+      ).run();
+    }
+    const before = db
+      .prepare("SELECT * FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'")
+      .all();
+    const selection = await readCronStoreSelectionForDoctor({});
+    expect(selection.status).toBe(expected);
+    if (selection.status === "ready") {
+      expect(selection.storeKey).toBe(storePath);
+    }
+    expect(
+      db
+        .prepare("SELECT * FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'")
+        .all(),
+    ).toEqual(before);
+  },
+);
+
+it("reports a moved partition, refuses --yes guessing, and binds only an explicit Doctor choice", async () => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", tempRoot!);
+  const configPath = path.join(tempRoot!, "openclaw.json");
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  await fs.writeFile(configPath, "{}");
+  const retainedKey = path.join(tempRoot!, "old-machine", "cron", "jobs.json");
+  await saveCronStore(retainedKey, { version: 1, jobs: [createCurrentCronJob() as never] });
+  const { db } = openOpenClawStateDatabase();
+  db.prepare("DELETE FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'").run();
+  const before = db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all();
+  await closeOpenClawStateDatabaseAsync();
+
+  const findings = await collectLegacyCronStoreHealthFindings({ cfg: {} });
+  expect(findings).toEqual([
+    expect.objectContaining({
+      requirement: "cron-default-partition-selected",
+      message: expect.stringContaining(retainedKey),
+      fixHint: expect.stringContaining("Select the default cron partition"),
+    }),
+  ]);
+  const options = { yes: true };
+  await maybeRepairLegacyCronStore({
+    cfg: {},
+    options,
+    prompter: createDoctorPrompter({ runtime: createNonExitingRuntime(), options }),
+  });
+  expect(
+    openOpenClawStateDatabase()
+      .db.prepare(
+        "SELECT value_json FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'",
+      )
+      .get(),
+  ).toBeUndefined();
+  await closeOpenClawStateDatabaseAsync();
+
+  const databasePath = resolveOpenClawStateSqlitePath();
+  const maintenance = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {},
+    assertDatabaseAccess(pathname) {
+      expect(pathname).toBe(databasePath);
+    },
+  });
+  try {
+    await maintenance.run(async () => {
+      admitOpenClawMaintenanceLiveAuthorityReads(databasePath);
+      // This preflight precedes the contribution that offers partition selection.
+      await prepareDoctorMigrationBackups({
+        schemas: { incompatible: [], indeterminate: [] },
+        env: { ...process.env },
+        check: "quick",
+        verifiedSnapshots: [],
+        automaticRepair: false,
+        runtime: createNonExitingRuntime(),
+        measure: async (_name, run) => run(),
+      });
+      await maybeRepairLegacyCronStore({
+        cfg: {},
+        options: { repair: true },
+        prompter: {
+          confirm: async () => false,
+          selectRuntimeRepair: vi.fn().mockResolvedValue(retainedKey),
+        },
+      });
+      const repaired = openOpenClawStateDatabase().db;
+      expect(
+        repaired
+          .prepare(
+            "SELECT value_json FROM config_machine_state WHERE state_key = 'cron.defaultStoreKey'",
+          )
+          .get(),
+      ).toEqual({ value_json: JSON.stringify(retainedKey) });
+      expect(repaired.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all()).toEqual(
+        before,
+      );
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["sqlite-job"]);
+    });
+  } finally {
+    await maintenance.close();
   }
 });

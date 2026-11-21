@@ -1,4 +1,3 @@
-// Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -168,6 +167,7 @@ export function buildMemorySystemPromptAddition(
     agentId: params.agentId ?? prepared.context.agentId,
     agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
     sandboxed: params.sandboxed ?? prepared.context.sandboxed,
+    projectKey: params.projectKey ?? prepared.context.projectKey,
   };
   return renderMemorySystemPromptAddition(contextParams, prepared);
 }

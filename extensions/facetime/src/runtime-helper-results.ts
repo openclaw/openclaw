@@ -1,14 +1,9 @@
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readHelperResults, type HelperActionResult } from "./helper-results.js";
+import { DIAL_BUNDLES, readHelperResults, type HelperActionResult } from "./helper-results.js";
 import type { FaceTimeHelperPeer, FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { retainFaceTimeDialCallUUID, type PendingFaceTimeDial } from "./outbound-call.js";
 import type { ActiveFaceTimeCall } from "./runtime-state.js";
-
-export const OUTBOUND_DIAL_HELPER_BUNDLES = new Set([
-  "com.apple.FaceTime",
-  "com.apple.FaceTime.FTConversationService",
-]);
 
 function readHelperPeers(result: HelperActionResult): FaceTimeHelperPeer[] {
   return readHelperResults(result).flatMap((entry) => (entry.helperPeer ? [entry.helperPeer] : []));
@@ -37,7 +32,7 @@ export function retainOutboundDialHelperPeers(
       continue;
     }
     for (const peer of readHelperPeers(entry)) {
-      if (OUTBOUND_DIAL_HELPER_BUNDLES.has(peer.bundleIdentifier)) {
+      if (DIAL_BUNDLES.has(peer.bundleIdentifier)) {
         peers.set(peer.processId, peer);
       }
     }
@@ -57,9 +52,7 @@ export function readOutboundProxyIdentifier(result: HelperActionResult): string 
 }
 
 export function hasDialHelperConfirmation(results: HelperActionResult[]): boolean {
-  return results.some((entry) =>
-    OUTBOUND_DIAL_HELPER_BUNDLES.has(entry.helperBundleIdentifier ?? ""),
-  );
+  return results.some((entry) => DIAL_BUNDLES.has(entry.helperBundleIdentifier ?? ""));
 }
 
 function hasDefinitiveDialHelperAbsence(

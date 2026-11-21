@@ -126,9 +126,9 @@ export function isGatewayServiceStateLive(state: {
 
 const SERVICE_RUNTIME_INSPECTION_FAILED_DETAIL = "service runtime inspection failed";
 
-export function formatServiceInspectionDetail(error: unknown): string {
+export function formatServiceInspectionDetail(error: unknown, maxLength = 500): string {
   const rawDetail = error instanceof Error ? error.message : String(error);
-  return truncateUtf16Safe(sanitizeForLog(rawDetail), 500);
+  return truncateUtf16Safe(sanitizeForLog(rawDetail), maxLength);
 }
 
 /** Keeps native probe failures bounded and diagnostic-only for status presentation owners. */

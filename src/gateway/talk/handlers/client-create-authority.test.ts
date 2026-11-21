@@ -35,8 +35,8 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import { prepareClientVoiceSessionClose } from "../../../talk/client-voice-session-lifecycle.js";
+import * as voiceWriters from "../../../talk/client-voice-session-source.js";
 import { readVoiceSessionRecordInTransaction } from "../../../talk/client-voice-session-store.js";
-import * as voiceWriters from "../../../talk/client-voice-session-write.js";
 import * as voiceSessions from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
@@ -578,7 +578,6 @@ describe("voice creation authority", () => {
           context: createDirectChatContext({
             getRuntimeConfig: fixture.context.getRuntimeConfig,
             getClientConnIds: (filter) => new Set(!filter || filter(client) ? [client.connId] : []),
-            chatAbortControllers: fixture.context.chatAbortControllers,
             broadcastToConnIds: fixture.context.broadcastToConnIds,
           }),
           client,

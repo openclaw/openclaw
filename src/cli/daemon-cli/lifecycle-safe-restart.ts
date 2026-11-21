@@ -8,17 +8,39 @@ import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budg
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { defaultRuntime, writeRuntimeJson } from "../../runtime.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { appendGatewayLifecycleAudit } from "./lifecycle-audit.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const SAFE_RESTART_METADATA_REFRESH_TIMEOUT_MS = 5_000;
 
+/** Flag-conflict failure that keeps its reason through the root CLI renderer. */
+function restartFlagConflictError(message: string): ExpectedCliError {
+  return new ExpectedCliError({
+    message,
+    humanOutput: `${theme.error("Error:")} ${message}`,
+    machineOutput: message,
+  });
+}
+
+/** Reject restart flags that only make sense with (or without) --safe. */
+export function assertNativeRestartFlags(opts: DaemonLifecycleOptions): void {
+  if (opts.preserveDefinition && opts.safe) {
+    throw restartFlagConflictError(
+      "--preserve-definition requires a native restart without --safe",
+    );
+  }
+  if (opts.skipDeferral && !opts.safe) {
+    throw restartFlagConflictError("--skip-deferral requires --safe");
+  }
+}
+
 export function resolveGatewayRestartIntentOptions(
   opts: DaemonLifecycleOptions,
 ): GatewayRestartIntent | undefined {
   if (opts.force && opts.wait !== undefined) {
-    throw new Error("--force cannot be combined with --wait");
+    throw restartFlagConflictError("--force cannot be combined with --wait");
   }
   if (opts.force) {
     return { force: true, waitMs: resolveGatewayRestartDeferralTimeoutMs() };
@@ -27,19 +49,20 @@ export function resolveGatewayRestartIntentOptions(
 }
 
 /** Request an OpenClaw-aware restart through the running Gateway. */
-type SafeRestartTarget = { pid: number; ownerId: string; port: number };
 
 export async function runSafeGatewayRestart(
   opts: DaemonLifecycleOptions,
-  target?: SafeRestartTarget,
+  target?: { pid: number; ownerId: string; port: number },
 ): Promise<boolean> {
   if (opts.force) {
-    throw new Error(
+    throw restartFlagConflictError(
       "--safe cannot be combined with --force; omit --safe to begin a forced restart",
     );
   }
   if (opts.wait !== undefined) {
-    throw new Error("--safe cannot be combined with --wait; safe restart uses gateway deferral");
+    throw restartFlagConflictError(
+      "--safe cannot be combined with --wait; safe restart uses gateway deferral",
+    );
   }
   const skipDeferral = opts.skipDeferral === true;
   const params = {

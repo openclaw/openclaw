@@ -1,11 +1,16 @@
+import type { WorkspaceFilesystemEvidence } from "../../agents/workspace-state-guard.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { SessionMember, SessionParticipantRecord } from "./session-membership-facts.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
   SessionTranscriptContextVersion,
   SessionTranscriptWatermark,
 } from "./session-transcript-context-version.types.js";
-import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextStats,
+  SessionTranscriptProjectionFacts,
+} from "./session-transcript-projection-facts.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -27,14 +32,13 @@ export type SessionActorLifetime = {
   assertReadable(): void;
 };
 
-/** Entry policy and physical/version identity; transcript indexes are not authority. */
-export type SessionActorAuthorityFacts = Pick<
-  SessionActorHotState,
-  "target" | "version" | "writeToken" | "dependencySessionIds" | "entry"
->;
+/** Entry policy and physical/session identity; replica revisions are not authority. */
+export type SessionActorAuthorityFacts = Pick<SessionActorHotState, "target" | "entry">;
 
 /** Host-owned live authority, rechecked at both synchronous admission boundaries. Facts are read-only. */
 export type SessionActorAuthority = {
+  readCustody?: readonly SessionStoreReadCustody[];
+  workspaceEvidence?: readonly WorkspaceFilesystemEvidence[];
   assertCurrent(): void;
   authorize(
     stage: "transaction" | "commit",
@@ -57,12 +61,14 @@ export type SessionActorHotState = {
   hasBoard: boolean;
   participants: SessionParticipantRecord[];
   members: SessionMember[];
+  /** Durable actors expose unconsumed custody only, not retained source history. */
   pendingInputs: Array<Omit<SessionPendingInputRow, "message_json">>;
   /** Retry-key membership is complete only with resident modelContext. */
   completionKeys: string[];
   transcript: {
     /** Durable projection postimage; omitted by adapters without SQLite projections. */
     projection?: SessionTranscriptProjectionFacts;
+    contextStats?: SessionTranscriptContextStats;
     watermark: SessionTranscriptWatermark;
     version: SessionTranscriptContextVersion;
     /** Empty anchors prove absence only when this exact projection is resident. */

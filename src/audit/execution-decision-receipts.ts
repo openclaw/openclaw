@@ -172,6 +172,7 @@ function projectDecisionDisplay({
       schemaVersion: 1,
       selectorId,
       occurredAt: receipt.occurredAt,
+      ...(receipt.representedSubject ? { representedSubject: receipt.representedSubject } : {}),
       action: { family: "decision", operation: "record" },
       decision: { outcome: "unknown", reasonCode: "decision_fact_display_unverified" },
       enforcement: {
@@ -193,6 +194,7 @@ function projectDecisionDisplay({
     schemaVersion: 1,
     selectorId,
     occurredAt: receipt.occurredAt,
+    ...(receipt.representedSubject ? { representedSubject: receipt.representedSubject } : {}),
     action: {
       family: receipt.action.family,
       operation: receipt.action.operation,

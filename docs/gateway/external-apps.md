@@ -106,9 +106,7 @@ events publish admission changes immediately. The phase is `accepting`,
 The Control UI's bottom-left connection indicator shows **Suspending…** during
 preparation or draining and **Suspended** while prepared, including in Settings.
 It clears when suspension admission reopens, not when a request succeeds.
-Offline and restart indicators take precedence. Scheduler recovery keeps the
-suspension indicator until admission actually reopens; there is no separate
-resuming phase.
+Offline and restart indicators take precedence; there is no separate resuming phase.
 
 The RPC contract is:
 
@@ -119,7 +117,7 @@ The RPC contract is:
 - `gateway.suspend.resume` — `operator.admin`; params
   `{ "suspensionId": "id-from-prepare" }`
 - `gateway.suspend.handoff` — `operator.admin`; params
-  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" } }`
+  `{ "suspensionId": "id-from-prepare", "target": { "pid": 123, "processInstanceId": "id-from-system-info" }, "commit": true }`
 
 `terminalPolicy` and `drain` are optional. `terminalPolicy` accepts only
 `"preserve"` or `"terminate"` and defaults to `"preserve"`; `drain` defaults
@@ -195,7 +193,14 @@ together with `expiresAtMs`, `retryAfterMs`, `activeCount`, and `blockers`.
 Each status call immediately returns a fresh active-work snapshot, including
 pending protected lifecycle or final-chat writes. Polling never waits for those
 writes, cancels work, releases custody, or renews the lease. The handoff owner
-checks write custody again before authorizing a stop.
+checks write custody again before authorizing a stop. If a final chat write arrives
+after readiness, handoff waits for settlement within the original 30-second drain
+budget; it does not consume the 15-second cleanup grace or extend the lease.
+Unsettled writes still return `UNAVAILABLE`. The refusal message, Gateway log, and
+RPC error `details.terminalPersistence` include the pending count, oldest observed
+terminal-event age in milliseconds (`null` when unavailable), and up to eight
+redacted run IDs, each capped at 256 characters. Session keys are omitted.
+Idle freeze handoffs remain immediate.
 Once every blocker has finished, the same lease transitions to
 `{"status":"ready","expiresAtMs":...}`.
 Status preserves the original response shape by default for published validators.
@@ -230,14 +235,26 @@ openclaw gateway call gateway.suspend.prepare \
   --json
 ```
 
-Wait for the lease to become `ready` before performing the checked restart.
+Wait for the lease to become `ready` before performing the checked restart. With
+`drain: true`, readiness waits for persistence custody to clear, rather than for
+agent work to finish. Preparation is reversible and does not mark or abort sessions;
+the committed stop/restart performs that step.
 Terminal commands and scrollback are not recovered after restart; see
 [Restart recovery](/gateway/restart-recovery#what-is-not-resumed).
 
 An external deployment controller that explicitly authorizes interrupting
 remaining work can instead call `gateway.suspend.handoff` after its own graceful
-drain budget. The target must match the `pid` and `processInstanceId` obtained from
-`system.info` before suspension. This arms
+drain budget. Allow at least 30 seconds for the handoff response (for the generic
+CLI RPC command, pass `--timeout 30000`). The target must match the `pid` and
+`processInstanceId` obtained from `system.info` before suspension. With `commit: true`, the host commits shutdown
+immediately once write custody is clear and returns
+`{ "status": "committed", "suspensionId": "...", "expiresAtMs": ... }`.
+Admission stays closed even after the original lease expires. The controller
+still owns the native service stop and replacement; it must proceed without
+requiring the retired suspension to remain ready or the old process to stay alive.
+
+Omitting `commit` preserves the existing public RPC contract for controllers
+that send their own signal. This arms
 restart cleanup for that exact lease and host iteration's next `SIGTERM`; it
 does not send a signal or create a successor. The controller still owns the
 native service restart. A successful response is
@@ -248,9 +265,9 @@ armed authority. Resume, replacement, another accepted lifecycle action, or
 host retirement invalidates it. Pending final-chat persistence refuses arming
 and is checked again when `SIGTERM` consumes the arm. If that check refuses,
 the Gateway logs the refusal and retains ordinary graceful-stop behavior.
-An accepted handoff uses the existing restart recovery and abort cleanup,
-then exits for the external controller. An ordinary stop without an arm keeps
-waiting for active work. Controllers must defer on unsupported methods or
+An accepted handoff uses the standard graceful-shutdown marker and abort path,
+then exits for the external controller. Ordinary committed stop/restart also
+marks running root sessions and aborts active work promptly. Controllers must defer on unsupported methods or
 refused handoffs; a draining lease alone never authorizes interruption.
 
 Once shutdown commits, including an installation-replaced restart during a
@@ -269,12 +286,11 @@ change an older resident's responses. Request lifecycle metadata only once a
 Gateway version supporting it is running. Drivers must still verify their exact
 predecessor and handle transport closure through their lifecycle owner.
 
-A competing request ID or transient scheduler-resume failure returns retryable
-`UNAVAILABLE` with `retryAfterMs`. During scheduler recovery, prepare, status,
-and resume all return that error, the Gateway remains not-ready and
-refuses new work, and the host must not freeze or snapshot it. OpenClaw retries the
-scheduler automatically and reopens admission only after recovery succeeds. A
-mismatched resume ID returns `INVALID_REQUEST`. Prepare is subject to the
+A competing request ID returns retryable `UNAVAILABLE` with `retryAfterMs`.
+Resume and lease expiry request cron scheduling to resume, then reopen admission.
+Cron worker refresh failures are reported in logs; suspension does not add a
+separate fail-closed scheduler recovery loop. A mismatched resume ID returns
+`INVALID_REQUEST`. Prepare is subject to the
 Gateway's control-plane write limit of 30 attempts per minute; honor the
 returned retry delay. WebSocket clients are bucketed by device and IP. Admin HTTP
 controllers are bucketed by resolved client IP, so controllers behind one

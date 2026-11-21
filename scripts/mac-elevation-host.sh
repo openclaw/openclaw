@@ -283,10 +283,10 @@ case "$COMMAND" in
     required_tools=(codesign ditto file jq lipo plutil shasum spctl xcrun)
     ;;
   install)
-    required_tools=(codesign defaults df diskutil ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl sqlite3 uuidgen xcrun)
+    required_tools=(codesign defaults df diskutil ditto file jq launchctl lipo lsof open pgrep plutil shasum spctl uuidgen xcrun)
     ;;
   migration-plan)
-    required_tools=(defaults df diskutil jq launchctl lsof pgrep plutil sqlite3)
+    required_tools=(defaults df diskutil jq launchctl lsof pgrep plutil)
     ;;
   status)
     required_tools=(codesign file jq launchctl lipo plutil spctl xcrun)
@@ -1778,7 +1778,7 @@ run_openclaw_cli() {
 prepare_gateway_attestation() {
   [[ -d "$STATE_DIR" && ! -L "$STATE_DIR" ]] || fail "state directory is missing or symlinked: $STATE_DIR"
   [[ -f "$CONFIG_PATH" && ! -L "$CONFIG_PATH" ]] || fail "config is missing or symlinked: $CONFIG_PATH"
-  local mode remote_url token password profile database node_id nodes_json
+  local mode remote_url token password profile identity_json node_id nodes_json
   mode="$(run_openclaw_cli config get gateway.mode --json 2>/dev/null || true)"
   jq -e '. == "remote"' <<<"$mode" >/dev/null 2>&1 ||
     fail 'elevation host requires app-readable gateway.mode=remote in the selected config'
@@ -1799,10 +1799,8 @@ prepare_gateway_attestation() {
   if [[ "$MIGRATION_KIND" == 'canonical-node' && "$profile" != 'primary' ]]; then
     fail 'canonical node migration requires the macOS app to select the primary identity profile'
   fi
-  database="$STATE_DIR/state/openclaw.sqlite"
-  [[ -f "$database" && ! -L "$database" ]] || fail 'state database is missing or symlinked'
-  node_id="$(sqlite3 -readonly -batch -noheader "$database" \
-    "SELECT device_id FROM device_identities WHERE identity_key = '$profile';" 2>/dev/null || true)"
+  identity_json="$(run_openclaw_cli node identity --identity "$profile" --json 2>/dev/null || true)"
+  node_id="$(jq -r '.deviceId // empty' <<<"$identity_json")"
   [[ "${#node_id}" -ge 8 && "${#node_id}" -le 256 && "$node_id" =~ ^[A-Za-z0-9._:-]+$ ]] ||
     fail 'selected macOS node identity is missing or invalid'
   if [[ "$MIGRATION_KIND" == 'canonical-node' && -n "$MIGRATION_NODE_ID" &&

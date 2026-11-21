@@ -9,7 +9,6 @@ export type UserBackgroundReadCommand =
 export type UserBackgroundReadReply =
   | {
       type: "userBackground.snapshot";
-      profileId: string | undefined;
       result: UsersBackgroundResult;
     }
   | { type: "userBackground.image"; image: Uint8Array | undefined; byteLength: number | undefined };

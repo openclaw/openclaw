@@ -59,11 +59,6 @@ export function markEmbeddedRunAuthProfileSuccess(input: {
             `runId=${input.runId} sessionId=${input.sessionId} ` +
             `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
         );
-      } else if (log.isEnabled("trace")) {
-        log.trace(
-          `post-run auth-profile success bookkeeping completed: ` +
-            `runId=${input.runId} sessionId=${input.sessionId} durationMs=${durationMs}`,
-        );
       }
     })
     .catch((error: unknown) => {

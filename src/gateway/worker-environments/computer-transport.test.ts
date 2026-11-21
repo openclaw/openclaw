@@ -21,10 +21,10 @@ import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import { createTestApprovalFixture } from "../exec-approval-manager.test-support.js";
 import {
-  createApprovalClientLookup,
   createOperatorClient,
   expectSinglePendingApproval,
 } from "../node-invoke-plugin-policy.test-helpers.js";
+import { createApprovalClientLookup } from "../server-methods/approval-request.test-support.js";
 import { createWorkerComputerService } from "./computer-service.js";
 import {
   COMPUTER_USE,
@@ -871,6 +871,65 @@ describe("session computer transport", () => {
       });
       await service.close();
       expect(h.privateInvoke).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "settles native cleanup already in flight when worker shutdown expires (shared host: %s)",
+    async (sharedHost) => {
+      const h = createHarness(sharedHost);
+      const cleanup = new AbortController();
+      const service = createWorkerComputerService({ ...h.options, cleanupSignal: cleanup.signal });
+      const prepared = await service.prepare(h.claim);
+      if (!prepared) {
+        throw new Error("Expected a prepared session desktop");
+      }
+      const transport = prepared.bind(h.run, h.workerSource);
+      await transport.invoke(request("snapshot"));
+      const entered = createDeferredCore();
+      const released = createDeferredCore();
+      const closeResult = { ok: true, payload: { ok: true } };
+      const holdClose = async (invocation: { signal?: AbortSignal }) => {
+        const abort = () => released.resolve();
+        invocation.signal?.addEventListener("abort", abort, { once: true });
+        entered.resolve();
+        try {
+          await released.promise;
+          return invocation.signal?.aborted
+            ? { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } }
+            : closeResult;
+        } finally {
+          invocation.signal?.removeEventListener("abort", abort);
+        }
+      };
+      if (sharedHost) {
+        h.publicInvoke.mockImplementationOnce(holdClose);
+      } else {
+        h.privateInvoke.mockImplementationOnce(holdClose);
+      }
+      let settled = false;
+      const closing = service.close().then(
+        () => {
+          settled = true;
+          return undefined;
+        },
+        (error: unknown) => {
+          settled = true;
+          return error;
+        },
+      );
+      try {
+        await entered.promise;
+        expect(settled).toBe(false);
+        cleanup.abort(new Error("Worker shutdown deadline reached"));
+        await setImmediate();
+        expect(settled).toBe(true);
+        expect(await closing).toBeInstanceOf(AggregateError);
+        await expect(transport.invoke(request("type"))).rejects.toThrow(/closed|replaced/);
+      } finally {
+        released.resolve();
+        await closing;
+      }
     },
   );
 

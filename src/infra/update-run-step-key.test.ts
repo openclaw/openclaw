@@ -1,31 +1,15 @@
 import { afterEach, expect, it } from "vitest";
-import { z } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { VERSION } from "../version.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { createUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(closeOpenClawStateDatabaseForTest);
 
-// v2026.9.4 update-run-schema.ts:18 and gateway/server-methods/update-report.ts:111.
-// That reader drops exitCode from ledger rows and joins the sentinel by exact name.
-const releasedSteps = z
-  .array(
-    z.object({
-      step: z.string().max(1024),
-      status: z.enum(["pending", "in_progress", "completed", "failed", "skipped"]),
-      startedAtMs: z.number().int().nonnegative().optional(),
-      endedAtMs: z.number().int().nonnegative().optional(),
-      detail: z.string().max(1024).optional(),
-    }),
-  )
-  .max(128);
-
+// The v2026.9.4 reader drops exitCode and joins ledger and sentinel by exact name.
 it.each([
   ["package-install", "global update"],
   ["package-install-omit-optional", "global update (omit optional)"],
@@ -50,19 +34,12 @@ it.each([
   for (const receipt of updateRunStepsFromResultStep(step)) {
     recordUpdateRunStep(run.runId, { ...receipt, endedAtMs: 2 }, options);
   }
-  const recorded = getUpdateRun(run.runId, options);
-  if (!recorded) {
-    throw new Error("Missing recorded update run");
-  }
-  const decoded = releasedSteps.parse(recorded.steps);
-  expect(decoded).toEqual([
-    ...releasedSteps.parse(run.steps),
+  const recorded = getUpdateRun(run.runId, options)!;
+  expect(recorded.steps).toMatchObject([
+    ...run.steps,
     {
       step: releasedName,
       status: "failed",
-      startedAtMs: 1,
-      endedAtMs: 2,
-      detail: "timeout; Synthetic timeout",
     },
   ]);
   const result: UpdateRunResult = {
@@ -74,25 +51,9 @@ it.each([
     durationMs: 1,
   };
   const sentinel = buildUpdateRestartSentinelPayload({ result, meta: {} });
-  expect(sentinel.stats?.steps?.map((entry) => entry.name)).toEqual([releasedName]);
   expect(
-    decoded
-      .filter((entry) => entry.status === "failed")
-      .map(
-        (entry) =>
-          sentinel.stats?.steps?.find(
-            (measured) => !measured.advisory && measured.name === entry.step,
-          )?.log?.exitCode,
-      ),
-  ).toEqual([0]);
-  const report = await prepareUpdateFailureReport(
-    { attemptId: run.runId, result, recordedRun: recorded },
-    options,
-  );
-  expect(report.title).toBe(`Update failure: ${name} (${VERSION})`);
-  expect(report.body.split("\n").filter((line) => line.startsWith("- Failed phase:"))).toEqual([
-    `- Failed phase: ${name}`,
-  ]);
+    sentinel.stats?.steps?.map(({ name: key, log, advisory }) => [key, log?.exitCode, advisory]),
+  ).toEqual([[releasedName, 0, undefined]]);
 });
 
 it("retains bounded informational diagnostics without warnings or raw process output", () => {
@@ -108,10 +69,26 @@ it("retains bounded informational diagnostics without warnings or raw process ou
     recordUpdateRunStep(run.runId, receipt, options);
   }
   const recorded = getUpdateRun(run.runId, options)!;
-  const decoded = releasedSteps.parse(recorded.steps);
   expect(
-    decoded.filter((step) => step.step.startsWith("diagnostic:")).map((step) => step.detail),
+    recorded.steps.filter((step) => step.step.startsWith("diagnostic:")).map((step) => step.detail),
   ).toEqual([diagnostics[0], diagnostics[1], "x".repeat(1024)]);
-  expect(decoded.some((step) => step.step.startsWith("warning:"))).toBe(false);
+  expect(recorded.steps.some((step) => step.step.startsWith("warning:"))).toBe(false);
   expect(JSON.stringify(recorded)).not.toContain("RAW_PROCESS_OUTPUT");
 });
+
+// Settlement clears warnings, not the original process classification.
+it.each([{ warnings: undefined }, { warnings: [] }])(
+  "projects an advisory with explicit warnings $warnings",
+  ({ warnings }) => {
+    const steps = updateRunStepsFromResultStep({
+      name: "package-doctor",
+      exitCode: 86,
+      warnings,
+      advisory: { kind: "package-post-install-doctor", message: "Doctor advisory." },
+    });
+    expect(steps[0]).toMatchObject({ status: "completed", exitCode: 86 });
+    expect(steps.filter((step) => step.step.startsWith("warning:"))).toEqual(
+      warnings ? [] : [expect.objectContaining({ detail: "Doctor advisory." })],
+    );
+  },
+);

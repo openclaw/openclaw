@@ -7,9 +7,10 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  asNullableObjectRecord,
   normalizeOptionalString,
-  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -63,27 +64,12 @@ const CAPTURE_QUERY_PRESETS = new Set([
   "error-bursts",
 ]);
 
-type QaStartupProbeStatus = {
-  label: string;
-  url: string;
-  ok: boolean;
-  error?: string;
-};
-
 export function isCaptureQueryPreset(value: string): value is CaptureQueryPreset {
   return CAPTURE_QUERY_PRESETS.has(value);
 }
 
 function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  return typeof metaJson === "string" ? asNullableObjectRecord(safeParseQaJson(metaJson)) : null;
 }
 
 export function mapCaptureEventForQa(row: Record<string, unknown>) {
@@ -91,10 +77,10 @@ export function mapCaptureEventForQa(row: Record<string, unknown>) {
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: normalizeOptionalString(readStringField(meta, "provider")),
-    api: normalizeOptionalString(readStringField(meta, "api")),
-    model: normalizeOptionalString(readStringField(meta, "model")),
-    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
+    provider: normalizeOptionalString(meta?.provider),
+    api: normalizeOptionalString(meta?.api),
+    model: normalizeOptionalString(meta?.model),
+    captureOrigin: normalizeOptionalString(meta?.captureOrigin),
   };
 }
 
@@ -108,14 +94,10 @@ function defaultPortForProtocol(protocol: string): number {
   return 0;
 }
 
-async function probeTcpReachability(
-  rawUrl: string,
-  timeoutMs = 700,
-): Promise<QaStartupProbeStatus> {
+async function probeTcpReachability(rawUrl: string) {
   const parsed = URL.parse(rawUrl);
   if (!parsed) {
     return {
-      label: rawUrl,
       url: rawUrl,
       ok: false,
       error: "invalid url",
@@ -125,7 +107,6 @@ async function probeTcpReachability(
   const port = parsed.port ? Number(parsed.port) : defaultPortForProtocol(parsed.protocol);
   if (!host || !Number.isFinite(port) || port <= 0) {
     return {
-      label: parsed.origin,
       url: parsed.toString(),
       ok: false,
       error: "missing host or port",
@@ -138,9 +119,7 @@ async function probeTcpReachability(
         socket.destroy();
         reject(error);
       };
-      socket.setTimeout(timeoutMs, () => {
-        socket.destroy(new Error("timeout"));
-      });
+      socket.setTimeout(700);
       socket.once("connect", () => {
         socket.end();
         resolve();
@@ -149,13 +128,11 @@ async function probeTcpReachability(
       socket.once("timeout", () => onError(new Error("timeout")));
     });
     return {
-      label: parsed.host,
       url: parsed.toString(),
       ok: true,
     };
   } catch (error) {
     return {
-      label: parsed.host,
       url: parsed.toString(),
       ok: false,
       error: formatErrorMessage(error),

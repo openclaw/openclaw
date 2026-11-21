@@ -31,11 +31,8 @@ export function buildPluginCommandContext(params: HandleCommandsParams) {
     from: command.from,
     to: command.to,
     originatingTo: normalizeOptionalString(ctx.OriginatingTo),
-    accountId: ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof ctx.MessageThreadId === "string" || typeof ctx.MessageThreadId === "number"
-        ? ctx.MessageThreadId
-        : undefined,
+    accountId: ctx.AccountId,
+    messageThreadId: ctx.MessageThreadId,
     threadParentId: normalizeOptionalString(ctx.ThreadParentId),
   };
 }
@@ -75,6 +72,9 @@ export function buildCommandContext(
     senderIsOwner: auth.senderIsOwner,
     ...(auth.assertOwnerCurrent ? { assertOwnerCurrent: auth.assertOwnerCurrent } : {}),
     isAuthorizedSender: auth.isAuthorizedSender,
+    ...(auth.assertAuthorizedCurrent
+      ? { assertAuthorizedCurrent: auth.assertAuthorizedCurrent }
+      : {}),
     senderId: auth.senderId,
     abortKey,
     rawBodyNormalized,

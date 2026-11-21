@@ -4,12 +4,18 @@ import {
   isToolCallContentType,
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
+import { messageSubagentCompletions } from "../../../../src/shared/subagent-completion.js";
 import type { MessageGroup, NormalizedMessage } from "./chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
-import { extractText, extractTextCached, isEmptyUserTextOnlyMessage } from "./message-extract.ts";
+import {
+  extractText,
+  extractTextCached,
+  isEmptyUserTextOnlyMessage,
+  readTranscriptMediaEntries,
+} from "./message-extract.ts";
 
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -20,6 +26,12 @@ export function resolveMessageVisibleContent(
   message: unknown,
   normalized: NormalizedMessage,
 ): MessageGroup["visibleContent"] {
+  if (messageSubagentCompletions(message).length) {
+    return "text";
+  }
+  if (readTranscriptMediaEntries(message).length > 0) {
+    return "non-text";
+  }
   let hasText = false;
   for (const block of normalized.content) {
     if (block.type === "text") {
@@ -41,20 +53,16 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
     return false;
   }
   const text = extractText(message);
-  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
+  return text?.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
 export function isHiddenAssistantStreamText(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
-export function shouldHideAssistantChatMessage(message: unknown): boolean {
-  return isAssistantHeartbeatAckForDisplay(message);
-}
-
 export function isVisibleChatHistoryMessage(message: unknown): boolean {
   return !(
-    shouldHideAssistantChatMessage(message) ||
+    isAssistantHeartbeatAckForDisplay(message) ||
     isSyntheticTranscriptRepairToolResult(message) ||
     isEmptyUserTextOnlyMessage(message)
   );

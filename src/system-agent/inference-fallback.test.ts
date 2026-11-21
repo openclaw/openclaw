@@ -1,262 +1,116 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as modelAuth from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { verifySystemAgentInferenceWithFallback } from "./inference-fallback.js";
+import * as inferenceRoute from "./inference-route.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
+import * as setupInference from "./setup-inference.js";
 import type { VerifySetupInferenceResult } from "./setup-inference.js";
 
+afterEach(() => vi.restoreAllMocks());
 const runtime = {} as RuntimeEnv;
-
-function route(agentId: string, provider: string): SystemAgentConfiguredRoute {
-  return {
-    runner: "embedded",
-    agentHarnessRuntimeOverride: "openclaw",
-    runConfig: {},
-    sourceConfig: {},
-    modelLabel: `${provider}/model`,
-    provider,
-    model: "model",
-    agentDir: `/tmp/${agentId}`,
-    agentId,
-  };
-}
-
-const config: OpenClawConfig = {
-  agents: {
-    defaults: {
-      model: { primary: "zeta/model" },
-      systemAgent: { agentId: "requester" },
-    },
-    entries: {
-      requester: { model: "zeta/model" },
-      beta: { model: "beta/model" },
-      alpha: { model: "alpha/model" },
-    },
-  },
+const unavailable = { ok: false, status: "unavailable", error: "down" } as const;
+const roster = (ids: string[]): OpenClawConfig => ({
+  agents: { entries: Object.fromEntries(ids.map((id) => [id, {}])) },
+});
+type Options = {
+  config?: OpenClawConfig;
+  provider?: (agentId: string) => string;
+  hasAuth?: typeof modelAuth.hasAvailableAuthForProvider;
+  winner?: string;
+  failure?: Extract<VerifySetupInferenceResult, { ok: false }>;
 };
-
-async function verifyAfterFailure(
-  failure: Extract<VerifySetupInferenceResult, { ok: false }>,
-  {
-    includeBeta = false,
-    successfulAgentId = "alpha-other",
-  }: { includeBeta?: boolean; successfulAgentId?: "alpha-other" | "beta" } = {},
-) {
-  const attempts: string[] = [];
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: { model: { primary: "alpha/model" } },
-      entries: {
-        requester: { model: "alpha/model" },
-        "alpha-other": { model: "alpha/model" },
-        ...(includeBeta ? { beta: { model: "beta/model" } } : {}),
-      },
+async function exercise(attempts: string[], options: Options = {}) {
+  const observed: Array<string | undefined> = [];
+  const provider = options.provider ?? ((id) => (id === "requester" ? "zeta" : id));
+  vi.spyOn(inferenceRoute, "resolveSystemAgentConfiguredRouteFromConfig").mockImplementation(
+    async (_config, agentId) => {
+      if (!agentId) {
+        throw new Error("missing fallback fixture owner identity");
+      }
+      return {
+        runner: "embedded",
+        agentHarnessRuntimeOverride: "openclaw",
+        runConfig: {},
+        sourceConfig: {},
+        model: "model",
+        modelLabel: `${provider(agentId)}/model`,
+        provider: provider(agentId),
+        agentId,
+        agentDir: `/tmp/${agentId}`,
+      } satisfies SystemAgentConfiguredRoute;
     },
-  };
+  );
+  vi.spyOn(modelAuth, "hasAvailableAuthForProvider").mockImplementation(
+    options.hasAuth ?? (async () => true),
+  );
+  vi.spyOn(setupInference, "verifySetupInference").mockImplementation(async ({ agentId }) => {
+    observed.push(agentId);
+    return agentId === options.winner && agentId !== undefined
+      ? ({ ok: true, modelRef: `${provider(agentId)}/model`, latencyMs: 1, binding: {} } as never)
+      : (options.failure ?? unavailable);
+  });
   const result = await verifySystemAgentInferenceWithFallback({
     requestingAgentId: "requester",
     runtime,
-    deps: {
-      readConfig: async () => cfg,
-      resolveRoute: async (_cfg, agentId) => route(agentId, agentId === "beta" ? "beta" : "alpha"),
-      hasAuth: async () => true,
-      verify: async ({ agentId }) => {
-        attempts.push(agentId);
-        return agentId === successfulAgentId
-          ? ({
-              ok: true,
-              modelRef: agentId === "beta" ? "beta/model" : "alpha/model",
-              latencyMs: 1,
-              binding: {},
-            } as never)
-          : { ...failure };
-      },
-    },
+    config: options.config ?? roster(["requester", "beta", "alpha"]),
   });
-  return { result, attempts };
+  expect(observed).toEqual(attempts);
+  expect(result.ok).toBe(options.winner !== undefined);
+  return result;
 }
 
-describe("system-agent inference fallback", () => {
-  it("does not claim providers are unconfigured when no route can be verified", async () => {
-    const result = await verifySystemAgentInferenceWithFallback({
-      runtime,
-      deps: {
-        readConfig: async () => ({}),
-        resolveRoute: async () => null,
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      status: "unknown",
-      error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
-    });
+it("does not claim providers are unconfigured when no route can be verified", async () => {
+  vi.spyOn(inferenceRoute, "resolveSystemAgentConfiguredRouteFromConfig").mockResolvedValue(null);
+  expect(await verifySystemAgentInferenceWithFallback({ runtime, config: {} })).toEqual({
+    ok: false,
+    status: "unknown",
+    error: "OpenClaw could not verify a usable inference route. Check model setup and try again.",
   });
+});
 
-  it("tries the system-agent route first, then authenticated providers by provider id", async () => {
-    const attempts: string[] = [];
-    const verify = vi.fn(async ({ agentId }: { agentId: string }) => {
-      attempts.push(agentId);
-      return agentId === "beta"
-        ? ({ ok: true, modelRef: "beta/model", latencyMs: 1, binding: {} } as never)
-        : ({ ok: false, status: "unavailable", error: "down" } as const);
-    });
+it.each<[string, string[], Options]>([
+  ["requester then provider-id order", ["requester", "alpha", "beta"], { winner: "beta" }],
+  [
+    "implicit main before roster setup",
+    ["requester", "main"],
+    { config: {}, provider: (id) => id, winner: "main" },
+  ],
+  [
+    "skip unauthenticated providers",
+    ["requester", "beta"],
+    { hasAuth: async ({ provider }) => provider !== "alpha" },
+  ],
+  [
+    "later authenticated owner of one provider",
+    ["requester", "alpha-good"],
+    {
+      config: roster(["requester", "alpha-bad", "alpha-good"]),
+      provider: (id) => (id === "requester" ? "zeta" : "alpha"),
+      hasAuth: async ({ agentDir }) => agentDir?.endsWith("alpha-good") === true,
+      winner: "alpha-good",
+    },
+  ],
+])("tries %s", async (_name, attempts, options) => {
+  await exercise(attempts, options);
+});
 
-    const result = await verifySystemAgentInferenceWithFallback({
-      runtime,
-      deps: {
-        readConfig: async () => config,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "requester" ? "zeta" : agentId),
-        hasAuth: async () => true,
-        verify: verify as never,
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "alpha", "beta"]);
+it.each([
+  ["auth", "stale key", false, "alpha-other"],
+  ["rate_limit", "429", false, "alpha-other"],
+  ["format", "bad response", true, "alpha-other"],
+  ["unavailable", "down", true, "beta"],
+] as const)("retries %s at the correct owner scope", async (status, error, includeBeta, winner) => {
+  await exercise(["requester", winner], {
+    config: roster(["requester", "alpha-other", ...(includeBeta ? ["beta"] : [])]),
+    provider: (id) => (id === "beta" ? "beta" : "alpha"),
+    failure: { ok: false, status, error },
+    winner,
   });
+});
 
-  it("retains the implicit main fallback for a pre-roster config", async () => {
-    const attempts: string[] = [];
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => ({}),
-        resolveRoute: async (_cfg, agentId) => route(agentId, agentId),
-        hasAuth: async () => true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "main"
-            ? ({ ok: true, modelRef: "main/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "unavailable", error: "down" } as const);
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "main"]);
-  });
-
-  it("skips unauthenticated fallback providers", async () => {
-    const attempts: string[] = [];
-    await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => config,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "requester" ? "zeta" : agentId),
-        hasAuth: async ({ provider }) => provider !== "alpha",
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return { ok: false, status: "unavailable", error: "down" };
-        },
-      },
-    });
-
-    expect(attempts).toEqual(["requester", "beta"]);
-  });
-
-  it("uses a later authenticated route for one fallback provider", async () => {
-    const attempts: string[] = [];
-    const duplicateProviderConfig: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "zeta/model" } },
-        entries: {
-          requester: { model: "zeta/model" },
-          "alpha-bad": { model: "alpha/model" },
-          "alpha-good": { model: "alpha/model" },
-        },
-      },
-    };
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => duplicateProviderConfig,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "requester" ? "zeta" : "alpha"),
-        hasAuth: async ({ agentDir }) => agentDir?.endsWith("alpha-good") === true,
-        verify: async ({ agentId }) => {
-          attempts.push(agentId);
-          return agentId === "alpha-good"
-            ? ({ ok: true, modelRef: "alpha/model", latencyMs: 1, binding: {} } as never)
-            : ({ ok: false, status: "unavailable", error: "down" } as const);
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "alpha-good"]);
-  });
-
-  it("tries another credential owner of the same provider after an auth failure", async () => {
-    const { result, attempts } = await verifyAfterFailure({
-      ok: false,
-      status: "auth",
-      error: "stale key",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "alpha-other"]);
-  });
-
-  it("treats a rate limit as credential-scoped and tries another owner", async () => {
-    const { result, attempts } = await verifyAfterFailure({
-      ok: false,
-      status: "rate_limit",
-      error: "429",
-    });
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "alpha-other"]);
-  });
-
-  it("tries another route of the same provider after a malformed response", async () => {
-    const { result, attempts } = await verifyAfterFailure(
-      { ok: false, status: "format", error: "bad response" },
-      { includeBeta: true },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "alpha-other"]);
-  });
-
-  it("retires the whole provider after a provider-wide failure", async () => {
-    const { result, attempts } = await verifyAfterFailure(
-      { ok: false, status: "unavailable", error: "down" },
-      { includeBeta: true, successfulAgentId: "beta" },
-    );
-
-    expect(result.ok).toBe(true);
-    expect(attempts).toEqual(["requester", "beta"]);
-  });
-
-  it("does not fail over on owner or identity uncertainty", async () => {
-    const verify = vi.fn(
-      async () => ({ ok: false, status: "unknown", error: "winner identity uncertain" }) as const,
-    );
-
-    const result = await verifySystemAgentInferenceWithFallback({
-      requestingAgentId: "requester",
-      runtime,
-      deps: {
-        readConfig: async () => config,
-        resolveRoute: async (_cfg, agentId) =>
-          route(agentId, agentId === "requester" ? "zeta" : agentId),
-        hasAuth: async () => true,
-        verify,
-      },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      status: "unknown",
-      error: "winner identity uncertain",
-    });
-    expect(verify).toHaveBeenCalledOnce();
-  });
+it("does not fail over on owner or identity uncertainty", async () => {
+  const failure = { ok: false, status: "unknown", error: "winner identity uncertain" } as const;
+  expect(await exercise(["requester"], { failure })).toEqual(failure);
 });

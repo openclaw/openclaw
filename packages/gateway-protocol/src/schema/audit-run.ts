@@ -46,6 +46,15 @@ const PrincipalFactV1Schema = closedObject({
   state: ExecutionIdentityEvidenceStateSchema,
 });
 
+const RecordedRepresentedSubjectV1Schema = closedObject({
+  state: Type.Literal("present"),
+  principal: closedObject({
+    kind: Type.Literal("person"),
+    domainRef: ExecutionIdentityRefSchema,
+    principalRef: ExecutionIdentityRefSchema,
+  }),
+});
+
 const SponsorFactV1Schema = closedObject({
   principal: PrincipalRefV1Schema,
   relationshipRef: Type.Optional(ExecutionIdentityRefSchema),
@@ -164,6 +173,7 @@ export const DecisionReceiptV1Schema = closedObject({
   runId: ExecutionIdentityRefSchema,
   actionId: Type.Optional(ExecutionIdentityRefSchema),
   occurredAt: Type.Integer({ minimum: 0 }),
+  representedSubject: Type.Optional(RecordedRepresentedSubjectV1Schema),
   action: closedObject({
     family: ExecutionIdentityRefSchema,
     operation: ExecutionIdentityRefSchema,
@@ -208,6 +218,7 @@ export const DecisionReceiptDisplayV1Schema = closedObject({
   schemaVersion: Type.Literal(1),
   selectorId: ExecutionIdentityRefSchema,
   occurredAt: Type.Integer({ minimum: 0 }),
+  representedSubject: Type.Optional(RecordedRepresentedSubjectV1Schema),
   action: closedObject({
     family: ExecutionIdentityRefSchema,
     operation: ExecutionIdentityRefSchema,

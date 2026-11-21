@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -15,7 +16,7 @@ import {
   sha256File,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
-import { hasErrnoCode } from "./errno.js";
+import { ignoreMissingPath } from "./errno.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -32,6 +33,8 @@ import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.
 import { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 import type { UpdateDatabaseGenerations } from "./update-database-generations.js";
+import { writeDisplacedDatabaseReceipts } from "./update-displaced-database-receipt.js";
+import type { PluginCohortRecoveryBinding } from "./update-plugin-cohort-schema.js";
 
 async function existingFile(file: string) {
   try {
@@ -41,10 +44,7 @@ async function existingFile(file: string) {
     }
     return info;
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 
@@ -129,6 +129,9 @@ export async function restoreUpdateDatabaseBackup(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
+  pluginCohortRecovery?: PluginCohortRecoveryBinding;
+  /** Fires before the first live database changes; a failure before it left them untouched. */
+  onLiveMutation?: () => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -153,6 +156,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           assertOwned();
           const generations = await readUpdateDatabaseGenerationsIsolated(paths, {
             env: params.env,
+            pluginOwners: backup.pluginOwners,
           });
           assertOwned();
           if (!isDeepStrictEqual(generations, params.expectedGenerations)) {
@@ -182,6 +186,13 @@ export async function restoreUpdateDatabaseBackup(params: {
           resolveOpenClawStateSqlitePath(params.env),
         );
         const shared = backup.databases.find((entry) => entry.path === sharedPath);
+        const { prepareUpdateClientCredentialRestore } =
+          await import("./client-credential-restore.js");
+        const restoreClientCredentials = prepareUpdateClientCredentialRestore({
+          backup,
+          env: params.env,
+        });
+        assertOwned();
         const sources = [...backup.databases];
         for (const entry of sources) {
           if (entry.engine !== "postgres") {
@@ -197,20 +208,26 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
+          params.onLiveMutation?.();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
             config,
+            pluginOwners: backup.pluginOwners,
             profile: "exact",
-            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
             assertCurrent: assertOwned,
+            preserveUpdateHistory: entry.path === sharedPath,
+            pluginCohortRecovery:
+              entry.path === sharedPath ? params.pluginCohortRecovery : undefined,
+            expectedSource: { storeId: entry.storeId, namespace: entry.namespace },
           });
           sources[sources.indexOf(entry)] = { ...entry, ...prepared, snapshotPath };
           displaced.push(`PostgreSQL namespace ${entry.namespace}`);
         }
-        if (paths.includes(sharedPath)) {
+        if (paths.includes(sharedPath) && shared?.engine !== "postgres") {
           if (!shared) {
             throw new Error(
               "Database rollback cannot preserve update history without its shared snapshot.",
@@ -238,6 +255,7 @@ export async function restoreUpdateDatabaseBackup(params: {
                 currentPath: sharedPath,
                 targetPath,
                 stagingRoot,
+                pluginCohortRecovery: params.pluginCohortRecovery,
               },
             }),
             z.object({
@@ -250,6 +268,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           sources[sources.indexOf(shared)] = { ...shared, ...prepared, snapshotPath: targetPath };
         }
         const moves: Array<{
+          databasePath: string;
           source: string;
           target: string;
           identity: NonNullable<Awaited<ReturnType<typeof existingFile>>>;
@@ -263,7 +282,7 @@ export async function restoreUpdateDatabaseBackup(params: {
             }
             const identity = await existingFile(source);
             if (identity) {
-              moves.push({ source, target, identity });
+              moves.push({ databasePath, source, target, identity });
             }
           }
         }
@@ -297,6 +316,11 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        // Cleanup may remove these files only after a later verified update, by this receipt.
+        // Bookkeeping never blocks a rollback: without a receipt the files stay protected.
+        await writeDisplacedDatabaseReceipts(params.runId, moves).catch(() => undefined);
+        assertOwned();
+        params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();
           try {
@@ -322,6 +346,8 @@ export async function restoreUpdateDatabaseBackup(params: {
           await output.publish();
           assertOwned();
         }
+        restoreClientCredentials?.();
+        assertOwned();
         return displaced;
       },
     );

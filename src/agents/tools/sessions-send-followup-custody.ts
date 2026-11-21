@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
@@ -8,6 +9,7 @@ import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { assertionSucceeds } from "../../shared/assertion.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { FollowupRequest } from "../subagents/completion/session-followup-completion.types.js";
 import { captureRequesterFollowupAuthority } from "../subagents/requester-cron-authority.js";
@@ -93,7 +95,11 @@ export async function prepareSessionsSendFollowup(params: {
     }
     assertInvocation?.();
     for (const target of [
-      { agentId: params.requesterAgentId, sessionKey: params.requesterSessionKey },
+      {
+        agentId: params.requesterAgentId,
+        sessionKey: params.requesterSessionKey,
+        followLifecycle: true,
+      },
       { agentId: params.targetAgentId, sessionKey: params.targetSessionKey },
     ]) {
       facts.push(await prepareSessionMutationFacts({ cfg, ...target }));
@@ -134,6 +140,7 @@ export async function prepareSessionsSendFollowup(params: {
                     profile?.role ?? null,
                     currentConfig,
                     profile?.githubLogin ?? null,
+                    operatorRoleSubject(profile),
                   ),
             aliases: new Set(profile?.aliases ?? []),
           },
@@ -177,14 +184,7 @@ export async function prepareSessionsSendFollowup(params: {
             authorityReleased = true;
             releaseResources();
           },
-          isCurrent: () => {
-            try {
-              assertCurrent();
-              return true;
-            } catch {
-              return false;
-            }
-          },
+          isCurrent: () => assertionSucceeds(assertCurrent),
         }),
       );
       // The observer and the admitted parent share the prepared custody. Either

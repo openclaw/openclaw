@@ -5,14 +5,10 @@ import {
   resolveMediaUnderstandingString,
   type OpenAiCompatibleVideoPayload,
 } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
-import {
-  assertOkOrThrowHttpError,
-  buildOpenAiCompatibleAuthHeaders,
-  postJsonRequest,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-} from "./shared.js";
-import type { VideoDescriptionRequest, VideoDescriptionResult } from "./types.js";
+import type { VideoDescriptionResult } from "../../packages/media-understanding-common/src/types.js";
+import { postJsonResponse } from "./provider-json-post.js";
+import { buildOpenAiCompatibleAuthHeaders, resolveProviderHttpRequestConfig } from "./shared.js";
+import type { VideoDescriptionRequest } from "./types.js";
 
 export * from "../../packages/media-understanding-common/src/openai-compatible-video.js";
 
@@ -47,7 +43,7 @@ export async function describeOpenAiCompatibleVideo(
       transport: "media-understanding",
     });
 
-  const { response, release } = await postJsonRequest({
+  const payload = await postJsonResponse<OpenAiCompatibleVideoPayload>({
     url: `${baseUrl}/chat/completions`,
     headers,
     body: buildOpenAiCompatibleVideoRequestBody({
@@ -61,21 +57,14 @@ export async function describeOpenAiCompatibleVideo(
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
+    errorLabel: `${errorPrefix} failed`,
+    errorOptions: { requestHeaders: headers },
+    readOptions: { requestHeaders: headers },
   });
 
-  try {
-    await assertOkOrThrowHttpError(response, `${errorPrefix} failed`, { requestHeaders: headers });
-    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
-      response,
-      `${errorPrefix} failed`,
-      { requestHeaders: headers },
-    );
-    const text = coerceOpenAiCompatibleVideoText(payload);
-    if (!text) {
-      throw new Error(`${errorPrefix} response missing content`);
-    }
-    return { text, model };
-  } finally {
-    await release();
+  const text = coerceOpenAiCompatibleVideoText(payload);
+  if (!text) {
+    throw new Error(`${errorPrefix} response missing content`);
   }
+  return { text, model };
 }

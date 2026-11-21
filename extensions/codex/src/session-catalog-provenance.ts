@@ -2,8 +2,9 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { constants, createZstdDecompress } from "node:zlib";
 import { root as openSafeFilesystemRoot } from "openclaw/plugin-sdk/file-access-runtime";
-import { isJsonObject, type CodexThread, type JsonObject } from "./app-server/protocol.js";
+import { isJsonObject, type JsonObject } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
+import type { CodexCatalogNativeThread } from "./session-catalog-types.js";
 
 const MAX_SESSION_META_BYTES = 1024 * 1024;
 const SESSION_META_READ_CHUNK_BYTES = 64 * 1024;
@@ -46,6 +47,7 @@ export async function readCodexSessionMeta(
       symlinks: "reject",
     });
   } catch {
+    // Unavailable metadata cannot establish native provenance.
     return undefined;
   }
   const candidates = rolloutPath.endsWith(".zst")
@@ -129,6 +131,7 @@ export async function readCodexSessionMeta(
       const payload = parsed.payload;
       return payload.id === threadId ? payload : null;
     } catch {
+      // Incomplete or unreadable metadata cannot establish native provenance.
       return undefined;
     } finally {
       await opened.handle.close().catch(() => undefined);
@@ -139,20 +142,20 @@ export async function readCodexSessionMeta(
 
 /** Passive local listing uses native creation provenance, with rollout fallback for older records. */
 export async function isOpenClawManagedCodexThread(
-  thread: CodexThread,
+  thread: CodexCatalogNativeThread,
   localSessionsRoot: string | undefined,
-  diagnostics?: CodexCatalogPageDiagnostics,
+  diagnostics?: CodexCatalogPageDiagnostics | null,
 ): Promise<boolean> {
   const started = diagnostics ? performance.now() : 0;
   if (diagnostics) {
     diagnostics.fields.provenanceChecks++;
   }
   try {
-    const rolloutPath = typeof thread.path === "string" ? thread.path.trim() : "";
+    const rolloutPath = thread.path?.trim();
     if (!localSessionsRoot || !rolloutPath) {
       return false;
     }
-    if (typeof thread.originator === "string" && thread.originator.length > 0) {
+    if (thread.originator) {
       return thread.originator === "openclaw";
     }
     const cacheKey = `${localSessionsRoot}\0${rolloutPath}`;

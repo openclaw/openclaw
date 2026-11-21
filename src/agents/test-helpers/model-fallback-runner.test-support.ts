@@ -1,6 +1,13 @@
 import type { FailoverReason } from "../failover/signal.js";
 import type { ModelFallbackRunOptions } from "../model-fallback-attempt.js";
 
+export function isTestCliProvider(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return (
+    normalized === "claude-cli" || normalized === "google-gemini-cli" || normalized === "codex-cli"
+  );
+}
+
 export type TestModelFallbackRunnerParams<T = unknown> = {
   provider: string;
   model: string;

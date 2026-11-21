@@ -20,7 +20,7 @@ Install the external
 [`@poolside/openclaw-provider` plugin](https://hub.openclaw.ai/poolside/plugins/openclaw-provider):
 
 ```bash
-openclaw plugins install clawhub:@poolside/openclaw-provider
+openclaw plugins install @poolside/openclaw-provider
 ```
 
 Follow [Poolside's OpenClaw guide](https://docs.poolside.ai/tools/openclaw) for

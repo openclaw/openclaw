@@ -1,5 +1,6 @@
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../../infra/sqlite-busy-timeout.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { retainOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -68,27 +69,24 @@ export function prepareSessionMaintenanceInWorker(
   try {
     claim.assertCurrent();
     prepareWorkerAgeFact(database, plan);
-    const prepared = runSqliteDeferredTransactionSync(
+    const prepared = runSqliteReadSnapshotSync(
       database.db,
-      () => {
-        const planPreparation = prepareSessionEntryMaintenanceInDatabase(
+      () =>
+        prepareSessionEntryMaintenanceInDatabase(
           database,
           plan.input,
           () => plan.input.preservation,
-        );
-        return planPreparation.kind === "no-op"
-          ? planPreparation.apply
-          : planPreparation.captureMutation();
-      },
+        ),
       { databaseLabel: database.path, operationLabel: "session.maintenance.plan.read" },
     );
     return {
+      requiresWrite: prepared.requiresWrite,
       apply(
         current: OpenClawAgentDatabase,
         onArchived?: Parameters<typeof applySessionEntryMaintenanceInDatabase>[3],
       ) {
         claim.assertCurrent();
-        return prepared(current, onArchived);
+        return prepared.apply(current, onArchived);
       },
       release: claim.release,
     };
@@ -163,7 +161,7 @@ export function runSessionMaintenanceMetadataInTransaction(
 ): SessionMaintenanceMetadataResult {
   if (plan.kind === "maintenance-statistics") {
     const database = openOpenClawAgentDatabase(plan.databaseOptions);
-    runWithSqliteBusyTimeout(database.db, 0, () =>
+    const run = () =>
       runOpenClawAgentWriteTransaction(
         (current) => {
           callbacks.beforeMutation?.(current);
@@ -173,11 +171,24 @@ export function runSessionMaintenanceMetadataInTransaction(
         },
         plan.databaseOptions,
         { busyTimeoutMs: 0, operationLabel: "session.maintenance.statistics" },
-      ),
-    );
+      );
+    if (isPostgresSqlConnection(database.db)) {
+      run();
+    } else {
+      runWithSqliteBusyTimeout(database.db, 0, run);
+    }
     return { kind: plan.kind, value: true };
   }
   try {
+    if (plan.kind === "maintenance-plan" && prepared?.requiresWrite === false) {
+      const database = openOpenClawAgentDatabase(plan.databaseOptions);
+      return {
+        kind: plan.kind,
+        value: prepared.apply(database),
+        nextAt: readSessionEntryMaintenanceNextAgeAt(database, plan.input.maintenance),
+        ageFact: readSessionEntryMaintenanceAgeFact(database.db, plan.input.maintenance),
+      };
+    }
     return runOpenClawAgentWriteTransaction(
       (database) => {
         callbacks.beforeMutation?.(database);

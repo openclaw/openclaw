@@ -1,9 +1,7 @@
-import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
 } from "../state/openclaw-state-db-readonly.js";
-import { PluginCacheFactInvalidatedError } from "./plugin-cache.js";
 import type {
   PluginMetadataStateKey,
   PluginMetadataStateRow,
@@ -17,40 +15,30 @@ async function readPluginMetadataState(
   options: { path?: string; env?: NodeJS.ProcessEnv },
   artifactPreservingReadOnly: boolean,
 ): Promise<PluginMetadataStateRow[]> {
-  try {
-    const stateKeys: PluginMetadataStateKey[] =
-      "stateKeys" in selection
-        ? [...selection.stateKeys]
-        : [
-            selection.selector === "installed-index"
-              ? "plugins.installedIndex"
-              : "plugins.bundledDiscovery",
-          ];
-    const read = () =>
-      executeExistingOpenClawStateRead(
-        options,
-        {
-          type: "plugins.metadata.read",
-          input: { stateKeys },
-        },
-        { snapshotPreparation: "awaited" },
-      );
-    const result = await (artifactPreservingReadOnly
-      ? withArtifactPreservingStateReads(read)
-      : read());
-    if (result === undefined) {
-      return [];
-    }
-    return result.rows;
-  } catch (error) {
-    if (isStateDatabaseReadAdmissionInvalidatedError(error)) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin metadata read admission changed during preparation; retry the operation.",
-        { cause: error },
-      );
-    }
-    throw error;
+  const stateKeys: PluginMetadataStateKey[] =
+    "stateKeys" in selection
+      ? [...selection.stateKeys]
+      : [
+          selection.selector === "installed-index"
+            ? "plugins.installedIndex"
+            : "plugins.bundledDiscovery",
+        ];
+  const read = () =>
+    executeExistingOpenClawStateRead(
+      options,
+      {
+        type: "plugins.metadata.read",
+        input: { stateKeys },
+      },
+      { snapshotPreparation: "awaited" },
+    );
+  const result = await (artifactPreservingReadOnly
+    ? withArtifactPreservingStateReads(read)
+    : read());
+  if (result === undefined) {
+    return [];
   }
+  return result.rows;
 }
 
 /** Read raw metadata through the shared reader, including retained snapshot scopes. */

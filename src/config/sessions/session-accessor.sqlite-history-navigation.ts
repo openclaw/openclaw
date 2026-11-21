@@ -1,7 +1,12 @@
 import { toUSVString } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
+import {
+  jsonNativeFieldsValid,
+  jsonObjectStringEntries,
+} from "../../infra/database-engine/json-values.js";
+import { engineStringPosition } from "../../infra/database-engine/scalar.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   UnindexedActiveTranscriptNavigation,
   UnindexedTranscriptNavigation,
@@ -10,62 +15,39 @@ import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import {
-  transcriptEventNavigationSql,
-  transcriptEventResetNavigationSql,
-} from "./transcript-payload.js";
-
-function parseNavigation(eventJson: string): Record<string, unknown> | undefined {
-  const parsed: unknown = JSON.parse(eventJson);
-  if (!isRecord(parsed)) {
-    return undefined;
-  }
-  // SQLite-overdepth rows reach JSON.parse whole; retain only navigation afterward.
-  const {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
-  } = parsed;
-  return {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
-  };
-}
+  projectTranscriptNavigationForReadSql,
+  readTranscriptNavigation,
+} from "./session-transcript-navigation.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 function navigationCandidatesSql(
+  database: EngineConnection,
   identitySeq: Expression<number | null>,
   event: Expression<string>,
-  candidate: { key: "id"; eventIds: readonly string[] },
+  navigationValid: Expression<number>,
+  eventIds: readonly string[],
 ): RawBuilder<SqlBool> {
+  const member =
+    /* kysely-allow-raw: fixed member alias in the candidate enumeration below. */ sql.ref<string>(
+      "member.value",
+    );
   const match =
-    candidate.eventIds.length > 32
-      ? /* kysely-allow-raw: keep the member guard; callers filter large sets without a quadratic scan. */ sql<SqlBool>`1`
-      : candidate.eventIds.length === 1
-        ? /* kysely-allow-raw: bound instr narrows IDs before exact JavaScript matching. */ sql<SqlBool>`instr(member.value, ${candidate.eventIds[0]}) > 0`
-        : /* kysely-allow-raw: nested json_each matches bound ID sets without row hydration. */ sql<SqlBool>`EXISTS (SELECT 1 FROM json_each(${JSON.stringify(candidate.eventIds)}) AS requested
-        WHERE instr(member.value, requested.value) > 0)`;
+    eventIds.length > 32
+      ? /* kysely-allow-raw: keep the member guard; callers filter large sets without a quadratic scan. */ sql<SqlBool>`true`
+      : /* kysely-allow-raw: bound substrings only narrow candidates before exact JavaScript matching. */ sql<SqlBool>`(${sql.join(
+          eventIds.map((id) => sql`${engineStringPosition(database, member, sql.val(id))} > 0`),
+          sql` OR `,
+        )})`;
   // Admit any duplicate root member; JavaScript applies last-key and full trim semantics.
   // Invalid and SQLite-overdepth rows still reach the existing JSON.parse fallback.
   // Fence JSON behind the anti-join so indexed payloads are never parsed just to reject them.
-  return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN 0
-    WHEN json_valid(${event}) THEN EXISTS (
-      SELECT 1 FROM json_each(${event}) AS member
-      WHERE member.key = ${candidate.key} AND member.type = 'text' AND ${match}
-    ) ELSE 1 END`;
+  return /* kysely-allow-raw: decoded members only narrow unindexed candidates; JavaScript owns exact matching. */ sql<SqlBool>`CASE WHEN ${identitySeq} IS NOT NULL THEN false
+    WHEN ${navigationValid} = 1 AND ${jsonNativeFieldsValid(database, event)} THEN EXISTS (
+      SELECT 1 FROM ${jsonObjectStringEntries(database, event)} AS member
+      WHERE member.key = ${"id"} AND ${match}
+    ) ELSE true END`;
 }
 
 function canFilterEventIds(eventIds: readonly string[] | undefined): eventIds is readonly string[] {
@@ -78,6 +60,7 @@ function unindexedNavigationQuery(
   projection: CurrentTranscriptProjection,
   eventIds: readonly string[] | undefined,
 ) {
+  const event = transcriptEventNavigationSql(projection.database.db, "event");
   return getActiveTranscriptKysely(projection.database)
     .selectFrom("transcript_events as event")
     .leftJoin("transcript_event_identities as identity", (join) =>
@@ -87,7 +70,10 @@ function unindexedNavigationQuery(
     )
     .select([
       "event.seq as event_seq",
-      transcriptEventResetNavigationSql(projection.database.db, "event").as("event_json"),
+      /* kysely-allow-raw: stored validity preserves the raw overdepth/invalid parser fallback. */
+      sql<string>`CASE WHEN event.navigation_valid = 1 THEN ${projectTranscriptNavigationForReadSql(projection.database.db, event)} ELSE ${event} END`.as(
+        "event_json",
+      ),
       /* kysely-allow-raw: preserve original event byte costs while reading navigation only. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
     ])
@@ -96,12 +82,11 @@ function unindexedNavigationQuery(
     .$if(canFilterEventIds(eventIds), (filtered) =>
       filtered.where((eb) =>
         navigationCandidatesSql(
+          projection.database.db,
           eb.ref("identity.seq"),
-          transcriptEventNavigationSql(projection.database.db, "event"),
-          {
-            key: "id",
-            eventIds: eventIds!,
-          },
+          event,
+          eb.ref("event.navigation_valid"),
+          eventIds!,
         ),
       ),
     );
@@ -109,7 +94,7 @@ function unindexedNavigationQuery(
 
 function* navigationRows<Row extends { event_json: string }>(rows: Iterable<Row>) {
   for (const { event_json, ...row } of rows) {
-    const event = parseNavigation(event_json);
+    const event = readTranscriptNavigation(event_json);
     if (event) {
       yield { ...row, event };
     }
@@ -132,10 +117,26 @@ export function* iterateUnindexedTranscriptNavigation(
   const query = unindexedNavigationQuery(projection, options.eventIds)
     .$if(options.controlsOnly === true, (filtered) =>
       filtered.where((eb) =>
-        eb.or([
-          eb("event.navigation_valid", "=", 0),
-          eb("event.navigation_last_type", "in", ["reset", "compaction", "custom_message"]),
-        ]),
+        // SQLite may evaluate event columns before the anti-join unless identity fences them.
+        eb
+          .case()
+          .when("identity.seq", "is not", null)
+          .then(false)
+          .else(
+            eb.or([
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
+                "=",
+                0,
+              ),
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_last_type", "event"),
+                "in",
+                ["reset", "compaction", "custom_message"],
+              ),
+            ]),
+          )
+          .end(),
       ),
     )
     .where("event.seq", "<=", options.maxRawSeq ?? projection.state.indexedSeq)

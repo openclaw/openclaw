@@ -1,4 +1,4 @@
-import { isSessionLifecycleMutationActive } from "../../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../../sessions/session-controller.lifecycle.js";
 import { assertSessionEntryCreationPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryCreationOperation } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { CapturedSessionActorStorageOwner } from "./session-actor-storage-binding.js";
@@ -6,15 +6,31 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import type {
-  SessionGenerationEntry,
-  SessionGenerationFacts,
-} from "./session-delivery-generation.types.js";
+import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
+
+/**
+ * A chat lease follows the key to the current transcript. A transcript lease holds the
+ * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
+ * the row's absence.
+ */
+export function matchesSessionGeneration(
+  input: LeaseFacts,
+  entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+): boolean {
+  if (!entry || input.sessionId === null) {
+    return Boolean(entry) !== (input.sessionId === null);
+  }
+  return (
+    !input.exact ||
+    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
+      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
+  );
+}
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
-  input: SessionGenerationFacts,
+  input: LeaseFacts,
   onRevoked?: (reason: unknown) => void,
 ) {
   const selected = source.binding;
@@ -45,7 +61,7 @@ export async function prepareMemorySessionGeneration(
   let initial: SessionGenerationEntry | undefined;
   try {
     initial = readEntry();
-    if ((initial?.sessionId ?? null) !== input.sessionId) {
+    if (!matchesSessionGeneration(input, initial)) {
       throw new SessionDeliveryGenerationRevokedError();
     }
   } catch (error) {
@@ -77,20 +93,23 @@ export async function prepareMemorySessionGeneration(
   };
   return {
     assertCurrent,
+    assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
     assertDeliveryCurrent() {
-      if (
-        isSessionLifecycleMutationActive(source.path, [
-          input.sessionKey,
-          input.sessionId ?? undefined,
-        ])
-      ) {
+      if (isSessionMutationActive(source.path, [input.sessionKey, initial?.sessionId])) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertCurrent();
     },
     readSessionSettings() {
       const entry = readCurrent();
-      return { permissionMode: entry?.permissionMode, toolOverrides: entry?.toolOverrides };
+      return (
+        entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+        }
+      );
     },
     prepareRead: () => undefined,
     release() {

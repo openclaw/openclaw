@@ -11,7 +11,7 @@ extension ChatSessionSidebar {
                     Image(systemName: "square.and.pencil")
                     Text("New Thread")
                     Spacer(minLength: 4)
-                    Text(verbatim: "⇧⌘N")
+                    Text(verbatim: "⌘N")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -20,7 +20,7 @@ extension ChatSessionSidebar {
                 .frame(height: 38)
                 .contentShape(Rectangle())
             }
-            .help(String(localized: "New thread"))
+            .help(String(localized: "New thread (⌘N)"))
             .accessibilityIdentifier("chat-new-thread")
             Divider()
                 .frame(height: 16)
@@ -33,7 +33,6 @@ extension ChatSessionSidebar {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(String(localized: "New thread options"))
-            .help(String(localized: "New thread options"))
             .popover(isPresented: self.$isPresentingNewSessionOptions) {
                 ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
                     self.isPresentingNewSessionOptions = false
@@ -146,7 +145,7 @@ extension ChatSessionSidebar {
             .buttonStyle(.plain)
             .accessibilityIdentifier("chat-agent-\(agent.id)")
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-            .help(String(format: String(localized: "Open %@"), agent.displayName))
+            .help(agent.displayName)
             self.attentionBadge(summary: attention, targetID: "agent:\(agent.id)")
         }
         .padding(.horizontal, 8)

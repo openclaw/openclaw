@@ -1,3 +1,4 @@
+import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import {
   acceptGatewayDeviceSourceAuthority,
   bindGatewayDeviceRevocation,
@@ -54,21 +55,18 @@ export async function retainTalkClientRunAuthority(
       acceptGatewayDeviceSourceAuthority(params.hasCurrentClientAuthority);
     },
     async retainRun(runId: string) {
-      if (released) {
-        throw new Error("Talk caller source has closed");
+      if (released || sourceCurrent?.() === false) {
+        throw new Error("Talk caller source authority is no longer active");
       }
       const retained = await retainGatewayOperatorRun({
         client: client ?? null,
         context: params.context,
         hasCurrentClientAuthority: committedSource,
         runId,
-        entry: params.context.chatAbortControllers.get(runId),
+        entry: getRpcSourceForGateway(runId, params.context.resolveGatewayContext),
       });
       const assertSourceCurrent = () => {
         retained.authority?.assertCurrent();
-        if (sourceCurrent?.() === false) {
-          throw new Error("Talk caller source authority is no longer active");
-        }
       };
       try {
         assertSourceCurrent();

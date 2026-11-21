@@ -14,7 +14,7 @@ export function configResponse(prefs: Record<string, unknown>, hash: string) {
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
+export function requireRecord(value: unknown, label: string): Record<string, unknown> {
   expect(value, label).toBeTruthy();
   expect(typeof value, label).toBe("object");
   expect(Array.isArray(value), label).toBe(false);

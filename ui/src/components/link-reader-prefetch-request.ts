@@ -29,7 +29,7 @@ export async function prefetchLinkReader(
   if (!target || !owner?.client?.connected || signal.aborted) {
     return;
   }
-  const { client, agentId, readers } = owner;
+  const { client, agentId, sessionKey, readers } = owner;
   await bootstrap.define();
   const provider = bootstrap.providerFor(anchor);
   await provider?.updateComplete;
@@ -41,6 +41,7 @@ export async function prefetchLinkReader(
     provider !== owner ||
     provider.client !== client ||
     provider.agentId !== agentId ||
+    provider.sessionKey !== sessionKey ||
     provider.readers !== readers
   ) {
     return;

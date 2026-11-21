@@ -15,7 +15,10 @@ import {
   resolveSessionFilePathOptions,
 } from "../../config/sessions/paths.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
-import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
+import {
+  resolveSessionCreatorActor,
+  sessionCreatorProfileId,
+} from "../../config/sessions/session-entry-provenance.js";
 import { withSessionHistoryWorkerDatabases } from "../../config/sessions/session-transcript-worker-runtime.js";
 import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -119,7 +122,7 @@ export function projectUsageCreator(
   config: OpenClawConfig,
 ): SessionUsageCreator {
   const entry = session.storeEntry ?? session.creatorEntry;
-  const actor = entry?.createdActor;
+  const actor = resolveSessionCreatorActor(entry?.createdActor);
   if (!actor) {
     return { key: UNKNOWN_USAGE_CREATOR_KEY };
   }
@@ -162,6 +165,11 @@ function usageSessionIdentity(agentId: string, sessionId: string): string {
 
 type StoredUsageSession = { key: string; entry: SessionEntry };
 type UsageSessionTarget = Pick<GatewayStoredSessionTarget, "agentId" | "storeTarget" | "storeKey">;
+type UsageSessionVisibility = (
+  key: string,
+  entry: SessionEntry,
+  target?: UsageSessionTarget,
+) => boolean;
 
 function buildStoreBySessionIdentity(
   store: Record<string, SessionEntry>,
@@ -227,7 +235,7 @@ export async function selectUsageSessions(params: {
   groupingMode: UsageGroupingMode;
   startMs: number;
   endMs: number;
-  visibilityFilter?: (key: string, entry: SessionEntry) => boolean;
+  visibilityFilter?: UsageSessionVisibility;
 }): Promise<UsageSessionSelection[]> {
   const {
     config,
@@ -240,6 +248,9 @@ export async function selectUsageSessions(params: {
     visibilityFilter,
   } = params;
   await projection.prepareSelection({ metadataOnly: true });
+  if (visibilityFilter) {
+    await projection.prepareMembership();
+  }
   const selection = prepareSessionRowSelection(
     projection,
     effectiveAgentId ? { agentId: effectiveAgentId } : {},
@@ -268,7 +279,7 @@ export async function selectUsageSessions(params: {
     Object.entries(store).filter(
       ([key, entry]) =>
         (!effectiveAgentId || targetsBySessionKey.get(key)?.agentId === effectiveAgentId) &&
-        (!visibilityFilter || visibilityFilter(key, entry)),
+        (!visibilityFilter || visibilityFilter(key, entry, targetsBySessionKey.get(key))),
     ),
   );
   const { storeByIdentity: storeBySessionIdentity, familyOwners } = buildStoreBySessionIdentity(
@@ -298,8 +309,6 @@ export async function selectUsageSessions(params: {
     const currentInstance = {
       sessionId: base.sessionId,
       sessionFile: base.sessionFile,
-      transcriptFile: discoveredByIdentity.get(usageSessionIdentity(base.agentId, base.sessionId))
-        ?.transcriptFile,
     };
     if (groupingMode !== "family") {
       return { ...base, instances: [currentInstance] };
@@ -386,7 +395,12 @@ export async function selectUsageSessions(params: {
         }
         if (
           visibilityFilter &&
-          (!resolved.entry || !visibilityFilter(resolvedStoreKey, resolved.entry))
+          (!resolved.entry ||
+            !visibilityFilter(
+              resolvedStoreKey,
+              resolved.entry,
+              targetsBySessionKey.get(resolvedStoreKey),
+            ))
         ) {
           throw new Error("session visibility changed");
         }
@@ -467,7 +481,10 @@ export async function selectUsageSessions(params: {
           ) {
             throw new UsageSessionInvalidRequestError(`Invalid session reference: ${key}`);
           }
-          if (visibilityFilter && (!target.entry || !visibilityFilter(key, target.entry))) {
+          if (
+            visibilityFilter &&
+            (!target.entry || !visibilityFilter(key, target.entry, targetsBySessionKey.get(key)))
+          ) {
             continue;
           }
           sessionFile = target.sessionFile;
@@ -513,7 +530,7 @@ export async function selectUsageSessions(params: {
 
 export async function loadUsageSessionContext(
   selected: UsageSessionSelection[],
-  visibilityFilter?: (key: string, entry: SessionEntry) => boolean,
+  visibilityFilter?: UsageSessionVisibility,
 ): Promise<void> {
   const contextRows = new Map<
     GatewayStoredSessionTarget["storeTarget"],
@@ -557,7 +574,16 @@ export async function loadUsageSessionContext(
           // Summary loading can yield across a reset or sharing change; never expose its successor's report.
           if (
             entry?.sessionId === row.sessionId &&
-            (!visibilityFilter || visibilityFilter(row.key, entry))
+            (!visibilityFilter ||
+              visibilityFilter(
+                row.key,
+                entry,
+                row.contextTarget && {
+                  agentId: row.agentId,
+                  storeTarget: row.contextTarget.storeTarget,
+                  storeKey: row.contextTarget.storedKey,
+                },
+              ))
           ) {
             row.contextWeight = entry.systemPromptReport;
           }

@@ -1,36 +1,19 @@
 // Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
-import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
-  analyzeBootstrapBudget,
+  buildBootstrapBudgetState,
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarningNotice,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { buildGroupChatContext } from "../../../src/auto-reply/reply/groups.js";
-import {
-  buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
-} from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
+import { buildSourceConversationContext } from "../../../src/auto-reply/reply/groups.js";
+import { buildInboundMetaSystemPrompt } from "../../../src/auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
-
-/** One turn in a prompt composition scenario. */
-type PromptScenarioTurn = {
-  id: string;
-  systemPrompt: string;
-  bodyPrompt: string;
-};
-
-/** Multi-turn prompt composition scenario fixture. */
-export type PromptScenario = {
-  scenario: string;
-  turns: PromptScenarioTurn[];
-};
+import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 
 function buildCommonSystemParams(workspaceDir: string) {
   const toolNames = [
@@ -84,17 +67,13 @@ function buildSystemPrompt(params: {
   });
 }
 
-function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
-  const inboundUserContext = buildInboundUserContextPrefix(params.ctx);
-  const envelope = buildReplyPromptEnvelope({
-    ctx: params.ctx,
-    sessionCtx: params.ctx,
-    baseBody: params.body,
-    hasUserBody: true,
-    inboundUserContext,
-    isBareSessionReset: false,
-    startupAction: "new",
-  });
+async function buildAutoReplyModelPrompt(params: {
+  ctx: TemplateContext;
+  body: string;
+  workspaceDir: string;
+}): Promise<string> {
+  const prepared = await preparePromptSnapshotReply(params);
+  const envelope = prepared.buildPromptBodies({});
   return buildCurrentInboundPrompt({
     context: envelope.currentInboundContext,
     prompt: envelope.queuedBody,
@@ -104,7 +83,7 @@ function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string 
 function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: TemplateContext }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
-    buildGroupChatContext({
+    buildSourceConversationContext({
       sessionCtx: params.sessionCtx,
     }),
   ].filter(Boolean);
@@ -115,7 +94,9 @@ function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: 
   });
 }
 
-function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
+async function createDiscordBoundaryScenario(
+  workspaceDir: string,
+): Promise<{ systemPrompt: string; bodyPrompt: string }> {
   const body = "Please summarize the deploy log.";
   const baseCtx: TemplateContext = {
     Provider: "discord",
@@ -144,24 +125,19 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
     ],
   };
   return {
-    scenario: "auto-reply-discord-boundary",
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: baseCtx,
-        }),
-        bodyPrompt: buildAutoReplyModelPrompt({
-          ctx: baseCtx,
-          body,
-        }),
-      },
-    ],
+    systemPrompt: buildAutoReplySystemPrompt({
+      workspaceDir,
+      sessionCtx: baseCtx,
+    }),
+    bodyPrompt: await buildAutoReplyModelPrompt({
+      ctx: baseCtx,
+      body,
+      workspaceDir,
+    }),
   };
 }
 
-async function createBootstrapWarningScenario(workspaceDir: string): Promise<PromptScenario> {
+async function createBootstrapWarningScenario(workspaceDir: string): Promise<string> {
   const bootstrapConfig = {
     agents: {
       defaults: {
@@ -179,58 +155,26 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
     workspaceDir,
     config: bootstrapConfig,
   });
-  const analysis = analyzeBootstrapBudget({
-    files: buildBootstrapInjectionStats({
-      bootstrapFiles,
-      injectedFiles: contextFiles,
-    }),
-    bootstrapMaxChars: bootstrapConfig.agents.defaults.bootstrapMaxChars,
-    bootstrapTotalMaxChars: bootstrapConfig.agents.defaults.bootstrapTotalMaxChars,
-  });
+  const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
+    buildBootstrapBudgetState({
+      config: bootstrapConfig,
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: contextFiles,
+      }),
+    });
   if (!analysis.hasTruncation) {
     throw new Error("bootstrap-warning scenario expected truncated bootstrap context");
   }
-  const warning = buildBootstrapPromptWarning({
-    analysis,
-    mode: "always",
-    seenSignatures: [],
-  });
   const truncationNotice = buildBootstrapPromptWarningNotice(warning.lines);
   if (!truncationNotice) {
     throw new Error("bootstrap-warning scenario expected a truncation notice");
   }
-  return {
-    scenario: "bootstrap-warning",
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "hello",
-      },
-      {
-        id: "t2",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "hello again",
-      },
-      {
-        id: "t3",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "one more turn",
-      },
-    ],
-  };
+  return buildSystemPrompt({
+    workspaceDir,
+    contextFiles,
+    bootstrapTruncationNotice: truncationNotice,
+  });
 }
 
 /** Create a temp workspace with prompt composition context files. */
@@ -261,18 +205,12 @@ async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
 }
 
 /** Create all prompt composition scenarios plus cleanup handles. */
-export async function createPromptCompositionScenarios(): Promise<{
-  scenarios: PromptScenario[];
-  cleanup: () => Promise<void>;
-}> {
+export async function createPromptCompositionScenarios() {
   const workspaceDir = await createWorkspaceWithPromptCompositionFiles();
   const warningWorkspaceDir = await makeTempWorkspace("openclaw-prompt-cache-warning-");
-  const scenarios = [
-    createDiscordBoundaryScenario(workspaceDir),
-    await createBootstrapWarningScenario(warningWorkspaceDir),
-  ];
   return {
-    scenarios,
+    discordBoundary: await createDiscordBoundaryScenario(workspaceDir),
+    bootstrapWarningSystemPrompt: await createBootstrapWarningScenario(warningWorkspaceDir),
     cleanup: async () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(warningWorkspaceDir, { recursive: true, force: true });

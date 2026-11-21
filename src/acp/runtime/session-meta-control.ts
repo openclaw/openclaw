@@ -65,6 +65,7 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
     sessionKey: params.sessionKey,
     agentId: target.agentId,
     allowMissing: true,
+    sessionAccessOnly: true,
   });
   let active = true;
   let source: AcpSessionControlConstraint["source"] | undefined;
@@ -155,12 +156,10 @@ async function prepareAcpSessionControlReadOwned(params: AcpSessionControlReadPa
     }
     const entry = read.entry;
     assertAcpSessionMutationEntry(entry, current.target?.entry ?? null, undefined, "control read");
-    if (
-      resolveAcpSessionControlOwner(entry) !== resolveAcpSessionControlOwner(current.target?.entry)
-    ) {
+    const ownerKey = resolveAcpSessionControlOwner(entry);
+    if (ownerKey !== resolveAcpSessionControlOwner(current.target?.entry)) {
       throw new SessionMutationFactsUnavailableError();
     }
-    const ownerKey = resolveAcpSessionControlOwner(entry);
     initial ??= {
       entry: entry ? captureAcpSessionEntryBinding(entry) : null,
       ownerKey,

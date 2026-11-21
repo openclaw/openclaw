@@ -11,18 +11,23 @@ For Discord archive/history/search, use `$discrawl` instead.
 
 ## Transport
 
-Use the OpenClaw relay helper:
+Use the installed [OpenClaw relay skill](https://github.com/steipete/agent-scripts/tree/main/skills/openclaw-relay).
+Read its instructions and resolve its physical skill directory. Set
+`relay_script` below to that directory's `scripts/openclaw_relay.py`; report a
+missing installation instead of guessing a checkout path. Keep the selected
+OpenClaw checkout as the shell cwd for the default local transport. The relay's
+instructions own remote transport and target configuration.
 
 ```bash
-cd ~/Projects/agent-scripts
-python3 skills/openclaw-relay/scripts/openclaw_relay.py targets
-python3 skills/openclaw-relay/scripts/openclaw_relay.py resolve --target maintainers
+relay_script="/path/to/installed/openclaw-relay/scripts/openclaw_relay.py"
+python3 "$relay_script" targets
+python3 "$relay_script" resolve --target maintainers
 ```
 
 If the target alias exists, prefer a private ask first:
 
 ```bash
-python3 skills/openclaw-relay/scripts/openclaw_relay.py ask \
+python3 "$relay_script" ask \
   --target maintainers \
   --message "Reply with exactly OK."
 ```

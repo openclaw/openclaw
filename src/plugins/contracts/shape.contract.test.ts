@@ -1,188 +1,83 @@
-// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { describe, expect, it } from "vitest";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
+import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
   it("keeps hook-only, plain capability, and hybrid capability shapes explicit", () => {
     const { config, registry } = createPluginRegistryFixture({
-      plugins: {
-        entries: {
-          "hook-only": {
-            hooks: {
-              allowConversationAccess: true,
-            },
-          },
-        },
-      },
+      plugins: { entries: { "hook-only": { hooks: { allowConversationAccess: true } } } },
+    });
+    type Plugin = Parameters<typeof registerVirtualTestPlugin>[0];
+    const register = (id: string, setup: Plugin["register"], contracts?: Plugin["contracts"]) =>
+      registerVirtualTestPlugin({ registry, config, id, name: id, register: setup, contracts });
+
+    register("hook-only", (api) => {
+      api.on("before_prompt_build", () => ({ prependContext: "hook-only" }));
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "hook-only",
-      name: "Hook Only",
-      register(api) {
-        api.on("before_prompt_build", () => ({ prependContext: "hook-only" }));
-      },
+    register("plain-provider", (api) => {
+      api.registerProvider({ id: "plain-provider", label: "Plain Provider", auth: [] });
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "plain-provider",
-      name: "Plain Provider",
-      register(api) {
-        api.registerProvider({
-          id: "plain-provider",
-          label: "Plain Provider",
-          auth: [],
-        });
-      },
-    });
-
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "hybrid-company",
-      name: "Hybrid Company",
-      register(api) {
-        api.registerProvider({
-          id: "hybrid-company",
-          label: "Hybrid Company",
-          auth: [],
-        });
-        api.registerWebSearchProvider({
+    register("hybrid-company", (api) => {
+      api.registerProvider({ id: "hybrid-company", label: "Hybrid Company", auth: [] });
+      api.registerWebSearchProvider(
+        createWebSearchTestProvider({
+          pluginId: "hybrid-company",
           id: "hybrid-search",
-          label: "Hybrid Search",
-          hint: "Search the web",
-          envVars: ["HYBRID_SEARCH_KEY"],
-          placeholder: "hsk_...",
-          signupUrl: "https://example.com/signup",
           credentialPath: "tools.web.search.hybrid-search.apiKey",
-          getCredentialValue: () => "hsk-test",
-          setCredentialValue(searchConfigTarget, value) {
-            searchConfigTarget.apiKey = value;
-          },
-          createTool: () => ({
-            description: "Hybrid search",
-            parameters: {},
-            execute: async () => ({}),
-          }),
-        });
-      },
+        }),
+      );
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "channel-demo",
-      name: "Channel Demo",
-      register(api) {
-        api.registerChannel({
-          plugin: {
+    register("channel-demo", (api) => {
+      api.registerChannel({
+        plugin: {
+          ...createChannelTestPluginBase({
             id: "channel-demo",
-            meta: {
-              id: "channel-demo",
-              label: "Channel Demo",
-              selectionLabel: "Channel Demo",
-              docsPath: "/channels/channel-demo",
-              blurb: "channel demo",
-            },
-            capabilities: { chatTypes: ["direct"] },
+            label: "Channel Demo",
             config: {
               listAccountIds: () => [],
               resolveAccount: () => ({ accountId: "default" }),
             },
-            outbound: { deliveryMode: "direct" },
-          },
-        });
-      },
+          }),
+          outbound: { deliveryMode: "direct" },
+        },
+      });
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "session-catalog-demo",
-      name: "Session Catalog Demo",
-      register(api) {
-        api.registerSessionCatalog({
-          id: "session-catalog-demo",
-          label: "Session Catalog Demo",
-          list: async () => [],
-          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-        });
-      },
+    register("session-catalog-demo", (api) => {
+      api.registerSessionCatalog({
+        id: "session-catalog-demo",
+        label: "Session Catalog Demo",
+        list: async () => [],
+        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+      });
     });
 
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "document-extract-test",
-      name: "Document Extract Test",
-      contracts: { documentExtractors: ["pdf"] },
-      register() {},
-    });
+    register("document-extract-test", () => {}, { documentExtractors: ["pdf"] });
 
     const report = {
       workspaceDir: "/virtual-workspace",
       ...registry.registry,
     };
-    const inspect = report.plugins.map((plugin) =>
-      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
-    );
-
     expect(
-      inspect.map((entry) => ({
-        id: entry.plugin.id,
-        shape: entry.shape,
-        capabilityMode: entry.capabilityMode,
-      })),
+      report.plugins.map((plugin) => {
+        const { shape, capabilityMode, capabilities } = buildPluginShapeSummary({ plugin, report });
+        return [plugin.id, shape, capabilityMode, capabilities.map(({ kind }) => kind)];
+      }),
     ).toEqual([
-      {
-        id: "hook-only",
-        shape: "hook-only",
-        capabilityMode: "none",
-      },
-      {
-        id: "plain-provider",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "hybrid-company",
-        shape: "hybrid-capability",
-        capabilityMode: "hybrid",
-      },
-      {
-        id: "channel-demo",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "session-catalog-demo",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
-      {
-        id: "document-extract-test",
-        shape: "plain-capability",
-        capabilityMode: "plain",
-      },
+      ["hook-only", "hook-only", "none", []],
+      ["plain-provider", "plain-capability", "plain", ["text-inference"]],
+      ["hybrid-company", "hybrid-capability", "hybrid", ["text-inference", "web-search"]],
+      ["channel-demo", "plain-capability", "plain", ["channel"]],
+      ["session-catalog-demo", "plain-capability", "plain", ["session-catalog"]],
+      ["document-extract-test", "plain-capability", "plain", ["document-extractors"]],
     ]);
-
-    expect(inspect.map((entry) => entry.capabilities.map((capability) => capability.kind))).toEqual(
-      [
-        [],
-        ["text-inference"],
-        ["text-inference", "web-search"],
-        ["channel"],
-        ["session-catalog"],
-        ["document-extractors"],
-      ],
-    );
   });
 });

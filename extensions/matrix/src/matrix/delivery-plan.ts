@@ -236,9 +236,6 @@ export async function loadMatrixDeliveryPlan(
     return null;
   }
   const plan = decodePlan(entry.bytes);
-  if (planKey(plan) !== planKey(params.identity)) {
-    throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-  }
   assertPlanIdentity(plan, params);
   return plan;
 }
@@ -323,7 +320,9 @@ async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
   const partCount = plans[0]?.partCount;
   if (!partCount) {
-    throw new MatrixDeliveryPlanInvariantError("Matrix ambiguous delivery has no event plan");
+    throw new MatrixDeliveryPlanInvariantError(
+      "Matrix ambiguous delivery has no persisted event plan",
+    );
   }
   if (plans.some((plan) => plan.partCount !== partCount)) {
     throw new MatrixDeliveryPlanInvariantError(
@@ -359,11 +358,6 @@ export async function reconcileMatrixUnknownSend(
       );
     }
     const plans = await loadQueuePlans(ctx.queueId);
-    if (plans.length === 0) {
-      throw new MatrixDeliveryPlanInvariantError(
-        "Matrix ambiguous delivery has no persisted event plan",
-      );
-    }
     assertCompletePartTopology(plans);
     return await withResolvedMatrixSendClient(
       { cfg: ctx.cfg, accountId: ctx.accountId },

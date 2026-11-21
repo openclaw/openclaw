@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
@@ -10,6 +11,10 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { captureUserProfileAuthorityRead } from "../../state/user-profile-events.js";
+import {
+  hasMultipleResidentSessionSharingIdentities,
+  readResidentUserProfileIdentity,
+} from "../../state/user-profile-list.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import type {
   SkillLibraryReadInput,
@@ -35,10 +40,16 @@ export function captureSkillLibraryAccess(
     env,
   });
   const roles = structuredClone(authority.getConfig().gateway?.roles);
+  const readRoleSubject = () =>
+    authority.getConfig().gateway?.openclawId?.enabled && authority.profileId
+      ? operatorRoleSubject(readResidentUserProfileIdentity(authority.profileId))
+      : { profileId: authority.profileId, openclawIdMember: false };
   const input: SkillLibraryWorkerAuthority = {
+    roleSubject: readRoleSubject(),
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
+    ownerDevice: authority.ownerDevice,
     config: { gateway: { roles } },
   };
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
@@ -47,8 +58,10 @@ export function captureSkillLibraryAccess(
     authority.assertCurrent();
     if (
       !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
+      !isDeepStrictEqual(input.roleSubject, readRoleSubject()) ||
       !isDeepStrictEqual(input.scopes, authority.scopes) ||
       input.profileId !== authority.profileId ||
+      input.ownerDevice !== authority.ownerDevice ||
       input.namespace !== authority.namespace
     ) {
       throw new SkillLibraryError(
@@ -65,7 +78,6 @@ export function captureSkillLibraryAccess(
       params: SkillLibraryReadQueries[K]["input"],
     ) {
       assertCurrent();
-      const capturedParams = structuredClone(params);
       const library = captureSkillLibraryAuthorityRead(context.admission);
       const assertSource = () => {
         assertCurrent();
@@ -75,8 +87,9 @@ export function captureSkillLibraryAccess(
       assertSource();
       const commandInput = {
         kind,
-        params: capturedParams,
+        params,
         authority: input,
+        ...(kind === "session" ? { sessionFacts: captureSessionFacts() } : {}),
       } as SkillLibraryReadInput; // SAFETY: K binds the captured kind and parameters in SkillLibraryReadQueries.
       // Upload progress changes independently of published library entries.
       const cacheKey = kind === "upload" ? undefined : JSON.stringify(commandInput);
@@ -132,7 +145,7 @@ export function captureSkillLibraryAccess(
       const command = {
         type,
         input: {
-          ...structuredClone(params),
+          ...params,
           authority: input,
         } as SkillLibraryWorkerOperations[K]["input"], // SAFETY: K binds this input to the registry operation.
       };
@@ -207,4 +220,22 @@ export function captureSkillLibraryAccess(
       }
     },
   };
+
+  function captureSessionFacts() {
+    const profile = input.profileId
+      ? readResidentUserProfileIdentity(input.profileId, pinned)
+      : undefined;
+    if (input.profileId && !profile) {
+      throw new SkillLibraryError(
+        "AUTHORITY_EXPIRED",
+        "Your Gateway profile is no longer available. Sign in again before accessing the library.",
+      );
+    }
+    return {
+      profile: profile
+        ? { id: profile.profileId, role: profile.role, githubLogin: profile.githubLogin ?? null }
+        : undefined,
+      multipleProfiles: hasMultipleResidentSessionSharingIdentities(pinned),
+    };
+  }
 }

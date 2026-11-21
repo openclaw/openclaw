@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { sessionGoalHandlers } from "./sessions-goal.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -8,7 +8,6 @@ const edge = vi.hoisted(() => ({
   record: vi.fn(),
   emit: vi.fn(),
   current: vi.fn(),
-  fingerprint: vi.fn(),
   forbidden: vi.fn((): never => {
     throw new Error("Pure Goal RPC control crossed a native or process boundary");
   }),
@@ -22,16 +21,20 @@ const edge = vi.hoisted(() => ({
 }));
 
 vi.mock("node:sqlite", () => ({ DatabaseSync: edge.forbidden }));
-vi.mock("node:worker_threads", () => ({ isMainThread: true, threadId: 0, Worker: edge.forbidden }));
-vi.mock("node:child_process", () => ({
-  spawn: edge.forbidden,
-  spawnSync: edge.forbidden,
-  exec: edge.forbidden,
-  execSync: edge.forbidden,
-  execFile: edge.forbidden,
-  execFileSync: edge.forbidden,
-  fork: edge.forbidden,
+vi.mock("node:worker_threads", () => ({
+  isMainThread: true,
+  threadId: 0,
+  workerData: null,
+  Worker: edge.forbidden,
 }));
+vi.mock("node:child_process", () =>
+  Object.fromEntries(
+    ["spawn", "spawnSync", "exec", "execSync", "execFile", "execFileSync", "fork"].map((name) => [
+      name,
+      edge.forbidden,
+    ]),
+  ),
+);
 vi.mock("../../infra/node-sqlite.js", () => ({
   requireNodeSqlite: edge.forbidden,
   openNodeSqliteDatabase: edge.forbidden,
@@ -42,12 +45,6 @@ vi.mock("../../infra/kysely-sync.js", async (importOriginal) => ({
   executeSqliteQuerySync: edge.forbidden,
   executeSqliteQueryTakeFirstSync: edge.forbidden,
 }));
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  ErrorCodes: { INVALID_REQUEST: "INVALID_REQUEST", UNAVAILABLE: "UNAVAILABLE" },
-  errorShape: (code: string, message: string) => ({ code, message }),
-  validateSessionsGoalClearParams: () => true,
-  validateSessionsGoalUpdateParams: () => true,
-}));
 vi.mock("../../config/sessions/goals-operations.js", () => ({
   mutateSessionGoal: edge.mutate,
   SessionGoalOperationError: class extends Error {},
@@ -55,18 +52,11 @@ vi.mock("../../config/sessions/goals-operations.js", () => ({
 vi.mock("../../sessions/session-state-events.js", () => ({
   recordSessionGoalChanged: edge.record,
 }));
-vi.mock("../session-plugin-ownership.js", () => ({
-  resolvePluginSessionOwnershipError: () => null,
-}));
 vi.mock("../session-request-agent.js", () => ({
   resolveRequestedSessionAgentId: () => ({ ok: true, agentId: "main" }),
 }));
 // mock-isolation: Goal-event fixtures control the sharing target and its revocation during delivery.
 vi.mock("../session-sharing.js", () => ({
-  resolveSessionMutationAuthorization: () => ({
-    authorization: { assertCurrent: edge.current },
-    error: null,
-  }),
   resolveSessionSharingTargetAsync: async () => edge.target,
   SessionMutationAuthorizationChangedError: class extends Error {
     constructor(public error: { code: string; message: string }) {
@@ -97,22 +87,16 @@ vi.mock("./gateway-client-identity.js", () => ({
   gatewayClientSessionCreator: () => ({ type: "human", id: "operator" }),
 }));
 vi.mock("./session-change-event.js", () => ({ emitSessionsChanged: edge.emit }));
-// mock-isolation: Fingerprint settlement is controlled without creating a process device identity.
+// mock-isolation: Fingerprinting must not create a process device identity.
 vi.mock("./session-goal-request.js", () => ({
-  fingerprintSessionGoalRequest: edge.fingerprint,
+  fingerprintSessionGoalRequest: () => "fingerprint",
 }));
+
+const result = () => ({ operationId: "operation-id", status: "updated" });
 
 function invoke() {
   const respond = vi.fn();
-  const context = {
-    getRuntimeConfig: () => ({}),
-    logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-  const handler = sessionGoalHandlers["sessions.goal.update"];
-  if (!handler) {
-    throw new Error("Goal update handler is not registered");
-  }
-  const pending = handler({
+  const pending = sessionGoalHandlers["sessions.goal.update"]!({
     req: { type: "req", id: "goal-request", method: "sessions.goal.update" },
     params: {
       sessionKey: edge.target.canonicalKey,
@@ -123,83 +107,60 @@ function invoke() {
       issuedAtMs: 1,
     },
     respond,
-    context,
+    context: {
+      getRuntimeConfig: () => ({}),
+      logGateway: { warn: vi.fn() },
+    } as unknown as GatewayRequestContext,
     client: null,
     isWebchatConnect: () => false,
   });
   return { pending, respond };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  edge.target.storeKey = "agent:main:goal";
-  edge.target.canonicalKey = "agent:main:goal";
-  edge.fingerprint.mockReturnValue("fingerprint");
-  edge.record.mockResolvedValue(undefined);
-  edge.emit.mockImplementation(() => undefined);
-  edge.mutate.mockResolvedValue({
-    replayed: false,
-    sessionEntry: edge.target.entry,
-    result: { operationId: "operation-id", status: "updated" },
-  });
-});
+beforeEach(() => vi.clearAllMocks());
 
 afterEach(() => expect(edge.forbidden).not.toHaveBeenCalled());
 
-describe("Goal RPC event custody", () => {
-  it.each([false, true])(
-    "publishes the committed projection immediately and joins event custody when broadcast fails=%s",
-    async (broadcastFails) => {
-      const committed = createDeferred();
-      const event = createDeferred();
-      const emitted = createDeferred();
-      const order: string[] = [];
-      edge.mutate.mockImplementation(async () => {
-        await committed.promise;
-        order.push("commit");
-        return {
-          replayed: false,
-          sessionEntry: edge.target.entry,
-          result: { operationId: "operation-id", status: "updated" },
-        };
-      });
-      edge.record.mockImplementation(() => {
-        order.push("event-start");
-        return event.promise;
-      });
-      edge.emit.mockImplementation(() => {
-        order.push("projection");
-        emitted.resolve();
-        if (broadcastFails) {
-          throw new Error("Synthetic broadcaster failure");
-        }
-      });
-      const { pending, respond } = invoke();
-      expect(edge.record).not.toHaveBeenCalled();
-      expect(edge.emit).not.toHaveBeenCalled();
-      committed.resolve();
-      await emitted.promise;
-      expect(order).toEqual(["commit", "event-start", "projection"]);
-      expect(respond).not.toHaveBeenCalled();
-      event.resolve();
-      await pending;
-      expect(respond).toHaveBeenCalledOnce();
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        { operationId: "operation-id", status: "updated" },
-        undefined,
-      );
-      expect(edge.record).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("replies to a durable replay without issuing another event or projection change", async () => {
-    const result = { operationId: "operation-id", status: "updated" };
-    edge.mutate.mockResolvedValue({ replayed: true, result });
+it.each([false, true])(
+  "publishes the committed projection immediately and joins event custody when broadcast fails=%s",
+  async (broadcastFails) => {
+    const committed = createDeferred();
+    const event = createDeferred();
+    const emitted = createDeferred();
+    const order: string[] = [];
+    edge.mutate.mockImplementation(async () => {
+      await committed.promise;
+      order.push("commit");
+      return { replayed: false, sessionEntry: edge.target.entry, result: result() };
+    });
+    edge.record.mockImplementation(() => {
+      order.push("event-start");
+      return event.promise;
+    });
+    edge.emit.mockImplementation(() => {
+      order.push("projection");
+      emitted.resolve();
+      if (broadcastFails) {
+        throw new Error("Synthetic broadcaster failure");
+      }
+    });
     const { pending, respond } = invoke();
+    expect([edge.record, edge.emit].map((mock) => mock.mock.calls)).toEqual([[], []]);
+    committed.resolve();
+    await emitted.promise;
+    expect(order).toEqual(["commit", "event-start", "projection"]);
+    expect(respond).not.toHaveBeenCalled();
+    event.resolve();
     await pending;
-    expect(respond).toHaveBeenCalledWith(true, { ...result, replayed: true }, undefined);
-    expect(edge.record).not.toHaveBeenCalled();
-    expect(edge.emit).not.toHaveBeenCalled();
-  });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, result(), undefined);
+    expect(edge.record).toHaveBeenCalledOnce();
+  },
+);
+
+it("replies to a durable replay without issuing another event or projection change", async () => {
+  edge.mutate.mockResolvedValue({ replayed: true, result: result() });
+  const { pending, respond } = invoke();
+  await pending;
+  expect(respond).toHaveBeenCalledWith(true, { ...result(), replayed: true }, undefined);
+  expect([edge.record, edge.emit].map((mock) => mock.mock.calls)).toEqual([[], []]);
 });

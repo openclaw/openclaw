@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import {
+  floorPositiveFiniteNumber,
+  resolveIntegerOption,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
@@ -13,10 +18,12 @@ import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   asNonArrayRecord,
   isRecord,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { safeParseJson, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
@@ -31,6 +38,10 @@ import {
   unwrapNodeInvokePayload,
 } from "./session-catalog-parsing.js";
 import type { CodexSessionCatalogControlFactory } from "./session-catalog-types.js";
+
+const loadSessionCatalogNodeAdoption = createLazyRuntimeModule(
+  () => import("./session-catalog-node-adoption.js"),
+);
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
 export const CODEX_CLI_SESSION_RESUME_COMMAND = "codex.cli.session.resume";
@@ -209,7 +220,7 @@ export async function resumeCodexCliSessionOnNode(params: {
       params.storePath ??
       params.runtime.agent.session.resolveStorePath(undefined, { agentId: params.agentId });
     const { adoptionSessionKeyRest, CODEX_NODE_SESSION_KEY_PREFIX, readNodeSessionMarker } =
-      await import("./session-catalog-node-adoption.js");
+      await loadSessionCatalogNodeAdoption();
     const entry = await params.runtime.agent.session.getSessionEntryAsync({
       agentId: params.agentId,
       storePath,
@@ -297,8 +308,12 @@ export function formatCodexCliSessions(params: {
 
 async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<string> {
   const params = parseJsonRecord(paramsJSON);
-  const limit = normalizeLimit(params.limit);
-  const filter = typeof params.filter === "string" ? params.filter.trim().toLowerCase() : "";
+  const limit = resolveIntegerOption(params.limit, DEFAULT_SESSION_LIMIT, {
+    min: 1,
+    max: MAX_SESSION_LIMIT,
+  });
+  // Canonical forms compare equal here; sessions keep their original spelling.
+  const filter = normalizeLowercaseStringOrEmpty(params.filter).normalize("NFC");
   const codexHome = resolveCodexAppServerUserHomeDir();
   const summaries = await readHistorySessions(codexHome);
   await hydrateSessionsFromSessionFiles(codexHome, summaries);
@@ -308,7 +323,7 @@ async function listLocalCodexCliSessions(paramsJSON?: string | null): Promise<st
         return true;
       }
       return [session.sessionId, session.cwd, session.lastMessage].some((value) =>
-        value?.toLowerCase().includes(filter),
+        normalizeLowercaseStringOrEmpty(value).normalize("NFC").includes(filter),
       );
     })
     .toSorted((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""))
@@ -636,23 +651,13 @@ async function readFileMtimeIso(file: string): Promise<string | undefined> {
   }
 }
 
-function normalizeLimit(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.min(MAX_SESSION_LIMIT, Math.max(1, Math.floor(value)))
-    : DEFAULT_SESSION_LIMIT;
-}
-
 function normalizeTimeoutMs(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.min(60 * 60_000, Math.floor(value))
-    : DEFAULT_RESUME_TIMEOUT_MS;
+  const timeoutMs = floorPositiveFiniteNumber(value);
+  return timeoutMs === undefined ? DEFAULT_RESUME_TIMEOUT_MS : Math.min(60 * 60_000, timeoutMs);
 }
 
 function truncateText(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
-  }
-  return `${truncateUtf16Safe(value, Math.max(0, max - 3))}...`;
+  return truncateWithMarker(value, max, { marker: "...", reserve: 3, trimEnd: false });
 }
 
 function readNodeId(node: CodexCliSessionNodeInfo): string {

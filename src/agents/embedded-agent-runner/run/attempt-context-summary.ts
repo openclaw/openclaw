@@ -14,7 +14,7 @@ export function summarizeSessionContext(messages: AgentMessage[]): {
   let maxMessageTextChars = 0;
 
   for (const msg of messages) {
-    const role = typeof msg.role === "string" ? msg.role : "unknown";
+    const role = msg.role;
     roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
 
     const content = (msg as { content?: unknown }).content;
@@ -39,7 +39,8 @@ export function summarizeSessionContext(messages: AgentMessage[]): {
   return {
     roleCounts:
       [...roleCounts.entries()]
-        .toSorted((a, b) => a[0].localeCompare(b[0]))
+        // oxlint-disable-next-line unicorn/no-array-sort -- The materialized entries array is private.
+        .sort((a, b) => a[0].localeCompare(b[0]))
         .map(([role, count]) => `${role}:${count}`)
         .join(",") || "none",
     totalTextChars,

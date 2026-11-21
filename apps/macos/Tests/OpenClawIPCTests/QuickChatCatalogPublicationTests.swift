@@ -10,14 +10,16 @@ import Testing
 @MainActor
 struct QuickChatCatalogPublicationTests {
     @Test(arguments: [
-        ("config.changed", false, true),
-        ("chat.metadata.changed", false, false),
-        ("chat.metadata.changed", true, true),
+        ("config.changed", false, true, false),
+        ("chat.metadata.changed", false, false, false),
+        ("chat.metadata.changed", true, true, false),
+        ("chat.metadata.changed", false, false, true),
     ])
     func `Gateway publications refresh the presentation without discarding a draft`(
         _ event: String,
         modelSelectionChanged: Bool,
-        retiresChoices: Bool) async throws
+        retiresChoices: Bool,
+        authChanged: Bool) async throws
     {
         let policy: OpenClawChatModelSelectionPolicy? = if modelSelectionChanged {
             try JSONDecoder().decode(
@@ -27,7 +29,11 @@ struct QuickChatCatalogPublicationTests {
             nil
         }
         func publication(_ seq: Int) -> Data {
-            let payload = modelSelectionChanged ? #"{"modelSelectionChanged":true}"# : "{}"
+            let payload = if authChanged {
+                #"{"modelCatalogChanged":false,"authChanged":true}"#
+            } else {
+                modelSelectionChanged ? #"{"modelSelectionChanged":true}"# : "{}"
+            }
             return Data(
                 """
                 {"type":"event","event":"\(event)","payload":\(payload),"seq":\(seq)}

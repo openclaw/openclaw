@@ -1,27 +1,34 @@
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
+import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   beginPanelRefresh,
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
+} from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
+import {
+  isSessionKeyAddressable,
+  sessionNavigationTarget,
+  resolveSessionNavigationAgentId,
+} from "../../lib/sessions/route-navigation.ts";
+import {
+  isUiGlobalScopeConfigured,
+  resolveUiConfiguredMainKey,
+} from "../../lib/sessions/session-key.ts";
 import {
   requestSessionUsage,
-  requestSessionUsageLogs,
-  requestSessionUsageTimeSeries,
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import { createUsageRequest } from "./request.ts";
-import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
+import type { SessionLogEntry, UsageSessionEntry } from "./usage-state-types.ts";
 
 type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
 
@@ -44,7 +51,7 @@ function createUsageDetailRequest<T>(
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  const task = createUsageRequest(notify, {
+  const task = createPageRequest(notify, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
       { signal },
@@ -91,7 +98,7 @@ function createUsageDetailRequest<T>(
       status = failPanelRefresh(status, undefined, gateway.snapshot);
     }
     pending = null;
-    task.cancel();
+    task.reset();
   };
   const reset = (target?: UsageDetailTarget) => {
     value = target ? { target } : null;
@@ -105,8 +112,8 @@ function createUsageDetailRequest<T>(
     get status() {
       return status;
     },
-    get loading() {
-      return pending !== null;
+    get read() {
+      return task.read;
     },
     async recover(sessionKey: string, loadInitial = false): Promise<void> {
       const target = resolveTarget(sessionKey);
@@ -166,7 +173,10 @@ export function createUsageDetails(
   const timeSeries = createUsageDetailRequest(
     notify,
     gateway,
-    requestSessionUsageTimeSeries,
+    (client, target) =>
+      client
+        .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
+        .then((result) => result ?? null),
     resolveTarget,
     clearTimeSeriesRange,
   );
@@ -174,7 +184,10 @@ export function createUsageDetails(
     notify,
     gateway,
     async (client, target) => {
-      const payload = await requestSessionUsageLogs(client, target);
+      const payload = await client.request<{ logs?: unknown }>("sessions.usage.logs", {
+        ...target,
+        limit: 1000,
+      });
       // SAFETY: sessions.usage.logs returns entries normalized by the Gateway's loadSessionLogs.
       return Array.isArray(payload.logs) ? (payload.logs as SessionLogEntry[]) : null;
     },
@@ -215,4 +228,27 @@ export function createUsageDetails(
     cancel: () => requests.forEach((request) => request.cancel()),
     clear: () => requests.forEach((request) => request.clear()),
   };
+}
+
+/** Use the authoritative Usage owner, including raw global keys outside the active agent. */
+export function resolveUsageConversationTarget(
+  context: ApplicationContext,
+  selectedSession: UsageSessionEntry | null,
+) {
+  const navigationDefaults = {
+    agentsList: context.agents.state.agentsList,
+    hello: context.gateway.snapshot.hello,
+  };
+  return selectedSession &&
+    isSessionKeyAddressable(selectedSession.key, isUiGlobalScopeConfigured(navigationDefaults))
+    ? sessionNavigationTarget({
+        face: "chat",
+        sessionKey: selectedSession.key,
+        basePath: context.basePath,
+        fallbackAgentId: resolveSessionNavigationAgentId(context, selectedSession.agentId),
+        mainKey: resolveUiConfiguredMainKey(navigationDefaults),
+        row: { key: selectedSession.key, displayName: selectedSession.label },
+        exactKey: true,
+      })
+    : null;
 }

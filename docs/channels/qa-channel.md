@@ -60,7 +60,7 @@ Account keys:
 - `botUserId` - synthetic bot user id used in target grammar (default: `openclaw`).
 - `botDisplayName` - display name for outbound messages (default: `OpenClaw QA`).
 - `pollTimeoutMs` - long-poll wait window. Integer between 100 and 30000 (default: 1000).
-- `mediaMaxMb` - per-attachment limit in MiB for inbound bytes and outbound files. Named accounts override the channel root, then `agents.defaults.mediaMaxMb` supplies the fallback. If none is set, existing media-store and loader defaults apply. An oversized inbound attachment becomes an unavailable-attachment notice for the model. The channel loads each outbound batch before publishing it, so a failed attachment prevents that batch from being sent. Shared reply preparation can first remove oversized local files and retain valid attachments with a warning.
+- `mediaMaxMb` - per-attachment limit in MiB for inbound bytes and outbound files. Positive fractional limits are rounded down to whole bytes. Named accounts override the channel root, then `agents.defaults.mediaMaxMb` supplies the fallback. If none is set, existing media-store and loader defaults apply. An oversized inbound attachment becomes an unavailable-attachment notice for the model. The channel loads each outbound batch before publishing it, so a failed attachment prevents that batch from being sent. Shared reply preparation can first remove oversized local files and retain valid attachments with a warning.
 - `allowFrom` - sender allowlist (user ids or `"*"`; default: `["*"]`). DMs are
   always `open` policy; allowlisted group policy also uses these synthetic
   sender ids.

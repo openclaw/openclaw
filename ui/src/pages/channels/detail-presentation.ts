@@ -1,11 +1,3 @@
-import type { ImportGlobFunction } from "vite/types/importGlob.js";
-
-declare global {
-  interface ImportMeta {
-    glob: ImportGlobFunction;
-  }
-}
-
 export type ChannelDetailPresentation = {
   pluginId: string;
   titleKey: string;

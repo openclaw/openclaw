@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { capturePersonalCredentialAuthority } from "../../state/user-model-account-authority.js";
 import { enrollPersonalAuthProfileAuthorizationAsync } from "../../state/user-model-account-operations.js";
 import {
@@ -11,10 +10,10 @@ import {
 import { assertPersonalAuthProfileRuntime } from "./runtime-scope.js";
 
 /** Capture the private account owner's lifetime without exposing or copying bearer material. */
-export async function capturePersonalAuthProfileAuthorization(
-  params: { profileId: string; assertCurrent: () => void },
-  options: { context?: OpenClawStateWorkerContext } = {},
-): Promise<AuthProfileAuthorization> {
+export async function capturePersonalAuthProfileAuthorization(params: {
+  profileId: string;
+  assertCurrent: () => void;
+}): Promise<AuthProfileAuthorization> {
   const sanitize = (error: unknown) =>
     error instanceof AuthProfileAuthorizationError
       ? error
@@ -36,7 +35,7 @@ export async function capturePersonalAuthProfileAuthorization(
   try {
     assertPersonalAuthProfileRuntime();
     assertSource();
-    const context = options.context ?? captureOpenClawStateWorkerContext();
+    const context = captureOpenClawStateWorkerContext();
     const assertOwner = () => {
       assertSource();
       try {

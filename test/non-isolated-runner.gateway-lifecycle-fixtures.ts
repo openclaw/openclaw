@@ -7,21 +7,24 @@ export function gatewayWorkerLifetimeFixtureFiles(
   const source = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const provenance = mode === "provenance";
   const contract = provenance ? "provenance" : "database";
-  const registerListener = provenance
-    ? "registerClawInstallSchemaVersionSnapshotListener"
-    : "registerOpenClawStateDatabaseLifecycleListener";
+  const observe = provenance
+    ? "templateSchemaVersionNotifications.onChanged = "
+    : "registerOpenClawStateDatabaseLifecycleListener(";
+  const observationEnd = provenance ? ";" : ");";
   const callback = provenance ? "()" : "(event)";
   const observation = provenance
-    ? "readCachedClawInstallSchemaVersions(options).kind"
+    ? "readCachedTemplateInstallSchemaVersions(options).kind"
     : "event.kind";
-  const prepare = provenance ? "(await prepareClawInstallSchemaVersions(options)).publish();" : "";
+  const prepare = provenance
+    ? "(await prepareTemplateInstallSchemaVersions(options)).publish();"
+    : "";
   const ready = provenance ? "ready" : "opened";
   const closed = provenance ? "state-error" : "closed";
   const imports = `import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { openOpenClawStateDatabase, closeOpenClawStateDatabase, registerOpenClawStateDatabaseLifecycleListener } from ${source("state/openclaw-state-db.ts")};
-${provenance ? `import { prepareClawInstallSchemaVersions, readCachedClawInstallSchemaVersions, registerClawInstallSchemaVersionSnapshotListener } from ${source("claws/provenance-runtime-read.ts")};` : ""}
+${provenance ? `import { prepareTemplateInstallSchemaVersions, readCachedTemplateInstallSchemaVersions, templateSchemaVersionNotifications } from ${source("templates/provenance-runtime-read.ts")};` : ""}
 const root = process.env.GATEWAY_LIFETIME_PROBE_ROOT!;
 const log = path.join(root, "${mode}-events.log");
 const lines = () => readFileSync(log, "utf8").trim().split("\\n");
@@ -40,9 +43,9 @@ resolveGlobalSingleton(cleanupKey, () => ({}), async () => {
   }
 });
 const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-producer-state") }, artifactPreservingReadOnly: false };
-${registerListener}(${callback} => {
+${observe}${callback} => {
   appendFileSync(log, "A:" + ${observation} + "\\n");
-});
+}${observationEnd}
 const database = openOpenClawStateDatabase(options);
 ${prepare}
 it("keeps live ${contract} notifications through afterAll", () => {
@@ -57,9 +60,9 @@ afterAll(() => {
 `,
     [`${mode}-b-observer.test.ts`]: `${imports}
 const options = { env: { OPENCLAW_STATE_DIR: path.join(root, "${mode}-observer-state") }, artifactPreservingReadOnly: false };
-${registerListener}(${callback} => {
+${observe}${callback} => {
   appendFileSync(log, "B:" + ${observation} + "\\n");
-});
+}${observationEnd}
 const prior = lines();
 const before = prior.length;
 const database = openOpenClawStateDatabase(options);

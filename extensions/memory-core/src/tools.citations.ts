@@ -11,11 +11,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 export type MemorySearchToolResult = MemorySearchResult | MemoryCorpusSearchResult;
 
 export function resolveMemoryCitationsMode(cfg: OpenClawConfig): MemoryCitationsMode {
-  const mode = cfg.memory?.citations;
-  if (mode === "on" || mode === "off" || mode === "auto") {
-    return mode;
-  }
-  return "auto";
+  return cfg.memory?.citations ?? "auto";
 }
 
 export function buildMemorySearchPresentation(

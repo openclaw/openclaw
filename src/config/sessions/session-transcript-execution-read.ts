@@ -9,7 +9,9 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptExecutionReadResult } from "./session-transcript-execution-read.types.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import { withTranscriptLockSettlement } from "./session-transcript-lock-settlement.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 
@@ -17,6 +19,7 @@ export type PreparedSessionTranscriptReads = Pick<
   SessionHistoryWorkerDatabase,
   | "readRawDelta"
   | "readVisibleDelta"
+  | "readReplayGroups"
   | "readSessionMemoryCapture"
   | "readColdMetadata"
   | "readAnchors"
@@ -93,19 +96,12 @@ export function runLockedSessionTranscriptRead<T>(
 
 /** Ordinary reads use WAL snapshots; an active transcript lock lends its ordered connection. */
 export function createPreparedSessionTranscriptReads(params: {
-  claim: AgentDatabaseGenerationClaim;
   expectedIdentity: DatabasePathIdentity;
+  readCustody?: readonly SessionStoreReadCustody[];
   assertCurrent: () => void;
   reader: PreparedSessionTranscriptReads;
 }): PreparedSessionTranscriptReads {
-  const { claim, expectedIdentity } = params;
-  const assertCurrent = () => {
-    params.assertCurrent();
-    claim.assertCurrent();
-    if (`file:${claim.identity}` !== expectedIdentity.key) {
-      throw new Error("Transcript reader belongs to another prepared database generation");
-    }
-  };
+  const { expectedIdentity } = params;
   const read = async <T>(
     operation: (
       worker: AgentDatabaseExecutionScope,
@@ -114,24 +110,20 @@ export function createPreparedSessionTranscriptReads(params: {
     signal?: AbortSignal,
   ): Promise<T> => {
     signal?.throwIfAborted();
-    assertCurrent();
+    params.assertCurrent();
     const locked = findLockedTranscriptReads(expectedIdentity);
     if (locked) {
       return locked.queue(async () => {
         signal?.throwIfAborted();
-        assertCurrent();
+        params.assertCurrent();
         locked.assertCurrent();
         locked.claim.assertCurrent();
-        if (
-          locked.claim.identity !== claim.identity ||
-          locked.claim.incarnation !== claim.incarnation
-        ) {
+        if (`file:${locked.claim.identity}` !== expectedIdentity.key) {
           throw new Error("Transcript reader belongs to another locked database generation");
         }
         const result = await operation(locked.worker);
         signal?.throwIfAborted();
         locked.assertCurrent();
-        assertCurrent();
         if (!result.ok) {
           throw decodeSessionTranscriptWorkerReadError(result.error);
         }
@@ -140,7 +132,6 @@ export function createPreparedSessionTranscriptReads(params: {
     }
     const result = await snapshot();
     signal?.throwIfAborted();
-    assertCurrent();
     return result;
   };
   const reader =
@@ -155,7 +146,7 @@ export function createPreparedSessionTranscriptReads(params: {
     (input: Input, signal?: AbortSignal) =>
       read(
         (worker) => operation(worker, input, signal),
-        () => snapshot({ ...input, expectedIdentity }, signal),
+        () => snapshot.call(params.reader, { ...input, expectedIdentity }, signal),
         signal,
       );
   return {
@@ -177,6 +168,12 @@ export function createPreparedSessionTranscriptReads(params: {
         { signal },
       ),
     ),
+    readReplayGroups: reader(params.reader.readReplayGroups, (worker, input, signal) =>
+      worker.execute(
+        { type: "session.transcript.replayGroups.read", input: { ...input, expectedIdentity } },
+        { signal },
+      ),
+    ),
     readSessionMemoryCapture: reader(
       params.reader.readSessionMemoryCapture,
       (worker, input, signal) =>
@@ -191,20 +188,32 @@ export function createPreparedSessionTranscriptReads(params: {
         { signal },
       ),
     ),
-    readColdMetadata: async (input, signal) => ({
-      kind: "cold-metadata",
-      archive: await read(
-        (worker) =>
-          worker.execute(
+    readColdMetadata: (input, signal) =>
+      read<SessionColdMetadataWorkerResult>(
+        async (worker) => {
+          const result = await worker.execute(
             {
               type: "session.transcript.coldMetadata.read",
               input: { sessionId: input.sessionId, expectedIdentity },
             },
             { signal },
-          ),
-        async () => (await params.reader.readColdMetadata(input, signal)).archive,
+          );
+          if (!result.ok) {
+            return result;
+          }
+          return {
+            ok: true,
+            value: result.value
+              ? {
+                  kind: "cold-metadata",
+                  archive: result.value,
+                  source: { readIdentity: expectedIdentity, readCustody: params.readCustody },
+                }
+              : { kind: "cold-metadata", archive: undefined },
+          };
+        },
+        () => params.reader.readColdMetadata(input, signal),
         signal,
       ),
-    }),
   };
 }

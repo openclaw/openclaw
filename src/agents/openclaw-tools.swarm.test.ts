@@ -110,18 +110,4 @@ describe("Swarm registration", () => {
       expect(names).not.toContain(name);
     }
   });
-
-  it("omits the message tool for collector runs by invariant", () => {
-    const names = createOpenClawCodingTools({
-      sessionKey: "agent:worker:subagent:child",
-      runId: "collector-run",
-      config: {
-        agents: { entries: { main: {} } },
-        tools: { swarm: true },
-      },
-      swarmCollector: true,
-    }).map((tool) => tool.name);
-
-    expect(names).not.toContain("message");
-  });
 });

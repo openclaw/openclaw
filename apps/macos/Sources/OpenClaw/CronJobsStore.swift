@@ -30,7 +30,8 @@ final class CronJobsStore {
     private var eventTask: Task<Void, Never>?
     private var pollTask: Task<Void, Never>?
     private let gateway: GatewayConnection
-    private let interval: TimeInterval = 30
+    // Cron events keep the open menu current; polling only repairs missed updates.
+    private let interval: TimeInterval = 600
     private let isPreview: Bool
 
     init(gateway: GatewayConnection = .shared, isPreview: Bool = ProcessInfo.processInfo.isPreview) {

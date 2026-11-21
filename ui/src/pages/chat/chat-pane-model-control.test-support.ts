@@ -1,4 +1,5 @@
 import { onTestFinished } from "vitest";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 
@@ -8,13 +9,25 @@ const modelControlViews = new WeakMap<
   { update: (props: ModelControlProps) => void }
 >();
 
-export function renderPaneModelControl(props: ModelControlProps, container: HTMLElement) {
+export function renderPaneModelControl(
+  props: ModelControlProps,
+  container: HTMLElement,
+  openModelPicker = false,
+) {
+  installModelPickerLayout();
+  const renderProps = openModelPicker
+    ? { ...props, model: { ...props.model, modelPickerOpen: true } }
+    : props;
   const mounted = modelControlViews.get(container);
   if (mounted) {
-    mounted.update(props);
+    mounted.update(renderProps);
     return;
   }
-  modelControlViews.set(container, mountSolid(ChatPaneModelControl, props, container));
+  if (!container.isConnected) {
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+  }
+  modelControlViews.set(container, mountSolid(ChatPaneModelControl, renderProps, container));
   onTestFinished(() => {
     modelControlViews.delete(container);
   });

@@ -11,15 +11,13 @@ import {
   resolveInlineCommandMatch,
   resolvePowerShellInlineCommandMatch,
 } from "../infra/shell-inline-command.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveOomScoreWrappedCommand } from "./linux-oom-score.js";
+import { resolveOomScoreWrappedCommand } from "./linux-oom-score-spawn.js";
 
 const spawnCounts = resolveGlobalSingleton(Symbol.for("openclaw.childProcessSpawnCounts"), () => ({
   counts: new Map<string, { family: string; operation: string; count: number }>(),
   sampledAt: performance.now(),
 }));
-let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
   /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
 const GIT_OPERATIONS = [
@@ -62,6 +60,7 @@ const CHILD_OPERATIONS = [
   "shell.snapshot",
   "service.relay",
   "service.manager",
+  "plugin.capture-reclamation",
   "worktree.filesystem",
   "worktree.cleanup",
   "worktree.maintenance",
@@ -167,28 +166,45 @@ export function withGitProcessOperation<T>(
 
 /** Capture attribution before native preparation; record only after a successful launch. */
 export function prepareChildProcessSpawnRecorder(
-  command: string,
-  args: readonly string[] = [],
+  inputCommand: string,
+  inputArgs: readonly string[] = [],
   sqliteOperation?: `sqlite.${"scoped-read" | "session"}.${"broker" | "native"}`,
 ): (() => void) | undefined {
   if (!areDiagnosticsEnabledForProcess()) {
     return undefined;
   }
-  // Like nice+git, an owner-prepared OOM shim execs the target in the same process;
-  // the broker can omit that shell entirely. Report its logical command, not the shim.
+  let command = inputCommand;
+  let args = inputArgs;
+  // The OOM shim is outermost; its target may itself be a priority wrapper.
   const wrappedCommand = resolveOomScoreWrappedCommand(command, args);
-  const commandArgs = wrappedCommand ? args.slice(3) : args;
+  if (wrappedCommand) {
+    command = wrappedCommand;
+    args = args.slice(3);
+  }
+  // Priority wrappers exec their target in the same child, including nested nice.
+  if (command === "ionice" && args[0] === "-c" && args[1] === "3" && args[2]) {
+    command = args[2];
+    args = args.slice(3);
+  }
+  if (command === "taskpolicy" && args[0] === "-b" && args[1]) {
+    command = args[1];
+    args = args.slice(2);
+  }
+  if (command === "nice" && args[0] === "-n" && args[1] === "10" && args[2]) {
+    command = args[2];
+    args = args.slice(3);
+  }
   const name = path.win32
-    .basename(wrappedCommand ?? command)
+    .basename(command)
     .toLowerCase()
     .replace(/\.(exe|cmd)$/, "");
   const family = COMMAND_FAMILIES.test(name) ? name : "other";
   const operation =
     family === "git"
-      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(commandArgs))
+      ? (gitOperation.getStore() ?? childOperation.getStore() ?? unscopedGitOperation(args))
       : (sqliteOperation ??
         childOperation.getStore() ??
-        unscopedProcessOperation(family, name, commandArgs));
+        unscopedProcessOperation(family, name, args));
   const key = `${family}:${operation}`;
   return () => {
     if (areDiagnosticsEnabledForProcess()) {
@@ -231,9 +247,6 @@ export function emitChildProcessSpawnSample(): void {
       count,
       intervalMs,
     });
-    (spawnLog ??= createSubsystemLogger("gateway/diagnostics/process")).debug(
-      `child process spawns: family=${family} operation=${operation} count=${count} ratePerMinute=${((count * 60_000) / intervalMs).toFixed(2)}`,
-    );
   }
   spawnCounts.counts.clear();
   spawnCounts.sampledAt = now;

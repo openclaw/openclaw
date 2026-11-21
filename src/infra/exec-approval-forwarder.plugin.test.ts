@@ -71,6 +71,7 @@ describe("plugin approval forwarding", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
 
+    const pendingDeliveryCount = deliver.mock.calls.length;
     const replay = createForwarder(options);
     await replay.forwarder.handlePluginApprovalResolved?.({
       id: request.id,
@@ -84,8 +85,8 @@ describe("plugin approval forwarding", () => {
         request: expect.objectContaining({ id: request.id, request: request.request }),
       }),
     );
-    expect(replay.deliver).toHaveBeenCalledTimes(1);
-    expect(replay.deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
+    expect(deliver.mock.calls.length - pendingDeliveryCount).toBe(1);
+    expect(deliver.mock.calls[pendingDeliveryCount]?.[0]).not.toHaveProperty("skipQueue");
   });
 
   it("blocks a selected reviewer policy even without a running native handler", async () => {
@@ -106,6 +107,7 @@ describe("plugin approval forwarding", () => {
     });
 
     await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(false);
+    await flushPendingDelivery();
     expect(deliver).not.toHaveBeenCalled();
     await expect(
       forwarder.handlePluginApprovalRequested?.({

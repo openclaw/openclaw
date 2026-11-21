@@ -30,11 +30,6 @@ export function createDiscordDnsLookup(): LookupFunction {
         callback(err, "", 4);
         return;
       }
-      if (!Array.isArray(addresses)) {
-        callback(new Error("Expected all lookup addresses to be an array"), "", 4);
-        return;
-      }
-
       const reordered =
         addresses.length < 2
           ? addresses

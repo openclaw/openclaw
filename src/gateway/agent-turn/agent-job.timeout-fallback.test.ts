@@ -15,6 +15,31 @@ const NON_HARD_TIMEOUTS = [
 
 let runSequence = 0;
 
+const restartCancellation = {
+  aborted: true,
+  stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  error: "Restart interrupted the run",
+};
+const rpcCancellation = { aborted: true, stopReason: "rpc", error: "RPC cancelled the run" };
+const providerTimeout = {
+  aborted: true,
+  stopReason: "timeout",
+  timeoutPhase: "provider",
+  providerStarted: true,
+};
+const providerFailure = { ...providerTimeout, error: "Provider timed out" };
+const restartOutcome = {
+  status: "error",
+  stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  error: "Restart interrupted the run",
+};
+const rpcOutcome = { status: "error", stopReason: "rpc", error: "RPC cancelled the run" };
+const timeoutOutcome = { status: "timeout", stopReason: "timeout", timeoutPhase: "provider" };
+
+function emitLifecycle(runId: string, data: Record<string, unknown>) {
+  emitAgentEvent({ runId, stream: "lifecycle", data });
+}
+
 async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) {
   const runId = `run-timeout-fallback-${runSequence++}`;
   const waitPromise = waitForAgentJob({
@@ -22,21 +47,13 @@ async function resolveOuterTimeoutRace(data: Readonly<Record<string, unknown>>) 
     timeoutMs: 5_000,
   });
 
-  emitAgentEvent({
-    runId,
-    stream: "lifecycle",
-    data: { phase: "start", startedAt: 1_000 },
-  });
-  emitAgentEvent({
-    runId,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      startedAt: 1_000,
-      endedAt: 1_100,
-      aborted: true,
-      ...data,
-    },
+  emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+  emitLifecycle(runId, {
+    phase: "end",
+    startedAt: 1_000,
+    endedAt: 1_100,
+    aborted: true,
+    ...data,
   });
 
   // Fire the outer wait before the 15-second terminal retry grace publishes.
@@ -55,6 +72,24 @@ describe("waitForAgentJob timeout fallback", () => {
   });
 
   for (const phase of HARD_TIMEOUT_PHASES) {
+    it("includes a slow restored-completion read in the wait deadline", async () => {
+      const seen = vi.fn();
+      const wait = waitForAgentJob({
+        runId: "slow-restored-completion",
+        timeoutMs: 10,
+        canRestoreCompletion: () => true,
+        readRestoredCompletion: () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ status: "ok" }), 80);
+          }),
+      }).then(seen);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(seen).toHaveBeenCalledWith(null);
+      await vi.advanceTimersByTimeAsync(70);
+      await wait;
+      expect(seen).toHaveBeenCalledTimes(1);
+    });
+
     it(`forwards a pending ${phase} hard timeout`, async () => {
       await expect(resolveOuterTimeoutRace({ timeoutPhase: phase })).resolves.toMatchObject({
         status: "timeout",
@@ -75,25 +110,14 @@ describe("waitForAgentJob timeout fallback", () => {
     const runId = `run-timeout-fallback-exhausted-provider-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "All model fallback candidates failed",
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      ...providerTimeout,
+      error: "All model fallback candidates failed",
+      fallbackExhaustedFailure: true,
     });
 
     const terminalTimeout = {
@@ -113,20 +137,12 @@ describe("waitForAgentJob timeout fallback", () => {
     const runId = `run-timeout-fallback-retryable-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        error: "Retryable provider failure",
-      },
+    emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      error: "Retryable provider failure",
     });
 
     await vi.advanceTimersByTimeAsync(5_000);
@@ -153,15 +169,12 @@ describe("waitForAgentJob timeout fallback", () => {
     });
 
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 1_000, endedAt: 1_100, aborted: true },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", startedAt: 1_000, endedAt: 1_200, error: "final error" },
+    emitLifecycle(runId, { phase: "end", startedAt: 1_000, endedAt: 1_100, aborted: true });
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_200,
+      error: "final error",
     });
 
     await vi.advanceTimersByTimeAsync(15_000);
@@ -185,25 +198,17 @@ describe("waitForAgentJob timeout fallback", () => {
 
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
       for (let attempt = 0; attempt < failureCount; attempt += 1) {
-        emitAgentEvent({
-          runId,
-          stream: "lifecycle",
-          data: {
-            phase: "error",
-            startedAt: 1_000,
-            endedAt: 1_100 + attempt,
-            error: `Retryable provider failure ${attempt + 1}`,
-          },
+        emitLifecycle(runId, {
+          phase: "error",
+          startedAt: 1_000,
+          endedAt: 1_100 + attempt,
+          error: `Retryable provider failure ${attempt + 1}`,
         });
         await vi.advanceTimersByTimeAsync(15_000);
         expect(settled).toBe(false);
       }
 
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "end", startedAt: 1_000, endedAt: 40_000 },
-      });
+      emitLifecycle(runId, { phase: "end", startedAt: 1_000, endedAt: 40_000 });
 
       await expect(waitPromise).resolves.toMatchObject({ status: "ok", endedAt: 40_000 });
       await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
@@ -222,11 +227,7 @@ describe("waitForAgentJob timeout fallback", () => {
     });
 
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
-    });
+    emitLifecycle(runId, { phase: "error", endedAt: 1_100, error: "Retryable provider failure" });
     await vi.advanceTimersByTimeAsync(15_000);
     expect(settled).toBe(false);
 
@@ -246,11 +247,7 @@ describe("waitForAgentJob timeout fallback", () => {
     const runId = `run-timeout-fallback-late-waiter-${runSequence++}`;
     const firstWait = waitForAgentJob({ runId, timeoutMs: 60_000 });
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
-    });
+    emitLifecycle(runId, { phase: "error", endedAt: 1_100, error: "Retryable provider failure" });
     await vi.advanceTimersByTimeAsync(15_000);
 
     let laterWaitSettled = false;
@@ -261,11 +258,7 @@ describe("waitForAgentJob timeout fallback", () => {
     await Promise.resolve();
     expect(laterWaitSettled).toBe(false);
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 1_000, endedAt: 20_000 },
-    });
+    emitLifecycle(runId, { phase: "end", startedAt: 1_000, endedAt: 20_000 });
     await expect(Promise.all([firstWait, laterWait])).resolves.toEqual([
       expect.objectContaining({ status: "ok" }),
       expect.objectContaining({ status: "ok" }),
@@ -277,19 +270,11 @@ describe("waitForAgentJob timeout fallback", () => {
     const earlyWait = waitForAgentJob({ runId, timeoutMs: 20_000 });
     const lateWait = waitForAgentJob({ runId, timeoutMs: 60_000 });
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "error", endedAt: 1_100, error: "Retryable provider failure" },
-    });
+    emitLifecycle(runId, { phase: "error", endedAt: 1_100, error: "Retryable provider failure" });
 
     await vi.advanceTimersByTimeAsync(20_000);
     await expect(earlyWait).resolves.toMatchObject({ status: "error" });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "end", startedAt: 1_000, endedAt: 25_000 },
-    });
+    emitLifecycle(runId, { phase: "end", startedAt: 1_000, endedAt: 25_000 });
     await expect(lateWait).resolves.toMatchObject({ status: "ok", endedAt: 25_000 });
   });
 
@@ -300,11 +285,7 @@ describe("waitForAgentJob timeout fallback", () => {
       const waitPromise = waitForAgentJob({ runId, timeoutMs: 60_000 });
 
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start", startedAt: 1_000 } });
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        data: { phase: "error", endedAt: 1_100, livenessState },
-      });
+      emitLifecycle(runId, { phase: "error", endedAt: 1_100, livenessState });
 
       await vi.advanceTimersByTimeAsync(15_000);
       await expect(waitPromise).resolves.toMatchObject({ status: "error", livenessState });
@@ -314,51 +295,22 @@ describe("waitForAgentJob timeout fallback", () => {
   it.each([
     {
       label: "restart cancellation before a provider timeout",
-      initial: {
-        aborted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
-      final: {
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expected: {
-        status: "error",
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
+      initial: restartCancellation,
+      final: providerTimeout,
+      expected: restartOutcome,
     },
     {
       label: "restart cancellation before an exhausted failure",
-      initial: {
-        aborted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
+      initial: restartCancellation,
       final: {},
-      expected: {
-        status: "error",
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
+      expected: restartOutcome,
     },
     {
       label: "provider timeout before an exhausted failure",
-      initial: {
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "Provider timed out",
-      },
+      initial: providerFailure,
       final: {},
       expected: {
-        status: "timeout",
-        stopReason: "timeout",
-        timeoutPhase: "provider",
+        ...timeoutOutcome,
         providerStarted: true,
         error: "Provider timed out",
       },
@@ -366,37 +318,20 @@ describe("waitForAgentJob timeout fallback", () => {
   ])("preserves pending error-phase $label", async ({ initial, final, expected }) => {
     const runId = `run-timeout-fallback-pending-error-${runSequence++}`;
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        ...initial,
-      },
-    });
+    emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+    emitLifecycle(runId, { phase: "error", startedAt: 1_000, endedAt: 1_100, ...initial });
 
     const waitPromise = waitForAgentJob({
       runId,
       timeoutMs: 1_000,
     });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_200,
-        error: "All model fallback candidates failed",
-        ...final,
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_200,
+      error: "All model fallback candidates failed",
+      ...final,
+      fallbackExhaustedFailure: true,
     });
 
     const terminalOutcome = { ...expected, startedAt: 1_000, endedAt: 1_100 };
@@ -408,175 +343,56 @@ describe("waitForAgentJob timeout fallback", () => {
   it.each([
     {
       label: "restart error before a later provider end",
-      first: {
-        phase: "error",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
-      second: {
-        phase: "end",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expected: {
-        status: "error",
-        endedAt: 1_100,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
+      first: { phase: "error", endedAt: 1_100, ...restartCancellation },
+      second: { phase: "end", endedAt: 1_200, ...providerTimeout },
+      expected: { ...restartOutcome, endedAt: 1_100 },
     },
     {
       label: "RPC cancellation error before a later provider end",
-      first: {
-        phase: "error",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "rpc",
-        error: "RPC cancelled the run",
-      },
-      second: {
-        phase: "end",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expected: {
-        status: "error",
-        endedAt: 1_100,
-        stopReason: "rpc",
-        error: "RPC cancelled the run",
-      },
+      first: { phase: "error", endedAt: 1_100, ...rpcCancellation },
+      second: { phase: "end", endedAt: 1_200, ...providerTimeout },
+      expected: { ...rpcOutcome, endedAt: 1_100 },
     },
     {
       label: "provider timeout error before a later provider end",
-      first: {
-        phase: "error",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "Provider timed out",
-      },
-      second: {
-        phase: "end",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
+      first: { phase: "error", endedAt: 1_100, ...providerFailure },
+      second: { phase: "end", endedAt: 1_200, ...providerTimeout },
       expected: {
-        status: "timeout",
+        ...timeoutOutcome,
         endedAt: 1_100,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
         providerStarted: true,
         error: "Provider timed out",
       },
     },
     {
       label: "restart error after an earlier provider end",
-      first: {
-        phase: "error",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
-      second: {
-        phase: "end",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      expected: {
-        status: "timeout",
-        endedAt: 1_100,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-      },
+      first: { phase: "error", endedAt: 1_200, ...restartCancellation },
+      second: { phase: "end", endedAt: 1_100, ...providerTimeout },
+      expected: { ...timeoutOutcome, endedAt: 1_100 },
     },
     {
       label: "provider end before a later restart error",
-      first: {
-        phase: "end",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      second: {
-        phase: "error",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: AGENT_RUN_RESTART_ABORT_STOP_REASON,
-        error: "Restart interrupted the run",
-      },
-      expected: {
-        status: "timeout",
-        endedAt: 1_100,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-      },
+      first: { phase: "end", endedAt: 1_100, ...providerTimeout },
+      second: { phase: "error", endedAt: 1_200, ...restartCancellation },
+      expected: { ...timeoutOutcome, endedAt: 1_100 },
     },
     {
       label: "provider end after an earlier RPC cancellation error",
-      first: {
-        phase: "end",
-        endedAt: 1_200,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      },
-      second: {
-        phase: "error",
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "rpc",
-        error: "RPC cancelled the run",
-      },
-      expected: {
-        status: "error",
-        endedAt: 1_100,
-        stopReason: "rpc",
-        error: "RPC cancelled the run",
-      },
+      first: { phase: "end", endedAt: 1_200, ...providerTimeout },
+      second: { phase: "error", endedAt: 1_100, ...rpcCancellation },
+      expected: { ...rpcOutcome, endedAt: 1_100 },
     },
   ])("preserves canonical terminal precedence for $label", async ({ first, second, expected }) => {
     const runId = `run-timeout-fallback-cross-phase-${runSequence++}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { startedAt: 1_000, ...first },
-    });
+    emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+    emitLifecycle(runId, { startedAt: 1_000, ...first });
     const freshWaitPromise = waitForAgentJob({
       runId,
       timeoutMs: 5_000,
     });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { startedAt: 1_000, ...second },
-    });
+    emitLifecycle(runId, { startedAt: 1_000, ...second });
 
     await vi.advanceTimersByTimeAsync(5_000);
     const terminalOutcome = { startedAt: 1_000, pendingError: undefined, ...expected };
@@ -590,36 +406,21 @@ describe("waitForAgentJob timeout fallback", () => {
   it("preserves earlier cancellation over an exhausted fallback provider timeout", async () => {
     const runId = `run-timeout-fallback-exhausted-cancelled-${runSequence++}`;
 
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
+    emitLifecycle(runId, { phase: "start", startedAt: 1_000 });
+    emitLifecycle(runId, {
+      phase: "end",
+      startedAt: 1_000,
+      endedAt: 1_050,
+      aborted: true,
+      stopReason: "rpc",
     });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1_000,
-        endedAt: 1_050,
-        aborted: true,
-        stopReason: "rpc",
-      },
-    });
-    emitAgentEvent({
-      runId,
-      stream: "lifecycle",
-      data: {
-        phase: "error",
-        startedAt: 1_000,
-        endedAt: 1_100,
-        aborted: true,
-        stopReason: "timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: "All model fallback candidates failed",
-        fallbackExhaustedFailure: true,
-      },
+    emitLifecycle(runId, {
+      phase: "error",
+      startedAt: 1_000,
+      endedAt: 1_100,
+      ...providerTimeout,
+      error: "All model fallback candidates failed",
+      fallbackExhaustedFailure: true,
     });
 
     await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({

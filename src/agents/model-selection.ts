@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -102,14 +103,15 @@ export function resolvePersistedSelectedModelRef(
   const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
-      return { provider: runtimeProvider, model: runtimeModel };
+      return isTranscriptArtifactProvider(runtimeProvider)
+        ? null
+        : { provider: runtimeProvider, model: runtimeModel };
     }
-    return (
-      parseModelRef(runtimeModel, defaultProvider, params) ?? {
-        provider: defaultProvider,
-        model: runtimeModel,
-      }
-    );
+    const ref = parseModelRef(runtimeModel, defaultProvider, params) ?? {
+      provider: defaultProvider,
+      model: runtimeModel,
+    };
+    return isTranscriptArtifactProvider(ref.provider) ? null : ref;
   }
   return null;
 }
@@ -119,9 +121,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
   cfg?: OpenClawConfig;
   defaultProvider: string;
   loadCatalog: () => Promise<ModelCatalogEntry[]>;
-  aliasIndex?: ModelAliasIndex;
-  allowManifestNormalization?: boolean;
-  allowPluginNormalization?: boolean;
   preserveAuthProfile?: boolean;
 }): Promise<string | undefined> {
   const rawModel = normalizeOptionalString(params.raw);
@@ -140,9 +139,6 @@ export async function canonicalizeCaseOnlyCatalogModelRef(params: {
     cfg: params.cfg,
     raw: split.model,
     defaultProvider: params.defaultProvider,
-    aliasIndex: params.aliasIndex,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (!resolved) {
     return rawModel;
@@ -222,12 +218,7 @@ export function resolveConfiguredSubagentSpawnModelSelection(params: {
 }): string | undefined {
   const raw =
     normalizeModelSelection(params.modelOverride) ??
-    resolveSubagentConfiguredModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      includeAgentPrimary: params.includeAgentPrimary,
-      modelRuntime: params.modelRuntime,
-    });
+    resolveSubagentConfiguredModelSelection(params);
   if (!raw) {
     return undefined;
   }

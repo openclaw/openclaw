@@ -1,6 +1,5 @@
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -10,13 +9,14 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveXAccount } from "./accounts.js";
 import { openXAllowlist } from "./allowlist.js";
-import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
 import { getXApi } from "./client.js";
 import { createXGitHubReader } from "./github.js";
 import { formatXSenderLine } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
 import { XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
+import { setXTestFetch } from "./test-support/fetch.js";
 import { config, fixture, post } from "./test-support/monitor-fixture.js";
 import { createXTestSpend } from "./test-support/spend.js";
 import { createXGitHubService } from "./verified-github-service.js";
@@ -26,14 +26,6 @@ const network = vi.hoisted(() => ({
   github: vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(),
 }));
 
-vi.mock("./github.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./github.js")>();
-  return {
-    ...actual,
-    createXGitHubReader: (options: Parameters<typeof actual.createXGitHubReader>[0]) =>
-      actual.createXGitHubReader({ ...options, fetch: options.fetch ?? network.github }),
-  };
-});
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   getXApi: vi.fn(),
@@ -44,6 +36,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T12:00:00Z"));
   network.github.mockReset();
+  setXTestFetch("api.github.com", network.github);
   vi.mocked(getXApi).mockReset();
 });
 afterEach(() => {
@@ -51,36 +44,44 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+async function withService(
+  { runtime, logger }: ReturnType<typeof fixture>,
+  cfg: OpenClawConfig,
+  run: (clock: ReturnType<typeof createGatewaySchedulerClock>) => Promise<void>,
+) {
+  const clock = createGatewaySchedulerClock(Date.now());
+  const gateway = createTestGatewayScheduler(clock.clock);
+  const scheduler = createTestPluginServiceScheduler(gateway);
+  const service = createXGitHubService({ runtime });
+  const stateDir = runtime.state.resolveStateDir();
+  const context = { config: cfg, stateDir, logger, scheduler };
+  try {
+    await service.start(context);
+    await run(clock);
+  } finally {
+    await scheduler.stop();
+    await service.stop?.(context);
+    await gateway.stop();
+  }
+}
+
 function githubFixture(dailyUsd = 1) {
-  const cfg: OpenClawConfig = {
-    ...config,
-    channels: {
-      x: {
-        ...config.channels?.x,
-        verifiedFromGitHub: { repo: "test/repo", token: "synthetic-token" },
-      },
-    },
-  };
+  const verifiedFromGitHub = { repo: "test/repo", token: "synthetic-token" };
+  const x = { ...config.channels?.x, verifiedFromGitHub };
+  const cfg: OpenClawConfig = { ...config, channels: { x } };
   const host = fixture({ posts: [], cfg });
-  const source = {
-    people: [{ login: "writer", handle: "alice" }],
-    failing: false,
-  };
+  const source = { people: [{ login: "writer", handle: "alice" }], failing: false };
+  const permissions = { push: true, maintain: false, admin: false };
   network.github.mockImplementation(async (input) => {
     if (source.failing) {
       return Response.json({ message: "private upstream details" }, { status: 503 });
     }
-    const url = new URL(input);
-    const path = url.pathname;
+    const { pathname: path, searchParams } = new URL(input);
     if (path.endsWith("/collaborators")) {
-      const page = Number(url.searchParams.get("page") ?? "1");
+      const page = Number(searchParams.get("page") ?? "1");
       return Response.json(
         source.people
-          .map((person, index) => ({
-            id: index + 1,
-            login: person.login,
-            permissions: { push: true, maintain: false, admin: false },
-          }))
+          .map(({ login }, index) => ({ id: index + 1, login, permissions }))
           .slice((page - 1) * 100, page * 100),
       );
     }
@@ -92,11 +93,7 @@ function githubFixture(dailyUsd = 1) {
     if (!person) {
       throw new Error("Unexpected GitHub fixture path");
     }
-    return Response.json({
-      id: index + 1,
-      login: person.login,
-      twitter_username: person.handle,
-    });
+    return Response.json({ id: index + 1, login: person.login, twitter_username: person.handle });
   });
   const lookups: string[][] = [];
   const ids: Record<string, string> = { alice: "101", bob: "102", alice_new: "103" };
@@ -124,7 +121,7 @@ function githubFixture(dailyUsd = 1) {
   });
   vi.mocked(getXApi).mockResolvedValue(api);
   const account = resolveXAccount(cfg, "default");
-  const github = createXGitHubReader({ token: "synthetic-token" });
+  const github = createXGitHubReader({ token: verifiedFromGitHub.token });
   const abort = new AbortController();
   const sync = () =>
     syncXGitHub({
@@ -135,8 +132,14 @@ function githubFixture(dailyUsd = 1) {
       signal: abort.signal,
       assertCurrent: () => abort.signal.throwIfAborted(),
     });
-  return { ...host, cfg, source, ids, lookups, spend, account, sync };
+  const status = () => getXGitHubStatus(host.runtime, account);
+  const snapshot = () =>
+    openXAllowlist(host.runtime).readSnapshot("default", account.config.verifiedFromGitHub);
+  const ingress = (id: string, author = "101") => resolveXIngress("default", post(id, author), cfg);
+  return { ...host, cfg, source, ids, lookups, spend, account, sync, status, snapshot, ingress };
 }
+
+const maintainerAccess = { tier: "maintainer", ingress: { senderAccess: { allowed: true } } };
 
 describe("X GitHub verification sync", () => {
   it("persists resolved IDs, charges only returned users, and looks up only new or changed declarations", async () => {
@@ -153,10 +156,7 @@ describe("X GitHub verification sync", () => {
       },
     ]);
     expect(first.unresolvedHandles).toEqual(["missing"]);
-    const authorized = await openXAllowlist(test.runtime).readSnapshot(
-      "default",
-      test.account.config.verifiedFromGitHub,
-    );
+    const authorized = await test.snapshot();
     vi.setSystemTime(Date.now() + 60_000);
     await test.sync();
     expect(authorized.assertCurrent).not.toThrow();
@@ -168,7 +168,7 @@ describe("X GitHub verification sync", () => {
     expect(test.lookups).toEqual([["alice", "missing"], ["bob"], ["alice_new"]]);
     expect(changed.entries.map((entry) => entry.xUserId)).toEqual(["103", "102"]);
     expect(await test.spend.status()).toMatchObject({ dayUsd: 0.03, cycleUsd: 0.03 });
-    expect(await getXGitHubStatus(test.runtime, test.account)).toEqual({
+    expect(await test.status()).toEqual({
       repo: "test/repo",
       entries: changed.entries,
       unresolvedHandles: ["missing"],
@@ -190,31 +190,21 @@ describe("X GitHub verification sync", () => {
       addedAt: 0,
     });
     await test.sync();
-    const authorized = await resolveXIngress("default", post("501", "101"), test.cfg);
-    expect(authorized.tier).toBe("maintainer");
-    expect(authorized.ingress.senderAccess.allowed).toBe(true);
-    expect(
-      formatXSenderLine(
-        authorized.tier,
-        "101",
-        { id: "101", username: "alice", name: "Alice" },
-        authorized.github,
-      ),
-    ).toBe(
+    const authorized = await test.ingress("501");
+    expect(authorized).toMatchObject(maintainerAccess);
+    const alice = { id: "101", username: "alice", name: "Alice" };
+    expect(formatXSenderLine(authorized.tier, alice.id, alice, authorized.github)).toBe(
       "This is from a verified user: @alice (Alice), X user id 101, GitHub @writer with write access to test/repo.",
     );
-    expect(
+    const policy = () =>
       xPlugin.groups!.resolveToolPolicy!({
         cfg: test.cfg,
         accountId: "default",
         senderId: "101",
         groupId: "500",
-      }),
-    ).toBeUndefined();
-    const captured = await allowlist.readSnapshot(
-      "default",
-      test.account.config.verifiedFromGitHub,
-    );
+      });
+    expect(policy()).toBeUndefined();
+    const captured = await test.snapshot();
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
     test.resolveStable.mockImplementationOnce(async (params) => {
@@ -222,7 +212,7 @@ describe("X GitHub verification sync", () => {
       await resume.promise;
       return resolveStableChannelMessageIngress(params);
     });
-    const pending = resolveXIngress("default", post("502", "101"), test.cfg);
+    const pending = test.ingress("502");
     const rejected = expect(pending).rejects.toThrow("allowlist changed");
     await entered.promise;
     test.source.people = [];
@@ -234,22 +224,14 @@ describe("X GitHub verification sync", () => {
       resume.resolve();
     }
     await rejected;
-    const revoked = await resolveXIngress("default", post("503", "101"), test.cfg);
+    const revoked = await test.ingress("503");
     expect(revoked.tier).toBe("guest");
     expect(revoked.ingress.senderAccess.allowed).toBe(false);
     expect(revoked.github).toBeUndefined();
-    expect(
-      xPlugin.groups!.resolveToolPolicy!({
-        cfg: test.cfg,
-        accountId: "default",
-        senderId: "101",
-        groupId: "500",
-      }),
-    ).toBeDefined();
+    expect(policy()).toBeDefined();
     for (const id of ["10", "30"]) {
-      const retained = await resolveXIngress("default", post("504", id), test.cfg);
-      expect(retained.tier).toBe("maintainer");
-      expect(retained.ingress.senderAccess.allowed).toBe(true);
+      const retained = await test.ingress("504", id);
+      expect(retained).toMatchObject(maintainerAccess);
     }
   });
 
@@ -263,87 +245,75 @@ describe("X GitHub verification sync", () => {
     await expect(test.sync()).rejects.toBeInstanceOf(XBudgetExceededError);
     expect(test.lookups).toEqual([handles.slice(0, 100)]);
     expect(await test.spend.status()).toMatchObject({ dayUsd: 1, cycleUsd: 1 });
-    const partial = await getXGitHubStatus(test.runtime, test.account);
+    const partial = await test.status();
     expect(partial).toMatchObject({ entries: [], stale: true });
     expect(partial?.lastSyncAt).toBeUndefined();
-    const pending = await resolveXIngress("default", post("501", "1000"), test.cfg);
+    const pending = await test.ingress("501", "1000");
     expect(pending.ingress.senderAccess.allowed).toBe(false);
 
     vi.setSystemTime(Date.now() + 24 * 60 * 60_000);
     const completed = await test.sync();
     expect(test.lookups).toEqual([handles.slice(0, 100), ["writer100"]]);
-    expect(completed.entries).toHaveLength(101);
     expect(completed.entries.map((entry) => entry.xUserId)).toEqual(
       Array.from({ length: 101 }, (_, index) => String(1_000 + index)),
     );
     expect(completed.stale).toBe(false);
     expect(await test.spend.status()).toMatchObject({ dayUsd: 0.01, cycleUsd: 1.01 });
-    const admitted = await resolveXIngress("default", post("502", "1000"), test.cfg);
+    const admitted = await test.ingress("502", "1000");
     expect(admitted.ingress.senderAccess.allowed).toBe(true);
   });
 });
 
 describe("X GitHub verification service", () => {
+  it("names reauthorization when the X refresh token is rejected", async () => {
+    const test = githubFixture();
+    setXTestFetch("api.x.com", async () =>
+      Response.json(
+        { error: "invalid_grant", error_description: "private provider details" },
+        { status: 400 },
+      ),
+    );
+    await withService(test, test.cfg, async (clock) => {
+      await clock.wake();
+      expect(await test.status()).toMatchObject({
+        stale: true,
+        message: expect.stringContaining("reauthorize the X account"),
+      });
+      expect(test.logger.warn.mock.calls[0]?.[0]).not.toContain("private provider details");
+    });
+  });
+
   it("schedules no work when the feature is absent", async () => {
     const host = fixture({ posts: [] });
-    const clock = createGatewaySchedulerClock(Date.now());
-    const gateway = createTestGatewayScheduler(clock.clock);
-    const scheduler = createTestPluginServiceScheduler(gateway);
-    const service = createXGitHubService({ runtime: host.runtime });
-    const context: OpenClawPluginServiceContextV2 = {
-      config,
-      stateDir: host.runtime.state.resolveStateDir(),
-      logger: host.logger,
-      scheduler,
-    };
-    try {
-      await service.start(context);
+    await withService(host, config, async (clock) => {
       await clock.advanceBy(2 * 60 * 60_000);
       expect(clock.armedAtMs).toBeNull();
       expect(network.github).not.toHaveBeenCalled();
       expect(
         await getXGitHubStatus(host.runtime, resolveXAccount(config, "default")),
       ).toBeUndefined();
-    } finally {
-      await scheduler.stop();
-      await service.stop?.(context);
-      await gateway.stop();
-    }
+    });
   });
 
   it("keeps the last good set stale during failures, logs once per streak, and recovers on its next scheduled sync", async () => {
     const test = githubFixture();
-    const clock = createGatewaySchedulerClock(Date.now());
-    const gateway = createTestGatewayScheduler(clock.clock);
-    const scheduler = createTestPluginServiceScheduler(gateway);
-    const service = createXGitHubService({ runtime: test.runtime });
-    const context: OpenClawPluginServiceContextV2 = {
-      config: test.cfg,
-      stateDir: test.runtime.state.resolveStateDir(),
-      logger: test.logger,
-      scheduler,
-    };
-    const nextSync = async () => {
-      vi.setSystemTime(Date.now() + 60 * 60_000);
-      await clock.advanceBy(60 * 60_000);
-    };
-    try {
-      await service.start(context);
+    await withService(test, test.cfg, async (clock) => {
+      const nextSync = async () => {
+        vi.setSystemTime(Date.now() + 60 * 60_000);
+        await clock.advanceBy(60 * 60_000);
+      };
       await clock.wake();
-      const good = await getXGitHubStatus(test.runtime, test.account);
+      const good = await test.status();
       expect(good).toMatchObject({
         stale: false,
         entries: [{ xUserId: "101" }],
         lastSyncAt: Date.now(),
       });
-      const authorized = await openXAllowlist(test.runtime).readSnapshot(
-        "default",
-        test.account.config.verifiedFromGitHub,
-      );
+      const authorized = await test.snapshot();
       test.source.failing = true;
       await nextSync();
       await nextSync();
-      expect(await getXGitHubStatus(test.runtime, test.account)).toMatchObject({
+      expect(await test.status()).toMatchObject({
         stale: true,
         entries: good!.entries,
         lastSyncAt: good!.lastSyncAt,
@@ -351,23 +321,48 @@ describe("X GitHub verification service", () => {
       expect(test.logger.warn).toHaveBeenCalledOnce();
       expect(authorized.assertCurrent).not.toThrow();
       expect(test.logger.warn.mock.calls[0]?.[0]).not.toContain("private upstream details");
-      const retained = await resolveXIngress("default", post("501", "101"), test.cfg);
-      expect(retained.tier).toBe("maintainer");
-      expect(retained.ingress.senderAccess.allowed).toBe(true);
+      const retained = await test.ingress("501");
+      expect(retained).toMatchObject(maintainerAccess);
       test.source.failing = false;
       await nextSync();
-      expect(await getXGitHubStatus(test.runtime, test.account)).toMatchObject({
-        stale: false,
-        lastSyncAt: Date.now(),
-      });
+      expect(await test.status()).toMatchObject({ stale: false, lastSyncAt: Date.now() });
       expect(test.lookups).toEqual([["alice"]]);
       test.source.failing = true;
       await nextSync();
       expect(test.logger.warn).toHaveBeenCalledTimes(2);
-    } finally {
-      await scheduler.stop();
-      await service.stop?.(context);
-      await gateway.stop();
-    }
+    });
+  });
+
+  it("keeps sync status and the X client for mixed-case account keys under the runtime account id", async () => {
+    const test = githubFixture();
+    const { verifiedFromGitHub, ...credentials } = test.cfg.channels!.x!;
+    const cfg: OpenClawConfig = {
+      ...test.cfg,
+      channels: {
+        x: {
+          accounts: {
+            Work: { ...credentials, verifiedFromGitHub },
+            Ops: { ...credentials, userId: "200", verifiedFromGitHub: { repo: "test/repo" } },
+          },
+        },
+      },
+    };
+    await withService(test, cfg, async (clock) => {
+      await clock.wake();
+      const status = (key: string) => getXGitHubStatus(test.runtime, resolveXAccount(cfg, key));
+      expect({
+        lookupAccounts: vi.mocked(getXApi).mock.calls.map(([accountId]) => accountId),
+        work: await status("Work"),
+        ops: await status("Ops"),
+      }).toMatchObject({
+        lookupAccounts: ["work"],
+        work: { stale: false, entries: [{ xUserId: "101" }] },
+        ops: {
+          stale: true,
+          message:
+            "Configure verifiedFromGitHub.token with a GitHub credential that can list repository collaborators.",
+        },
+      });
+    });
   });
 });

@@ -6,7 +6,7 @@ import { createRouter, definePage } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -17,7 +17,9 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { rewindChatHistory, switchChatHistoryBranch } from "./chat-history-actions.ts";
 import type { ChatHistoryResponse } from "./chat-history-snapshot.ts";
@@ -25,11 +27,7 @@ import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
-import {
-  createInitializationContext,
-  createRenderTestChatPane,
-  nativeHistoryMessage,
-} from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane, nativeHistoryMessage } from "./chat-pane.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
 import {
   refreshChatMetadata,
@@ -145,7 +143,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;
@@ -513,6 +511,9 @@ it.each([false, true])(
     expect(getChatHistoryLoadState(state).phase).toBe("failed");
     const older = h.holdManaged();
     renderCurrent();
+    expect(container.querySelector(".chat-history-error__stage p")?.textContent).toContain(
+      "Temporary history failure",
+    );
     const retry = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-error button"),
       "Retry button",
@@ -528,18 +529,13 @@ it.each([false, true])(
       ...initial,
       updatedAt: 30,
       label: "Current retry descriptor",
-      placement: {
-        state: "active",
-        generation: 1,
-        createdAtMs: 1,
+      placement: createActiveSessionPlacement({
         updatedAtMs: 30,
         stateChangedAtMs: 30,
         environmentId: "worker:retry",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
         workspaceBaseManifestRef: "retry-base",
         remoteWorkspaceDir: "/workspace/synthetic",
-      },
+      }),
     } satisfies GatewaySessionRow;
     expectDefined(h.reads[1], "Retry history request").pending.resolve(history(fresh));
     await vi.waitFor(() => expect(getChatHistoryLoadState(state).phase).toBe("committed"));
@@ -655,9 +651,13 @@ it.each([
         };
       }
       return {
-        messages: (params.offset ? [1, 2, 3, 4] : [5, 6]).map((seq) => nativeHistoryMessage(seq)),
-        hasMore: !params.offset,
-        ...(params.offset ? {} : { nextOffset: 2, deltaCursor: "old-cursor" }),
+        messages: (params.cursor === "older-page" ? [1, 2, 3, 4] : [5, 6]).map((seq) =>
+          nativeHistoryMessage(seq),
+        ),
+        hasMore: params.cursor !== "older-page",
+        ...(params.cursor === "older-page"
+          ? {}
+          : { nextOffset: 2, olderCursor: "older-page", deltaCursor: "old-cursor" }),
         totalMessages: 6,
         sessionInfo: row,
       };

@@ -69,6 +69,10 @@ function inspectAuthProfileTable(
   target: "store" | "state",
   databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection | null {
+  // The selected PostgreSQL owner admits the complete generated schema before reads.
+  if (isPostgresSqlConnection(db)) {
+    return null;
+  }
   const tableName = authProfileTableName(target, databaseKind);
   const schema = getAdmittedSqliteSchemaFacts(db);
   if (schema) {
@@ -106,6 +110,42 @@ export function readAuthProfileJsonCellText(
       .select(cell.value)
       .where(cell.key, "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
   )?.[cell.value];
+}
+
+/** Read admitted credential and health cells in one statement without classifying errors. */
+export function readAuthProfileJsonCellTexts(
+  database: EngineConnection,
+  databaseKind: "agent" | "shared-state",
+): { store: string | undefined; state: string | undefined } {
+  const rows =
+    databaseKind === "shared-state"
+      ? executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
+            .selectFrom("config_machine_state")
+            .select(["state_key as target", "value_json as contents"])
+            .where("state_key", "in", [SHARED_AUTH_CELL_KEYS.store, SHARED_AUTH_CELL_KEYS.state]),
+        ).rows
+      : executeSqliteQuerySync(
+          database,
+          getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+            .selectFrom("auth_profile_store")
+            .select("store_json as contents")
+            .select((expression) => expression.val("store").as("target"))
+            .where("store_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY)
+            .unionAll(
+              getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
+                .selectFrom("auth_profile_state")
+                .select("state_json as contents")
+                .select((expression) => expression.val("state").as("target"))
+                .where("state_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
+            ),
+        ).rows;
+  const texts = new Map(rows.map((row) => [row.target, row.contents]));
+  return {
+    store: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.store : "store"),
+    state: texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.state : "state"),
+  };
 }
 
 export function inspectAuthProfileJsonCell(
@@ -220,7 +260,9 @@ export function readAuthProfileRows(
   let schemaObjects: Array<Record<string, unknown>>;
   try {
     const schema = authSchema ? undefined : getAdmittedSqliteSchemaFacts(database);
-    if (authSchema) {
+    if (isPostgresSqlConnection(database)) {
+      schemaObjects = [storeTable, stateTable].map((name) => ({ name, type: "table" }));
+    } else if (authSchema) {
       schemaObjects = [
         { name: storeTable, type: authSchema.store === "missing" ? undefined : authSchema.store },
         { name: stateTable, type: authSchema.state === "missing" ? undefined : authSchema.state },
@@ -271,40 +313,9 @@ export function readAuthProfileRows(
   );
   if (hasBothTables) {
     try {
-      const rows =
-        databaseKind === "shared-state"
-          ? executeSqliteQuerySync(
-              database,
-              getNodeSqliteKysely<SharedAuthProfileDatabase>(database)
-                .selectFrom("config_machine_state")
-                .select(["state_key as target", "value_json as contents"])
-                .where("state_key", "in", [
-                  SHARED_AUTH_CELL_KEYS.store,
-                  SHARED_AUTH_CELL_KEYS.state,
-                ]),
-            ).rows
-          : executeSqliteQuerySync(
-              database,
-              getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
-                .selectFrom("auth_profile_store")
-                .select("store_json as contents")
-                .select((expression) => expression.val("store").as("target"))
-                .where("store_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY)
-                .unionAll(
-                  getNodeSqliteKysely<AgentAuthProfileDatabase>(database)
-                    .selectFrom("auth_profile_state")
-                    .select("state_json as contents")
-                    .select((expression) => expression.val("state").as("target"))
-                    .where("state_key", "=", AUTH_PROFILE_PRIMARY_ROW_KEY),
-                ),
-            ).rows;
-      const texts = new Map(rows.map((row) => [row.target, row.contents]));
-      store = inspectAuthProfileJsonText(
-        texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.store : "store"),
-      );
-      state = inspectAuthProfileJsonText(
-        texts.get(databaseKind === "shared-state" ? SHARED_AUTH_CELL_KEYS.state : "state"),
-      );
+      const texts = readAuthProfileJsonCellTexts(database, databaseKind);
+      store = inspectAuthProfileJsonText(texts.store);
+      state = inspectAuthProfileJsonText(texts.state);
     } catch (error) {
       if (databaseKind === "shared-state") {
         throw error;
@@ -327,15 +338,10 @@ export function readAuthProfileRows(
 function inspectAuthProfileRow(
   database: EngineConnection,
   target: "store" | "state",
-  databaseKind: "agent" | "shared-state",
 ): PersistedAuthProfileStoreInspection {
   try {
-    return inspectAuthProfileJsonCell(database, target, databaseKind);
-  } catch (error) {
-    // Shared-state read ownership handles native failures and poisoned-handle eviction.
-    if (databaseKind === "shared-state") {
-      throw error;
-    }
+    return inspectAuthProfileJsonCell(database, target, "agent");
+  } catch {
     // A broken state table must not turn an absent credential row into a present source.
     return { status: "unreadable" };
   }
@@ -343,10 +349,10 @@ function inspectAuthProfileRow(
 
 /** The selected worker returns source presence without transferring credential rows. */
 export function hasAgentAuthProfileSourceInDatabase(database: EngineConnection): boolean {
-  const store = inspectAuthProfileRow(database, "store", "agent");
+  const store = inspectAuthProfileRow(database, "store");
   if (store.status !== "missing") {
     return true;
   }
-  const state = inspectAuthProfileRow(database, "state", "agent");
+  const state = inspectAuthProfileRow(database, "state");
   return state.status === "readable" && Boolean(state.raw);
 }

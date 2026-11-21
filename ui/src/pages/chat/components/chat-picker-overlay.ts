@@ -1,10 +1,12 @@
-import { createEffect, createSignal, untrack } from "solid-js";
-import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
+import { onSettled } from "solid-js";
+import { createOverlayAnchor, type OverlayPlacement } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { registryFor } from "../../../components/overlay-registry.ts";
 import "../../../components/solid/overlay.css";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
+import { focusComposerInput } from "../../../lib/composer-input.ts";
 import { acquireNativeOverlaySurface } from "../../../lib/native-overlay-occlusion.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
@@ -15,16 +17,18 @@ const composerPickerDismissals = new WeakMap<
   { owners: Set<symbol>; dispose: () => void }
 >();
 const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
-const INVOCATION_MENUS = ".agent-chat__input > :is(.slash-menu, .skill-menu)";
+type InvocationMenu = { element: HTMLElement; getTextarea: () => HTMLTextAreaElement | null };
+const invocationMenus = new WeakMap<Document, Set<InvocationMenu>>();
 let nextPickerId = 0;
 
 /** Keep native details selectors while the shared overlay owns visibility and dismissal. */
 function bindChatPickerOverlay(
   details: HTMLDetailsElement,
-  onOpenChange?: (details: HTMLDetailsElement) => void,
-): () => void {
-  const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
-  const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
+  trigger: HTMLElement,
+  surface: HTMLElement,
+  onOpenChange: ((details: HTMLDetailsElement) => void) | undefined,
+  placement: OverlayPlacement,
+) {
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
     exclusiveGroup: "menu",
     interactionElements: () => [details],
@@ -32,6 +36,11 @@ function bindChatPickerOverlay(
     onEscape: clearChatModelSearchOnEscape,
   });
   trigger.id = `${overlay.id}-trigger`;
+  const desktopPlacement = details.closest("[data-picker-below]")
+    ? placement === "top"
+      ? "bottom"
+      : "bottom-end"
+    : placement;
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-controls", overlay.id);
   surface.id = overlay.id;
@@ -46,7 +55,7 @@ function bindChatPickerOverlay(
     ).matches;
     anchor.update(
       mobile ? (details.closest<HTMLElement>(".agent-chat__input") ?? trigger) : trigger,
-      "top-end",
+      mobile ? "top-end" : desktopPlacement,
     );
     if (!overlay.request(details.open)) {
       details.open = overlay.open;
@@ -54,11 +63,12 @@ function bindChatPickerOverlay(
   };
   details.setAttribute("data-chat-native-picker", "");
   let lastOpen = overlay.open;
+  // Mirror each open/close edge into native details and its dismissal callback synchronously.
   const stop = overlay.subscribe((open) => {
     details.open = open;
     if (open !== lastOpen) {
       lastOpen = open;
-      untrack(() => onOpenChange?.(details));
+      onOpenChange?.(details);
     }
   });
   const toggle = () => {
@@ -67,7 +77,7 @@ function bindChatPickerOverlay(
     }
     sync();
   };
-  const activate = (event: MouseEvent) => {
+  const activate = (event: Event) => {
     if (event.defaultPrevented || !event.composedPath().includes(trigger)) {
       return;
     }
@@ -78,28 +88,56 @@ function bindChatPickerOverlay(
     details.open = !details.open;
     toggle();
   };
-  details.addEventListener("click", activate);
-  details.addEventListener("toggle", toggle);
   sync();
-  return () => {
-    details.removeEventListener("click", activate);
-    details.removeEventListener("toggle", toggle);
-    stop();
-    details.removeAttribute("data-chat-native-picker");
-    overlay.dispose();
-    anchor.dispose();
+  return {
+    onClick: activate,
+    onToggle: toggle,
+    dispose() {
+      stop();
+      details.removeAttribute("data-chat-native-picker");
+      overlay.dispose();
+      anchor.dispose();
+    },
   };
 }
 
 /** The ref only publishes the node; the component owner binds and releases its surface. */
 export function createChatPickerOverlay(
   onOpenChange?: (details: HTMLDetailsElement) => void,
-): (details: HTMLDetailsElement) => void {
-  const [element, setElement] = createSignal<HTMLDetailsElement>();
-  createEffect(element, (details) =>
-    details ? bindChatPickerOverlay(details, onOpenChange) : undefined,
-  );
-  return (details) => setElement(details);
+  placement: OverlayPlacement = "top-end",
+) {
+  let details!: HTMLDetailsElement;
+  let trigger!: HTMLElement;
+  let surface!: HTMLElement;
+  let binding: ReturnType<typeof bindChatPickerOverlay> | undefined;
+  onSettled(() => {
+    const current = bindChatPickerOverlay(details, trigger, surface, onOpenChange, placement);
+    binding = current;
+    return () => {
+      binding = undefined;
+      current.dispose();
+    };
+  });
+  return {
+    details: (element: HTMLDetailsElement) => (details = element),
+    trigger: (element: HTMLElement) => (trigger = element),
+    surface: (element: HTMLElement) => (surface = element),
+    onClick: (event: MouseEvent) => binding?.onClick(event),
+    onToggle: () => binding?.onToggle(),
+  };
+}
+
+/** Invocation menus publish their owned nodes instead of searching other composers' DOM. */
+export function registerChatComposerInvocationMenu(
+  element: HTMLElement,
+  getTextarea: () => HTMLTextAreaElement | null,
+): () => void {
+  const doc = element.ownerDocument;
+  const menus = invocationMenus.get(doc) ?? new Set<InvocationMenu>();
+  const entry = { element, getTextarea };
+  menus.add(entry);
+  invocationMenus.set(doc, menus);
+  return () => menus.delete(entry);
 }
 
 // Split panes and Home can overlap New Session. Keep one document listener set
@@ -125,13 +163,13 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
   const controller = new AbortController();
   const options = { capture: true, signal: controller.signal };
 
-  function dismissChatComposerPickersOutside(event: PointerEvent): void {
+  function dismissChatComposerPickersOutside(event: Event): void {
     const path = event.composedPath();
-    for (const menu of ownerDocument.querySelectorAll<HTMLElement>(INVOCATION_MENUS)) {
-      if (!path.includes(menu)) {
-        menu
-          .closest(".agent-chat__input")
-          ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+    for (const { element } of invocationMenus.get(ownerDocument) ?? []) {
+      if (element.isConnected && !path.includes(element)) {
+        element.parentElement?.dispatchEvent(
+          new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
+        );
       }
     }
   }
@@ -143,34 +181,44 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
       event.defaultPrevented ||
       consumeTooltipEscape(event, ownerDocument) ||
       event.key !== "Escape" ||
-      ownerDocument.querySelector(".shell-nav[aria-modal='true']")
+      // The modal navigation drawer owns focus and Escape within its subtree.
+      event
+        .composedPath()
+        .some((node) => node instanceof Element && node.matches(".shell-nav[aria-modal='true']"))
     ) {
       return;
     }
     if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
-    const invocationComposer = ownerDocument
-      .querySelector<HTMLElement>(INVOCATION_MENUS)
-      ?.closest<HTMLElement>(".agent-chat__input");
-    if (!invocationComposer) {
+    const menu = [...(invocationMenus.get(ownerDocument) ?? [])].find(
+      ({ element }) => element.isConnected,
+    );
+    if (!menu) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    invocationComposer.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
-    invocationComposer
-      .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-      ?.focus({ preventScroll: true });
+    menu.element.parentElement?.dispatchEvent(
+      new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
+    );
+    focusComposerInput(menu.getTextarea(), { preventScroll: true });
   }
 
-  ownerDocument.addEventListener("pointerdown", dismissChatComposerPickersOutside, options);
+  listen(ownerDocument, "pointerdown", dismissChatComposerPickersOutside, options);
   // Native surfaces consume Escape before invocation menus beneath them.
-  ownerDocument.defaultView?.addEventListener(
-    "keydown",
-    dismissChatComposerPickersOnEscape,
-    options,
-  );
+  if (ownerDocument.defaultView) {
+    listen(
+      ownerDocument.defaultView,
+      "keydown",
+      (event) => {
+        if (event instanceof KeyboardEvent) {
+          dismissChatComposerPickersOnEscape(event);
+        }
+      },
+      options,
+    );
+  }
 
   return () => controller.abort();
 }

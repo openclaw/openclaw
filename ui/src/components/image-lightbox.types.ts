@@ -1,3 +1,5 @@
+import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
+
 export type ImageLightboxItem = {
   kind?: "image" | "video";
   src: string;
@@ -21,3 +23,18 @@ export type ImageLightboxGallery = {
   index: number;
   items: readonly ((retryFailed?: boolean) => Promise<ImageLightboxItem | null>)[];
 };
+export type ImageLightboxProps = {
+  connectVideo?: ImageLightboxItem["connectVideo"];
+  gallery?: ImageLightboxGallery;
+  loadDisplayImage?: ImageLightboxItem["loadDisplayImage"];
+  readOriginalBlob?: ImageLightboxItem["readOriginalBlob"];
+  mediaKind: "image" | "video";
+  src: string;
+  originalSrc: string;
+  imageTitle: string;
+  imageDescription: string;
+  imageWidth?: number;
+  imageHeight?: number;
+};
+
+export type ImageLightboxElement = SolidBridgeElement<ImageLightboxProps>;

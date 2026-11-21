@@ -3,7 +3,10 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
 import type { NewSessionTerminalHostOptions } from "./terminal-start.ts";
 
-export function NewSessionTerminalHost(props: { params: NewSessionTerminalHostOptions }) {
+export function NewSessionTerminalHost(props: {
+  params: NewSessionTerminalHostOptions;
+  ref?: (element: HTMLElement) => void;
+}) {
   const hostValue = liveValue(() => props.params.hostId);
   const hidden = () =>
     !props.params.hosts ||
@@ -11,11 +14,18 @@ export function NewSessionTerminalHost(props: { params: NewSessionTerminalHostOp
   return (
     <>
       {hidden() ? undefined : !props.params.hosts?.length ? (
-        <span class="new-session-page__catalog-unavailable" role="status">
+        <span
+          class="new-session-page__catalog-unavailable"
+          role="status"
+          ref={(element) => props.ref?.(element)}
+        >
           {t("newSession.nativeHostsUnavailable")}
         </span>
       ) : (
-        <div class="new-session-page__select new-session-page__menu-field">
+        <div
+          class="new-session-page__select new-session-page__menu-field"
+          ref={(element) => props.ref?.(element)}
+        >
           <span>{t("newSession.where")}</span>
           <select
             class="new-session-page__trigger"

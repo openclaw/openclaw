@@ -12,7 +12,6 @@ function generatedAttachmentReference(attachment: AgentGeneratedAttachment): str
   );
 }
 
-/** Return unique media URLs/paths from generated attachments. */
 export function mediaUrlsFromGeneratedAttachments(
   attachments: readonly AgentGeneratedAttachment[] | undefined,
 ): string[] {

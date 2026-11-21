@@ -1,4 +1,3 @@
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { CodexThread, CodexThreadListResponse } from "./app-server/protocol.js";
 import type { CodexCatalogPageDiagnostics } from "./session-catalog-diagnostics.js";
 import { codexCatalogRowRecency } from "./session-catalog-index-order.js";
@@ -36,18 +35,15 @@ export class CodexCatalogProjections {
     return this.active > 0;
   }
 
-  run<T>(work: () => Promise<T>): Promise<T> {
+  async run<T>(work: () => Promise<T>): Promise<T> {
     if (this.active >= CODEX_CATALOG_MAX_ROWS) {
-      return Promise.reject(new CodexCatalogProjectionCapacityError());
+      throw new CodexCatalogProjectionCapacityError();
     }
     this.active++;
     try {
-      return work().finally(() => {
-        this.active--;
-      });
-    } catch (error) {
+      return await work();
+    } finally {
       this.active--;
-      return Promise.reject(toErrorObject(error, "Codex catalog projection failed"));
     }
   }
 }

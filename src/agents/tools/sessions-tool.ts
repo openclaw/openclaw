@@ -8,10 +8,8 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { appendSessionTranscriptReport } from "../../config/sessions/session-accessor.sqlite-transcript-reports.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  runWithoutOwnedSessionTranscriptWrites,
-  withSessionTranscriptWriteAssertion,
-} from "../../config/sessions/transcript-write-context.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayTransportError } from "../../gateway/call.js";
 import { withAgentSessionModelPatchOrigin } from "../../gateway/session-model-patch-origin.js";
@@ -19,7 +17,10 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionControllerSettlement,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import type { AnyAgentTool } from "./common.js";
@@ -54,6 +55,7 @@ import {
   hasSessionControlAuthority,
   hasSessionWriteAuthority,
 } from "./sessions-operator-authority.js";
+import { listSessionOwnerProfiles } from "./sessions-owner-profiles.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
 import {
   callSessionToolControl,
@@ -68,8 +70,6 @@ import {
 } from "./sessions-tool-patch.js";
 import {
   SessionControlToolSchema,
-  SessionOwnerToolSchema,
-  SessionRenameOwnerToolSchema,
   SessionRenameToolSchema,
   resolveSessionsToolSchema,
 } from "./sessions-tool-schema.js";
@@ -106,14 +106,7 @@ async function resolvePatchTarget(
   opts: SessionsToolOptions,
   sessionKey: string | undefined,
   callGateway: AgentToolGatewayRequestCaller,
-): Promise<{
-  agentId: string;
-  cfg: OpenClawConfig;
-  isRequesterSession: boolean;
-  key: string;
-  requesterAgentId: string;
-  requesterSessionKey: string;
-}> {
+) {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
   const requesterAgentId = resolveSessionAgentId({
@@ -213,22 +206,14 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
   return {
     label: "Sessions",
     name: "sessions",
+    // Only session-stable facts pick the definition, so every turn of a session
+    // offers the same tool; per-turn authority is enforced when it runs.
     description: sandboxRenameOnly
       ? "Rename a session created by the requesting operator with patch and label (empty string clears it). Default target: current session. Another session requires sessionKey and expectedSessionId from sessions_list. Archive and restore are unavailable in this authority context. No other session actions or settings."
-      : assignmentOnly
-        ? "Assign responsibility for a visible session to a human or agent with assign_owner, ownerType, and ownerId. Default target: current session. Does not change creator attribution or access. Archive and restore are unavailable in this authority context."
-        : renameOnly
-          ? "Rename a session created by the requesting operator: use patch with label (empty string clears it). Default target: current session; another session requires sessionKey and expectedSessionId from sessions_list. assign_owner assigns responsibility for a visible session to a human or agent. Archive and restore are unavailable in this authority context. No other settings or session controls."
-          : controlOnly
-            ? `Rename sessions created by the requesting operator with patch and label. Archive or restore sessions created by the requesting operator requires operator.write. Use patch with archived=true/false; self-archive waits until this run finishes. ${stopAllowed ? "Stop targets another session created by or assigned to the operator; runId optionally selects one active run. " : ""}assign_owner assigns responsibility for a visible session to a human or agent. No deletion, other settings, batch, or global group changes.`
-            : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent; reset/delete visible sessions.`,
+      : `cloud_profiles lists configured cloud profiles; pass profileId for their OS and machine choices. owner_profiles lists canonical human profile IDs; optional githubAccountIds resolves verified account mappings. Session settings, ownership, ${stopAllowed ? "stop, " : ""}reset, delete, and custom sidebar groups: patch label/icon/group/status, pin, archive/restore, model/thinking override. patch with group files sessions into a group; targets applies the same patch to up to 100 visible sessions; group_list shows the catalog; group_set replaces the whole ordered catalog; group_rename/group_delete change one group everywhere. assign_owner hands responsibility to a human or agent, not access. Report unresolved ownership separately and continue independently authorized work. reset/delete visible sessions. Turns without owner authority are limited when the action runs.`,
     parameters: sandboxRenameOnly
       ? SessionRenameToolSchema
-      : assignmentOnly
-        ? SessionOwnerToolSchema
-        : renameOnly
-          ? SessionRenameOwnerToolSchema
-          : resolveSessionsToolSchema(controlOnly, stopAllowed, renameAllowed),
+      : resolveSessionsToolSchema(stopAllowed),
     execute: wrapGatewayPersonalToolExecution(async (_toolCallId, rawArgs, signal) => {
       let params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
@@ -387,6 +372,9 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         });
         return jsonResult(result);
       }
+      if (action === "owner_profiles") {
+        return await listSessionOwnerProfiles(params, gatewayRequest);
+      }
       if (action === "cloud_profiles") {
         return await listSessionCloudProfiles(params, gatewayRequest);
       }
@@ -537,9 +525,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             sessionKey: key,
             storePath,
           });
-          const released = getSessionWorkAdmissionRelease({
-            scope: storePath,
-            identities: [key, currentEntry?.sessionId],
+          const released = captureSessionControllerSettlement({
+            target: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: key,
+              incarnation: currentEntry?.sessionId,
+              agentId,
+            }),
           });
 
           if (
@@ -576,7 +568,12 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             void runWithGatewayToolContinuationContext(() =>
               released
                 .then(async () => {
-                  const archiveIdentities = [key, expectedSessionIdentity.expectedSessionId];
+                  const archiveTarget = captureSessionTarget({
+                    storeScope: storePath,
+                    sessionKey: key,
+                    incarnation: expectedSessionIdentity.expectedSessionId,
+                    agentId,
+                  });
                   const archivePatch = {
                     key,
                     ...agentScope,
@@ -584,9 +581,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                     ...expectedSessionIdentity,
                   };
                   while (true) {
-                    const competingRelease = getSessionWorkAdmissionRelease({
-                      scope: storePath,
-                      identities: archiveIdentities,
+                    const competingRelease = captureSessionControllerSettlement({
+                      target: archiveTarget,
                     });
                     if (competingRelease) {
                       await competingRelease;
@@ -611,9 +607,8 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                       if (!retryableGatewayFailure) {
                         throw error;
                       }
-                      const retryAfterRelease = getSessionWorkAdmissionRelease({
-                        scope: storePath,
-                        identities: archiveIdentities,
+                      const retryAfterRelease = captureSessionControllerSettlement({
+                        target: archiveTarget,
                       });
                       if (!retryAfterRelease) {
                         throw error;

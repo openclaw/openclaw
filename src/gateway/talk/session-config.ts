@@ -1,4 +1,3 @@
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
@@ -16,7 +15,6 @@ import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcr
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
-import type { RealtimeVoiceProviderConfig } from "../../talk/provider-types.js";
 import {
   getVoiceProviderConfig,
   providerMatchesId,
@@ -35,16 +33,6 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   return [params.configuredInstructions, await resolveRealtimeVoiceAgentContextInstructions(params)]
     .filter((entry): entry is string => Boolean(entry?.trim()))
     .join("\n\n");
-}
-
-function normalizeRealtimeTransport(value: unknown): TalkRealtimeConfig["transport"] {
-  const transport = normalizeOptionalLowercaseString(value);
-  return transport === "webrtc" ||
-    transport === "provider-websocket" ||
-    transport === "gateway-relay" ||
-    transport === "managed-room"
-    ? transport
-    : undefined;
 }
 
 function getVoiceCallStreamingConfig(config: OpenClawConfig): {
@@ -155,10 +143,8 @@ export async function buildTalkRealtimeConfig(
   requestedProvider?: string,
   requestedModel?: string,
 ) {
-  const talkRealtime = asOptionalRecord(config.talk?.realtime);
-  const talkRealtimeProviderConfigs = talkRealtime?.providers as
-    | Record<string, RealtimeVoiceProviderConfig>
-    | undefined;
+  const talkRealtime = config.talk?.realtime;
+  const talkRealtimeProviderConfigs = talkRealtime?.providers;
   const explicitProvider =
     normalizeOptionalString(requestedProvider) ?? normalizeOptionalString(talkRealtime?.provider);
   const configuredProviderIds = Object.keys(talkRealtimeProviderConfigs ?? {});
@@ -187,14 +173,14 @@ export async function buildTalkRealtimeConfig(
       normalizeOptionalString(talkRealtime?.speakerVoice) ??
       normalizeOptionalString(talkRealtime?.speakerVoiceId),
     instructions: normalizeOptionalString(talkRealtime?.instructions),
-    mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
-    transport: normalizeRealtimeTransport(talkRealtime?.transport),
-    vadThreshold: asFiniteNumber(talkRealtime?.vadThreshold),
-    silenceDurationMs: asFiniteNumber(talkRealtime?.silenceDurationMs),
-    prefixPaddingMs: asFiniteNumber(talkRealtime?.prefixPaddingMs),
+    mode: talkRealtime?.mode,
+    transport: talkRealtime?.transport,
+    vadThreshold: talkRealtime?.vadThreshold,
+    silenceDurationMs: talkRealtime?.silenceDurationMs,
+    prefixPaddingMs: talkRealtime?.prefixPaddingMs,
     reasoningEffort: normalizeOptionalString(talkRealtime?.reasoningEffort),
-    brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
-    consultRouting: normalizeOptionalLowercaseString(talkRealtime?.consultRouting),
+    brain: talkRealtime?.brain,
+    consultRouting: talkRealtime?.consultRouting,
   };
 }
 
@@ -203,6 +189,7 @@ export async function buildTalkTranscriptionConfig(
   requestedProvider?: string,
   requestedModel?: string,
   agentId?: string,
+  fileTranscription?: ReturnType<typeof resolveTalkFileTranscriptionConfig>,
 ) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -215,18 +202,41 @@ export async function buildTalkTranscriptionConfig(
     providers: listTalkTranscriptionProviders(config, configuredProviderIds),
     requestedModel: normalizeOptionalString(requestedModel),
   });
-  const file =
+  let file =
     !provider &&
     !voiceModelDefault &&
     !normalizeOptionalString(requestedModel) &&
     Object.keys(providerConfigs).length === 0
-      ? await resolveTalkFileTranscriptionConfig(config, agentId)
+      ? await (fileTranscription ?? resolveTalkFileTranscriptionConfig(config, agentId))
       : undefined;
+  // A voice-note model nobody can run must not take Talk from a streaming
+  // provider that can; it keeps the path only to report what is missing.
+  if (
+    file &&
+    !file.ready &&
+    (await resolveConfiguredRealtimeTranscriptionProvider({ config, providerConfigs }).then(
+      () => true,
+      () => false,
+    ))
+  ) {
+    file = undefined;
+  }
   return {
     provider: provider ?? voiceModelDefault?.provider,
     providers: providerConfigs,
     model: voiceModelDefault?.model,
     file,
+    // The path chosen above, reported by talk.catalog so clients need not
+    // re-derive this precedence from config. `streaming-auto`: nothing names a
+    // provider, so the runtime picks the first realtime provider with a key,
+    // whether or not the Voice Call config holds options for some of them.
+    source: file
+      ? ("media-understanding" as const)
+      : !provider && voiceModelDefault
+        ? ("voice-model" as const)
+        : provider
+          ? ("streaming" as const)
+          : ("streaming-auto" as const),
   };
 }
 
@@ -273,7 +283,11 @@ export async function resolveConfiguredRealtimeTranscriptionProvider(params: {
     if (
       await configuredOrFalseAsync(() =>
         provider.isConfiguredAsync
-          ? provider.isConfiguredAsync({ cfg: params.config, providerConfig })
+          ? provider.isConfiguredAsync({
+              cfg: params.config,
+              providerConfig,
+              selectedExplicitly: normalizedConfigured !== undefined,
+            })
           : (provider.isConfigured?.({ cfg: params.config, providerConfig }) ?? false),
       )
     ) {

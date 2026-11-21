@@ -56,9 +56,7 @@ export function resolveSessionForRun(
   const storeOwner = explicitAgentId ? undefined : resolvePersistedSessionStoreOwner(cfg);
   const requestedAgentId =
     explicitAgentId ??
-    (storeOwner?.kind === "configured"
-      ? storeOwner.agentId
-      : normalizeAgentId(resolveDefaultAgentId(cfg)));
+    (storeOwner?.kind === "configured" ? storeOwner.agentId : resolveDefaultAgentId(cfg));
   if (
     cached &&
     (!context?.agentId?.trim() || cachedAgentId === requestedAgentId) &&

@@ -1,13 +1,12 @@
 import path from "node:path";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   resolveAgentWorkspaceDir,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
   resolveMemorySessionTargetsAsync,
+  streamSessionEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
@@ -316,7 +315,8 @@ async function forgetWorkspaceMemory(
       (entry.artifactKind === "archive-artifact" &&
         (!entry.sessionKind || entry.sessionKind === "unknown"))
     ) {
-      const parsed = await buildSessionEntry(entry.sessionFile, {
+      // Summaries carry provenance and observe messages without retaining the export.
+      const parsed = await streamSessionEntry(entry.sessionFile, {
         generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
         generatedByCronRun: entry.generatedByCronRun === true,
         ...(entry.transcriptSource === "sqlite"
@@ -411,10 +411,6 @@ async function forgetWorkspaceMemory(
     return false;
   };
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);
-  const extensionPath =
-    chunkIds.length > 0 && indexPlan.hasVectorTable
-      ? expectDefined(indexPlan.extensionPath, "memory forget vector preparation")
-      : undefined;
   const lineage = {
     agentId: params.agentId,
     sessionIds: [...sessionIds],
@@ -424,7 +420,11 @@ async function forgetWorkspaceMemory(
   const purged = await withMemoryForgetWorker(
     context.databaseOptions,
     execution,
-    { kind: "forget", prepareTombstones: !context.tombstoned, extensionPath },
+    {
+      kind: "forget",
+      prepareTombstones: !context.tombstoned,
+      extensionPath: indexPlan.extensionPath,
+    },
     async (scope) => {
       if (!context.tombstoned) {
         const marked = await scope.execute({ type: "forget.mark", input: lineage });

@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  SqliteWorkerError,
   hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
 import {
   readDatabasePathIdentitySync,
@@ -12,7 +12,10 @@ import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-o
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseExecutionScope,
+} from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -52,8 +55,12 @@ const unresolved = resolveGlobalSingleton(
 export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
-  assertCurrent: () => void,
-  onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
+  assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
+  onResult?: (
+    result: SessionNativeBindingCandidate["result"],
+    identity: string,
+    fileIdentity: AgentDatabaseExecutionFileIdentity,
+  ) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
     SessionNativeBindingCandidate,
@@ -64,12 +71,13 @@ export function deleteSessionWithNativeBindingsInWorker(
     entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
+    assertCandidate: (_candidate, operation) => assertCurrent(operation),
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onCommitted(candidate, published, identity) {
+    onCommitted(candidate, published, identity, _context, fileIdentity) {
       try {
-        onResult?.(candidate.result, identity);
+        onResult?.(candidate.result, identity, fileIdentity);
         publishSessionLifecycleWorkerEffects(plan, candidate.result);
       } finally {
         if (plan.kind === "lifecycle-projection-commit") {
@@ -267,13 +275,15 @@ export function runSessionNativeBindingWorkerOperation<
           }
         }
         if ((!committed && !rolledBack) || publicationFailure) {
-          const error = new SqliteWorkerError(
+          const error = wrapSqliteWorkerError(
             publicationFailure
               ? "Native binding settlement could not publish current lease facts; this generation cannot be reused"
               : "Native binding settlement is unknown; this generation cannot be reused",
             "outcome-unknown",
+            publicationFailure?.cause,
+            outcome.ok ? undefined : outcome.error,
+            settlement && settlement.kind !== "completed" ? settlement.error : undefined,
           );
-          error.cause = publicationFailure?.cause ?? (outcome.ok ? undefined : outcome.error);
           if (receipt?.compensationFailure) {
             const compensation = new Error("Native binding compensation failed");
             retainOpenClawStateWorkerErrorPayload(compensation, receipt.compensationFailure);

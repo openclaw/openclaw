@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
 import type { SessionObserverState } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
@@ -30,12 +30,14 @@ const digest = {
   health: "on-track" as const,
 };
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("session observer digest persistence", () => {
   it("does not let preamble persistence throttle the first model digest", async () => {
     let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const persistDigest = vi.fn(async () => true);
     const persist = createSessionObserverDigestPersister({
-      now: () => now,
       persistDigest,
       stillCurrent: () => () => true,
       onMissingEntry: vi.fn(),

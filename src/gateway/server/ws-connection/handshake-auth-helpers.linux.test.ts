@@ -4,13 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
+  isNativeAppUiClient,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
-import {
-  isNativeAppUiClient,
-  resolvePairingLocality,
-  shouldAllowSilentLocalPairing,
-} from "./handshake-auth-helpers.js";
+import { resolvePairingLocality, shouldAllowSilentLocalPairing } from "./handshake-auth-helpers.js";
 
 const LINUX_NATIVE_CONNECT_PARAMS = {
   client: {

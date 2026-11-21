@@ -66,7 +66,6 @@ export { listTelegramAccountIds };
 
 export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   accountId: string;
-  accountIds: string[];
   shouldWarnMissingDefault: boolean;
 } {
   // Explicit fleets use channel defaults, not a retained legacy migration owner.
@@ -77,7 +76,6 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   if (boundDefault) {
     return {
       accountId: boundDefault,
-      accountIds: listTelegramAccountIds(cfg),
       shouldWarnMissingDefault: false,
     };
   }
@@ -93,7 +91,6 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
   });
   return {
     accountId: resolved,
-    accountIds,
     shouldWarnMissingDefault:
       resolved === accountIds[0] &&
       !hasExplicitDefaultAccount &&

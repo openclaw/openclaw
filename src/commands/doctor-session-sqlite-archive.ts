@@ -1,4 +1,5 @@
 /** Plans Doctor archive paths; publication and receipts remain with the migration owner. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -25,6 +26,7 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationMoveKind,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { gatherLegacyArchiveCoverage } from "./doctor-session-sqlite-discovery.js";
 import {
   countBlockingSessionSqliteIssues,
@@ -92,12 +94,20 @@ export function planSessionJsonlArchiveMove(params: {
     value.replace(/[^A-Za-z0-9_.-]+/g, "_").slice(0, limit) || fallback;
   const baseName = slug(path.basename(params.sourcePathRaw), 160, "artifact");
   const keySlug = slug(params.archiveKey, 120, "session");
+  const prefix = `${keySlug}.${baseName}`;
+  const hash = createHash("sha256")
+    .update(JSON.stringify([params.archiveKey, path.basename(sourcePath)]))
+    .digest("hex")
+    .slice(0, 16);
+  const importedAt = Date.now();
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const suffix = attempt === 0 ? "" : `.${attempt}`;
-    const archivePath = path.join(
-      archiveDir,
-      `${keySlug}.${baseName}.imported-${Date.now()}${suffix}`,
-    );
+    const suffix = `.imported-${importedAt}${attempt === 0 ? "" : `.${attempt}`}`;
+    // Slugs are ASCII, so slicing this prefix cannot split a UTF-8 sequence.
+    const name =
+      Buffer.byteLength(prefix + suffix, "utf8") <= 255
+        ? prefix + suffix
+        : `${prefix.slice(0, 255 - Buffer.byteLength(`.${hash}${suffix}`, "utf8"))}.${hash}${suffix}`;
+    const archivePath = path.join(archiveDir, name);
     if (fs.existsSync(archivePath) || params.reservedArchivePaths?.has(archivePath)) {
       continue;
     }
@@ -118,11 +128,7 @@ export async function archiveImportedLegacySessionStores(
   assertCurrent?: () => void,
   publishSourceRemoval?: (remove: () => void, retainSource: () => void) => void,
 ): Promise<void> {
-  const byStore = new Map<string, LegacyArchiveTarget[]>();
-  for (const owner of owners) {
-    const storePath = owner.target.storePath;
-    byStore.set(storePath, [...(byStore.get(storePath) ?? []), owner]);
-  }
+  const byStore = groupRecords(owners, (owner) => owner.target.storePath);
   for (const [storePath, entries] of byStore) {
     assertCurrent?.();
     // A historical-only target may never have had an index; losing an admitted index is a failure.

@@ -1,19 +1,8 @@
-import { createHash } from "node:crypto";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "../../packages/normalization-core/src/number-coercion.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
-import {
-  consumeLiveCatalogRefresh,
-  recordLiveCatalogExpiry,
-} from "../plugins/provider-catalog-expiry.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
 
 export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
@@ -26,6 +15,11 @@ export type {
 } from "../plugins/types.js";
 
 export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+
+export {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
+} from "../plugins/provider-live-catalog-cache.js";
 
 export {
   buildManifestModelProviderConfig,
@@ -54,106 +48,6 @@ export type ConfiguredProviderCatalogEntry = {
   /** Runtime input modalities retained from the configured model row. */
   input?: Array<"text" | "image" | "audio" | "video" | "document">;
 };
-
-type LiveCatalogCacheEntry<T> = {
-  expiresAt: number;
-  value: Promise<T>;
-  settled: boolean;
-  retained: boolean;
-};
-
-const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = new Map<string, unknown>();
-
-async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
-  const value = await racePromiseWithAbortSignal(entry.value, signal, (aborted) => aborted.reason);
-  if (entry.retained) {
-    recordLiveCatalogExpiry(entry.expiresAt);
-  }
-  return value;
-}
-
-function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
-/**
- * Shares pending loads and caches successful values for a short TTL after completion.
- */
-export async function getCachedLiveCatalogValue<T>(params: {
-  /** Stable JSON-serializable values that identify one provider/config catalog load. */
-  keyParts: readonly unknown[];
-  /** Loader for the live catalog value when no fresh cache entry exists. */
-  load: (signal?: AbortSignal) => Promise<T>;
-  /** Cancels this consumer; admitted metadata loads finish within their own deadline. */
-  signal?: AbortSignal;
-  /** Optional predicate for values that are healthy enough to retain. */
-  shouldCache?: (value: T) => boolean;
-  /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
-  ttlMs?: number;
-  /** Test hook for deterministic cache expiry. */
-  now?: () => number;
-}): Promise<T> {
-  params.signal?.throwIfAborted();
-  const rawNow = params.now?.() ?? Date.now();
-  const ttlMs = params.ttlMs ?? 30_000;
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
-  // Uncached callers must neither reuse nor disturb an existing entry.
-  if (expiresAt === undefined) {
-    return await params.load(params.signal);
-  }
-  const key = buildLiveCatalogCacheKey(params.keyParts);
-  const refresh = consumeLiveCatalogRefresh(key);
-  const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
-  if (existing) {
-    if (
-      (!refresh || !existing.settled) &&
-      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
-    ) {
-      return await consumeLiveCatalog(existing, params.signal);
-    }
-    liveCatalogCache.delete(key);
-  }
-  const entry: LiveCatalogCacheEntry<T> = {
-    expiresAt,
-    settled: false,
-    retained: false,
-    // Read-only metadata may finish and warm the cache after every observer cancels.
-    value: params.load(),
-  };
-  entry.value = entry.value
-    .then((resolved) => {
-      if (params.shouldCache?.(resolved) ?? true) {
-        // A slow success gets a complete TTL without reviving an evicted entry.
-        const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
-          nowMs: params.now?.() ?? Date.now(),
-        });
-        if (completedExpiresAt !== undefined) {
-          entry.expiresAt = completedExpiresAt;
-          entry.retained = true;
-        }
-      }
-      return resolved;
-    })
-    .finally(() => {
-      entry.settled = true;
-      if (!entry.retained && liveCatalogCache.get(key) === entry) {
-        liveCatalogCache.delete(key);
-      }
-    });
-  // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
-  // new catalogs or canceling consumers of an evicted load.
-  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
-  liveCatalogCache.set(key, entry);
-  return await consumeLiveCatalog(entry, params.signal);
-}
-
-/**
- * Clears the process-local live catalog cache for tests and isolated plugin probes.
- */
-export function clearLiveCatalogCacheForTests(): void {
-  liveCatalogCache.clear();
-}
 
 function resolveConfiguredProviderModels(
   config: OpenClawConfig | undefined,

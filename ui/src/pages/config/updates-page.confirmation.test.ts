@@ -11,31 +11,67 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import { UpdatesPage } from "./updates-page.tsx";
+import { createUpdatesViewProps } from "./updates.test-support.ts";
+
+it("uses the connected Gateway version to keep a previous failure read-only", async () => {
+  const run = createUpdateRunFixture({
+    phase: "finished",
+    status: "failed",
+    reason: "global-install-failed",
+    verification: { serviceRunning: true, runningVersion: "1.0.0" },
+    finishedAtMs: Date.now(),
+  });
+  const harness = updateRunHarness(async (method) =>
+    method === "update.status" ? { lastRun: run } : {},
+  );
+  harness.update({
+    hello: {
+      ...harness.gateway.snapshot.hello!,
+      server: { version: "2.0.0" },
+      features: { methods: ["update.run", "update.status"] },
+    },
+  });
+  const overlays = createApplicationOverlays(harness.gateway);
+  const context = {
+    gateway: harness.gateway,
+    overlays,
+    config: { current: { serverVersion: "1.0.0" }, subscribe: () => () => undefined },
+    nativeDeviceSettings: null,
+  } as unknown as ApplicationContext;
+  const mounted = mountSolid(() =>
+    createComponent(UpdatesPage, {
+      ...createUpdatesViewProps({ configObject: {} }),
+      context,
+      onCheckStatus: () => overlays.refreshUpdateStatus(),
+    }),
+  );
+  try {
+    await overlays.refreshUpdateStatus();
+    flush();
+    expect(mounted.container.textContent).toContain("Last update run failed");
+    expect(mounted.queryByRole("button", { name: "Retry update" })).toBeNull();
+  } finally {
+    mounted.unmount();
+    overlays.dispose();
+  }
+});
 
 it.each(["loading", "open"] as const)(
   "retires a Gateway update confirmation when its target changes while %s",
   async (stage) => {
     const dialog = createModalDialogTestFixture();
     const run = createUpdateRunFixture();
+    const replies: Record<string, unknown> = {
+      "update.run": { runId: run.runId },
+      "update.runs.get": { run },
+      "update.status": {
+        updateAvailable: { channel: "stable", currentVersion: "1.0.0", latestVersion: "2.0.0" },
+      },
+    };
     const request = () =>
-      dialog.mockRequest<Parameters<RequestFn>, unknown>(async (method) => {
-        if (method === "update.run") {
-          return { runId: run.runId };
-        }
-        if (method === "update.runs.get") {
-          return { run };
-        }
-        if (method === "update.status") {
-          return {
-            updateAvailable: {
-              channel: "stable",
-              currentVersion: "1.0.0",
-              latestVersion: "2.0.0",
-            },
-          };
-        }
-        return {};
-      });
+      dialog.mockRequest<Parameters<RequestFn>, unknown>(async (method) =>
+        Object.hasOwn(replies, method) ? replies[method] : {},
+      );
     const requestA = request();
     const requestB = request();
     const harness = updateRunHarness(requestA);
@@ -49,31 +85,22 @@ it.each(["loading", "open"] as const)(
     const context = {
       gateway: harness.gateway,
       overlays,
-      config: {
-        current: { serverVersion: "1.0.0" },
-        subscribe: () => () => undefined,
-      },
+      config: { current: { serverVersion: "1.0.0" }, subscribe: () => () => undefined },
       nativeDeviceSettings: null,
     } as unknown as ApplicationContext;
     const mounted = mountSolid(() =>
       createComponent(UpdatesPage, {
+        ...createUpdatesViewProps({ configObject: {} }),
         context,
-        configObject: {},
-        configBusy: false,
-        updateBusy: false,
+        nowMs: undefined,
+        onCheckStatus: () => overlays.refreshUpdateStatus(),
       }),
     );
-    const updateButton = () => {
-      const button = [...mounted.container.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === "Update now",
-      );
-      expect(button).toBeDefined();
-      expect(button!.disabled).toBe(false);
-      return button!;
-    };
+    const updateButton = () =>
+      mounted.getByRole<HTMLButtonElement>("button", { name: "Update Gateway…" });
     const confirmButton = () =>
       document.body.querySelector<HTMLButtonElement>(
-        "openclaw-modal-dialog .exec-approval-actions .btn.danger",
+        "openclaw-modal-dialog openclaw-modal-actions .btn.danger",
       );
     const updateCalls = (calls: typeof requestA.mock.calls) =>
       calls.filter(([method]) => method === "update.run");
@@ -83,6 +110,7 @@ it.each(["loading", "open"] as const)(
       updateButton().click();
       if (stage === "open") {
         await dialog.waitFor(() => expect(confirmButton()).not.toBeNull());
+        expect(updateButton().disabled).toBe(true);
       }
       // No await in the loading case: retire A before the lazy import can resume.
       harness.gateway.connection.gatewayUrl = "ws://other-gateway.test";
@@ -90,8 +118,7 @@ it.each(["loading", "open"] as const)(
       await vi.dynamicImportSettled();
       confirmButton()?.click();
       await vi.dynamicImportSettled();
-      expect(updateCalls(requestA.mock.calls)).toEqual([]);
-      expect(updateCalls(requestB.mock.calls)).toEqual([]);
+      expect([requestA, requestB].map((rpc) => updateCalls(rpc.mock.calls))).toEqual([[], []]);
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
 
       await overlays.refreshUpdateStatus();

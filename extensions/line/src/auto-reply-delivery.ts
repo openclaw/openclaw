@@ -125,7 +125,7 @@ export async function deliverLineAutoReply(params: {
     }
   >();
   const pushLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowFailedBatchTextRecovery: boolean,
     externalTail: messagingApi.Message[] = [],
   ): Promise<void> => {
@@ -152,7 +152,7 @@ export async function deliverLineAutoReply(params: {
   };
 
   const sendLineMessages = async (
-    messages: messagingApi.Message[],
+    messages: readonly messagingApi.Message[],
     allowReplyToken: boolean,
   ): Promise<void> => {
     if (messages.length === 0) {

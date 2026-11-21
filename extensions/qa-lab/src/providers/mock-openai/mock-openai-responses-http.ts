@@ -16,6 +16,9 @@ export async function writeMockOpenAiResponsesHttp(
     if (dispatched.failure.retryAfterSeconds !== undefined) {
       res.setHeader("retry-after", String(dispatched.failure.retryAfterSeconds));
     }
+    if (dispatched.failure.retryAfterMs !== undefined) {
+      res.setHeader("retry-after-ms", String(dispatched.failure.retryAfterMs));
+    }
     writeJson(res, dispatched.failure.status, {
       error: {
         type: dispatched.failure.type,
@@ -47,13 +50,17 @@ export async function writeMockOpenAiResponsesHttp(
     dispatched.onResponseSent?.();
     return;
   }
-  await writeSse(
-    res,
-    dispatched.events,
-    "responses",
-    dispatched.previewPauseMs,
-    dispatched.previewPause,
-  );
+  if (dispatched.deltaIntervalMs !== undefined) {
+    await writePacedSse(res, dispatched.events, dispatched.deltaIntervalMs);
+  } else {
+    await writeSse(
+      res,
+      dispatched.events,
+      "responses",
+      dispatched.previewPauseMs,
+      dispatched.previewPause,
+    );
+  }
   dispatched.onResponseSent?.();
 }
 
@@ -82,4 +89,23 @@ async function writeHeldSse(
   }
   await writeSse(res, rest, "responses", dispatched.previewPauseMs, dispatched.previewPause);
   dispatched.onResponseSent?.();
+}
+
+// Streams like a live model: each output-text delta lands `intervalMs` after the previous one.
+async function writePacedSse(
+  res: ServerResponse,
+  events: QaMockProviderDispatchResult["events"],
+  intervalMs: number,
+): Promise<void> {
+  writeSseHeaders(res);
+  for (const event of events) {
+    if (res.destroyed) {
+      return;
+    }
+    if (event.type === "response.output_text.delta") {
+      await sleep(intervalMs);
+    }
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+  res.end("data: [DONE]\n\n");
 }

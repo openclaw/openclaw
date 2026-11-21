@@ -1,14 +1,5 @@
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type { DiscordCredentialStatus } from "./token.js";
-
-type InspectedDiscordConfiguredToken = {
-  token: string;
-  tokenSource: "config";
-  tokenStatus: Exclude<DiscordCredentialStatus, "missing">;
-};
 
 type DiscordAccountTokenState = {
   token: string;
@@ -17,16 +8,15 @@ type DiscordAccountTokenState = {
   configured: boolean;
 };
 
-function inspectDiscordConfiguredToken(value: unknown): InspectedDiscordConfiguredToken | null {
-  const normalized = normalizeSecretInputString(value);
-  if (normalized || hasConfiguredSecretInput(value)) {
-    return {
-      token: normalized ? normalized.replace(/^Bot\s+/i, "") : "",
-      tokenSource: "config",
-      tokenStatus: normalized ? "available" : "configured_unavailable",
-    };
-  }
-  return null;
+function inspectDiscordConfiguredToken(value: unknown) {
+  const credential = resolveSecretInputString({ value, path: "Discord token", mode: "inspect" });
+  return credential.status === "missing"
+    ? null
+    : {
+        token: credential.value?.replace(/^Bot\s+/i, "") ?? "",
+        tokenSource: "config" as const,
+        tokenStatus: credential.status,
+      };
 }
 
 export function inspectDiscordAccountTokenState<TBase extends object, TConfig>(params: {

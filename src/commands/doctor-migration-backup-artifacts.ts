@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
+import {
+  readMigrationArtifactIdentity,
+  type MigrationArtifactVerification,
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   canonicalMigrationFilePath,
   hasSymbolicLinkInDirectoryPath,
@@ -10,6 +13,8 @@ import {
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
+import { UPDATE_RUN_ID_PATTERN } from "../infra/update-displaced-database-receipt.js";
+import { getUpdateRun } from "../infra/update-run-reader.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { VERSION } from "../version.js";
@@ -20,6 +25,7 @@ export function recordDoctorMigrationBackups(
   backupId: string,
   inventory: readonly { path: string; identity: fs.BigIntStats; archivePath: string }[],
   versionPhase = false,
+  verification?: MigrationArtifactVerification,
 ): void {
   const runId = `startup-migration-${backupId}`;
   const manifestPath = path.join(resolveSessionSqliteMigrationRunsDir(env), `${runId}.json`);
@@ -39,7 +45,7 @@ export function recordDoctorMigrationBackups(
         sourcePath: source,
         archivePath,
         artifact: {
-          identity: readMigrationArtifactIdentity(archivePath),
+          identity: readMigrationArtifactIdentity(archivePath, 1n, undefined, verification),
           classification: "repair-original" as const,
           reason: versionPhase ? "pre-version-migration-backup" : "pre-startup-migration-backup",
           dependencies: [],
@@ -58,6 +64,20 @@ export function recordDoctorMigrationBackups(
       };
     },
   );
+  // Inside an update this links the backups to the run whose outcome releases them.
+  // UPDATE_RUN_ID_ENV; spelled out so Doctor does not load the update control plane. Only a
+  // run still in progress owns these backups; a stale variable leaves them untagged.
+  const candidateRunId = env.OPENCLAW_UPDATE_RUN_ID?.trim();
+  let updateRunId: string | undefined;
+  if (candidateRunId && UPDATE_RUN_ID_PATTERN.test(candidateRunId)) {
+    try {
+      const run = getUpdateRun(candidateRunId, { env });
+      updateRunId =
+        run?.status === "running" && run.finishedAtMs === null ? candidateRunId : undefined;
+    } catch {
+      updateRunId = undefined;
+    }
+  }
   getOpenClawDatabaseMaintenanceScope()?.assertAdmission();
   writeSessionSqliteMigrationManifest({
     manifestPath,
@@ -67,6 +87,7 @@ export function recordDoctorMigrationBackups(
       openClawVersion: VERSION,
       startedAt: new Date().toISOString(),
       targets,
+      ...(updateRunId ? { updateRunId } : {}),
     },
   });
 }

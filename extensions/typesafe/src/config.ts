@@ -28,9 +28,7 @@ export const ConfigSchema = Type.Object(
 );
 
 type RuntimeSnapshot = ReturnType<OpenClawPluginApi["runtime"]["config"]["current"]>;
-export type ModelProviderConfig = NonNullable<
-  NonNullable<RuntimeSnapshot["models"]>["providers"]
->[string];
+type ModelProviderConfig = NonNullable<NonNullable<RuntimeSnapshot["models"]>["providers"]>[string];
 export type RuntimeConfig = {
   apiKey?: string;
   baseUrl?: string;
@@ -68,7 +66,7 @@ export function hasCredentials(config: RuntimeConfig): boolean {
 }
 
 /** A configured endpoint grants access to one loopback origin, never arbitrary private hosts. */
-export function localBaseUrl(value: unknown): string | undefined {
+function localBaseUrl(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
   }

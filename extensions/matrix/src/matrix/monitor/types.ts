@@ -6,6 +6,7 @@ export const EventType = {
   RoomMessage: "m.room.message",
   RoomMessageEncrypted: "m.room.encrypted",
   RoomMember: "m.room.member",
+  RoomName: "m.room.name",
   Location: "m.location",
   Reaction: MATRIX_REACTION_EVENT_TYPE,
 } as const;

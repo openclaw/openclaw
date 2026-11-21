@@ -54,10 +54,6 @@ type PreviewCache = {
 };
 const previewsByAnswer = new WeakMap<object, PreviewCache>();
 
-function webToolName(value: unknown): WebToolName | undefined {
-  return value === "web_search" || value === "web_fetch" ? value : undefined;
-}
-
 function sourceUrl(value: unknown): URL | null {
   if (typeof value !== "string" || value.length > 2_048 || !isHttpUrl(value)) {
     return null;
@@ -144,22 +140,17 @@ function sourceExcerpt(value: unknown, name: WebToolName): string | undefined {
   return undefined;
 }
 
-function readPayload(card: ToolCard): Record<string, unknown> | null {
-  if (card.details !== undefined) {
-    return asNullableRecord(card.details);
-  }
-  if (!card.outputText || card.outputText.length > 100_000) {
-    return null;
-  }
-  return safeParseJsonRecord(card.outputText) ?? null;
-}
-
 function readSourceCandidates(
   card: ToolCard,
   name: WebToolName,
   cited: ReadonlySet<string>,
 ): Array<{ candidate: SourceCandidate; keys: string[] }> {
-  const payload = readPayload(card);
+  const payload =
+    card.details !== undefined
+      ? asNullableRecord(card.details)
+      : !card.outputText || card.outputText.length > 100_000
+        ? null
+        : (safeParseJsonRecord(card.outputText) ?? null);
   const external = asNullableRecord(payload?.externalContent);
   if (
     !payload ||
@@ -217,21 +208,6 @@ function readSourceCandidates(
   return requested && final
     ? candidate(final, payload, "text", [...new Set([sourceKey(requested), sourceKey(final)])])
     : [];
-}
-
-function renderSourcePreview(candidates: SourceCandidates): ChatSourcePreview {
-  const source = candidates.source;
-  const pageExcerpt = candidates.page && sourceExcerpt(candidates.page.excerpt, "web_fetch");
-  const excerpt =
-    pageExcerpt || (candidates.search && sourceExcerpt(candidates.search.excerpt, "web_search"));
-  return {
-    url: source.url.href,
-    title: sourceTitle(source.title, source.name) ?? source.url.hostname,
-    domain: source.url.hostname,
-    ...(excerpt
-      ? { excerpt, excerptKind: pageExcerpt ? ("page" as const) : ("search" as const) }
-      : {}),
-  };
 }
 
 /** Projects completed web results from one existing run frame; never fetches source content. */
@@ -348,7 +324,8 @@ export function extractChatSourcePreviews(params: {
       const callName = card.callId
         ? callNames.get(buildToolStreamIdentity(params.runId, card.callId))
         : undefined;
-      const name = webToolName(callName ?? envelopeName);
+      const rawName = callName ?? envelopeName;
+      const name = rawName === "web_search" || rawName === "web_fetch" ? rawName : undefined;
       if (!name || card.name !== name || (envelopeName && envelopeName !== name)) {
         continue;
       }
@@ -395,7 +372,18 @@ export function extractChatSourcePreviews(params: {
     }
     const source = sources.get(canonicalKey);
     if (source && !previews.has(canonicalKey) && !hasDedicatedCard(canonicalKey)) {
-      previews.set(canonicalKey, renderSourcePreview(source));
+      const previewSource = source.source;
+      const pageExcerpt = source.page && sourceExcerpt(source.page.excerpt, "web_fetch");
+      const excerpt =
+        pageExcerpt || (source.search && sourceExcerpt(source.search.excerpt, "web_search"));
+      previews.set(canonicalKey, {
+        url: previewSource.url.href,
+        title: sourceTitle(previewSource.title, previewSource.name) ?? previewSource.url.hostname,
+        domain: previewSource.url.hostname,
+        ...(excerpt
+          ? { excerpt, excerptKind: pageExcerpt ? ("page" as const) : ("search" as const) }
+          : {}),
+      });
     }
     if (previews.size >= MAX_SOURCES) {
       break;

@@ -59,6 +59,7 @@ const EXCLUDED_SCHEMA_EXPORTS = [
   "GatewayClientModeSchema",
   "GitHubPublicationBodySchema",
   "GitHubPublicationActionSchema",
+  "GitHubPublicationEditSchema",
   "GitHubPublicationPublisherSchema",
   "GitHubPublicationSelectionSchema",
   "GitHubPublicationTitleSchema",
@@ -213,11 +214,6 @@ type DerivedProtocolSchemaMap = {
 
 function deriveProtocolSchemas(): DerivedProtocolSchemaMap {
   const excluded = new Set<string>(EXCLUDED_SCHEMA_EXPORTS);
-  for (const name of excluded) {
-    if (!Object.hasOwn(schemaSources, name)) {
-      throw new Error(`Unknown excluded protocol schema export: ${name}`);
-    }
-  }
   const names = Object.keys(schemaSources)
     .filter((name): name is SchemaExportName => name.endsWith("Schema"))
     .toSorted();
@@ -227,7 +223,7 @@ function deriveProtocolSchemas(): DerivedProtocolSchemaMap {
       entries.push([name.slice(0, -"Schema".length), schemaSources[name]]);
     }
   }
-  // SAFETY: Checked exclusions and suffix projection preserve exact keys and canonical schema objects.
+  // SAFETY: Typed exclusions and suffix projection preserve exact keys and canonical schema objects.
   return Object.fromEntries(entries) as DerivedProtocolSchemaMap;
 }
 

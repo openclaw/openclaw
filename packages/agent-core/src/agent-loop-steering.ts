@@ -1,5 +1,44 @@
-import { getInternalSyncSteeringGetter } from "./internal-hooks.js";
-import type { AgentLoopConfig, AgentMessage } from "./types.js";
+import type { AgentEventSink } from "./agent-stream-response.js";
+import {
+  attachInternalSteeringQueueObserver,
+  commitInternalToolTurnInput,
+  getInternalSteeringQueueObserver,
+  getInternalSyncSteeringGetter,
+} from "./internal-hooks.js";
+import { isOpenClawSystemUpdateMessage, orderSystemUpdateMessages } from "./operator-messages.js";
+import type { AgentContext, AgentLoopConfig, AgentMessage } from "./types.js";
+
+export async function commitInputMessages(
+  messages: AgentMessage[],
+  context: AgentContext,
+  config: AgentLoopConfig,
+  emit: AgentEventSink,
+  newMessages: AgentMessage[],
+  onUserMessage: () => void,
+): Promise<boolean> {
+  let injectedMessage = false;
+  for (const message of orderSystemUpdateMessages(messages)) {
+    if (config.consumeQueuedMessageCancellation?.(message)) {
+      continue;
+    }
+    await emit({ type: "message_start", message });
+    if (config.consumeQueuedMessageCancellation?.(message)) {
+      continue;
+    }
+    if (message.role === "user") {
+      onUserMessage();
+    }
+    context.messages.push(message);
+    newMessages.push(message);
+    if (!isOpenClawSystemUpdateMessage(message)) {
+      // Acceptance precedes fallible publication so continuation cannot reuse the prior input.
+      commitInternalToolTurnInput(config.completesToolTurn);
+    }
+    await emit({ type: "message_end", message });
+    injectedMessage = true;
+  }
+  return injectedMessage;
+}
 
 export function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
@@ -36,6 +75,12 @@ export function createStreamedSteeringConfig(config: AgentLoopConfig) {
       return messages;
     },
   };
+  if (streamedConfig.getSteeringMessages) {
+    attachInternalSteeringQueueObserver(
+      streamedConfig.getSteeringMessages,
+      getInternalSteeringQueueObserver(config.getSteeringMessages),
+    );
+  }
   return {
     config: streamedConfig,
     getTerminalConfig: () => (streamedSteering ? streamedConfig : config),

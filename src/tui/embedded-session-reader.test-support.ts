@@ -3,9 +3,10 @@ import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createEmbeddedCallGateway } from "../agents/tools/embedded-gateway-stub.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EmbeddedTuiBackend } from "./embedded-backend.js";
+import { sendMainChat } from "./embedded-backend.test-helpers.js";
 
 export function createPreparedProjectionMethods(read: () => unknown) {
-  const methods = {
+  return {
     present: vi.fn((record: { entry: { sessionId?: unknown }; target: { key: string } }) => ({
       key: record.target.key,
       sessionId: record.entry.sessionId,
@@ -14,12 +15,20 @@ export function createPreparedProjectionMethods(read: () => unknown) {
       consume(read()),
     ),
   };
-  return methods;
 }
 
-export function registerEmbeddedSessionReaderTests<
-  Projection extends { dispose: () => void },
->(params: {
+export function registerEmbeddedSessionReaderTests<Projection extends { dispose: () => void }>({
+  createBackend,
+  sessionProjection: projection,
+  createSessionRowProjectionMock: createProjection,
+  listProjectedSessionsMock: listSessions,
+  runSessionStartupMigrationMock: migrate,
+  getRuntimeConfigMock: readConfig,
+  refreshPreparedModelRuntimeSnapshotsMock: publish,
+  agentCommandFromIngressMock: dispatch,
+  unregisterConfigWriteListenerMock: unsubscribe,
+  flushMicrotasks,
+}: {
   createBackend: () => EmbeddedTuiBackend;
   sessionProjection: Projection;
   createSessionRowProjectionMock: Mock<(_options?: unknown) => Promise<Projection>>;
@@ -33,84 +42,68 @@ export function registerEmbeddedSessionReaderTests<
   unregisterConfigWriteListenerMock: Mock;
   flushMicrotasks: () => Promise<void>;
 }) {
-  const {
-    createBackend,
-    sessionProjection,
-    createSessionRowProjectionMock,
-    listProjectedSessionsMock,
-    runSessionStartupMigrationMock,
-    getRuntimeConfigMock,
-    refreshPreparedModelRuntimeSnapshotsMock,
-    agentCommandFromIngressMock,
-    unregisterConfigWriteListenerMock,
-    flushMicrotasks,
-  } = params;
-
-  it("publishes the current runtime after startup maintenance and before the first local turn", async () => {
-    const initialConfig = { agents: { entries: { main: {} } } };
+  const unavailable = (pending: Promise<unknown>) =>
+    expect(pending).rejects.toThrow("Embedded session projection is unavailable");
+  function startBackend() {
+    const backend = createBackend();
+    backend.start();
+    return backend;
+  }
+  it("gates local turns and session reads on startup migration and publication", async () => {
+    readConfig.mockReturnValue({});
     const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
-    getRuntimeConfigMock.mockReturnValue(initialConfig);
     const migrating = deferred();
     const migration = deferred();
-    runSessionStartupMigrationMock.mockImplementationOnce(() => {
+    migrate.mockImplementationOnce(() => {
       migrating.resolve();
       return migration.promise;
     });
     const publication = deferred();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
-
-    const backend = createBackend();
-    backend.start();
-
-    const send = backend.sendChat({
-      sessionKey: "agent:main:main",
-      message: "hello",
-      runId: "run-waits-for-published-runtime",
-    });
+    publish.mockReturnValueOnce(publication.promise);
+    const backend = startBackend();
+    const sent = sendMainChat(backend, "hello", "run-waits-for-published-runtime");
+    const listed = backend.listSessions({ agentId: "work" });
     try {
       await migrating.promise;
-      expect(refreshPreparedModelRuntimeSnapshotsMock).not.toHaveBeenCalled();
-      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-
-      getRuntimeConfigMock.mockReturnValue(nextConfig);
+      await flushMicrotasks();
+      expect(publish).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(createProjection).not.toHaveBeenCalled();
+      expect(listSessions).not.toHaveBeenCalled();
+      readConfig.mockReturnValue(nextConfig);
       migration.resolve();
       await flushMicrotasks();
-
-      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(nextConfig);
-      expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-
+      expect(publish).toHaveBeenCalledWith(nextConfig);
+      expect(dispatch).not.toHaveBeenCalled();
       publication.resolve();
-      await send;
-      await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
+      await Promise.all([sent, listed]);
+      expect(migrate).toHaveBeenCalledWith({
+        cfg: {},
+        env: process.env,
+        log: { info: expect.any(Function), warn: expect.any(Function) },
+      });
+      expect(listSessions).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
     } finally {
       migration.resolve();
       publication.resolve();
-      await Promise.allSettled([send]);
+      await Promise.allSettled([sent, listed]);
       await backend.stop();
     }
   });
 
   it("shares one resident projection between local lists and embedded session tools", async () => {
-    const backend = createBackend();
-    backend.start();
+    const backend = startBackend();
     const opts = { agentId: "work", includeGlobal: true, search: "global" };
     try {
       await backend.listSessions(opts);
       await createEmbeddedCallGateway()({ method: "sessions.list", params: opts });
-      expect(createSessionRowProjectionMock).toHaveBeenCalledOnce();
-      expect(listProjectedSessionsMock).toHaveBeenCalledTimes(2);
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(1, {
-        projection: sessionProjection,
-        opts,
-      });
-      expect(listProjectedSessionsMock).toHaveBeenNthCalledWith(2, {
-        projection: sessionProjection,
-        opts,
-      });
+      expect(createProjection).toHaveBeenCalledOnce();
+      expect(listSessions.mock.calls).toEqual([[{ projection, opts }], [{ projection, opts }]]);
       for (const sessionKey of ["agent:work:notes", "global", "unknown"]) {
         await backend.describeSession({ sessionKey, agentId: "work" });
-        expect(listProjectedSessionsMock).toHaveBeenLastCalledWith({
-          projection: sessionProjection,
+        expect(listSessions).toHaveBeenLastCalledWith({
+          projection,
           key: sessionKey,
           opts: {
             agentId: "work",
@@ -123,77 +116,43 @@ export function registerEmbeddedSessionReaderTests<
     } finally {
       await backend.stop();
     }
-    expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(createEmbeddedCallGateway()({ method: "sessions.list" })).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
+    expect(projection.dispose).toHaveBeenCalledOnce();
+    await unavailable(createEmbeddedCallGateway()({ method: "sessions.list" }));
   });
 
-  it("disposes projection startup that finishes after shutdown begins", async () => {
-    const starting = deferred();
-    const startup = deferred();
-    runSessionStartupMigrationMock.mockImplementationOnce(() => {
-      starting.resolve();
-      return startup.promise;
-    });
-    const backend = createBackend();
-    backend.start();
-    await starting.promise;
-    const stopped = backend.stop();
-    startup.resolve();
-    await stopped;
-    expect(unregisterConfigWriteListenerMock).toHaveBeenCalledOnce();
-    expect(sessionProjection.dispose).toHaveBeenCalledOnce();
-    await expect(backend.listSessions()).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
-  });
-
-  it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
-    let resolveMigration: () => void = () => {};
-    const migrationDone = new Promise<void>((resolve) => {
-      resolveMigration = resolve;
-    });
-    runSessionStartupMigrationMock.mockReturnValueOnce(migrationDone);
-
-    const backend = createBackend();
-    backend.start();
-
-    const listed = backend.listSessions({ agentId: "work" });
-    await flushMicrotasks();
-    expect(createSessionRowProjectionMock).not.toHaveBeenCalled();
-    expect(listProjectedSessionsMock).not.toHaveBeenCalled();
-
-    resolveMigration();
-    await listed;
-    expect(runSessionStartupMigrationMock).toHaveBeenCalledWith({
-      cfg: {},
-      env: process.env,
-      log: {
-        info: expect.any(Function),
-        warn: expect.any(Function),
-      },
-    });
-    expect(listProjectedSessionsMock).toHaveBeenCalledTimes(1);
-    await backend.stop();
-  });
-
-  it("rejects metadata that settles after its embedded projection stops", async () => {
-    const settled = deferred<{ sessions: unknown[] }>();
-    listProjectedSessionsMock.mockReturnValueOnce(settled.promise);
-    const backend = createBackend();
-    backend.start();
-    const description = backend.describeSession({ sessionKey: "agent:work:notes" });
-    const rejected = expect(description).rejects.toThrow(
-      "Embedded session projection is unavailable",
-    );
+  it.each(["startup", "metadata"] as const)("stops held %s", async (stage) => {
+    const entered = deferred();
+    const held = deferred<{ sessions: unknown[] }>();
+    const wait = () => {
+      entered.resolve();
+      return held.promise;
+    };
+    if (stage === "startup") {
+      migrate.mockImplementationOnce(async () => {
+        await wait();
+      });
+    } else {
+      listSessions.mockImplementationOnce(wait);
+    }
+    const backend = startBackend();
+    const rejected =
+      stage === "metadata"
+        ? unavailable(backend.describeSession({ sessionKey: "agent:work:notes" }))
+        : undefined;
     try {
-      await vi.waitFor(() => expect(listProjectedSessionsMock).toHaveBeenCalledOnce());
-      await backend.stop();
-      settled.resolve({ sessions: [{ key: "agent:work:notes", sessionId: "stopped-session" }] });
+      await entered.promise;
+      const stopped = backend.stop();
+      if (stage === "startup") {
+        held.resolve({ sessions: [] });
+      }
+      await stopped;
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(projection.dispose).toHaveBeenCalledOnce();
+      held.resolve({ sessions: [{ key: "agent:work:notes", sessionId: "stopped-session" }] });
       await rejected;
+      await unavailable(backend.listSessions());
     } finally {
-      settled.resolve({ sessions: [] });
+      held.resolve({ sessions: [] });
       await backend.stop();
     }
   });

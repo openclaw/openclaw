@@ -23,8 +23,5 @@ export async function readChannelAllowFromStore(
     const allowFrom: Record<string, string[]> = {};
     return (allowFrom[resolvedAccountId] ?? []).slice();
   }
-  if (result.ok && result.type === "pairing.allowFrom") {
-    return result.entries;
-  }
-  throw new Error("Unexpected channel pairing allowlist result");
+  return result.entries;
 }

@@ -18,6 +18,9 @@ export function createStreamSteering(
   let submitted = false;
   const stop = () => {
     open = false;
+    if (observer) {
+      observer.onChange = undefined;
+    }
     const release = cleanup;
     cleanup = undefined;
     release?.();
@@ -27,7 +30,7 @@ export function createStreamSteering(
       return undefined;
     }
     needsContinuation = control.needsContinuation;
-    const outerCleanup = config.onActiveResponse?.(control);
+    cleanup = config.onActiveResponse?.(control) ?? undefined;
     const forward = () => {
       if (!open || signal?.aborted || failure || !observer || submitted) {
         return;
@@ -76,11 +79,9 @@ export function createStreamSteering(
           failure ??= { error };
         });
     };
-    const unsubscribe = observer?.subscribe(forward);
-    cleanup = () => {
-      unsubscribe?.();
-      outerCleanup?.();
-    };
+    if (observer) {
+      observer.onChange = forward;
+    }
     forward();
     return stop;
   };

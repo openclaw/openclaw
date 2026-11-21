@@ -38,15 +38,21 @@ const lifetime = createFixtureLifetime();
 let state: OpenClawTestState;
 let packageRoot: string;
 let candidateRoot: string;
-const durationsMs: Partial<
-  Record<
-    "fixture" | "publication" | "healthyChild" | "refusalChildren" | "unpublishedChild",
-    number
-  >
-> = {};
+
+async function wrapWorker(workerPath: string, imports = "", setup = "") {
+  const implementation = path.basename(workerPath).replace(".js", ".implementation.js");
+  await fs.promises.rename(workerPath, path.join(path.dirname(workerPath), implementation));
+  await fs.promises.writeFile(
+    workerPath,
+    `${imports}import * as json5 from "json5";
+import { registerSealedRuntime } from "./sealed-runtime-registry.js";
+registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
+${setup}await import(${JSON.stringify(`./${implementation}`)});
+`,
+  );
+}
 
 beforeAll(async () => {
-  const startedAt = performance.now();
   state = await lifetime.acquire(() =>
     createOpenClawTestState({
       label: "post-core-admission",
@@ -87,21 +93,14 @@ process.argv[1] = fileURLToPath(new URL("./entry.js", import.meta.url));
 await import("./entry.js");
 `,
     );
-    const workerPath = fileURLToPath(runtime.worker);
-    await fs.promises.rename(
-      workerPath,
-      path.join(path.dirname(workerPath), "update-migrated-finalize.implementation.js"),
-    );
     // Keep native children inside the fixture's private temp root. The receiver
     // and all authority/result owners remain real.
-    await fs.promises.writeFile(
-      workerPath,
+    await wrapWorker(
+      fileURLToPath(runtime.worker),
       `import { appendFileSync, existsSync } from "node:fs";
 import fsp from "node:fs/promises";
-import * as json5 from "json5";
-import { registerSealedRuntime } from "./sealed-runtime-registry.js";
-registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
-const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+`,
+      `const resultPath = process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
 if (process.argv[2] === "--post-core" && resultPath && existsSync(${JSON.stringify(state.path("fail-response-publication"))})) {
   const rename = fsp.rename;
   fsp.rename = async (from, to) => {
@@ -112,40 +111,20 @@ if (process.argv[2] === "--post-core" && resultPath && existsSync(${JSON.stringi
     return rename(from, to);
   };
 }
-await import("./update-migrated-finalize.implementation.js");
 `,
     );
-    const readOnlyWorker = path.join(
-      candidateRoot,
-      "dist",
-      "infra",
-      "sqlite-readonly-location.worker.js",
-    );
-    await fs.promises.rename(
-      readOnlyWorker,
-      path.join(path.dirname(readOnlyWorker), "sqlite-readonly-location.implementation.js"),
-    );
-    await fs.promises.writeFile(
-      readOnlyWorker,
-      `import * as json5 from "json5";
-import { registerSealedRuntime } from "./sealed-runtime-registry.js";
-registerSealedRuntime({ json5, resolveSecureTempRoot: () => ${JSON.stringify(state.path("control"))} });
-await import("./sqlite-readonly-location.implementation.js");
-`,
+    await wrapWorker(
+      path.join(candidateRoot, "dist", "infra", "sqlite-readonly-location.worker.js"),
     );
     await writePackageRoot(packageRoot, "2026.8.1");
   });
-  durationsMs.fixture = performance.now() - startedAt;
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-afterAll(async () => {
-  console.info("Post-core admission durations (ms):", durationsMs);
-  await lifetime.cleanup();
-});
+afterAll(() => lifetime.cleanup());
 
 it.skipIf(process.platform === "win32")(
   "resumes a published package, refuses unowned continuations, and retains unconfirmed results",
@@ -184,7 +163,6 @@ it.skipIf(process.platform === "win32")(
 
       await withUpdateCommandExecutor(runId, async (executor) => {
         const fence = await executor.enter(packageRoot);
-        const publicationStartedAt = performance.now();
         const reader = createPackageIntegrityReader();
         const prepared = await preparePackageActivationJournal({
           options: { fence, runtime, onPrepared: () => {} },
@@ -208,7 +186,6 @@ it.skipIf(process.platform === "win32")(
           fence.assertCurrent,
         );
         await publication.publish(false);
-        durationsMs.publication = performance.now() - publicationStartedAt;
         const journal = openPackageActivationJournal(prepared.anchor);
         expect(journal.read().phase).toBe("publication-complete");
         const invoke = () =>
@@ -230,9 +207,7 @@ it.skipIf(process.platform === "win32")(
 
         // Baseline raw-spawns the public CLI without a grant and is refused by
         // the journal before resume. No fixture supplies the child's fence/result.
-        const healthyStartedAt = performance.now();
         const healthy = await invoke();
-        durationsMs.healthyChild = performance.now() - healthyStartedAt;
         expect(healthy).toMatchObject({ resumed: true, pluginUpdate: { status: "ok" } });
         expect(JSON.parse(fs.readFileSync(state.configPath, "utf8")).update.channel).toBe("beta");
         expect(getUpdateRun(runId, { env: state.env })).toMatchObject({
@@ -253,7 +228,6 @@ it.skipIf(process.platform === "win32")(
           journal: fs.readFileSync(resolvePackageActivationJournalPath(prepared.anchor)),
         });
         const unchanged = await snapshot();
-        const refusalsStartedAt = performance.now();
         const markerResultPath = state.path("marker-result.json");
         const marker = await runChild(
           [
@@ -317,7 +291,6 @@ it.skipIf(process.platform === "win32")(
         expect(refusal?.stderr).toMatch(/post-core|update run/i);
         expect(await snapshot()).toEqual(unchanged);
         fence.assertCurrent();
-        durationsMs.refusalChildren = performance.now() - refusalsStartedAt;
 
         const { run: beforeUnpublishedRun, ...beforeUnpublishedState } = await snapshot();
         assert(beforeUnpublishedRun, "The admitted update run must remain available");
@@ -338,7 +311,6 @@ it.skipIf(process.platform === "win32")(
             }
             return result;
           });
-        const unpublishedStartedAt = performance.now();
         try {
           const outcome = await invoke().then(
             (value) => ({ value }),
@@ -373,7 +345,6 @@ it.skipIf(process.platform === "win32")(
           );
           fence.assertCurrent();
         } finally {
-          durationsMs.unpublishedChild = performance.now() - unpublishedStartedAt;
           unpublishedTransport.mockRestore();
           await fs.promises.rm(faultPath, { force: true });
           if (retainedResultPath) {

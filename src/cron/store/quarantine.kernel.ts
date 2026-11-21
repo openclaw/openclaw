@@ -8,7 +8,6 @@ import {
 } from "../../infra/sqlite-audit-record.kernel.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../types-shared.js";
-import { cronStoreKey } from "./key.js";
 
 type CronQuarantineDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events">;
 
@@ -18,7 +17,7 @@ export type CronQuarantineRegistration = {
 };
 
 function cronQuarantineScope(storePath: string): string {
-  return `cron.quarantine:${cronStoreKey(storePath)}`;
+  return `cron.quarantine:${storePath}`;
 }
 
 function cronQuarantineEntryKey(entry: QuarantinedCronConfigJob): string {
@@ -39,7 +38,7 @@ export function prepareCronQuarantineRegistration(params: {
   entries: readonly (QuarantinedCronConfigJob | CronQuarantinedJob)[];
   nowMs: number;
 }): CronQuarantineRegistration {
-  const storeKey = cronStoreKey(params.storePath);
+  const storeKey = params.storePath;
   const scope = cronQuarantineScope(storeKey);
   const records = params.entries.map((entry) => {
     const quarantinedAtMs = "quarantinedAtMs" in entry ? entry.quarantinedAtMs : params.nowMs;

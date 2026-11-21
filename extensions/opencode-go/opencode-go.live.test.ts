@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resolveProviderRequestPolicy } from "openclaw/plugin-sdk/provider-http";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
@@ -9,7 +10,7 @@ import {
   listOpencodeGoModelCatalogEntries,
 } from "./provider-catalog.js";
 
-const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_GO_MODELS_URL = "https://opencode.ai/inference/go/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
 const LIVE = isLiveTestEnabled(["OPENCODE_GO_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;
@@ -51,41 +52,75 @@ describeLive("OpenCode Go live dynamic catalog", () => {
     expect(discoveredIds).toEqual([...new Set(liveIds)].filter((id) => !inactiveIds.has(id)));
   }, 30_000);
 
-  it("runs a discovered Go model with the account credential", async () => {
-    const provider = await buildOpencodeGoLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
-    const row = provider.models.find((model) => model.id === "gpt-5.6-luna");
-    if (!row || row.api !== "openai-responses" || !row.contextWindow) {
-      throw new Error("OpenCode Go catalog lacks the GPT 5.6 Luna Responses route");
-    }
-    const input = row.input.filter((kind) => kind === "text" || kind === "image");
-    expect(input).toEqual(row.input);
-    const model: Model<"openai-responses"> = {
-      ...row,
-      api: row.api,
-      contextWindow: row.contextWindow,
-      provider: "opencode-go",
-      baseUrl: row.baseUrl ?? provider.baseUrl,
-      input,
-    };
-    const registeredProvider = await registerSingleProviderPlugin(plugin);
-    const sessionId = `opencode-go-live-${randomUUID()}`;
-    const turnState = registeredProvider.resolveTransportTurnState?.({
-      provider: model.provider,
-      modelId: model.id,
-      model,
-      sessionId,
-      turnId: randomUUID(),
-      attempt: 1,
-      transport: "stream",
-    });
-    const result = await completeSimple(
-      model,
-      { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },
-      { apiKey: OPENCODE_API_KEY, maxTokens: 128, sessionId, headers: turnState?.headers },
-    );
-    if (result.stopReason === "error") {
-      throw new Error(result.errorMessage || "OpenCode Go inference returned an error");
-    }
-    expect(extractNonEmptyAssistantText(result.content)).toMatch(/^ok[.!]?$/i);
-  }, 120_000);
+  it.each([
+    ["glm-5.3-flash", "openai-completions"],
+    ["gpt-5.6-luna", "openai-responses"],
+    ["qwen3.8-flash", "anthropic-messages"],
+    ["gemini-4-argon-contributor", "google-generative-ai"],
+  ] as const)(
+    "runs discovered %s through %s",
+    async (modelId, api) => {
+      const provider = await buildOpencodeGoLiveProviderConfig({ apiKey: OPENCODE_API_KEY });
+      const row = provider.models.find((model) => model.id === modelId);
+      expect(row?.api).toBe(api);
+      expect(row?.baseUrl).toMatch(/^https:\/\/opencode\.ai\/inference\/go\//);
+      if (!row || row.api !== api || !row.contextWindow) {
+        throw new Error(`OpenCode Go catalog lacks the ${modelId} ${api} route`);
+      }
+      const input = row.input.filter((kind) => kind === "text" || kind === "image");
+      expect(input).toEqual(row.input);
+      const model: Model<typeof api> = {
+        ...row,
+        api: row.api,
+        contextWindow: row.contextWindow,
+        provider: "opencode-go",
+        baseUrl: row.baseUrl ?? provider.baseUrl,
+        input,
+      };
+      const registeredProvider = await registerSingleProviderPlugin(plugin);
+      expect(
+        resolveProviderRequestPolicy({
+          provider: model.provider,
+          api: model.api,
+          baseUrl: model.baseUrl,
+          capability: "llm",
+          transport: "stream",
+        }).attributionHeaders?.["User-Agent"],
+      ).toMatch(/^openclaw\//);
+      const sessionId = `opencode-go-live-${randomUUID()}`;
+      const turnState = registeredProvider.resolveTransportTurnState?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        sessionId,
+        turnId: randomUUID(),
+        attempt: 1,
+        transport: "stream",
+      });
+      const result = await completeSimple(
+        model,
+        { messages: [{ role: "user", content: "Reply with exactly: ok", timestamp: Date.now() }] },
+        {
+          apiKey: OPENCODE_API_KEY,
+          maxTokens: 512,
+          reasoning: "low",
+          sessionId,
+          headers: turnState?.headers,
+        },
+      );
+      if (result.stopReason === "error") {
+        // Contributor models require a workspace opt-in to training on request data; this
+        // refusal still proves the route, auth, and model id reached Go.
+        if (
+          modelId.endsWith("-contributor") &&
+          result.errorMessage?.includes("trains on request data")
+        ) {
+          return;
+        }
+        throw new Error(result.errorMessage || "OpenCode Go inference returned an error");
+      }
+      expect(extractNonEmptyAssistantText(result.content)).toMatch(/^ok[.!]?$/i);
+    },
+    120_000,
+  );
 });

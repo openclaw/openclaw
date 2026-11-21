@@ -9,14 +9,9 @@ import {
   getExternalizedBundledPluginLookupIds,
   type ExternalizedBundledPluginBridge,
 } from "./externalized-bundled-plugins.js";
-import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import { resolvePluginInstallDir } from "./install.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { reconcileRegisteredOpenClawHostLinks } from "./plugin-peer-link.js";
-import { resetPluginSlotsToDefaults } from "./slots.js";
-import { setPluginEnabledInConfig } from "./toggle-config.js";
-import type { PluginUpdateLogger } from "./update-source.js";
 
 export async function hasRunnableInstalledNpmPayload(params: {
   installPath: string;
@@ -292,68 +287,38 @@ export function migratePluginConfigId(
   }
 
   const slots = plugins.slots;
-  if (slots?.memory === fromId || slots?.contextEngine === fromId) {
+  for (const [installOwner, record] of Object.entries(nextPlugins.installs ?? {})) {
+    const mapping = record.contextEngineIdsByPlugin;
+    if (!mapping || !Object.hasOwn(mapping, fromId)) {
+      continue;
+    }
+    const { [fromId]: engineIds, ...rest } = mapping;
+    if (!engineIds) {
+      continue;
+    }
+    ensureNextPlugins().installs = {
+      ...nextPlugins.installs,
+      [installOwner]: {
+        ...record,
+        contextEngineIdsByPlugin: {
+          ...rest,
+          [toId]: Object.hasOwn(rest, toId) ? (rest[toId] ?? engineIds) : engineIds,
+        },
+      },
+    };
+  }
+  const declaredEngine = Object.values(installs ?? {}).some((record) =>
+    Object.values(record.contextEngineIdsByPlugin ?? {}).some((ids) =>
+      ids.includes(slots?.contextEngine ?? ""),
+    ),
+  );
+  if (slots?.memory === fromId || (slots?.contextEngine === fromId && !declaredEngine)) {
     ensureNextPlugins().slots = {
       ...slots,
       ...(slots.memory === fromId ? { memory: toId } : {}),
-      ...(slots.contextEngine === fromId ? { contextEngine: toId } : {}),
+      ...(slots.contextEngine === fromId && !declaredEngine ? { contextEngine: toId } : {}),
     };
   }
 
   return nextPlugins === plugins ? cfg : { ...cfg, plugins: nextPlugins };
-}
-
-export function disablePluginAfterUpdateFailure(
-  config: OpenClawConfig,
-  pluginId: string,
-): OpenClawConfig {
-  const disabled = setPluginEnabledInConfig(config, pluginId, false, {
-    updateChannelConfig: false,
-  });
-  const pluginsConfig = disabled.plugins ?? {};
-  return {
-    ...disabled,
-    plugins: {
-      ...pluginsConfig,
-      // Failed updates are reversible activation changes; only explicit uninstall removes trust policy.
-      slots: resetPluginSlotsToDefaults(pluginsConfig.slots, pluginId),
-    },
-  };
-}
-
-/** Repairs a legacy npm-owned extensions-root host without reinstalling its package. */
-export async function repairRegisteredOpenClawHostLink(params: {
-  pluginId: string;
-  record: PluginInstallRecord;
-  logger: PluginUpdateLogger;
-  beforePersistentEffect?: () => void;
-}): Promise<boolean> {
-  const result = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: { [params.pluginId]: params.record },
-    extensionsDir: resolveDefaultPluginExtensionsDir(),
-    mode: "repair",
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentEffect,
-  });
-  return result.repaired > 0;
-}
-
-export async function repairOpenClawPeerLinksForNpmInstalls(params: {
-  config: OpenClawConfig;
-  logger: PluginUpdateLogger;
-  beforePersistentEffect?: () => void;
-}): Promise<boolean> {
-  const result = await reconcileRegisteredOpenClawHostLinks({
-    installRecords: params.config.plugins?.installs ?? {},
-    extensionsDir: resolveDefaultPluginExtensionsDir(),
-    mode: "repair",
-    logger: params.logger,
-    beforePersistentApply: params.beforePersistentEffect,
-    onPackageReadError: (error, packageDir) => {
-      params.logger.warn?.(
-        `Could not repair openclaw peer link at ${packageDir}: ${String(error)}`,
-      );
-    },
-  });
-  return result.repaired > 0;
 }

@@ -1,15 +1,46 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { prerelease as parseSemverPrerelease, valid as validSemver } from "semver";
 import {
-  parse as parseSemver,
-  prerelease as parseSemverPrerelease,
-  type SemVer,
-  valid as validSemver,
-} from "semver";
-import { compareOpenClawSemver, isOpenClawCorrectionSemver } from "./semver.js";
+  compareOpenClawReleaseVersions,
+  compareValidSemver,
+  isOpenClawCorrectionSemver,
+  normalizeLegacyDotBetaVersion,
+  parseOpenClawReleaseVersion,
+} from "./semver.js";
 
+export { compareOpenClawReleaseVersions };
 export { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 
-const OPENCLAW_RELEASE_PREFIX_RE = /^\d{4}\./;
+export type NpmSpecResolution = {
+  name?: string;
+  version?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
+};
+
+type NpmResolutionFields = {
+  resolvedName?: string;
+  resolvedVersion?: string;
+  resolvedSpec?: string;
+  integrity?: string;
+  shasum?: string;
+  resolvedAt?: string;
+};
+
+export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
+  return {
+    resolvedName: resolution?.name,
+    resolvedVersion: resolution?.version,
+    resolvedSpec: resolution?.resolvedSpec,
+    integrity: resolution?.integrity,
+    shasum: resolution?.shasum,
+    resolvedAt: resolution?.resolvedAt,
+  };
+}
+
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /**
@@ -111,31 +142,6 @@ export function isExactSemverVersion(value: string): boolean {
   return validSemver(value.trim()) !== null;
 }
 
-/** Parses OpenClaw's monthly patch stable/alpha/beta/correction version format. */
-function parseOpenClawReleaseVersion(value: string): SemVer | null {
-  const trimmed = value.trim();
-  const parsed = OPENCLAW_RELEASE_PREFIX_RE.test(trimmed) ? parseSemver(trimmed) : null;
-  if (!parsed || parsed.build.length > 0) {
-    return null;
-  }
-  if (parsed.minor < 1 || parsed.minor > 12 || parsed.patch < 1) {
-    return null;
-  }
-
-  const [label, sequence] = parsed.prerelease;
-  const isStable = parsed.prerelease.length === 0;
-  const isCorrection = isOpenClawCorrectionSemver(parsed) && typeof label === "number" && label > 0;
-  const isPrerelease =
-    parsed.prerelease.length === 2 &&
-    (label === "alpha" || label === "beta") &&
-    typeof sequence === "number" &&
-    sequence > 0;
-  if (!isStable && !isCorrection && !isPrerelease) {
-    return null;
-  }
-  return parsed;
-}
-
 /** Returns whether a version is an OpenClaw monthly patch stable correction release. */
 function isOpenClawStableCorrectionVersion(value: string): boolean {
   const parsed = parseOpenClawReleaseVersion(value);
@@ -151,11 +157,17 @@ export function resolveOpenClawReleaseCohortVersion(value: string): string {
     : trimmed;
 }
 
-/** Compares OpenClaw monthly patch release versions across alpha, beta, stable, and corrections. */
-export function compareOpenClawReleaseVersions(left: string, right: string): number | null {
-  const parsedLeft = parseOpenClawReleaseVersion(left);
-  const parsedRight = parseOpenClawReleaseVersion(right);
-  return parsedLeft && parsedRight ? compareOpenClawSemver(parsedLeft, parsedRight) : null;
+/** Compares update versions, preserving monthly corrections and legacy dot-beta tags. */
+export function compareSemverStrings(a: string | null, b: string | null): number | null {
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
+    }
+  }
+  const normalizedA = a ? normalizeLegacyDotBetaVersion(a) : null;
+  const normalizedB = b ? normalizeLegacyDotBetaVersion(b) : null;
+  return normalizedA && normalizedB ? compareValidSemver(normalizedA, normalizedB) : null;
 }
 
 /** Returns whether an exact semver value is a prerelease, excluding stable correction releases. */
@@ -195,7 +207,7 @@ export function formatPrereleaseResolutionError(params: {
   const selectorHint =
     params.spec.selectorKind === "none" ||
     normalizeLowercaseStringOrEmpty(params.spec.selector) === "latest"
-      ? `Use "${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
+      ? `Use "npm:${params.spec.name}@beta" (or another prerelease tag) or an exact prerelease version to opt in explicitly.`
       : `Use an explicit prerelease tag or exact prerelease version if you want prerelease installs.`;
   return `Resolved ${params.spec.raw} to prerelease version ${params.resolvedVersion}, but prereleases are only installed when explicitly requested. ${selectorHint}`;
 }

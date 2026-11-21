@@ -1,55 +1,9 @@
 import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AssistantMessage } from "../../../llm/types.js";
-import type { resolveBootstrapContextForRun } from "../../bootstrap-files.js";
-import {
-  isHeartbeatLifecycleRunKind,
-  type BootstrapContextRunKind,
-  type BootstrapMode,
-} from "../../bootstrap-mode.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { hasNonzeroUsage, normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { isUnreadableWorkspaceBootstrapFile } from "../../workspace-bootstrap-read.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
-
-/**
- * Resolves bootstrap/context files for this attempt and reports whether the
- * caller should persist a completed bootstrap marker. Continuation-skip mode
- * intentionally suppresses reinjection after a full bootstrap turn has already
- * been recorded for the session.
- */
-export async function resolveAttemptBootstrapContext(params: {
-  contextInjectionMode: "always" | "continuation-skip" | "never";
-  bootstrapContextMode?: string;
-  bootstrapContextRunKind?: BootstrapContextRunKind;
-  bootstrapMode?: BootstrapMode;
-  deliversCompleteWorkspaceContext: boolean;
-  hasCompletedBootstrapTurn: () => Promise<boolean>;
-  resolveBootstrapContextForRun: () => ReturnType<typeof resolveBootstrapContextForRun>;
-}) {
-  const isHeartbeatLifecycleRun = isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind);
-  const isContinuationTurn =
-    params.bootstrapMode !== "full" &&
-    params.contextInjectionMode === "continuation-skip" &&
-    !isHeartbeatLifecycleRun &&
-    (await params.hasCompletedBootstrapTurn());
-  const shouldSkipBootstrapInjection =
-    params.contextInjectionMode === "never" || isContinuationTurn;
-  const context = shouldSkipBootstrapInjection
-    ? { bootstrapFiles: [], contextFiles: [] }
-    : await params.resolveBootstrapContextForRun();
-  // Check both workspace layers after loading: an unreadable file must be retried next turn.
-  const shouldRecordCompletedBootstrapTurn =
-    !shouldSkipBootstrapInjection &&
-    params.bootstrapContextMode !== "lightweight" &&
-    !isHeartbeatLifecycleRun &&
-    params.bootstrapContextRunKind !== "cron" &&
-    params.deliversCompleteWorkspaceContext &&
-    !context.bootstrapFiles.some(isUnreadableWorkspaceBootstrapFile) &&
-    (params.bootstrapMode === "full" || params.contextInjectionMode === "continuation-skip");
-
-  return { ...context, isContinuationTurn, shouldRecordCompletedBootstrapTurn };
-}
 
 /**
  * Builds the compact prompt-cache metadata stored on an attempt result. Empty

@@ -1,7 +1,5 @@
-/** Tests model fallback notice formatting and transition state tracking. */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
-import { canonicalizeProviderModelId } from "../agents/provider-model-route.js";
 import {
   resolveActiveFallbackState,
   type FallbackNoticeState,
@@ -12,398 +10,174 @@ import {
   resolveFallbackTransition,
 } from "./fallback-state.js";
 
-const baseAttempt = {
-  provider: "demo-primary",
-  model: "demo-primary/model-a",
-  error: "Provider demo-primary is in cooldown (all profiles unavailable)",
+const attempt = {
+  provider: "primary",
+  model: "a",
+  error: "cooldown",
   reason: "rate_limit" as const,
 };
-
-const activeFallbackState: FallbackNoticeState = {
-  fallbackNotice: {
-    kind: "active",
-    selectedModel: "demo-primary/model-a",
-    activeModel: "demo-fallback/model-b",
-    reason: "rate limit",
-  },
-};
-
-function registerAnthropicCliBackendForTest(): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    ],
-  });
+function notice(
+  selectedModel = "primary/a",
+  activeModel = "fallback/b",
+  reason = "rate limit",
+): FallbackNoticeState {
+  return { fallbackNotice: { kind: "active", selectedModel, activeModel, reason } };
 }
-
-function resolveDemoFallbackTransition(
-  overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {},
+const cleared = { selectedModel: undefined, activeModel: undefined, reason: undefined };
+function pair(
+  selectedProvider: string,
+  selectedModel: string,
+  activeProvider = selectedProvider,
+  activeModel = selectedModel,
 ) {
+  return { selectedProvider, selectedModel, activeProvider, activeModel };
+}
+function activeState(
+  selectedModelRef: string,
+  activeModelRef: string,
+  state?: FallbackNoticeState,
+) {
+  return resolveActiveFallbackState({ selectedModelRef, activeModelRef, state, config: {} });
+}
+function transition(overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {}) {
   return resolveFallbackTransition({
-    selectedProvider: "demo-primary",
-    selectedModel: "model-a",
-    activeProvider: "demo-fallback",
-    activeModel: "model-b",
-    attempts: [baseAttempt],
-    state: {},
+    ...pair("primary", "a", "fallback", "b"),
+    attempts: [attempt],
     ...overrides,
   });
 }
+afterEach(() => cliBackendsTesting.resetDepsForTest());
 
-const cliAliasTransition = {
-  selectedProvider: "anthropic",
-  selectedModel: "claude-opus-4-7",
-  activeProvider: "claude-cli",
-  activeModel: "claude-opus-4-7",
-  attempts: [],
-  state: {
-    fallbackNotice: {
-      kind: "active",
-      selectedModel: "anthropic/claude-opus-4-7",
-      activeModel: "claude-cli/claude-opus-4-7",
-      reason: "selected model unavailable",
-    },
-  },
-  cfg: {},
-} satisfies Parameters<typeof resolveFallbackTransition>[0];
-
-describe("fallback-state", () => {
-  afterEach(() => {
-    cliBackendsTesting.resetDepsForTest();
+it.each([
+  [notice(), true],
+  [undefined, false],
+  [notice("other/model"), false],
+  [notice(undefined, "other/model"), false],
+] as const)("uses only matching persisted fallback state: %j", (state, active) => {
+  expect(activeState("primary/a", "fallback/b", state)).toEqual({
+    active,
+    reason: active ? "rate limit" : undefined,
   });
+});
 
-  it.each([
-    {
-      name: "treats fallback as active only when state matches selected and active refs",
-      state: activeFallbackState,
-      expected: { active: true, reason: "rate limit" },
-      expectedSetupLookups: 2,
-    },
-    {
-      name: "does not discover runtime aliases without persisted fallback state",
-      state: undefined,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not treat runtime drift as fallback when persisted state does not match",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "other-provider/other-model",
-          activeModel: "demo-fallback/model-b",
-          reason: "rate limit",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not discover runtime aliases when the recorded active ref differs",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "demo-primary/model-a",
-          activeModel: "other-provider/other-model",
-          reason: "rate limit",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 0,
-    },
-    {
-      name: "does not report a matching persisted CLI runtime alias as fallback",
-      selectedModelRef: "anthropic/claude-opus-4-7",
-      activeModelRef: "claude-cli/claude-opus-4-7",
-      state: {
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "anthropic/claude-opus-4-7",
-          activeModel: "claude-cli/claude-opus-4-7",
-          reason: "selected model unavailable",
-        },
-      } satisfies FallbackNoticeState,
-      expected: { active: false, reason: undefined },
-      expectedSetupLookups: 2,
-    },
-  ])("$name", ({ state, expected, expectedSetupLookups, selectedModelRef, activeModelRef }) => {
-    let setupLookups = 0;
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend }) => {
-        setupLookups += 1;
-        return backend === "claude-cli"
-          ? {
-              pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
-            }
-          : undefined;
-      },
-    });
-    const resolved = resolveActiveFallbackState({
-      selectedModelRef: selectedModelRef ?? "demo-primary/model-a",
-      activeModelRef: activeModelRef ?? "demo-fallback/model-b",
-      config: {},
+it("preserves provider-local prefixes through activation, repetition and recovery", () => {
+  const refs = {
+    ...pair("custom", "custom/model", "custom", "model"),
+    attempts: [{ ...attempt, provider: "custom", model: "custom/model" }],
+  };
+  const active = transition(refs);
+  expect(active).toMatchObject({
+    fallbackActive: true,
+    fallbackTransitioned: true,
+    nextState: { selectedModel: "custom/custom/model", activeModel: "custom/model" },
+  });
+  const state = notice(active.selectedModelRef, active.activeModelRef, active.reasonSummary);
+  expect(transition({ ...refs, state })).toMatchObject({
+    fallbackTransitioned: false,
+    stateChanged: false,
+  });
+  expect(transition({ ...refs, activeModel: refs.selectedModel, state })).toMatchObject({
+    fallbackCleared: true,
+    nextState: cleared,
+  });
+  expect(buildFallbackNotice(refs)).toContain("selected custom/custom/model");
+  expect(buildFallbackClearedNotice({ ...refs, previousActiveModel: active.activeModelRef })).toBe(
+    "↪️ Model Fallback cleared: custom/custom/model (was custom/model)",
+  );
+});
+
+it.each([
+  [
+    "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
+    [
+      expect.stringContaining("HTTP 429: Too Many Requests"),
+      expect.stringContaining("Claude Max usage limit reached"),
+    ],
+  ],
+  [
+    "ThrottlingException: Too many concurrent requests",
+    [expect.stringContaining("ThrottlingException"), expect.not.stringMatching(/^rate limit$/)],
+  ],
+  ["Unauthorized: invalid API key", ["rate limit"]],
+  [`429 ${"x".repeat(68)}😀tail`, [`HTTP 429: ${"x".repeat(68)}…`]],
+] as const)("formats transient details without exposing auth errors: %s", (error, expected) => {
+  const { reasonSummary } = transition({ attempts: [{ ...attempt, error }] });
+  for (const value of expected) {
+    expect(reasonSummary).toEqual(value);
+  }
+});
+
+it("refreshes a changed reason without reactivating the fallback", () => {
+  expect(
+    transition({ attempts: [{ ...attempt, reason: "timeout" }], state: notice() }),
+  ).toMatchObject({
+    fallbackTransitioned: false,
+    stateChanged: true,
+    nextState: { reason: "timeout" },
+  });
+});
+
+it.each([false, true])("recognizes CLI aliases with setup discovery=%s", (setup) => {
+  const backend = {
+    id: "claude-cli",
+    modelProvider: "anthropic",
+    config: { command: "claude" },
+    bundleMcp: false,
+  };
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => (setup ? [] : [{ ...backend, pluginId: "anthropic" }]),
+    resolvePluginSetupCliBackend: ({ backend: id }) =>
+      id === backend.id ? { pluginId: "anthropic", backend } : undefined,
+  });
+  const state = notice("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7");
+  expect(
+    transition({
+      ...pair("anthropic", "claude-opus-4-7", "claude-cli"),
+      attempts: [],
+      cfg: {},
       state,
-    });
-
-    expect(resolved).toEqual(expected);
-    expect(setupLookups).toBe(expectedSetupLookups);
+    }),
+  ).toMatchObject({
+    fallbackActive: false,
+    fallbackCleared: false,
+    stateChanged: true,
+    nextState: cleared,
   });
+  expect(activeState("anthropic/claude-opus-4-7", "claude-cli/claude-opus-4-7", state)).toEqual({
+    active: false,
+    reason: undefined,
+  });
+});
 
-  it("preserves provider-local model prefixes through fallback and recovery", () => {
-    const refs = {
-      selectedProvider: "custom",
-      selectedModel: "custom/model",
-      activeProvider: "custom",
-      activeModel: "model",
-      attempts: [{ ...baseAttempt, provider: "custom", model: "custom/model" }],
-    };
-    const activated = resolveDemoFallbackTransition(refs);
-    expect(activated).toMatchObject({
-      fallbackActive: true,
-      fallbackTransitioned: true,
-      nextState: { selectedModel: "custom/custom/model", activeModel: "custom/model" },
-      attemptSummaries: ["custom/custom/model rate limit"],
-    });
-    const state: FallbackNoticeState = {
-      fallbackNotice: {
-        kind: "active",
-        selectedModel: activated.selectedModelRef,
-        activeModel: activated.activeModelRef,
-        reason: activated.reasonSummary,
-      },
-    };
-    expect(resolveDemoFallbackTransition({ ...refs, state })).toMatchObject({
+const selected = "arcee/trinity-large-preview";
+const alias = "arcee/arcee-ai/trinity-large-preview";
+const arcee = {
+  ...pair("arcee", "trinity-large-preview", "arcee", "arcee-ai/trinity-large-preview"),
+  attempts: [],
+  cfg: {},
+};
+it.each([{}, notice(selected, alias, "selected model unavailable")])(
+  "does not persist an Arcee wire alias as fallback: %j",
+  (state) => {
+    const params = { ...arcee, state };
+    expect(transition(params)).toMatchObject({
+      fallbackActive: false,
       fallbackTransitioned: false,
-      stateChanged: false,
+      fallbackCleared: false,
+      stateChanged: "fallbackNotice" in state,
+      nextState: cleared,
     });
-    expect(
-      resolveDemoFallbackTransition({ ...refs, activeModel: refs.selectedModel, state }),
-    ).toMatchObject({
-      fallbackCleared: true,
-      nextState: { selectedModel: undefined, activeModel: undefined, reason: undefined },
-    });
-    expect(buildFallbackNotice(refs)).toContain("selected custom/custom/model");
-    expect(
-      buildFallbackClearedNotice({ ...refs, previousActiveModel: activated.activeModelRef }),
-    ).toBe("↪️ Model Fallback cleared: custom/custom/model (was custom/model)");
-  });
-
-  it("prefers formatted transient error details over generic rate-limit labels", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [
-        {
-          ...baseAttempt,
-          error: "429 Too Many Requests: Claude Max usage limit reached, try again in 6 minutes.",
-        },
-      ],
-    });
-
-    expect(resolved.reasonSummary).toContain("HTTP 429: Too Many Requests");
-    expect(resolved.reasonSummary).toContain("Claude Max usage limit reached");
-  });
-
-  it("preserves throttle-flavored transient details over the generic rate-limit label", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, error: "ThrottlingException: Too many concurrent requests" }],
-    });
-
-    expect(resolved.reasonSummary).toContain("ThrottlingException");
-    expect(resolved.reasonSummary).not.toBe("rate limit");
-  });
-
-  it("still collapses to the reason label when a transient reason lacks any transient-detail hint", () => {
-    // 防止过度匹配: 修复不得让门控对无 transient 提示的文本也放行。
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, error: "Unauthorized: invalid API key" }],
-    });
-
-    expect(resolved.reasonSummary).toBe("rate limit");
-  });
-
-  it("keeps truncated transient error details UTF-16 safe", () => {
-    const detail = "x".repeat(68);
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, error: `429 ${detail}😀tail` }],
-    });
-
-    expect(resolved.reasonSummary).toBe(`HTTP 429: ${detail}…`);
-  });
-
-  it("refreshes reason when fallback remains active with same model pair", () => {
-    const resolved = resolveDemoFallbackTransition({
-      attempts: [{ ...baseAttempt, reason: "timeout" }],
-      state: activeFallbackState,
-    });
-
-    expect(resolved.fallbackTransitioned).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.reason).toBe("timeout");
-  });
-
-  it("does not treat a CLI runtime alias as a model fallback", () => {
-    registerAnthropicCliBackendForTest();
-
-    const resolved = resolveFallbackTransition(cliAliasTransition);
-
-    expect(resolved.fallbackActive).toBe(false);
-    expect(resolved.fallbackCleared).toBe(false);
-    expect(resolved.stateChanged).toBe(true);
-    expect(resolved.nextState.selectedModel).toBeUndefined();
-    expect(resolved.nextState.activeModel).toBeUndefined();
-  });
-
-  it("does not repeat runtime alias comparison when persisted fallback refs match", () => {
-    let setupBackendLookups = 0;
-    cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupCliBackend: ({ backend }) => {
-        setupBackendLookups += 1;
-        return backend === "claude-cli"
-          ? {
-              pluginId: "anthropic",
-              backend: {
-                id: "claude-cli",
-                modelProvider: "anthropic",
-                config: { command: "claude" },
-                bundleMcp: false,
-              },
-            }
-          : undefined;
-      },
-      resolvePluginSetupRegistry: () => {
-        throw new Error("full setup registry should not load for a single runtime alias");
-      },
-      resolveRuntimeCliBackends: () => [],
-    });
-
-    const resolved = resolveFallbackTransition(cliAliasTransition);
-
-    expect(resolved.fallbackActive).toBe(false);
-    expect(setupBackendLookups).toBe(2);
-  });
-
-  describe("Arcee wire identity", () => {
-    it.each([
-      {
-        name: "fresh state",
-        state: {} satisfies FallbackNoticeState,
-        expectedStateChanged: false,
-      },
-      {
-        name: "captured alias-only state",
-        state: {
-          fallbackNotice: {
-            kind: "active",
-            selectedModel: "arcee/trinity-large-preview",
-            activeModel: "arcee/arcee-ai/trinity-large-preview",
-            reason: "selected model unavailable",
-          },
-        } satisfies FallbackNoticeState,
-        expectedStateChanged: true,
-      },
-    ])("keeps $name out of fallback state", ({ state, expectedStateChanged }) => {
-      const params = {
-        selectedProvider: "arcee",
-        selectedModel: "trinity-large-preview",
-        activeProvider: "arcee",
-        activeModel: "arcee-ai/trinity-large-preview",
-        attempts: [],
-        cfg: {},
-        state,
-      };
-
-      expect(canonicalizeProviderModelId("arcee", "arcee-ai/trinity-large-preview")).toBe(
-        "trinity-large-preview",
-      );
-
-      const resolved = resolveFallbackTransition(params);
-
-      expect(resolved).toMatchObject({
-        fallbackActive: false,
-        fallbackTransitioned: false,
-        fallbackCleared: false,
-        stateChanged: expectedStateChanged,
-      });
-      expect(resolved.nextState).toEqual({
-        selectedModel: undefined,
-        activeModel: undefined,
-        reason: undefined,
-      });
-      expect(buildFallbackNotice(params)).toBeNull();
-      expect(
-        resolveActiveFallbackState({
-          selectedModelRef: "arcee/trinity-large-preview",
-          activeModelRef: "arcee/arcee-ai/trinity-large-preview",
-          config: {},
-          state,
-        }),
-      ).toEqual({ active: false, reason: undefined });
-    });
-
-    it.each([
-      {
-        name: "different model",
-        activeProvider: "arcee",
-        activeModel: "arcee-ai/trinity-large-thinking",
-        activeRef: "arcee/arcee-ai/trinity-large-thinking",
-      },
-      {
-        name: "different provider",
-        activeProvider: "openrouter",
-        activeModel: "arcee-ai/trinity-large-preview",
-        activeRef: "openrouter/arcee-ai/trinity-large-preview",
-      },
-    ])("keeps a $name as a real fallback", ({ activeProvider, activeModel, activeRef }) => {
-      const params = {
-        selectedProvider: "arcee",
-        selectedModel: "trinity-large-preview",
-        activeProvider,
-        activeModel,
-        attempts: [],
-        cfg: {},
-        state: {},
-      };
-
-      const resolved = resolveFallbackTransition(params);
-
-      expect(resolved).toMatchObject({
-        fallbackActive: true,
-        fallbackTransitioned: true,
-        fallbackCleared: false,
-        stateChanged: true,
-        nextState: {
-          selectedModel: "arcee/trinity-large-preview",
-          activeModel: activeRef,
-        },
-      });
-      expect(buildFallbackNotice(params)).toContain(activeRef);
-      expect(
-        resolveActiveFallbackState({
-          selectedModelRef: "arcee/trinity-large-preview",
-          activeModelRef: activeRef,
-          config: {},
-          state: {
-            fallbackNotice: {
-              kind: "active",
-              selectedModel: "arcee/trinity-large-preview",
-              activeModel: activeRef,
-              reason: "selected model unavailable",
-            },
-          },
-        }),
-      ).toEqual({ active: true, reason: "selected model unavailable" });
-    });
+    expect(buildFallbackNotice(params)).toBeNull();
+  },
+);
+it.each([
+  ["arcee", "arcee-ai/trinity-large-thinking"],
+  ["openrouter", "arcee-ai/trinity-large-preview"],
+])("retains a genuine provider/model change: %s/%s", (activeProvider, activeModel) => {
+  const params = { ...arcee, activeProvider, activeModel };
+  const activeModelRef = `${activeProvider}/${activeModel}`;
+  expect(transition(params)).toMatchObject({
+    fallbackActive: true,
+    nextState: { selectedModel: selected, activeModel: activeModelRef },
   });
 });

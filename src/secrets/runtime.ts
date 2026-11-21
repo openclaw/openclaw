@@ -38,10 +38,11 @@ import {
   canUseSecretsRuntimeFastPath,
   collectCandidateAgentDirs,
   createEmptyRuntimeWebToolsMetadata,
+  hasRuntimeWebToolConfigSurface,
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
-import { mergeProviderAuthRuntimeWarnings } from "./runtime-provider-auth-warnings.js";
+import type { SecretResolverWarning } from "./runtime-shared.js";
 import {
   activateProviderAuthRuntimeSnapshot,
   activateSecretsRuntimeSnapshotState,
@@ -96,6 +97,9 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   }
   const channels = config.channels;
   if (isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults")) {
+    return true;
+  }
+  if (hasRuntimeWebToolConfigSurface(config)) {
     return true;
   }
   const providers = config.secrets?.providers;
@@ -227,12 +231,15 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
   let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
-    const { resolveConfigWidePluginManifestRegistry } = await loadRuntimeManifestHelpers();
-    manifestRegistry = resolveConfigWidePluginManifestRegistry({
-      config: sourceConfig,
-      env: runtimeEnv,
-    });
+  if (
+    !manifestRegistry &&
+    (shouldLoadPluginMetadataForSecrets(sourceConfig) ||
+      (params.assignmentConfig && shouldLoadPluginMetadataForSecrets(assignmentSourceConfig)))
+  ) {
+    const { resolveConfigWidePluginMetadataSnapshotAsync } = await loadRuntimeManifestHelpers();
+    manifestRegistry = (
+      await resolveConfigWidePluginMetadataSnapshotAsync({ config: sourceConfig, env: runtimeEnv })
+    ).manifestRegistry;
   }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
@@ -504,9 +511,7 @@ function patchResolvedSecretRefLeaves(params: {
       : { changed: true, value: params.resolved };
   }
   if (Array.isArray(params.source) && Array.isArray(params.resolved)) {
-    const next = Array.isArray(params.current)
-      ? [...params.current]
-      : structuredClone(params.resolved);
+    const next = Array.isArray(params.current) ? [...params.current] : [...params.resolved];
     let changed = false;
     for (const [index, source] of params.source.entries()) {
       const patch = patchResolvedSecretRefLeaves({
@@ -523,9 +528,7 @@ function patchResolvedSecretRefLeaves(params: {
     return { changed, value: changed ? next : params.current };
   }
   if (isRecord(params.source) && isRecord(params.resolved)) {
-    const next = isRecord(params.current)
-      ? { ...params.current }
-      : structuredClone(params.resolved);
+    const next = isRecord(params.current) ? { ...params.current } : { ...params.resolved };
     let changed = false;
     for (const [key, source] of Object.entries(params.source)) {
       const patch = patchResolvedSecretRefLeaves({
@@ -549,6 +552,14 @@ function selectProviderAuthConfig(config: OpenClawConfig): OpenClawConfig {
     ...(config.secrets === undefined ? {} : { secrets: config.secrets }),
     ...(config.models === undefined ? {} : { models: config.models }),
   };
+}
+
+function isProviderAuthRuntimeWarning(warning: SecretResolverWarning): boolean {
+  return (
+    warning.path.startsWith("models.providers.") ||
+    warning.path.startsWith("models.providers[") ||
+    warning.path.includes(".auth-profiles.")
+  );
 }
 
 function mergeProviderAuthOwners(
@@ -633,10 +644,10 @@ export async function refreshActiveProviderAuthRuntimeSnapshot(): Promise<boolea
       authStores: candidate.snapshot.authStores,
       authStoreCredentialsRevision: candidate.snapshot.authStoreCredentialsRevision,
       authStoreSnapshotsRevision: candidate.snapshot.authStoreSnapshotsRevision,
-      warnings: mergeProviderAuthRuntimeWarnings(
-        activeSnapshot.warnings,
-        candidate.snapshot.warnings,
-      ),
+      warnings: [
+        ...activeSnapshot.warnings.filter((warning) => !isProviderAuthRuntimeWarning(warning)),
+        ...candidate.snapshot.warnings.filter(isProviderAuthRuntimeWarning),
+      ],
       ...mergeProviderAuthOwners(activeSnapshot, candidate.snapshot),
     };
     // The revision check and activation are synchronous. A queued auth refresh must retry

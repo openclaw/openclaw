@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Sourced by the packager and run directly as the per-architecture worker.
+source "$(dirname "${BASH_SOURCE[0]}")/mac-disk-image.sh"
+
 build_path_for_arch() {
   echo "$BUILD_ROOT/$1"
 }
@@ -39,7 +42,14 @@ build_mlx_tts_helper() {
 }
 
 sparkle_framework_for_arch() {
-  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+  # Swift Build products do not contain binary dependencies. SwiftPM resolves
+  # the locked XCFramework into the architecture's scratch artifact directory.
+  local framework="$(build_path_for_arch "$1")/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
+  if [[ ! -f "$framework/Sparkle" ]]; then
+    echo "ERROR: Required Sparkle.framework not found at $framework" >&2
+    return 1
+  fi
+  printf '%s\n' "$framework"
 }
 
 run_with_locked_swift_packages() {
@@ -241,6 +251,10 @@ prepare_swift_package_root() {
   ln -s "$ROOT_DIR/apps/macos/Tests" "$SWIFT_PACKAGE_ROOT/Tests"
   ln -s "$ROOT_DIR/apps/shared" "$SWIFT_PACKAGE_CONTAINER/apps/shared"
   ln -s "$ROOT_DIR/apps/swabble" "$SWIFT_PACKAGE_CONTAINER/apps/swabble"
+  if [[ "${OPENCLAW_IROH_NATIVE:-0}" == "1" ]]; then
+    mkdir -p "$SWIFT_PACKAGE_CONTAINER/crates"
+    ln -s "$ROOT_DIR/crates/openclaw-iroh-ffi" "$SWIFT_PACKAGE_CONTAINER/crates/openclaw-iroh-ffi"
+  fi
   MLX_TTS_HELPER_ROOT="$SWIFT_PACKAGE_CONTAINER/apps/macos-mlx-tts"
   mkdir -p "$MLX_TTS_HELPER_ROOT"
   cp "$ROOT_DIR/apps/macos-mlx-tts/Package.swift" "$MLX_TTS_HELPER_ROOT/Package.swift"
@@ -325,47 +339,6 @@ if committed_pins != snapshot_pins:
 PY
 }
 
-peekaboo_snapshot_image_devices() {
-  /usr/bin/python3 - "$PEEKABOO_SNAPSHOT_IMAGE" <<'PY'
-import os
-import plistlib
-import re
-import subprocess
-import sys
-
-target = os.path.realpath(sys.argv[1])
-info = subprocess.run(["hdiutil", "info", "-plist"], stdout=subprocess.PIPE)
-if info.returncode:
-    raise SystemExit(f"ERROR: hdiutil info failed with exit code {info.returncode}; cannot verify {target} is detached")
-for image in plistlib.loads(info.stdout).get("images", []):
-    image_path = image.get("image-path")
-    # Resolve both spellings across symlinks; the first whole disk owns the image.
-    if not image_path or os.path.realpath(image_path) != target:
-        continue
-    for entity in image.get("system-entities", []):
-        device = entity.get("dev-entry", "")
-        if re.fullmatch(r"/dev/disk[0-9]+", device):
-            print(device)
-            break
-    else:
-        raise SystemExit(f"ERROR: Peekaboo snapshot image has no whole-disk device: {image_path}")
-PY
-}
-
-detach_peekaboo_snapshot_image() {
-  local devices device
-  devices="$(peekaboo_snapshot_image_devices)" || return 1
-  [[ -n "$devices" ]] || return 0
-  while IFS= read -r device; do
-    hdiutil detach -quiet "$device" >/dev/null 2>&1 || true
-  done <<< "$devices"
-  devices="$(peekaboo_snapshot_image_devices)" || return 1
-  if [[ -n "$devices" ]]; then
-    echo "ERROR: Peekaboo snapshot image $PEEKABOO_SNAPSHOT_IMAGE is still attached; detach it with: hdiutil detach $(printf '%s' "$devices" | tr '\n' ' ')" >&2
-    return 1
-  fi
-}
-
 attach_peekaboo_snapshot() {
   local attempt=1 errors attach_status
   # Busy hosts can fail attach with EAGAIN after creating devices.
@@ -376,7 +349,7 @@ attach_peekaboo_snapshot() {
     fi
     [[ "$attach_status" == 0 ]] && return 0
     if [[ "$errors" == *"Resource temporarily unavailable"* && "$attempt" -lt 3 ]]; then
-      detach_peekaboo_snapshot_image || return 1
+      detach_disk_image "$PEEKABOO_SNAPSHOT_IMAGE" || return 1
       sleep $((attempt * 2))
       attempt=$((attempt + 1))
     else
@@ -537,7 +510,7 @@ cleanup_swift_architecture() {
       fi
       # A failed attach can leave the image's devices attached without a mount.
       if [[ -e "$PEEKABOO_SNAPSHOT_IMAGE" ]]; then
-        detach_peekaboo_snapshot_image || cleanup_status=1
+        detach_disk_image "$PEEKABOO_SNAPSHOT_IMAGE" || cleanup_status=1
       fi
     }
   fi

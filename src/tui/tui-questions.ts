@@ -164,9 +164,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     try {
       return await recovery;
     } finally {
-      if (questions.get(record.id)?.recovery === recovery) {
-        update(record.id, { recovery: undefined });
-      }
+      update(record.id, { recovery: undefined });
     }
   }
 

@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import type { Server } from "node:http";
 import { setImmediate } from "node:timers/promises";
+import { promisify } from "node:util";
 import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi, type TestContext } from "vitest";
-import { createDeferred } from "./promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "./promise.js";
+
+type Evidence = typeof import("../e2e/qa-lab/runtime/script-evidence.js");
+type Wire = typeof import("../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js");
+type MockFactory = Extract<Parameters<typeof vi.doMock>[1], (...args: never[]) => unknown>;
+const generationModule = "../e2e/qa-lab/runtime/worker-inference-generation-reload.js";
 
 it.for(["cancelled import", "failed import", "failed evidence", "cancelled close"] as const)(
   "joins generation work before reset and the next case (%s)",
   (fault, context) => {
     const work = Promise.resolve().then(async () => {
-      const after: Array<() => unknown> = [];
+      let after!: () => unknown;
       const cases: Array<(context: TestContext) => Promise<unknown>> = [];
       const gate = createDeferred();
       const importing = createDeferred();
@@ -21,51 +27,44 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
       const resets: boolean[] = [];
       const writes: Array<{ artifactBase: string; details?: string }> = [];
       const roots = new Set<string>();
-      const argv = process.argv;
-      const exitCode = process.exitCode;
+      const originalProcess = { argv: process.argv, exitCode: process.exitCode };
       const tmpdir = process.env.TMPDIR;
       const remove = fs.rm;
       let released = false;
       let first: Promise<unknown> | undefined;
       let teardown: Promise<unknown> | undefined;
       const mocks = new Set<string>();
-      const realDoMock = vi.doMock.bind(vi);
-      const record = (_name: string, body: (context: TestContext) => Promise<unknown>) => {
-        cases.push(body);
+      const reset = (ids: Iterable<string>) => {
+        for (const id of ids) {
+          vi.doUnmock(id);
+        }
+        vi.restoreAllMocks();
+        vi.unstubAllEnvs();
+        vi.resetModules();
       };
-      const captureIt = Object.assign(record, {
-        each: (values: string[]) => (_name: string, body: (value: string) => Promise<unknown>) => {
-          for (const value of values) {
-            cases.push(() => body(value));
-          }
-        },
-        for:
-          (values: string[]) =>
-          (_name: string, body: (value: string, context: TestContext) => Promise<unknown>) => {
-            for (const value of values) {
-              cases.push((ctx) => body(value, ctx));
-            }
-          },
-      });
       vi.doMock("vitest", () => ({
         expect,
         describe: (_name: string, body: () => void) => body(),
-        it: captureIt,
-        afterEach: (hook: () => unknown) => after.push(hook),
+        // Only the generation table is exercised; sibling bodies stay in their own suite.
+        it: Object.assign(() => {}, {
+          each: () => () => {},
+          for:
+            (values: string[]) =>
+            (_name: string, body: (value: string, context: TestContext) => Promise<unknown>) => {
+              cases.push(...values.map((value) => (ctx: TestContext) => body(value, ctx)));
+            },
+        }),
+        afterEach: (hook: () => unknown) => (after = hook),
         vi: {
           ...vi,
-          doMock: (id: string, factory: Parameters<typeof vi.doMock>[1]) => {
+          doMock: (id: string, factory: MockFactory) => {
             mocks.add(id);
-            if (typeof factory !== "function") {
-              realDoMock(id, factory);
-            } else if (id.endsWith("/script-evidence.js")) {
-              realDoMock(id, async (importOriginal) => {
-                const original = (await factory(
-                  importOriginal,
-                )) as typeof import("../e2e/qa-lab/runtime/script-evidence.js");
+            if (id.endsWith("/script-evidence.js")) {
+              vi.doMock(id, async (importOriginal) => {
+                const original = (await factory(importOriginal)) as Evidence;
                 return {
                   createQaScriptEvidenceWriter: (
-                    options: Parameters<typeof original.createQaScriptEvidenceWriter>[0],
+                    options: Parameters<Evidence["createQaScriptEvidenceWriter"]>[0],
                   ) => {
                     const writer = original.createQaScriptEvidenceWriter(options);
                     return {
@@ -82,10 +81,8 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
                 };
               });
             } else if (id.endsWith("/paired-node-worker-wire-fixture.js")) {
-              realDoMock(id, async (importOriginal) => {
-                const original = (await factory(
-                  importOriginal,
-                )) as typeof import("../e2e/qa-lab/runtime/paired-node-worker-wire-fixture.js");
+              vi.doMock(id, async (importOriginal) => {
+                const original = (await factory(importOriginal)) as Wire;
                 return {
                   ...original,
                   async closeWireServer(server: Server) {
@@ -98,41 +95,24 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
                 };
               });
             } else {
-              realDoMock(id, factory);
+              vi.doMock(id, factory);
             }
           },
           doUnmock: (id: string) => {
             resets.push(released);
             // Record premature reset without letting pre-fix code start real services.
-            if (released) {
-              vi.doUnmock(id);
-            }
+            return released && vi.doUnmock(id);
           },
-          restoreAllMocks: () => {
-            if (released) {
-              vi.restoreAllMocks();
-            }
-          },
-          unstubAllEnvs: () => {
-            if (released) {
-              vi.unstubAllEnvs();
-            }
-          },
-          resetModules: () => {
-            if (released) {
-              vi.resetModules();
-            }
-          },
+          restoreAllMocks: () => released && vi.restoreAllMocks(),
+          unstubAllEnvs: () => released && vi.unstubAllEnvs(),
+          resetModules: () => released && vi.resetModules(),
           stubEnv: (key: string, value: string) => {
-            if (key === "TMPDIR") {
-              roots.add(value);
-            }
+            roots.add(value);
             return vi.stubEnv(key, value);
           },
         },
       }));
-      vi.doMock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js", async (original) => {
-        console.log(`lifecycle: ${fault} import barrier reached`);
+      vi.doMock(generationModule, async (original) => {
         importing.resolve();
         await gate.promise;
         if (fault === "failed import") {
@@ -140,25 +120,20 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         }
         return await original();
       });
-      const firstContext = { ...context, signal };
       try {
         await import("./qa-gateway-cleanup.test.js");
-        first = cases[0]!(firstContext).catch((error: unknown) => error);
-        await Promise.race([
+        first = cases[0]!({ ...context, signal }).catch((error: unknown) => error);
+        await awaitGateBeforeSettlement(
           importing.promise,
-          first.then(() => {
-            throw new Error("generation case ended before the import barrier");
-          }),
-        ]);
+          first,
+          "generation case ended before the import barrier",
+        );
         if (fault === "cancelled import") {
           controller.abort(reason);
         }
-        // Vitest enters afterEach when its cancellation wrapper rejects, while the
-        // original body is still pending. The last hook owns reset in both versions.
+        // Vitest can start teardown while the cancelled body is still pending.
         let teardownDone = false;
-        teardown = Promise.resolve(after.at(-1)!()).then(() => {
-          teardownDone = true;
-        });
+        teardown = Promise.resolve(after()).then(() => (teardownDone = true));
         await setImmediate();
         const resetBeforeJoin = resets.includes(false);
         const completedBeforeJoin = teardownDone;
@@ -166,33 +141,13 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         gate.resolve();
         const outcome = await first;
         await teardown;
-        // The old temp tracker has a separate earlier hook; run it only after join.
-        for (const hook of after.slice(0, -1)) {
-          await hook();
-        }
         const firstWrites = [...writes];
-        console.log(
-          JSON.stringify({
-            fault,
-            resetBeforeJoin,
-            completedBeforeJoin,
-            firstWrites: firstWrites.length,
-          }),
-        );
-        vi.doUnmock("../e2e/qa-lab/runtime/worker-inference-generation-reload.js");
-        for (const id of mocks) {
-          vi.doUnmock(id);
-        }
-        vi.restoreAllMocks();
-        vi.unstubAllEnvs();
-        vi.resetModules();
+        vi.doUnmock(generationModule);
+        reset(mocks);
         firstCase = false;
         await cases[1]!(context);
-        for (const hook of after.toReversed()) {
-          await hook();
-        }
-        expect(resetBeforeJoin).toBe(false);
-        expect(completedBeforeJoin).toBe(false);
+        await after();
+        expect([resetBeforeJoin, completedBeforeJoin]).toEqual([false, false]);
         expect(collectErrorGraphCandidates(outcome, (error) => [error.cause])).toContain(reason);
         const firstWriteCount = fault === "failed evidence" || fault === "cancelled close" ? 1 : 0;
         expect(firstWrites).toHaveLength(firstWriteCount);
@@ -201,14 +156,10 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
         expect(servers).toHaveLength(firstWriteCount + 1);
         for (const server of servers) {
           expect(server.listening).toBe(false);
-          expect(
-            await new Promise<number>((resolve, reject) => {
-              server.getConnections((error, count) => (error ? reject(error) : resolve(count)));
-            }),
-          ).toBe(0);
+          expect(await promisify(server.getConnections.bind(server))()).toBe(0);
         }
-        expect(process.argv).toBe(argv);
-        expect(process.exitCode).toBe(exitCode);
+        expect(process.argv).toBe(originalProcess.argv);
+        expect(process.exitCode).toBe(originalProcess.exitCode);
         expect(process.env.TMPDIR).toBe(tmpdir);
         expect(fs.rm).toBe(remove);
         const [firstRoot, secondRoot] = [...roots];
@@ -226,30 +177,15 @@ it.for(["cancelled import", "failed import", "failed evidence", "cancelled close
           await first;
           await teardown;
         } finally {
-          for (const id of [
-            "vitest",
-            "../e2e/qa-lab/runtime/worker-inference-generation-reload.js",
-            ...mocks,
-          ]) {
-            vi.doUnmock(id);
-          }
-          vi.restoreAllMocks();
-          vi.unstubAllEnvs();
-          vi.resetModules();
-          process.argv = argv;
-          process.exitCode = exitCode;
+          reset(["vitest", generationModule, ...mocks]);
+          Object.assign(process, originalProcess);
           for (const root of roots) {
             await fs.rm(root, { recursive: true, force: true });
           }
         }
       }
     });
-    context.onTestFinished(() =>
-      work.then(
-        () => {},
-        () => {},
-      ),
-    );
+    context.onTestFinished(() => work.catch(() => {}));
     return work;
   },
 );

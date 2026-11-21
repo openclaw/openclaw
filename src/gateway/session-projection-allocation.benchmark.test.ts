@@ -12,8 +12,20 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
+
+const fingerprint = (value: unknown) =>
+  createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const report = (value: Record<string, unknown>) => console.log(JSON.stringify(value));
+// Captured from b6a449c84a9: three viewers, two revisions; fixed clock preserves row bytes/order.
+const goldenHashes = [
+  "151f22796650c322b4ca3f229031b4fc8135178ac5d021504ddfa1dd8d68c615",
+  "e4b8b9478db07c2fe02fb7360d636f8504f8fdb4fc6f1ee89b5ad13a609f3823",
+  "c00e5ca642060f28731e4dea89aa264e06475a551bfd5f3dec08f4f5a895a1ce",
+  "b92215f9f344e28b4512f4ea9c223b2a4ce0e50f464f0ccf683996a21f5f4290",
+].flatMap((hash) => [hash, hash, hash]);
 
 // Opt-in profiling fixture: excluded from routine test cost; run on a Testbox.
 it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
@@ -41,13 +53,9 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
         Object.assign(identifiedClient(`viewer-${index}`), {
           connId: `viewer-${index}`,
           usesSharedGatewayAuth: false,
-          authenticatedUserProfile: {
-            profileId: `viewer-${index}`,
+          authenticatedUserProfile: dispatchProfile(`viewer-${index}`, {
             displayName: `viewer-${index}`,
-            avatarRevision: "1",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          }),
           socket: {
             readyState: 1,
             bufferedAmount: 0,
@@ -99,27 +107,16 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
             const result = await list(index);
             expect(result.sessions[0]?.label).toBe(`Revision ${revision}`);
             expect(result.totalCount).toBe(5_000);
-            // A fixed clock preserves every serialized row byte, including property order.
-            golden.push(createHash("sha256").update(JSON.stringify(result.sessions)).digest("hex"));
+            golden.push(fingerprint(result.sessions));
           }
           refresh();
           for (let index = 0; index < 3; index++) {
             const frame = JSON.parse(wire[index]!);
             expect(frame.payload.session.label).toBe(`Revision ${revision}`);
-            golden.push(createHash("sha256").update(JSON.stringify(frame.payload)).digest("hex"));
+            golden.push(fingerprint(frame.payload));
           }
         }
-        // Captured from the unchanged owner at b6a449c84a9: three viewers, two revisions.
-        expect
-          .soft(golden)
-          .toEqual(
-            [
-              "151f22796650c322b4ca3f229031b4fc8135178ac5d021504ddfa1dd8d68c615",
-              "e4b8b9478db07c2fe02fb7360d636f8504f8fdb4fc6f1ee89b5ad13a609f3823",
-              "c00e5ca642060f28731e4dea89aa264e06475a551bfd5f3dec08f4f5a895a1ce",
-              "b92215f9f344e28b4512f4ea9c223b2a4ce0e50f464f0ccf683996a21f5f4290",
-            ].flatMap((hash) => [hash, hash, hash]),
-          );
+        expect.soft(golden).toEqual(goldenHashes);
         await inspector.post("HeapProfiler.enable");
         await inspector.post("Profiler.enable");
         for (const phase of ["list", "refresh"] as const) {
@@ -157,19 +154,17 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
               .map((node) => node.id),
           );
           const samples = cpu.samples ?? [];
-          console.log(
-            JSON.stringify({
-              phase,
-              calls,
-              viewers: 50,
-              rows: 5_000,
-              elapsedMs,
-              bytesPerCall: Math.round(totalBytes / calls),
-              sampledBytesPerSecond: Math.round((totalBytes * 1_000) / elapsedMs),
-              gcPercent: (100 * samples.filter((id) => gc.has(id)).length) / samples.length,
-              sites: [...sites].toSorted((a, b) => b[1] - a[1]).slice(0, 15),
-            }),
-          );
+          report({
+            phase,
+            calls,
+            viewers: 50,
+            rows: 5_000,
+            elapsedMs,
+            bytesPerCall: Math.round(totalBytes / calls),
+            sampledBytesPerSecond: Math.round((totalBytes * 1_000) / elapsedMs),
+            gcPercent: (100 * samples.filter((id) => gc.has(id)).length) / samples.length,
+            sites: [...sites].toSorted((a, b) => b[1] - a[1]).slice(0, 15),
+          });
           await inspector.post("Profiler.start");
           const cpuStart = performance.now();
           let cpuCalls = 0;
@@ -197,15 +192,13 @@ it.skipIf(process.env.OPENCLAW_ALLOCATION_BENCH !== "1")(
               gcUs += us;
             }
           });
-          console.log(
-            JSON.stringify({
-              phase,
-              cpuCalls,
-              cpuDurationMs: (profile.endTime - profile.startTime) / 1_000,
-              busyMs: busyUs / 1_000,
-              gcBusyPercent: (100 * gcUs) / busyUs,
-            }),
-          );
+          report({
+            phase,
+            cpuCalls,
+            cpuDurationMs: (profile.endTime - profile.startTime) / 1_000,
+            busyMs: busyUs / 1_000,
+            gcBusyPercent: (100 * gcUs) / busyUs,
+          });
         }
       } finally {
         inspector.disconnect();

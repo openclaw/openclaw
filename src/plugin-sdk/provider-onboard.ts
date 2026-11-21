@@ -20,6 +20,27 @@ import type {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
+
+/** Seed a media default only when the operator has not selected one. */
+export function applyAgentDefaultMediaModel(
+  cfg: OpenClawConfig,
+  kind: "image" | "video",
+  primary: string,
+): OpenClawConfig {
+  if (cfg.agents?.defaults?.mediaModels?.[kind]) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        mediaModels: { ...cfg.agents?.defaults?.mediaModels, [kind]: { primary } },
+      },
+    },
+  };
+}
 export {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
@@ -270,12 +291,20 @@ function mergeOnboardProviderRequest(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+// Catalog-declared families describe the catalog row, not authored config; strict config rejects them.
+function withoutCatalogFamilies(provider: ModelProviderConfig): ModelProviderConfig {
+  return provider.models?.some((model) => model.family !== undefined)
+    ? { ...provider, models: provider.models.map(({ family: _family, ...model }) => model) }
+    : provider;
+}
+
 function mergeOnboardProviderConfigs(
   existingProviders: Record<string, ModelProviderConfig> | undefined,
   patchProviders: Record<string, ModelProviderConfig>,
 ): Record<string, ModelProviderConfig> {
   const merged: Record<string, ModelProviderConfig> = { ...existingProviders };
-  for (const [providerId, providerConfig] of Object.entries(patchProviders)) {
+  for (const [providerId, patchProvider] of Object.entries(patchProviders)) {
+    const providerConfig = withoutCatalogFamilies(patchProvider);
     const normalizedProviderId = normalizeProviderId(providerId);
     const patchProviderKey = Object.hasOwn(patchProviders, normalizedProviderId)
       ? normalizedProviderId

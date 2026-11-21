@@ -110,7 +110,8 @@ export const PluginDecisionProviderStatusSchema = closedObject({
   providerId: NonEmptyString,
   pluginId: NonEmptyString,
   configured: Type.Boolean(),
-  credentialReady: Type.Boolean(),
+  /** V1 prepared readiness; V2 omits this because credentials are selected per call. */
+  credentialReady: Type.Optional(Type.Boolean()),
   callable: Type.Boolean(),
   runtimeGeneration: NonEmptyString,
   recentSuccessAt: Type.Optional(Type.Integer({ minimum: 0 })),

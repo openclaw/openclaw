@@ -31,6 +31,7 @@ export async function seedPersonalGitHubDeletionReceipt(key: string, sessionId: 
     identity_login: "fixture-user",
     title: "Synthetic publication",
     body: null,
+    draft: null,
     status: "requested",
     gateway_instance_id: "fixture-gateway",
     execution_id: null,

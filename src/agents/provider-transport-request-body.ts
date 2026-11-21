@@ -1,4 +1,4 @@
-import { encodedModelRequestBodyStream } from "@openclaw/ai/internal/openai";
+import { encodedModelRequestBodyStream } from "@openclaw/ai/internal/model-request-body";
 
 export function requestBodyHasStreamTrue(
   request: Request | undefined,

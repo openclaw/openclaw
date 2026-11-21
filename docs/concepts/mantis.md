@@ -56,7 +56,8 @@ Calls the Discord REST API (`https://discord.com/api/v10`) to fetch the bot
 user, the guild, the guild's channels, and the target channel, asserts the
 channel belongs to the guild, then (unless `--skip-post`) posts a message and
 adds a `👀` reaction. Writes `mantis-discord-smoke-summary.json` and
-`mantis-discord-smoke-report.md`.
+`mantis-discord-smoke-report.md`. If the reaction fails after a successful post,
+the smoke fails but the artifacts still record the posted message.
 
 Token resolution order: `--token-file` value, then `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN`
 (override with `--token-env`), then a file named by `OPENCLAW_QA_DISCORD_MANTIS_BOT_TOKEN_FILE`
@@ -483,7 +484,7 @@ slow or unavailable, add it behind the same Crabbox interface rather than
 hardcoding a fallback.
 
 VM baseline: Linux with a desktop-capable Chrome/Chromium, CDP access, VNC/
-noVNC, Node 24.16+ or 26.1+ and pnpm, an OpenClaw checkout, and
+noVNC, Node 24.22.1+ or 26.12.1+ and pnpm, an OpenClaw checkout, and
 outbound access to the target transport, GitHub, model providers, and the
 credential broker.
 

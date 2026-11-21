@@ -4,7 +4,6 @@ import type { UrbitSSEClient } from "./urbit/sse-client.js";
 
 export const TLON_PENDING_APPROVAL_LIMIT = 100;
 
-/** Pending approval request stored for persistence */
 export type PendingApproval = {
   id: string;
   type: "dm" | "channel" | "group";
@@ -54,7 +53,6 @@ export type TlonSettingsStore = {
   defaultAuthorizedShips?: string[];
   /** Ship that receives approval requests for DMs, channel mentions, and group invites */
   ownerShip?: string;
-  /** Pending approval requests awaiting owner response */
   pendingApprovals?: PendingApproval[];
 };
 

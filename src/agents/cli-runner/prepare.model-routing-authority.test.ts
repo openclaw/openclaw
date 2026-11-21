@@ -18,14 +18,15 @@ import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
-  createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServer,
-  createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
-import { prepareDiscoveredContextTokenCache } from "../context-cache-projection.js";
-import { replaceDiscoveredContextTokenCache } from "../context-cache.js";
+import {
+  providerContextTokenCacheKey,
+  replaceDiscoveredContextTokenCache,
+} from "../context-cache.js";
 import { resetContextWindowCacheForTest } from "../context.test-support.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { mockCliMcpPreparation } from "./prepare-mcp.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -93,28 +94,15 @@ describe("CLI model-routing receipt authority", () => {
       resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
     });
-    setCliRunnerPrepareTestDeps({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      makeBootstrapWarn: vi.fn(() => () => undefined),
-      resolveBootstrapContextForRun: vi.fn(async () => ({
-        bootstrapFiles: [],
-        contextFiles: [],
-      })),
+    mockCliMcpPreparation({
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      mintMcpLoopbackClientGrant: vi.fn(createTestMcpLoopbackClientGrant),
-      bindMcpLoopbackClientGrantAdmission: vi.fn(() => true),
-      revokeMcpLoopbackClientGrant: vi.fn(() => true),
       resolveMcpLoopbackPolicyTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
-      resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
       prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
         args: [],
         cleanup: vi.fn(async () => undefined),
       })),
-      getCliLiveSessionGeneration: vi.fn(() => undefined),
-      loadManifestModelCatalog: vi.fn(() => []),
     });
     fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
   });
@@ -316,18 +304,17 @@ describe("CLI context-window ownership", () => {
 
     // Discovery publishes both provider-qualified and bare keys. The latter cannot
     // supply a different runtime's native budget on the next turn.
-    const catalogModels = [{ provider: catalogProvider, id: model, contextWindow: 1_000_000 }];
-    replaceDiscoveredContextTokenCache(
-      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
-    );
+    const discoveredCache = new Map([
+      [model, 1_000_000],
+      [providerContextTokenCacheKey(catalogProvider, model), 1_000_000],
+    ]);
+    replaceDiscoveredContextTokenCache(new Map(discoveredCache));
     const resumed = await prepare();
     expect(resumed.contextWindowInfo?.tokens).toBe(200_000);
 
     // A provider-owned large window remains usable even without a manifest row.
-    catalogModels.push({ provider, id: model, contextWindow: 1_000_000 });
-    replaceDiscoveredContextTokenCache(
-      await prepareDiscoveredContextTokenCache({ modelCatalog: { entries: catalogModels } }),
-    );
+    discoveredCache.set(providerContextTokenCacheKey(provider, model), 1_000_000);
+    replaceDiscoveredContextTokenCache(new Map(discoveredCache));
     const owned = await prepare();
     expect(owned.contextWindowInfo?.tokens).toBe(1_000_000);
     expect(prepareExecution.mock.calls.map(([context]) => context.contextTokenBudget)).toEqual([

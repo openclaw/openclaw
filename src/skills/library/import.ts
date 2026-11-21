@@ -5,7 +5,6 @@ import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import {
   SKILL_LIBRARY_MAX_BUNDLE_BYTES,
   SKILL_LIBRARY_MAX_FILE_BYTES,
-  validateSkillsLibraryUploadParams,
   type SkillsLibraryUploadParams,
   type SkillsLibraryUploadResult,
   type SkillsLibraryImportParams,
@@ -16,6 +15,7 @@ import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db
 import { installSkillFromClawHub } from "../lifecycle/clawhub.js";
 import { SkillLibraryError } from "../skill-library-error.js";
 import {
+  decodeSkillLibraryFile,
   prepareSkillLibraryBundle,
   readSkillLibraryTree,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
@@ -40,7 +40,7 @@ async function publishDirectory(
     {
       slug,
       expectedRevision: null,
-      content: Buffer.from(markdown.content, "base64").toString("utf8"),
+      content: decodeSkillLibraryFile(markdown).toString("utf8"),
       files: files.filter(
         (file) => file !== markdown && !/^\.(?:clawhub|clawdhub)\//u.test(file.path),
       ),
@@ -87,9 +87,6 @@ export async function uploadSkillLibrary(
   params: SkillsLibraryUploadParams,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<SkillsLibraryUploadResult> {
-  if (!validateSkillsLibraryUploadParams(params)) {
-    throw new SkillLibraryError("INVALID_BUNDLE", "Invalid library upload parameters.");
-  }
   const access = captureSkillLibraryAccess(authority, options);
   if (params.action !== "commit") {
     return access.write("skillLibrary.upload", { params });

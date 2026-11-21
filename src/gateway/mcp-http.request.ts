@@ -1,4 +1,3 @@
-// MCP loopback HTTP request helpers.
 // Authenticates local MCP POST requests and extracts scoped Gateway context.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -10,6 +9,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { writeJsonWithoutCharset } from "../infra/http-json.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-header-value.js";
@@ -144,8 +144,7 @@ export function validateMcpLoopbackRequest(params: {
   onSseResponse?: (res: ServerResponse) => void;
 }): McpLoopbackRequestAuth | null {
   const reply = (status: number, body: unknown): null => {
-    params.res.writeHead(status, { "Content-Type": "application/json" });
-    params.res.end(JSON.stringify(body));
+    writeJsonWithoutCharset(params.res, status, body);
     return null;
   };
   const url = URL.parse(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -231,7 +230,8 @@ export function validateMcpLoopbackRequest(params: {
   }
 
   const contentType = getHeader(params.req, "content-type") ?? "";
-  if (!contentType.startsWith("application/json")) {
+  // Media types are case-insensitive (RFC 9110 §8.3.1).
+  if (contentType.slice(0, "application/json".length).toLowerCase() !== "application/json") {
     logMcpLoopbackTraffic("reject", {
       reason: "unsupported_media_type",
       method: params.req.method ?? "",

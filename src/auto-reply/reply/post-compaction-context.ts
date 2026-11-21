@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { findFenceSpanAt, parseFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
@@ -41,16 +38,15 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
 type PostCompactionContextOptions = {
   cfg?: OpenClawConfig;
   agentId?: string;
-  nowMs?: number;
 };
 
 export async function readPostCompactionContext(
   workspaceDir: string,
   options?: PostCompactionContextOptions,
 ): Promise<string | null> {
-  const { cfg, agentId, nowMs } = options ?? {};
+  const { cfg, agentId } = options ?? {};
   const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-  if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
+  if (!configuredSections?.length) {
     return null;
   }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
@@ -108,7 +104,7 @@ export async function readPostCompactionContext(
       return null;
     }
 
-    const resolvedNowMs = nowMs ?? Date.now();
+    const resolvedNowMs = Date.now();
     const timezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone);
     const dateStamp = formatDateStamp(resolvedNowMs, timezone);
     const maxContextChars =
@@ -198,7 +194,7 @@ export async function appendPostCompactionRefreshPrompt(params: {
     return;
   }
 
-  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
+  const existingPrompt = params.followupRun.run.extraSystemPrompt;
   if (existingPrompt?.includes(refreshPrompt)) {
     return;
   }

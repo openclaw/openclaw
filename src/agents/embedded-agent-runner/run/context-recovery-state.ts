@@ -1,4 +1,4 @@
-import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
 import {
   restoreEmbeddedRunTimeoutAbandonment,
   type EmbeddedRunTimeoutRecoveryMarker,
@@ -19,6 +19,7 @@ export function createEmbeddedRunContextRecoveryState() {
     overflowCompactionAttempts: 0,
     timeoutCompactionAttempts: 0,
     toolResultTruncationAttempted: false,
+    itemConflictRecoveryAttempted: false,
     observeContextAccounting(event: EmbeddedContextAccountingEvent) {
       // Producer order, not terminal usage copies, determines the current context.
       const tokens = event.kind === "compaction" ? event.tokensAfter : event.contextTokens;
@@ -26,7 +27,7 @@ export function createEmbeddedRunContextRecoveryState() {
       if (event.kind === "compaction") {
         state.autoCompactionCount += 1;
         state.lastCompactionTokensAfter = tokens;
-      } else if (event.successful) {
+      } else if (event.kind === "model" && event.successful) {
         state.overflowCompactionAttempts = 0;
         state.toolResultTruncationAttempted = false;
       }
@@ -38,6 +39,35 @@ export function createEmbeddedRunContextRecoveryState() {
       const marker = timeoutRecoveryMarker;
       timeoutRecoveryMarker = undefined;
       return marker ? restoreEmbeddedRunTimeoutAbandonment(marker) : false;
+    },
+    // Retained accounting callbacks must not share the loop's attempt/result closure.
+    beginAttempt(
+      signal: AbortSignal | undefined,
+      onBudget: ((budget: CompactionRequestBudget | undefined) => void) | undefined,
+    ) {
+      let acceptsRequestBudget = true;
+      const accounting = {
+        recordedCompactionCount: 0,
+        onCompactionRequestBudget: (budget: CompactionRequestBudget | undefined) => {
+          if (!acceptsRequestBudget || signal?.aborted) {
+            return;
+          }
+          state.compactionRequestBudget = budget;
+          onBudget?.(budget);
+        },
+        onContextAccountingEvent: (event: EmbeddedContextAccountingEvent) => {
+          if (event.kind === "compaction") {
+            accounting.recordedCompactionCount += 1;
+          }
+          state.observeContextAccounting(event);
+        },
+        close() {
+          acceptsRequestBudget = false;
+        },
+      };
+      state.compactionRequestBudget = undefined;
+      onBudget?.(undefined);
+      return accounting;
     },
   };
   return state;

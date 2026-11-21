@@ -1,15 +1,12 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
 
-export type WorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
+export type WorkspaceResultConflict = NonNullable<
+  ReturnType<typeof normalizeWorkspaceResultConflict>
+>;
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
   return (
@@ -30,7 +27,7 @@ export function workspaceConflictPathForDisplay(entryPath: string): string {
   }).join("");
 }
 
-function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {
+function normalizeWorkspaceResultConflict(value: unknown) {
   const record = asNullableRecord(value);
   if (!record || !Array.isArray(record.paths) || record.paths.length === 0) {
     return undefined;
@@ -86,36 +83,5 @@ export function visibleWorkspaceConflictPaths(conflict: WorkspaceResultConflict)
   return {
     paths,
     remaining: Math.max(0, workspaceConflictCount(conflict) - paths.length),
-  };
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
-
-export function workspaceConflictGitCommands(
-  conflict: WorkspaceResultConflict,
-  requestedPath?: string,
-):
-  | {
-      inspect: string;
-      takeCloud: string;
-    }
-  | undefined {
-  const entryPath =
-    requestedPath === undefined
-      ? conflict.paths.find((candidate) => !hasTerminalControl(candidate))
-      : conflict.paths.includes(requestedPath) && !hasTerminalControl(requestedPath)
-        ? requestedPath
-        : undefined;
-  if (!entryPath) {
-    return undefined;
-  }
-  const stagedPath = shellQuote(`${conflict.stagedResultRef}:${entryPath}`);
-  const stagedRef = shellQuote(conflict.stagedResultRef);
-  const literalPathspec = shellQuote(`:(top,literal)${entryPath}`);
-  return {
-    inspect: `git show ${stagedPath}`,
-    takeCloud: `git checkout ${stagedRef} -- ${literalPathspec}`,
   };
 }

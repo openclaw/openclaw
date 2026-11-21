@@ -12,7 +12,6 @@ type IteratorHandler<T> = (
   value?: unknown,
 ) => IteratorResult<T, unknown> | Promise<IteratorResult<T, unknown>>;
 
-/** Wraps an async iterator with custom next/return/throw behavior. */
 export function createStreamIteratorWrapper<T>(params: {
   iterator: StreamIterator<T>;
   next: (iterator: StreamIterator<T>) => Promise<IteratorResult<T, unknown>>;

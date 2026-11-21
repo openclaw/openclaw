@@ -1,5 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -17,8 +17,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
-import { raceWithTimeout } from "../../../packages/retry/src/index.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { normalizeHostname } from "./hostname.js";
 import { hasTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
 import {
@@ -190,11 +189,8 @@ export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
     : undefined;
 }
 
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "metadata.google.internal",
-]);
+const METADATA_HOSTNAME = "metadata.google.internal";
+const BLOCKED_HOSTNAMES = new Set(["localhost", "localhost.localdomain", METADATA_HOSTNAME]);
 
 function normalizeHostnameAllowlist(values?: string[]): string[] {
   return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
@@ -297,6 +293,12 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return true;
   }
   return looksLikeUnsupportedIpv4Literal(normalized);
+}
+
+/** True for the cloud-metadata hostname and metadata or link-local IP literals in any encoding. */
+export function isCloudMetadataHostnameOrIp(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === METADATA_HOSTNAME || isLinkLocalIpAddress(host) || isCloudMetadataIpAddress(host);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
@@ -568,9 +570,13 @@ export async function resolvePinnedHostnameWithPolicy(
     params.policy,
   );
 
-  const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
+  const lookupFn: LookupFn = params.lookupFn ?? dns.lookup;
   const results = normalizeLookupResults(
-    await runAbortablePreflight(() => lookupFn(normalized, { all: true }), params.signal),
+    await racePromiseWithAbortSignal(
+      () => lookupFn(normalized, { all: true }),
+      params.signal,
+      (signal) => signal.reason,
+    ),
   );
   params.signal?.throwIfAborted();
   if (results.length === 0) {
@@ -597,30 +603,13 @@ export async function resolvePinnedHostnameWithPolicy(
   };
 }
 
-async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await run();
-  }
-  signal.throwIfAborted();
-  const aborted = createDeferredCore<never>();
-  const onAbort = () => aborted.reject(signal.reason);
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    // Node lookup cannot cancel getaddrinfo. Stop waiting, observe late failures,
-    // and remove the listener whether DNS or cancellation settles first.
-    return await Promise.race([aborted.promise, run()]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {
   return resolveHostnamePolicyChecks(hostname, policy).normalized;
 }
 
 export async function resolvePinnedHostname(
   hostname: string,
-  lookupFn: LookupFn = dnsLookup,
+  lookupFn: LookupFn = dns.lookup,
 ): Promise<PinnedHostname> {
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }

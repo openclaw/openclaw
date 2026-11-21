@@ -1,4 +1,3 @@
-// Release preflight tests keep generated-artifact checks fail-closed for operators.
 import { spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -47,16 +46,13 @@ const FIX_COMMANDS = [
 ];
 
 const tempDirs = new Set<string>();
+const plistPath = (root: string) => join(root, "apps/macos/Sources/OpenClaw/Resources/Info.plist");
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-function makeFakePnpm(waitFor?: { command: string; endpoint: string }): {
-  binDir: string;
-  eventsPath: string;
-  logPath: string;
-} {
+function makeFakePnpm(waitFor?: { command: string; endpoint: string }) {
   const root = makeTempDir(tempDirs, "openclaw-release-preflight-");
   const binDir = join(root, "bin");
   const eventsPath = join(root, "pnpm-events.log");
@@ -92,14 +88,22 @@ process.exitCode = failures.has(command) ? 7 : 0;
     );
     chmodSync(binPath, 0o755);
   }
-  return { binDir, eventsPath, logPath };
+  return {
+    eventsPath,
+    logPath,
+    env: {
+      OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: logPath,
+      OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: eventsPath,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+    },
+  };
 }
 
 function runPreflight(
   args: string[],
   fakePnpm?: ReturnType<typeof makeFakePnpm>,
   extraEnv: NodeJS.ProcessEnv = {},
-  cwd = process.cwd(),
+  cwd = makeReleaseFixture(),
 ) {
   return spawnSync(testNodeExecPath, [SCRIPT, ...args], {
     cwd,
@@ -107,13 +111,7 @@ function runPreflight(
     env: {
       ...process.env,
       ...extraEnv,
-      ...(fakePnpm
-        ? {
-            OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
-            OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
-            PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
-          }
-        : {}),
+      ...fakePnpm?.env,
     },
   });
 }
@@ -126,14 +124,13 @@ function makeReleaseFixture(
   } = {},
 ): string {
   const root = makeTempDir(tempDirs, "openclaw-release-preflight-fixture-");
-  const plistDir = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources");
-  mkdirSync(plistDir, { recursive: true });
+  mkdirSync(dirname(plistPath(root)), { recursive: true });
   writeFileSync(
     join(root, "package.json"),
     `${JSON.stringify({ version: params.packageVersion ?? "2026.7.1-beta.3" }, null, 2)}\n`,
   );
   writeFileSync(
-    join(plistDir, "Info.plist"),
+    plistPath(root),
     `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0">
 <dict>
@@ -255,15 +252,9 @@ describe("scripts/release-preflight.mjs", () => {
 
   it("serializes the root package writer before generated-artifact readers", () => {
     const fakePnpm = makeFakePnpm();
-    const root = makeReleaseFixture();
-    const result = runPreflight(
-      ["--fix", "--jobs", "8"],
-      fakePnpm,
-      {
-        OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS: "40",
-      },
-      root,
-    );
+    const result = runPreflight(["--fix", "--jobs", "8"], fakePnpm, {
+      OPENCLAW_RELEASE_PREFLIGHT_DELAY_MS: "40",
+    });
     const events = readPnpmLog(fakePnpm.eventsPath);
 
     expect(result.status).toBe(0);
@@ -296,12 +287,7 @@ describe("scripts/release-preflight.mjs", () => {
       const fakePnpm = makeFakePnpm({ command, endpoint: receipts.endpoint });
       const child = spawn(testNodeExecPath, [SCRIPT, ...args], {
         cwd: makeReleaseFixture(),
-        env: {
-          ...process.env,
-          OPENCLAW_RELEASE_PREFLIGHT_PNPM_LOG: fakePnpm.logPath,
-          OPENCLAW_RELEASE_PREFLIGHT_PNPM_EVENTS: fakePnpm.eventsPath,
-          PATH: `${fakePnpm.binDir}${delimiter}${process.env.PATH ?? ""}`,
-        },
+        env: { ...process.env, ...fakePnpm.env },
         stdio: ["ignore", "ignore", "pipe"],
       });
       const stderr = createBoundedChildOutput();
@@ -345,15 +331,9 @@ describe("scripts/release-preflight.mjs", () => {
 
   it("skips failed generator descendants while completing unrelated generators", () => {
     const fakePnpm = makeFakePnpm();
-    const result = runPreflight(
-      ["--fix", "--jobs", "4"],
-      fakePnpm,
-      {
-        OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS:
-          "node --import tsx scripts/sync-plugin-versions.ts",
-      },
-      makeReleaseFixture(),
-    );
+    const result = runPreflight(["--fix", "--jobs", "4"], fakePnpm, {
+      OPENCLAW_RELEASE_PREFLIGHT_FAIL_COMMANDS: "node --import tsx scripts/sync-plugin-versions.ts",
+    });
     expect(result.status).toBe(1);
     const commands = readPnpmLog(fakePnpm.logPath);
     expect(commands).toContain("pnpm config:docs:gen");
@@ -514,10 +494,9 @@ process.once("exit", () => {
   it("fails closed when required macOS plist values are missing", () => {
     const fakePnpm = makeFakePnpm();
     const root = makeReleaseFixture();
-    const plistPath = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources", "Info.plist");
     writeFileSync(
-      plistPath,
-      readFileSync(plistPath, "utf8").replace(
+      plistPath(root),
+      readFileSync(plistPath(root), "utf8").replace(
         /\s*<key>CFBundleVersion<\/key>\s*<string>[^<]*<\/string>/u,
         "",
       ),
@@ -536,12 +515,11 @@ process.once("exit", () => {
       buildVersion: "2026061000",
       shortVersion: "2026.6.10",
     });
-    const plistPath = join(root, "apps", "macos", "Sources", "OpenClaw", "Resources", "Info.plist");
-    const before = readFileSync(plistPath, "utf8");
+    const before = readFileSync(plistPath(root), "utf8");
     const result = runPreflight(["--fix"], fakePnpm, {}, root);
 
     expect(result.status).toBe(1);
-    expect(readFileSync(plistPath, "utf8")).toBe(before);
+    expect(readFileSync(plistPath(root), "utf8")).toBe(before);
     expect(readPnpmLog(fakePnpm.logPath).toSorted()).toEqual(
       [...FIX_COMMANDS, ...CHECK_COMMANDS].toSorted(),
     );

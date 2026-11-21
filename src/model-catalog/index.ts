@@ -2,10 +2,7 @@
 // normalized planning APIs instead of reaching into catalog internals.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
-import {
-  planManifestModelCatalogRows,
-  type ManifestModelCatalogRowSelection,
-} from "./manifest-planner.js";
+import { planManifestModelCatalogRows } from "./manifest-planner.js";
 import { getRemoteModelCatalogProviderOverlay } from "./remote-overlay.js";
 export { planManifestModelCatalogSuppressions } from "./manifest-planner.js";
 
@@ -15,7 +12,7 @@ export function planEffectiveModelCatalogRows(params: {
   providerFilter?: string;
   providerFilters?: readonly string[];
   mergeKeyFilter?: ReadonlySet<string>;
-  selection?: ManifestModelCatalogRowSelection;
+  selection?: "static";
 }) {
   return planManifestModelCatalogRows({
     registry: params.registry,

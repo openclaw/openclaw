@@ -25,13 +25,6 @@ import {
   isAutoManagedIMessageCliPath,
 } from "./setup-core.js";
 
-// Re-export for backwards compatibility
-export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
-export {
-  getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
-} from "./private-api-status.js";
-
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
   privateApi?: IMessagePrivateApiStatus;
@@ -149,6 +142,22 @@ export async function probeIMessagePrivateApi(
       return cached;
     }
   }
+  const unavailable = (error: string) => {
+    const status: NonNullable<IMessageProbe["privateApi"]> = {
+      available: false,
+      v2Ready: false,
+      selectors: {},
+      rpcMethods: [],
+      cliCapabilities: {
+        sendRichSupportsAttachment: false,
+        pollSendSupportsNoComment: false,
+      },
+      error,
+    };
+    cacheIMessagePrivateApiStatus(key, status);
+    return status;
+  };
+
   try {
     const result = await runCommandWithTimeout([expandIMessageUserPath(key), "status", "--json"], {
       timeoutMs,
@@ -160,19 +169,9 @@ export async function probeIMessagePrivateApi(
       normalized.includes("unknown subcommand") &&
       normalized.includes("status")
     ) {
-      const status: NonNullable<IMessageProbe["privateApi"]> = {
-        available: false,
-        v2Ready: false,
-        selectors: {},
-        rpcMethods: [],
-        cliCapabilities: {
-          sendRichSupportsAttachment: false,
-          pollSendSupportsNoComment: false,
-        },
-        error: `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
-      };
-      cacheIMessagePrivateApiStatus(key, status);
-      return status;
+      return unavailable(
+        `imsg CLI does not support the "status" subcommand. Update imsg on the Messages Mac: ${IMESSAGE_UPDATE_COMMAND}`,
+      );
     }
     const lines = normalizeStringEntries(result.stdout.split(/\r?\n/));
     let payload: Record<string, unknown> | null = null;
@@ -240,19 +239,7 @@ export async function probeIMessagePrivateApi(
     cacheIMessagePrivateApiStatus(key, status);
     return status;
   } catch (err) {
-    const status: NonNullable<IMessageProbe["privateApi"]> = {
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-      cliCapabilities: {
-        sendRichSupportsAttachment: false,
-        pollSendSupportsNoComment: false,
-      },
-      error: String(err),
-    };
-    cacheIMessagePrivateApiStatus(key, status);
-    return status;
+    return unavailable(String(err));
   }
 }
 

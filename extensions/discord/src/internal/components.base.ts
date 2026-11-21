@@ -46,15 +46,13 @@ export abstract class BaseComponent {
   abstract serialize(): unknown;
 }
 
-export abstract class BaseMessageInteractiveComponent extends BaseComponent {
-  override readonly isV2 = false;
-  defer: boolean | ConditionalComponentOption = false;
-  ephemeral: boolean | ConditionalComponentOption = false;
+export abstract class BaseMessageInteractiveComponent {
+  abstract readonly type: number;
+  declare defer?: boolean | ConditionalComponentOption;
+  declare ephemeral?: boolean | ConditionalComponentOption;
   abstract customId: string;
-  customIdParser = parseCustomId;
-  run(_interaction: BaseComponentInteraction, _data: ComponentData): unknown {
-    return undefined;
-  }
+  declare customIdParser?: typeof parseCustomId;
+  abstract run(interaction: BaseComponentInteraction, data: ComponentData): unknown;
 }
 
 export abstract class BaseModalComponent extends BaseComponent {

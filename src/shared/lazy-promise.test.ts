@@ -1,79 +1,53 @@
-// Lazy promise tests cover single-flight loading and error reuse behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  createLazyImportLoader,
-  createLazyPromise,
-  createLazyPromiseLoader,
-  getOrCreatePromise,
-} from "./lazy-promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createLazyPromise, createLazyPromiseLoader, getOrCreatePromise } from "./lazy-promise.js";
 
-describe("getOrCreatePromise", () => {
+function cachedLoad(options: Parameters<typeof getOrCreatePromise<string, string>>[3]) {
+  const cache = new Map<string, Promise<string>>();
+  const load = (key: string, create: () => Promise<string>) =>
+    getOrCreatePromise(cache, key, create, options);
+  return { cache, load };
+}
+
+const recoveringLoad = () =>
+  vi
+    .fn<() => Promise<string>>()
+    .mockRejectedValueOnce(new Error("transient"))
+    .mockResolvedValue("recovered");
+
+describe("lazy promises", () => {
   it("evicts only rejected loads when rejection caching is disabled", async () => {
-    const cache = new Map<string, Promise<string>>();
-    const create = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(new Error("transient"))
-      .mockResolvedValue("recovered");
+    const { load } = cachedLoad({ cacheRejections: false });
+    const create = recoveringLoad();
 
-    await expect(
-      getOrCreatePromise(cache, "a", create, { cacheRejections: false }),
-    ).rejects.toThrow("transient");
-    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
-      "recovered",
-    );
-    await expect(getOrCreatePromise(cache, "a", create, { cacheRejections: false })).resolves.toBe(
-      "recovered",
-    );
+    await expect(load("a", create)).rejects.toThrow("transient");
+    await expect(load("a", create)).resolves.toBe("recovered");
+    await expect(load("a", create)).resolves.toBe("recovered");
     expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("evicts settled in-flight work without deleting a replacement", async () => {
-    const cache = new Map<string, Promise<string>>();
-    let resolveFirst!: (value: string) => void;
-    const first = getOrCreatePromise(
-      cache,
-      "a",
-      () =>
-        new Promise<string>((resolve) => {
-          resolveFirst = resolve;
-        }),
-      { evictOnSettled: true },
-    );
-    const replacement = Promise.resolve("replacement");
-    cache.set("a", replacement);
-
-    resolveFirst("first");
-    await expect(first).resolves.toBe("first");
-    expect(cache.get("a")).toBe(replacement);
-
-    await expect(
-      getOrCreatePromise(cache, "b", async () => "settled", { evictOnSettled: true }),
-    ).resolves.toBe("settled");
-    expect(cache.has("b")).toBe(false);
-  });
-
-  it("does not let a stale rejection delete a replacement", async () => {
-    const cache = new Map<string, Promise<string>>();
-    let rejectFirst!: (reason: Error) => void;
-    const first = getOrCreatePromise(
-      cache,
-      "a",
-      () =>
-        new Promise<string>((_resolve, reject) => {
-          rejectFirst = reject;
-        }),
-      { cacheRejections: false },
-    );
-    const replacement = Promise.resolve("replacement");
-    cache.set("a", replacement);
-
-    rejectFirst(new Error("stale"));
-    await expect(first).rejects.toThrow("stale");
-    expect(cache.get("a")).toBe(replacement);
-  });
-});
-
-describe("createLazyPromise", () => {
+  it.each([true, false])(
+    "preserves replacements after stale settlement (resolve=%s)",
+    async (resolve) => {
+      const { cache, load } = cachedLoad(
+        resolve ? { evictOnSettled: true } : { cacheRejections: false },
+      );
+      const deferred = createDeferred<string>();
+      const first = load("a", () => deferred.promise);
+      const replacement = Promise.resolve("replacement");
+      cache.set("a", replacement);
+      if (resolve) {
+        deferred.resolve("first");
+        await expect(first).resolves.toBe("first");
+        await expect(load("b", async () => "settled")).resolves.toBe("settled");
+        expect(cache.has("b")).toBe(false);
+      } else {
+        deferred.reject(new Error("stale"));
+        await expect(first).rejects.toThrow("stale");
+      }
+      expect(cache.get("a")).toBe(replacement);
+    },
+  );
   it("returns a reusable single-flight loader", async () => {
     let calls = 0;
     const load = createLazyPromise(async () => `loaded-${++calls}`);
@@ -82,22 +56,13 @@ describe("createLazyPromise", () => {
     await expect(load()).resolves.toBe("loaded-1");
     expect(calls).toBe(1);
   });
-});
-
-describe("createLazyPromiseLoader", () => {
   it("evicts rejected loads by default so retries can recover", async () => {
-    let calls = 0;
-    const loader = createLazyPromiseLoader(async () => {
-      calls += 1;
-      if (calls === 1) {
-        throw new Error("transient");
-      }
-      return "recovered";
-    });
+    const create = recoveringLoad();
+    const loader = createLazyPromiseLoader(create);
 
     await expect(loader.load()).rejects.toThrow("transient");
     await expect(loader.load()).resolves.toBe("recovered");
-    expect(calls).toBe(2);
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it("clears cached values", async () => {
@@ -110,13 +75,5 @@ describe("createLazyPromiseLoader", () => {
     loader.clear();
     expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-2");
-  });
-});
-
-describe("createLazyImportLoader", () => {
-  it("wraps import-shaped loaders", async () => {
-    const loader = createLazyImportLoader(async () => ({ value: "module" }));
-
-    await expect(loader.load()).resolves.toEqual({ value: "module" });
   });
 });

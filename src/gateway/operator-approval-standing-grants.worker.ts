@@ -6,10 +6,12 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
+import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
+import { resolveCronJobGrantDefinitionRevision } from "../cron/store/job-config-codec.js";
+import { importLegacyCronMemberSources } from "../cron/store/member-source-role-import.js";
 import {
   loadedCronStoreFromRows,
   resolveCronJobGrantDefinitionGenerationFloor,
-  resolveCronJobGrantDefinitionRevision,
 } from "../cron/store/row-codec.js";
 import { readCronRunReceiptCurrentFactsInDatabase } from "../cron/store/run-receipt-read.js";
 import type { CronStoredJob } from "../cron/types.js";
@@ -18,11 +20,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -31,6 +34,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
+import type { LegacyOpenClawIdMemberRoleImport } from "./openclaw-id/member-source-role-import.js";
 import type {
   CronStandingGrantMintSpec,
   CronStandingGrantLookupInput,
@@ -76,6 +80,10 @@ const installStandingGrantSchema = createSqliteSchemaEnsurer(() => STANDING_GRAN
 });
 
 function ensureStandingGrantSchema(db: EngineConnection): void {
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, STANDING_GRANT_TABLE);
+    return;
+  }
   const ddl = getAdmittedSqliteSchemaFacts(db)?.tableSql.get(STANDING_GRANT_TABLE);
   // This retired, unshipped shape is recognized from admission's existing DDL facts.
   if (ddl && /\bexpires_at_ms\s+INTEGER\s+NOT\s+NULL\b/iu.test(ddl)) {
@@ -94,6 +102,7 @@ export function migrateCronInferenceStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
+  verifiedPreviousAuthorizationId?: string,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -103,13 +112,60 @@ export function migrateCronInferenceStandingGrantReferences(
   }
   maintenance.assertAdmission();
   const { inferenceBinding, ...unchanged } = next;
+  const source = previous.operatorSource;
   if (
-    previous.inferenceBinding !== undefined ||
+    source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
+    isDeepStrictEqual(next.operatorSource, {
+      ...source,
+      executionRevision: resolveCronOperatorExecutionRevision(next),
+    })
+  ) {
+    // Doctor may update only the derivative revision, never the captured authority.
+    unchanged.operatorSource = source;
+  }
+  if (
     !inferenceBinding ||
-    !isDeepStrictEqual(previous, unchanged)
+    !isDeepStrictEqual(
+      previous,
+      verifiedPreviousAuthorizationId === undefined
+        ? unchanged
+        : {
+            ...unchanged,
+            inferenceBinding: {
+              ...inferenceBinding,
+              authorizationId: verifiedPreviousAuthorizationId,
+            },
+          },
+    )
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
+  migrateCronStandingGrantReferences(db, previous, next, generation);
+}
+
+/** A live import may change only the already captured member's explicit role representation. */
+export function migrateCronMemberSourceRoleStandingGrantReferences(
+  db: EngineConnection,
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  generation: number,
+  input: LegacyOpenClawIdMemberRoleImport,
+): void {
+  if (
+    previous === next ||
+    !isDeepStrictEqual(next, importLegacyCronMemberSources(previous, input))
+  ) {
+    throw new Error("Cron member role import must preserve the entire approved job definition.");
+  }
+  migrateCronStandingGrantReferences(db, previous, next, generation);
+}
+
+function migrateCronStandingGrantReferences(
+  db: EngineConnection,
+  previous: CronStoredJob,
+  next: CronStoredJob,
+  generation: number,
+): void {
   if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
     return;
   }

@@ -62,7 +62,7 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
       ([, profile]) => normalizeProviderId(profile.provider) === provider,
     ),
     credentialOrder: forProvider(authStore.order),
-    // The configured view admits exactly these refs (primary, fallbacks, model maps, utility).
+    // Primary, fallback, and utility references share the visibility owner.
     configuredRefs: resolveAdditionalConfiguredModelRefs({
       cfg: config,
       agentId: source.agentId,
@@ -78,7 +78,9 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
     ],
     plugins: {
       enabled: config.plugins?.enabled,
-      allow: config.plugins?.allow?.filter((id) => pluginIds.includes(id)),
+      allow: config.plugins?.allow?.length
+        ? config.plugins.allow.filter((id) => pluginIds.includes(id))
+        : undefined,
       deny: config.plugins?.deny?.filter((id) => pluginIds.includes(id)),
       entries: pluginIds.map((id) => config.plugins?.entries?.[id]),
     },
@@ -162,7 +164,6 @@ export function createChatMetadataModelList(params: {
         preparationAuthority: authority,
         source: {
           kind: "published",
-          getConfig: params.context.getRuntimeConfig,
           owner: {
             ...owner,
             catalogOwner,
@@ -204,6 +205,7 @@ export function createChatMetadataModelList(params: {
               sessionKey: readScope.sessionKey,
               sessionEntry: entry && {
                 modelOverride: entry.modelOverride,
+                modelOverrideSource: entry.modelOverrideSource,
                 providerOverride: entry.providerOverride,
                 modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
                 modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,

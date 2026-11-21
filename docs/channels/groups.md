@@ -107,6 +107,8 @@ bindings retain their own route activation rules.
 These rules govern new message admissions. An already admitted turn keeps its
 captured policy; changing mention rules or sender allowlists does not suppress
 its reply.
+If a queued request is refused because the requester no longer has channel access,
+the refusal is silent on the channel but recorded in the session for the owner.
 
 The transport must deliver unmentioned messages before OpenClaw can apply the
 policy:
@@ -135,7 +137,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Accepted group/channel requests normally receive an answer, but an explicit token-only `NO_REPLY` can end them silently in either delivery mode. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. `agents.defaults.silentReply.group: "allow"` or a `surfaces.<id>.silentReply.group` override permits optional handling of unaddressed requests; it is not needed to honor explicit silence. Empty output still needs recovery. See [Silent replies](/concepts/messages#silent-replies).
+Accepted group/channel requests normally receive an answer, but an explicit token-only `NO_REPLY` can end them silently in either delivery mode. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. `agents.defaults.silentReply.group: "allow"` or a `surfaces.<id>.silentReply.group` override permits optional handling of unaddressed requests; it is not needed to honor explicit silence. Empty output still needs recovery. The legacy `HEARTBEAT_OK` marker does not request silence; update workspace instructions that use it to stay quiet to say `NO_REPLY` instead. See [Silent replies](/concepts/messages#silent-replies).
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 

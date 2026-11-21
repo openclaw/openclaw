@@ -3,6 +3,7 @@ set -euo pipefail
 
 # Called after the canonical source build, before the app is signed. The npm
 # artifact is only an installation source; trim development files before sealing.
+# Type-only metadata belongs to the public SDK artifact.
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
@@ -20,7 +21,7 @@ STAGE="$(cd "$(dirname "$DESTINATION")" && mktemp -d "$PWD/.openclaw-mac-runtime
 trap 'rm -rf "$STAGE" "$SCRATCH"' EXIT
 mkdir -p "$SCRATCH/home" "$SCRATCH/package"
 node "$ROOT_DIR/scripts/lib/desktop-runtime-plugins.mjs" plan "$ROOT_DIR" > "$SCRATCH/plugins.json"
-PACKAGE_ARGS=(--skip-build --pnpm-pack --allow-unreleased-changelog --output-dir "$SCRATCH/package" --output-name openclaw.tgz)
+PACKAGE_ARGS=(--skip-build --pnpm-pack --runtime-only --allow-unreleased-changelog --output-dir "$SCRATCH/package" --output-name openclaw.tgz)
 while IFS= read -r plugin; do
   [[ -z "$plugin" ]] || PACKAGE_ARGS+=(--bundle-plugin "$plugin")
 done < <(node -e 'for (const id of require(process.argv[1]).pluginIds) console.log(id)' "$SCRATCH/plugins.json")
@@ -70,10 +71,20 @@ env -i HOME="$SCRATCH/home" PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
 for arch in "$@"; do
 node "$ROOT_DIR/scripts/lib/desktop-runtime-plugins.mjs" stamp \
   "$STAGE/installed-$arch/lib/node_modules/openclaw" "$SCRATCH/plugins.json"
-node - "$STAGE/installed-$arch/lib/node_modules/openclaw" "$arch" <<'JS'
+node - "$STAGE/installed-$arch/lib/node_modules/openclaw" "$arch" "$SCRATCH/plugins.json" <<'JS'
 const fs = require("node:fs");
 const path = require("node:path");
-const archs = process.argv[3].split(" ").map(arch => arch === "x86_64" ? "x64" : arch);
+const [root, arch, planFile] = process.argv.slice(2);
+const cpu = arch === "x86_64" ? "x64" : arch;
+const omittedDirectories = new Set();
+if (JSON.parse(fs.readFileSync(planFile, "utf8")).pluginIds.includes("codex")) {
+  // Only the Codex TUI uses the voice helper, whose published Mach-O carries
+  // Bazel build-tree rpaths. Match only the two npm layouts in this private install.
+  const target = arch === "x86_64" ? "x86_64-apple-darwin" : "aarch64-apple-darwin";
+  const voice = `@openai/codex-darwin-${cpu}/vendor/${target}/codex-resources/voice`;
+  omittedDirectories.add(path.join(root, "node_modules", voice));
+  omittedDirectories.add(path.join(root, "node_modules/@openai/codex/node_modules", voice));
+}
 function supports(values, target) {
   return !Array.isArray(values) || (!values.includes(`!${target}`) &&
     (!values.some(value => !value.startsWith("!")) || values.includes(target) || values.includes("any")));
@@ -83,7 +94,7 @@ function visit(dir, packageDirectory = false) {
     const manifest = path.join(dir, "package.json");
     if (fs.existsSync(manifest)) {
       const pkg = JSON.parse(fs.readFileSync(manifest, "utf8"));
-      if (!supports(pkg.os, "darwin") || !archs.some(arch => supports(pkg.cpu, arch))) {
+      if (!supports(pkg.os, "darwin") || !supports(pkg.cpu, cpu)) {
         fs.rmSync(dir, { recursive: true }); return;
       }
       if (pkg.name === "npm") {
@@ -99,6 +110,7 @@ function visit(dir, packageDirectory = false) {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const child = path.join(dir, entry.name);
+    if (omittedDirectories.has(child)) { fs.rmSync(child, { recursive: true }); continue; }
     // Executables are invoked explicitly with Bun. Do not retain npm's Node
     // shebang launchers, especially links to removed platform packages.
     const inModules = path.basename(dir) === "node_modules";
@@ -112,7 +124,7 @@ function visit(dir, packageDirectory = false) {
     }
   }
 }
-visit(process.argv[2]);
+visit(root);
 JS
   node "$ROOT_DIR/scripts/lib/desktop-runtime-prune.mjs" "$STAGE/installed-$arch/lib/node_modules"
 

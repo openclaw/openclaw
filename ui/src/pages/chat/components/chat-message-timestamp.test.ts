@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { extractGroupMeta } from "./chat-message-timestamp.ts";
+import { extractGroupMeta } from "./chat-message-timestamp-view.tsx";
 import { createAssistantMessage, createMessageGroup } from "./chat-message.test-support.ts";
 
 // One Claude CLI turn of two model calls: counters sum both, the marker keeps the last call.

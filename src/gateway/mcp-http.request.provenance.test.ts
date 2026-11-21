@@ -49,6 +49,7 @@ describe("MCP current-conversation provenance", () => {
         {
           senderIsOwner: false,
           boundClientGrant: {
+            toolPolicyConfig: {},
             context: {
               sessionKey: "agent:main:discord:channel:bound",
               senderIsOwner: false,

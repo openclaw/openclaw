@@ -18,9 +18,12 @@ vi.mock("@openclaw/proc-safe/reaper", async (importOriginal) => ({
   inspectChildWaitState: (pid: number) => ({ kind: "exited", pid }),
   reapChild: nativeReap,
 }));
-vi.mock("node:fs", () => ({
-  readdirSync: () => ["400", "401", "402"],
-  readFileSync: (path: string) => {
+vi.mock("node:fs/promises", () => ({
+  readdir: () => ["1"],
+  readFile: (path: string) => {
+    if (path.endsWith("/children")) {
+      return "400 401 402";
+    }
     const pid = Number(path.split("/")[2]);
     const group = pid === 402 ? 900 : 400;
     return `${pid} (fixture) Z ${process.pid} ${group} 0 0 0`;
@@ -28,21 +31,24 @@ vi.mock("node:fs", () => ({
 }));
 
 const originalPlatform = process.platform;
-afterEach(() => {
+afterEach(async () => {
+  await vi.advanceTimersByTimeAsync(31_000);
+  vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(process, "platform", { value: originalPlatform });
 });
 
-it("tree termination reaps adopted zombies after root exit without consuming other children", () => {
+it("tree termination reaps adopted zombies after root exit without consuming other children", async () => {
   Object.defineProperty(process, "platform", { value: "linux" });
   vi.useFakeTimers();
+  vi.spyOn(process, "kill").mockReturnValue(true);
   const child = new ChildProcess();
   Object.defineProperty(child, "pid", { value: 400 });
   signalChildProcessTree(child, "SIGTERM");
-  vi.advanceTimersByTime(100);
+  await vi.advanceTimersByTimeAsync(100);
   expect(nativeReap).not.toHaveBeenCalled();
 
   child.emit("exit", null, "SIGTERM");
-  vi.advanceTimersByTime(25);
+  await vi.advanceTimersByTimeAsync(25);
   expect(nativeReap.mock.calls).toEqual([[401]]);
 });

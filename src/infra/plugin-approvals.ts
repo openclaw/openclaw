@@ -1,6 +1,6 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
-import type { ExecApprovalDecision } from "./exec-approvals-core.js";
+import { EXEC_APPROVAL_DECISIONS, type ExecApprovalDecision } from "./exec-approvals-core.js";
 
 type PluginApprovalActionView = {
   kind?: "command" | "decision";
@@ -83,11 +83,6 @@ export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
 const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
 const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
-const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
-  "allow-once",
-  "allow-always",
-  "deny",
-] as const satisfies readonly ExecApprovalDecision[];
 
 /** Caps reviewer-only plugin detail by Unicode code point without splitting surrogate pairs. */
 export function truncatePluginApprovalDetail(value: string): string {
@@ -135,7 +130,7 @@ export function resolvePluginApprovalRequestAllowedDecisions(params?: {
       }
     }
   }
-  return explicit.length > 0 ? explicit : DEFAULT_PLUGIN_APPROVAL_DECISIONS;
+  return explicit.length > 0 ? explicit : EXEC_APPROVAL_DECISIONS;
 }
 
 export function buildPluginApprovalRequestMessage(

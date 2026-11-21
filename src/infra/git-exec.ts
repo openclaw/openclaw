@@ -1,17 +1,30 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  prepareSandboxStateOwnerPath,
+  type SandboxStateOwnerPath,
+} from "../agents/sandbox/state-owner-path.js";
+import { validateWorkspaceFilesystemEvidence } from "../agents/workspace-state-guard.js";
+import {
+  prepareSessionSourceEffect,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createCommandError } from "../process/command-error.js";
-import type { SpawnResult } from "../process/exec-result.js";
-import { runCommandBuffersWithTimeout, type BufferSpawnResult } from "../process/exec-runner.js";
 import {
-  runCommandWithTimeout,
-  runCommandBuffered,
-  type BufferedCommandOptions,
-  type BufferedCommandResult,
-  type CommandOptions,
+  CommandProcessCleanupError,
+  readCommandProcessCleanup,
+  recordCommandProcessFailure,
+  type SpawnResult,
+} from "../process/exec-result.js";
+import type { BufferSpawnResult } from "../process/exec-runner.js";
+import type {
+  BufferedCommandOptions,
+  BufferedCommandResult,
+  CommandOptions,
 } from "../process/exec.js";
+import { idleIoPriorityArgv } from "../process/idle-io-priority.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -22,6 +35,7 @@ import {
   type GitOperationStarter,
 } from "./git-network-retry.js";
 import { startGitOperationTiming } from "./git-operation-timing.js";
+import { decodeWindowsOutputBuffer } from "./windows-encoding.js";
 
 export const GIT_TIMEOUT_MS = 120_000;
 
@@ -137,7 +151,7 @@ export function gitCommandArgv(cwd: string, args: string[], config: string[] = [
 function gitExecutionArgv(
   cwd: string,
   args: string[],
-  options: { killProcessTree?: boolean; lowerPriority?: boolean },
+  options: { killProcessTree?: boolean; lowerPriority?: boolean; idleIoPriority?: boolean },
 ): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
   const argv = gitCommandArgv(
@@ -145,13 +159,15 @@ function gitExecutionArgv(
     args,
     options.killProcessTree ? ["maintenance.autoDetach=false", "gc.autoDetach=false"] : [],
   );
-  return options.lowerPriority && process.platform !== "win32"
-    ? ["nice", "-n", "10", ...argv]
-    : argv;
+  return idleIoPriorityArgv(
+    options.lowerPriority && process.platform !== "win32" ? ["nice", "-n", "10", ...argv] : argv,
+    options.idleIoPriority,
+  );
 }
 
 export type GitCommandOptions = Pick<
   CommandOptions,
+  | "executionIntent"
   | "timeoutMs"
   | "noOutputTimeoutMs"
   | "baseEnv"
@@ -167,11 +183,15 @@ export type GitCommandOptions = Pick<
   refMutationDirectory?: string;
   /** Yield CPU to foreground Gateway work for content-heavy background reads. */
   lowerPriority?: boolean;
+  idleIoPriority?: boolean;
+  /** Drain a bounded file inventory's patches, keeping this many bytes plus an overflow marker per file. */
+  maxPatchBytes?: number;
   operation?: GitProcessOperation;
   /** Settle without the generic absolute deadline; an idle deadline may still apply. */
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
-  beforeRun?: () => void;
+  beforeRun?: SessionSourceAssertion;
+  stateOwnerPath?: SandboxStateOwnerPath;
   /** Admit each attempt inside the caller's asynchronous credential owner. */
   startRun?: GitOperationStarter;
 };
@@ -182,8 +202,15 @@ export async function executeGitCommand(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandResult> {
+  const { runCommandWithTimeout } = await import("../process/exec.js");
   return withGitProcessOperation(options.operation, () =>
-    executeGitCommandWithOutput(runCommandWithTimeout, cwd, args, options),
+    executeGitCommandWithOutput(
+      runCommandWithTimeout,
+      (result, stdout) => ({ ...result, stdout: decodeWindowsOutputBuffer({ buffer: stdout }) }),
+      cwd,
+      args,
+      options,
+    ),
   );
 }
 
@@ -193,13 +220,67 @@ export async function executeGitCommandBytes(
   args: string[],
   options: GitCommandOptions = {},
 ): Promise<GitCommandBytesResult> {
+  const { runCommandBuffersWithTimeout } = await import("../process/exec-runner.js");
   return withGitProcessOperation(options.operation, () =>
-    executeGitCommandWithOutput(runCommandBuffersWithTimeout, cwd, args, options),
+    executeGitCommandWithOutput(
+      runCommandBuffersWithTimeout,
+      (result, stdout) => ({ ...result, stdout }),
+      cwd,
+      args,
+      options,
+    ),
   );
+}
+
+function createGitPatchCapture(maxPatchBytes: number) {
+  const separator = Buffer.from("\ndiff --git ");
+  const chunks: Buffer[] = [];
+  let pending = Buffer.alloc(0);
+  let captured = 0;
+  let lastByte: number | undefined;
+  const append = (chunk: Buffer) => {
+    const kept = chunk.subarray(0, Math.max(0, maxPatchBytes + 1 - captured));
+    if (kept.length > 0) {
+      chunks.push(Buffer.from(kept));
+      captured += kept.length;
+      lastByte = kept[kept.length - 1];
+    }
+  };
+  const finishPatch = () => {
+    // Keep clipped frames separable while their extra byte makes truncation explicit.
+    if (captured > maxPatchBytes && lastByte !== 10) {
+      chunks.push(Buffer.from("\n"));
+    }
+    captured = 0;
+    lastByte = undefined;
+  };
+  return {
+    append(chunk: Buffer) {
+      const input = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
+      let start = 0;
+      let boundary = input.indexOf(separator);
+      while (boundary !== -1) {
+        append(input.subarray(start, boundary + 1));
+        finishPatch();
+        start = boundary + 1;
+        boundary = input.indexOf(separator, start);
+      }
+      // A header can straddle process chunks. Retain only its possible prefix.
+      const end = Math.max(start, input.length - separator.length + 1);
+      append(input.subarray(start, end));
+      pending = Buffer.from(input.subarray(end));
+    },
+    finish() {
+      append(pending);
+      finishPatch();
+      return Buffer.concat(chunks);
+    },
+  };
 }
 
 async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSpawnResult>(
   run: (argv: string[], options: CommandOptions) => Promise<Result>,
+  replaceStdout: (result: Result, stdout: Buffer) => Result,
   cwd: string,
   args: string[],
   options: GitCommandOptions,
@@ -207,11 +288,48 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const argv = gitExecutionArgv(cwd, args, options);
+  const runAttempt = (attemptOptions: CommandOptions) =>
+    withGitAttemptSource(options, async () => {
+      const capture =
+        options.maxPatchBytes === undefined
+          ? undefined
+          : createGitPatchCapture(options.maxPatchBytes);
+      let result = await run(
+        argv,
+        capture
+          ? {
+              ...attemptOptions,
+              outputCapture: "discard",
+              tolerateOutputError: { stderr: true },
+              onOutputChunk: (chunk, stream) => {
+                if (stream === "stdout") {
+                  capture.append(chunk);
+                }
+              },
+            }
+          : attemptOptions,
+      );
+      // Startup cancellation can return before its retained process cleanup. Join
+      // before releasing Git custody or copying away the non-enumerable owner.
+      const cleanup = readCommandProcessCleanup(result);
+      if (cleanup) {
+        result = {
+          ...result,
+          cleanup: await cleanup.catch((cause: unknown) => {
+            throw new CommandProcessCleanupError({ cause });
+          }),
+        };
+      }
+      return capture
+        ? replaceStdout({ ...result, stdoutTruncatedBytes: undefined }, capture.finish())
+        : result;
+    });
   if (options.waitForExit === true) {
     const start = () => {
       options.beforeRun?.();
-      return run(argv, {
+      return runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: undefined,
       });
@@ -223,8 +341,9 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     retryableGitNetworkOperation(args),
     { ...options, timeoutMs },
     (attemptTimeoutMs) =>
-      run(argv, {
+      runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: attemptTimeoutMs,
       }),
@@ -235,7 +354,9 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
   refMutationDirectory?: string;
   lowerPriority?: boolean;
-  beforeRun?: () => void;
+  idleIoPriority?: boolean;
+  beforeRun?: SessionSourceAssertion;
+  stateOwnerPath?: SandboxStateOwnerPath;
   startRun?: GitOperationStarter;
   operation?: GitProcessOperation;
 };
@@ -245,6 +366,7 @@ export async function executeGitCommandBuffered(
   args: string[],
   options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
+  const { runCommandBuffered } = await import("../process/exec.js");
   const env = gitReadOnlyEnvironment(args, options.env ?? {});
   const argv = gitExecutionArgv(cwd, args, {
     ...options,
@@ -254,9 +376,41 @@ export async function executeGitCommandBuffered(
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) => runCommandBuffered(argv, { ...options, env, timeoutMs }),
+      (timeoutMs) =>
+        withGitAttemptSource(options, () =>
+          runCommandBuffered(argv, {
+            ...options,
+            executionIntent: options.executionIntent ?? "gateway-internal",
+            env,
+            timeoutMs,
+          }),
+        ),
     ),
   );
+}
+
+async function withGitAttemptSource<T>(
+  options: Pick<GitCommandOptions, "beforeRun" | "stateOwnerPath">,
+  run: () => Promise<T>,
+): Promise<T> {
+  const source = options.beforeRun?.prepareSessionSourceEffect
+    ? await prepareSessionSourceEffect(options.beforeRun)
+    : undefined;
+  try {
+    for (const evidence of source?.workspaceEvidence ?? []) {
+      await validateWorkspaceFilesystemEvidence(evidence);
+    }
+    if (options.stateOwnerPath) {
+      await prepareSandboxStateOwnerPath(options.stateOwnerPath);
+    }
+    // The existing attempt boundary follows credential/retry waits and precedes broker dispatch.
+    if (source || options.stateOwnerPath) {
+      (source?.assertCurrent ?? options.beforeRun)?.();
+    }
+    return await run();
+  } finally {
+    await source?.release?.();
+  }
 }
 
 export function createGitCommandError(
@@ -292,12 +446,24 @@ export function requireGitCommandOutput(
   result: GitCommandResult,
   createError: (command: string, result: GitCommandResult) => Error = createGitCommandError,
 ): string {
+  let failed: GitCommandResult | undefined;
   if (result.termination !== "exit" || result.code !== 0) {
-    throw createError(command, result);
+    failed = result;
+  } else if (result.stdoutTruncatedBytes) {
+    // Required stdout is data; a clean exit cannot make truncated output complete.
+    failed = { ...result, code: null, outputLimitExceeded: true };
   }
-  // Required stdout is data, not a diagnostic tail; a clean exit cannot make it complete.
-  if (result.stdoutTruncatedBytes) {
-    throw createError(command, { ...result, code: null, outputLimitExceeded: true });
+  if (failed) {
+    // Required-output translation must preserve native settlement and cancellation,
+    // without retaining command output in the private lifecycle facts.
+    throw recordCommandProcessFailure(createError(command, failed), {
+      pid: result.pid,
+      code: result.code,
+      cleanup: result.cleanup,
+      termination: result.termination,
+      killIssuedByAbort: result.killIssuedByAbort,
+      outputLimitExceeded: result.outputLimitExceeded,
+    });
   }
   return result.stdout;
 }
@@ -306,4 +472,9 @@ export function requireGitCommandOutput(
 // Config values such as core.hooksPath still accept os.devNull.
 export function gitNullConfigPath(): string {
   return process.platform === "win32" ? "NUL" : "/dev/null";
+}
+
+/** Quote a Git config value without treating its contents as config syntax. */
+export function quoteGitConfig(value: string): string {
+  return `"${value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/\n/gu, "\\n").replace(/\t/gu, "\\t").replaceAll("\b", "\\b")}"`;
 }

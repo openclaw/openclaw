@@ -24,7 +24,7 @@ type DebugProxyCaptureDatabase = Pick<
 >;
 type NodeSqliteDatabase = EngineConnection;
 
-/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. Final compatibility day: 2026-12-31. */
+/** @deprecated Use AsyncDebugProxyCaptureReader and await its read operations. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export type DebugProxyCaptureReader = {
   getSessionEvents(sessionId: string, limit?: number): Array<Record<string, unknown>>;
   readBlob(blobId: string): string | null;
@@ -103,7 +103,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "method", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "retry-storms":
       query = locations
@@ -113,7 +113,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path"])
         .having(count, ">", 1)
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "cache-busting":
       query = locations
@@ -128,7 +128,7 @@ export function queryDebugProxyCapturePreset(
         )
         .groupBy(["host", "path"])
         .orderBy("variantCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "ws-duplicate-frames":
       query = locations
@@ -138,7 +138,7 @@ export function queryDebugProxyCapturePreset(
         .groupBy(["host", "path", "data_sha256"])
         .having(count, ">", 1)
         .orderBy("duplicateFrames", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     case "missing-ack":
       query = events
@@ -162,7 +162,7 @@ export function queryDebugProxyCapturePreset(
         .where("kind", "=", "error")
         .groupBy(["host", "path"])
         .orderBy("errorCount", "desc")
-        .orderBy("host", "asc");
+        .orderBy("host", (order) => order.asc().nullsFirst());
       break;
     default:
       return [];
@@ -322,7 +322,7 @@ export function readDebugProxyCaptureBlob(db: NodeSqliteDatabase, blobId: string
   return (row.encoding === "gzip" ? gunzipSync(data) : data).toString("utf8");
 }
 
-/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. Final compatibility day: 2026-12-31. */
+/** @deprecated Use createDebugProxyCaptureReaderAsync for worker-backed, noncreating reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createDebugProxyCaptureReader(params: {
   env: NodeJS.ProcessEnv;
 }): DebugProxyCaptureReader {

@@ -173,7 +173,6 @@ export function recordSessionTranscriptArchivePublishResults(
   results: readonly TranscriptArchivePublishResult[],
   nowMs: number,
 ): void {
-  ensureSessionTranscriptArchiveSchema(database.db);
   const db = getNodeSqliteKysely<TranscriptArchiveDatabase>(database.db);
   for (const result of results) {
     withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(result.sessionId)], () =>

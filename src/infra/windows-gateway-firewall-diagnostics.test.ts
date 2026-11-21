@@ -1,44 +1,42 @@
-// Windows Gateway firewall diagnostics classify LAN reachability risks.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { inspectWindowsGatewayFirewall } from "./windows-gateway-firewall-diagnostics.js";
 
 type InspectOptions = Parameters<typeof inspectWindowsGatewayFirewall>[0];
-type FirewallCommandRunner = NonNullable<InspectOptions["runCommandWithTimeout"]>;
+type FirewallCommandRunner = typeof runCommandWithTimeout;
+
+vi.mock("../process/exec.js", { spy: true });
+
+beforeEach(() => {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  vi.mocked(runCommandWithTimeout).mockReset();
+});
+afterEach(() => vi.restoreAllMocks());
 
 function inspect(
   runner: FirewallCommandRunner,
-  options: Partial<Pick<InspectOptions, "bind" | "platform" | "mode" | "timeoutMs">> = {},
+  options: Partial<Pick<InspectOptions, "bind">> = {},
 ) {
+  vi.mocked(runCommandWithTimeout).mockImplementation(runner);
   return inspectWindowsGatewayFirewall({
     bind: "lan",
     port: 18789,
-    platform: "win32",
-    runCommandWithTimeout: runner,
     ...options,
   });
 }
 
-function statePayload(params?: {
-  networkCategory?: string;
-  defaultInboundAction?: string;
-  allowInboundRules?: string;
-  activeAllowLocalRules?: string;
-  localAllowRules?: string;
-}) {
+function statePayload(active: Record<string, string> = {}, local = "True") {
   return {
-    ConnectionProfiles: [
-      {
-        InterfaceAlias: "Ethernet",
-        NetworkCategory: params?.networkCategory ?? "Public",
-      },
-    ],
+    ConnectionProfiles: [{ NetworkCategory: "Public" }],
     ActiveFirewallProfiles: [
       {
         Name: "Public",
         Enabled: "True",
-        DefaultInboundAction: params?.defaultInboundAction ?? "Block",
-        AllowInboundRules: params?.allowInboundRules ?? "True",
-        AllowLocalFirewallRules: params?.activeAllowLocalRules ?? "True",
+        DefaultInboundAction: "Block",
+        AllowInboundRules: "True",
+        AllowLocalFirewallRules: "True",
+        ...active,
       },
     ],
     LocalFirewallProfiles: [
@@ -47,337 +45,225 @@ function statePayload(params?: {
         Enabled: "True",
         DefaultInboundAction: "NotConfigured",
         AllowInboundRules: "NotConfigured",
-        AllowLocalFirewallRules: params?.localAllowRules ?? "NotConfigured",
+        AllowLocalFirewallRules: local,
       },
     ],
   };
 }
 
-function stateJson(params?: Parameters<typeof statePayload>[0]) {
-  return JSON.stringify(statePayload(params));
-}
-
-function ruleJson(params?: Parameters<typeof ruleRow>[0]) {
-  return JSON.stringify([ruleRow(params)]);
-}
-
 function quickPayloadJson(params?: {
-  state?: string;
+  state?: ReturnType<typeof statePayload>;
   activeRules?: unknown[];
   localRules?: unknown[];
 }) {
   return JSON.stringify({
-    State: JSON.parse(params?.state ?? stateJson({ localAllowRules: "True" })),
+    State: params?.state ?? statePayload(),
     ActiveRules: params?.activeRules ?? [],
     LocalRules: params?.localRules ?? [ruleRow()],
   });
 }
 
-function rulesPayloadJson(params: { active?: unknown[]; local?: unknown[] }) {
-  return JSON.stringify({
-    ActiveRules: params.active ?? [],
-    LocalRules: params.local ?? [],
-  });
-}
+const baseRule = {
+  DisplayName: "OpenClaw Gateway",
+  Profile: "Any",
+  PolicyStoreSource: "PersistentStore",
+  PolicyStoreSourceType: "Local",
+  Program: "Any",
+  LocalAddress: "Any",
+  RemoteAddress: "Any",
+};
+const ruleRow = (overrides: Partial<typeof baseRule> = {}) => ({ ...baseRule, ...overrides });
 
-function ruleRow(params?: {
-  displayName?: string;
-  profile?: string;
-  policyStoreSource?: string;
-  policyStoreSourceType?: string;
-  program?: string;
-  localAddress?: string;
-  remoteAddress?: string;
-}) {
-  return {
-    DisplayName: params?.displayName ?? "OpenClaw Gateway",
-    Profile: params?.profile ?? "Any",
-    PolicyStoreSource: params?.policyStoreSource ?? "PersistentStore",
-    PolicyStoreSourceType: params?.policyStoreSourceType ?? "Local",
-    Program: params?.program ?? "Any",
-    LocalAddress: params?.localAddress ?? "Any",
-    RemoteAddress: params?.remoteAddress ?? "Any",
-  };
-}
-
-async function classify(params: { stateJson: string; rulesJson: string }) {
-  const parsedRules = JSON.parse(params.rulesJson) as unknown;
-  const rulePayload =
-    parsedRules && typeof parsedRules === "object" && !Array.isArray(parsedRules)
-      ? (parsedRules as { ActiveRules?: unknown; LocalRules?: unknown })
-      : undefined;
-  const activeRules = Array.isArray(rulePayload?.ActiveRules) ? rulePayload.ActiveRules : [];
-  const localRules = Array.isArray(rulePayload?.LocalRules)
-    ? rulePayload.LocalRules
-    : Array.isArray(parsedRules)
-      ? parsedRules
-      : [];
-  const runner: FirewallCommandRunner = async () => ({
-    code: 0,
-    stdout: quickPayloadJson({ state: params.stateJson, activeRules, localRules }),
-  });
+async function classify(params: Parameters<typeof quickPayloadJson>[0]) {
+  const runner: FirewallCommandRunner = async () =>
+    commandResult({ stdout: quickPayloadJson(params) });
   return await inspect(runner);
 }
 
-describe("Windows Gateway firewall diagnostics", () => {
-  it("does not run commands outside Windows LAN binding", async () => {
-    const runner = vi.fn<FirewallCommandRunner>();
-
-    await expect(
-      inspect(runner, {
-        bind: "loopback",
-      }),
-    ).resolves.toMatchObject({
-      applies: false,
-      code: "windows_firewall_not_applicable",
-    });
-    await expect(
-      inspect(runner, {
-        platform: "darwin",
-      }),
-    ).resolves.toMatchObject({
-      applies: false,
-      code: "windows_firewall_not_applicable",
-    });
-    expect(runner).not.toHaveBeenCalled();
+it("skips non-Windows and non-LAN bindings", async () => {
+  const runner = vi.fn<FirewallCommandRunner>();
+  await expect(inspect(runner, { bind: "loopback" })).resolves.toMatchObject({
+    applies: false,
+    code: "windows_firewall_not_applicable",
   });
-
-  it("detects managed Windows policy that ignores local Gateway allow rules", async () => {
-    const diagnostic = await classify({
-      stateJson: stateJson({
-        activeAllowLocalRules: "False",
-        localAllowRules: "NotConfigured",
-      }),
-      rulesJson: ruleJson(),
-    });
-
-    expect(diagnostic).toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-    });
-    expect(diagnostic.details.join("\n")).toContain(
-      "Local firewall rules are disabled for the active profile.",
-    );
+  vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  await expect(inspect(runner)).resolves.toMatchObject({
+    applies: false,
+    code: "windows_firewall_not_applicable",
   });
+  expect(runner).not.toHaveBeenCalled();
+});
 
-  it("rejects allow rules when the active profile blocks inbound rules globally", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ allowInboundRules: "False", localAllowRules: "True" }),
-        rulesJson: ruleJson(),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_inbound_rules_disabled",
-    });
+it("detects policy ignoring local rules", async () => {
+  const diagnostic = await classify({
+    state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
+    localRules: [ruleRow()],
   });
-
-  it("does not treat program-scoped rules as sufficient Gateway allow rules", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ localAllowRules: "True" }),
-        rulesJson: ruleJson({ program: "C:\\Other\\server.exe" }),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_program_scoped_rule_unverified",
-    });
+  expect(diagnostic).toMatchObject({
+    applies: true,
+    severity: "warning",
+    code: "windows_firewall_local_rules_ignored",
   });
+  expect(diagnostic.details.join("\n")).toContain(
+    "Local firewall rules are disabled for the active profile.",
+  );
+});
 
-  it("does not treat address-scoped rules as sufficient Gateway allow rules", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ localAllowRules: "True" }),
-        rulesJson: ruleJson({ remoteAddress: "192.168.1.20" }),
-      }),
-    ).resolves.toMatchObject({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_address_scoped_rule_unverified",
-    });
-  });
-
-  it("prefers managed rule profile mismatch over local-rule-disabled fallback", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({
-          networkCategory: "Public",
-          activeAllowLocalRules: "False",
+it.each([
+  ["inbound_rules_disabled", { state: statePayload({ AllowInboundRules: "False" }) }],
+  [
+    "program_scoped_rule_unverified",
+    { localRules: [ruleRow({ Program: "C:\\Other\\server.exe" })] },
+  ],
+  ["address_scoped_rule_unverified", { localRules: [ruleRow({ RemoteAddress: "192.168.1.20" })] }],
+  [
+    "rule_profile_mismatch",
+    {
+      state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
+      activeRules: [
+        ruleRow({
+          DisplayName: "Managed private allow",
+          Profile: "Private",
+          PolicyStoreSource: "Intune",
+          PolicyStoreSourceType: "MDM",
         }),
-        rulesJson: rulesPayloadJson({
-          active: [
-            ruleRow({
-              displayName: "Managed private allow",
-              profile: "Private",
-              policyStoreSource: "Intune",
-              policyStoreSourceType: "MDM",
-            }),
-          ],
-          local: [],
-        }),
-      }),
-    ).resolves.toMatchObject({
+      ],
+      localRules: [],
+    },
+  ],
+] satisfies Array<[string, Parameters<typeof quickPayloadJson>[0]]>)(
+  "classifies %s",
+  async (code, payload) => {
+    expect(await classify(payload)).toMatchObject({
       applies: true,
       severity: "warning",
-      code: "windows_firewall_rule_profile_mismatch",
+      code: `windows_firewall_${code}`,
     });
-  });
+  },
+);
 
-  it("reports no allow rule when the probe returns no active profiles", async () => {
-    await expect(
-      classify({
-        stateJson: JSON.stringify({
-          ConnectionProfiles: [],
-          ActiveFirewallProfiles: [],
-          LocalFirewallProfiles: [],
-        }),
-        rulesJson: "[]",
-      }),
-    ).resolves.toEqual({
+it("warns when no profiles or rules exist", async () => {
+  await expect(
+    classify({
+      state: {
+        ConnectionProfiles: [],
+        ActiveFirewallProfiles: [],
+        LocalFirewallProfiles: [],
+      },
+      localRules: [],
+    }),
+  ).resolves.toEqual({
+    applies: true,
+    severity: "warning",
+    code: "windows_firewall_no_allow_rule",
+    message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+    details: [
+      "Active network profile: unknown.",
+      "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
+      "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
+    ],
+  });
+});
+
+it("reports unrestricted profiles before checking rules", async () => {
+  await expect(
+    classify({
+      state: statePayload({ DefaultInboundAction: "Allow" }, "NotConfigured"),
+      localRules: [],
+    }),
+  ).resolves.toEqual({
+    applies: true,
+    severity: "info",
+    code: "windows_firewall_unrestricted",
+    message: "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
+    details: ["Active network profile: public."],
+  });
+});
+
+it.each([
+  [
+    "a nonzero exit",
+    async () => commandResult({ code: 1, stdout: quickPayloadJson() }),
+    "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+  ],
+  [
+    "truncated stderr",
+    async () => commandResult({ stdout: quickPayloadJson(), stderrTruncatedBytes: 1 }),
+    "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+  ],
+  [
+    "malformed JSON",
+    async () => commandResult({ stdout: "{" }),
+    "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
+  ],
+  [
+    "a runner exception",
+    async () => {
+      throw new Error("probe failed");
+    },
+    "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+  ],
+] satisfies Array<[string, FirewallCommandRunner, string]>)(
+  "fails closed after %s",
+  async (_label, run, message) => {
+    const runner = vi.fn<FirewallCommandRunner>(run);
+    await expect(inspect(runner)).resolves.toEqual({
       applies: true,
       severity: "warning",
-      code: "windows_firewall_no_allow_rule",
-      message: "Windows Firewall is likely blocking LAN devices from reaching the Gateway port.",
+      code: "windows_firewall_inspection_failed",
+      message,
       details: [
-        "Active network profile: unknown.",
-        "No enabled inbound TCP allow rule for the Gateway port was found in the active firewall policy.",
-        "Allow the Gateway port in Windows Firewall, or use loopback, Tailscale, or an SSH tunnel instead of LAN binding.",
+        "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
       ],
     });
-  });
-
-  it("reports an unblocked active profile before checking allow rules", async () => {
-    await expect(
-      classify({
-        stateJson: stateJson({ defaultInboundAction: "Allow" }),
-        rulesJson: "[]",
-      }),
-    ).resolves.toEqual({
-      applies: true,
-      severity: "info",
-      code: "windows_firewall_unrestricted",
-      message:
-        "Windows Firewall is not blocking unsolicited inbound traffic on the active profile.",
-      details: ["Active network profile: public."],
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls[0]?.[1]).toEqual({
+      timeoutMs: 5_000,
+      maxOutputBytes: 2 * 1024 * 1024,
     });
-  });
+  },
+);
 
-  it.each([
-    [
-      "a nonzero exit",
-      async () => ({ code: 1, stdout: quickPayloadJson() }),
-      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
-    ],
-    [
-      "truncated stderr",
-      async () => ({ code: 0, stdout: quickPayloadJson(), stderrTruncatedBytes: 1 }),
-      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
-    ],
-    [
-      "malformed JSON",
-      async () => ({ code: 0, stdout: "{" }),
-      "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
-    ],
-    [
-      "a runner exception",
-      async () => {
-        throw new Error("probe failed");
-      },
-      "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
-    ],
-  ] satisfies Array<[string, FirewallCommandRunner, string]>)(
-    "fails closed after %s",
-    async (_label, run, message) => {
-      const runner = vi.fn<FirewallCommandRunner>(run);
-
-      await expect(inspect(runner)).resolves.toEqual({
-        applies: true,
-        severity: "warning",
-        code: "windows_firewall_inspection_failed",
-        message,
-        details: [
-          "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
-        ],
-      });
-      expect(runner).toHaveBeenCalledTimes(1);
-      expect(runner.mock.calls[0]?.[1]).toEqual({
-        timeoutMs: 5_000,
-        maxOutputBytes: 2 * 1024 * 1024,
-      });
-    },
-  );
-
-  it("reports disabled local-rule policy without follow-up probes", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async () => ({
-      code: 0,
+it("avoids follow-up probes for disabled local rules", async () => {
+  const runner = vi.fn<FirewallCommandRunner>(async () =>
+    commandResult({
       stdout: quickPayloadJson({
-        state: stateJson({ activeAllowLocalRules: "False" }),
+        state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
         activeRules: [],
         localRules: [],
       }),
-    }));
-
-    await expect(inspect(runner)).resolves.toMatchObject({
-      code: "windows_firewall_local_rules_ignored",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
+    }),
+  );
+  await expect(inspect(runner)).resolves.toMatchObject({
+    code: "windows_firewall_local_rules_ignored",
   });
+  expect(runner).toHaveBeenCalledTimes(1);
+});
 
-  it("preserves managed ActiveStore allow rules by default", async () => {
-    const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
-      const command = argv.join(" ");
-      expect(command).toContain("requestedPolicyStoreSourceTypes");
-      expect(command).toContain("-ieq");
-      expect(command).toContain("GroupPolicy");
-      expect(command).toContain("MDM");
-      return {
-        code: 0,
-        stdout: quickPayloadJson({
-          state: stateJson({ activeAllowLocalRules: "False" }),
-          activeRules: [
-            ruleRow({
-              displayName: "MDM-managed Gateway allow",
-              policyStoreSource: "Intune",
-              policyStoreSourceType: "MDM",
-            }),
-          ],
-          localRules: [ruleRow({ displayName: "Ignored local allow" })],
-        }),
-      };
+it("retains managed ActiveStore rules", async () => {
+  const runner = vi.fn<FirewallCommandRunner>(async (argv) => {
+    const command = argv.join(" ");
+    expect(command).toContain("requestedPolicyStoreSourceTypes");
+    expect(command).toContain("-ieq");
+    expect(command).toContain("GroupPolicy");
+    expect(command).toContain("MDM");
+    return commandResult({
+      stdout: quickPayloadJson({
+        state: statePayload({ AllowLocalFirewallRules: "False" }, "NotConfigured"),
+        activeRules: [
+          ruleRow({
+            DisplayName: "MDM-managed Gateway allow",
+            PolicyStoreSource: "Intune",
+            PolicyStoreSourceType: "MDM",
+          }),
+        ],
+        localRules: [ruleRow({ DisplayName: "Ignored local allow" })],
+      }),
     });
-
-    await expect(inspect(runner)).resolves.toMatchObject({
-      severity: "info",
-      code: "windows_firewall_rule_present",
-    });
-    expect(runner).toHaveBeenCalledTimes(1);
   });
-
-  it("uses the quick probe by default and honors an explicit timeout", async () => {
-    const createRunner = () =>
-      vi.fn<FirewallCommandRunner>(async () => ({ code: 0, stdout: quickPayloadJson() }));
-    const defaultRunner = createRunner();
-    const explicitQuickRunner = createRunner();
-    const overrideRunner = createRunner();
-
-    const defaultResult = await inspect(defaultRunner);
-    const explicitQuickResult = await inspect(explicitQuickRunner, {
-      mode: "quick",
-    });
-    await inspect(overrideRunner, {
-      timeoutMs: 1234,
-    });
-
-    expect(defaultResult).toEqual(explicitQuickResult);
-    expect(defaultRunner).toHaveBeenCalledTimes(1);
-    expect(explicitQuickRunner).toHaveBeenCalledTimes(1);
-    expect(overrideRunner).toHaveBeenCalledTimes(1);
-    expect(defaultRunner.mock.calls[0]?.[0]).toEqual(explicitQuickRunner.mock.calls[0]?.[0]);
-    expect(defaultRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 5_000 });
-    expect(explicitQuickRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 5_000 });
-    expect(overrideRunner.mock.calls[0]?.[1]).toMatchObject({ timeoutMs: 1234 });
+  await expect(inspect(runner)).resolves.toMatchObject({
+    severity: "info",
+    code: "windows_firewall_rule_present",
   });
+  expect(runner).toHaveBeenCalledTimes(1);
 });

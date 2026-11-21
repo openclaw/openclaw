@@ -54,10 +54,23 @@ export function selectGitHubPublicationDeferralsInDatabase(
           }).filter((row) => matchesRepositoryGitHubPublicationClaim(row, selection.claim))
     ).map((row) => row.request_id);
   }
-  const rows =
+  const localClaims = new Map(selection.localClaims?.map((claim) => [claim.sessionId, claim]));
+  const rows = (
     kind === "shared"
       ? listSharedGitHubPublicationsInDatabase(db, { pending: true })
-      : listRepositoryGitHubPublicationsInDatabase(db, { ownerProfileId: null, pending: true });
+      : listRepositoryGitHubPublicationsInDatabase(db, { ownerProfileId: null, pending: true })
+  ).filter((row) => {
+    if (!row.claim_id) {
+      return false;
+    }
+    const localClaim = kind === "shared" ? localClaims.get(row.session_id) : undefined;
+    return (
+      !localClaim ||
+      localClaim.claimId !== row.claim_id ||
+      localClaim.runId !== row.run_id ||
+      localClaim.placementGeneration !== row.placement_generation
+    );
+  });
   if (!rows.length) {
     return [];
   }
@@ -73,7 +86,7 @@ export function selectGitHubPublicationDeferralsInDatabase(
     ).map((row) => [row.sessionId, row]),
   );
   return rows.flatMap((row) => {
-    if (!row.claim_id || pending.has(`${row.session_id}\0${row.claim_id}\0${row.run_id}`)) {
+    if (pending.has(`${row.session_id}\0${row.claim_id}\0${row.run_id}`)) {
       return [];
     }
     const placement = placements.get(row.session_id);

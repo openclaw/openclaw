@@ -39,7 +39,7 @@ struct GatewayDiscoveryInlineList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Get connection instructions. A Nearby listing does not verify the Gateway owner.")
+                .help("Nearby discovery does not verify the Gateway owner.")
             }
         }
     }

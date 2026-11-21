@@ -10,6 +10,7 @@ import {
   isConfigurationUpdate,
   replayResponsesReasoningUpdates,
   supportsResponsesReasoningUpdate,
+  type ResponsesConfigurationUpdate,
 } from "./openai-responses-reasoning-update.js";
 import {
   buildProviderReplayContext,
@@ -17,7 +18,7 @@ import {
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string };
+type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 
 /** Save only admitted settings and hashes, never another copy of the conversation. */
 export function recordResponsesReasoningState(
@@ -40,8 +41,14 @@ export function recordResponsesReasoningState(
   const reasoning = {
     ...buildProviderReplayContext(model, identity),
     effort: request.reasoning.effort,
-    controls: request.input.flatMap((item, index) =>
-      isConfigurationUpdate(item) ? [{ index, item }] : [],
+    controls: request.input.reduce<Array<{ index: number; item: ResponsesConfigurationUpdate }>>(
+      (controls, item, index) => {
+        if (isConfigurationUpdate(item)) {
+          controls.push({ index, item });
+        }
+        return controls;
+      },
+      [],
     ),
     inputLength: request.input.length,
     outputLength: output.length,

@@ -28,6 +28,17 @@ it.each([
   ).toBe(build);
 });
 
+it("prepares the cold ClawRouter catalog E2E worker runtime", () => {
+  expect(
+    resolveVitestPretestBuildMode([
+      {
+        configs: ["test/vitest/vitest.e2e.config.ts"],
+        includePatterns: ["src/agents/clawrouter-catalog-discovery.e2e.test.ts"],
+      },
+    ]),
+  ).toBe("runtime");
+});
+
 it.each(["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"])(
   "honors direct provider-runtime selection and exclusion in %s",
   (config) => {

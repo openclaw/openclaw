@@ -1,7 +1,8 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { AUDIT_EVENT_RETENTION_MS, rowToAuditEvent } from "./audit-event-store.js";
+import { rowToAuditEvent } from "./audit-event-row.js";
+import { AUDIT_EVENT_RETENTION_MS } from "./audit-event-store.js";
 import type { AuditEventListQuery, AuditEventListPage } from "./audit-event-types.js";
 
 /** Connection-bound query kernel; production list reads execute only in the state worker. */

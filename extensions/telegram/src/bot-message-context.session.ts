@@ -11,7 +11,7 @@ import {
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -30,21 +30,18 @@ import {
   getTelegramTextParts,
   normalizeForwardedContext,
   resolveTelegramPrimaryMedia,
-  type TelegramMediaKind,
   type TelegramReplyTarget,
 } from "./bot/helpers.js";
 import { renderTelegramTextEntities } from "./bot/inbound-text-entities.js";
 import { resolveTelegramDirectPeerId } from "./dm-session-key.js";
-import {
-  resolveTelegramDirectToolPolicy,
-  resolveTelegramGroupPromptSettings,
-} from "./group-config-helpers.js";
+import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
   isTelegramChatWindowPromptContext,
   selectTelegramGroupPromptContext,
   telegramPromptContextHistory,
 } from "./group-history-window.js";
 import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
+import { isTelegramMediaKind } from "./message-cache-persistence.js";
 import { TELEGRAM_REPLY_CHAIN_MAX_DEPTH } from "./message-cache.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildTelegramConversationId } from "./topic-conversation.js";
@@ -71,6 +68,7 @@ function replyTargetToChainEntry(
   replyTarget: TelegramReplyTarget,
   media?: TelegramMediaRef,
 ): TelegramReplyChainEntry {
+  const { forwardedFrom } = replyTarget;
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
     sender: replyTarget.sender,
@@ -88,16 +86,10 @@ function replyTargetToChainEntry(
         }
       : {}),
     ...(replyTarget.kind === "quote" ? { isQuote: true } : {}),
-    ...(replyTarget.forwardedFrom?.from ? { forwardedFrom: replyTarget.forwardedFrom.from } : {}),
-    ...(replyTarget.forwardedFrom?.fromId
-      ? { forwardedFromId: replyTarget.forwardedFrom.fromId }
-      : {}),
-    ...(replyTarget.forwardedFrom?.fromUsername
-      ? { forwardedFromUsername: replyTarget.forwardedFrom.fromUsername }
-      : {}),
-    ...(replyTarget.forwardedFrom?.date
-      ? { forwardedDate: replyTarget.forwardedFrom.date * 1000 }
-      : {}),
+    ...(forwardedFrom?.from ? { forwardedFrom: forwardedFrom.from } : {}),
+    ...(forwardedFrom?.fromId ? { forwardedFromId: forwardedFrom.fromId } : {}),
+    ...(forwardedFrom?.fromUsername ? { forwardedFromUsername: forwardedFrom.fromUsername } : {}),
+    ...(forwardedFrom?.date ? { forwardedDate: forwardedFrom.date * 1000 } : {}),
   };
 }
 
@@ -136,17 +128,9 @@ function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): s
   return `[${labels.join(" ")}]\n${bodyLines.join("\n")}`;
 }
 
-const TELEGRAM_MEDIA_KINDS: TelegramMediaKind[] = [
-  "audio",
-  "document",
-  "image",
-  "sticker",
-  "video",
-];
-
 function resolveReplyChainMediaType(entry: TelegramReplyChainEntry) {
   const mediaType = entry.mediaType;
-  const nativeKind = TELEGRAM_MEDIA_KINDS.find((kind) => kind === mediaType);
+  const nativeKind = isTelegramMediaKind(mediaType) ? mediaType : undefined;
   const kind = entry.mediaKind || nativeKind;
   return {
     ...(kind ? { kind } : {}),
@@ -306,6 +290,8 @@ export async function buildTelegramInboundContextPayload(
     const visibleEntry = {
       ...entry,
       ...selectedReplyEntry,
+      // The saved file owns classification, including images sent as Telegram documents.
+      ...(entry.mediaPath ? { mediaKind: entry.mediaKind, mediaType: entry.mediaType } : {}),
       // Preserve authenticated identity while Telegram's selected quote body wins.
       sender: entry.sender,
       senderId: entry.senderId,
@@ -409,14 +395,17 @@ export async function buildTelegramInboundContextPayload(
         key: ambientTranscriptWatermarkKey,
       })
     : undefined;
+  // An existing session already replays its own user and assistant turns, so a
+  // window rebuilt from that transcript keeps only delivery mirrors replay omits.
+  // Fresh sessions and explicit replies keep the full transcript window.
+  const replaysPersistedSessionTurns =
+    previousTimestamp !== undefined && visibleReplyChain.length === 0 && !visibleReplyTarget;
+  // Plain DMs also drop Telegram's native window: it holds only the same private
+  // turns. Group windows carry room messages that never became turns, so they stay.
   const shouldSuppressPersistedDmChatWindowContext =
-    !isGroup &&
-    previousTimestamp !== undefined &&
-    dmThreadId == null &&
-    visibleReplyChain.length === 0 &&
-    !visibleReplyTarget;
-  // Existing plain DMs already carry their history through the persistent
-  // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
+    !isGroup && dmThreadId == null && replaysPersistedSessionTurns;
+  const sessionTranscriptDeliveryOnly =
+    shouldSuppressPersistedDmChatWindowContext || (isGroup && replaysPersistedSessionTurns);
   const baseVisiblePromptContext = shouldSuppressPersistedDmChatWindowContext
     ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
     : promptContext;
@@ -574,23 +563,14 @@ export async function buildTelegramInboundContextPayload(
     },
     sessionTranscript: {
       chatWindow: true,
+      ...(sessionTranscriptDeliveryOnly ? { deliveryOnly: true } : {}),
       historyLimit: isGroup ? historyLimit : dmHistoryLimit,
       beforeTimestampMs: options?.receivedAtMs ?? messageTimestamp,
       minTimestampMs: options?.promptContextMinTimestampMs,
       senderLabels: { assistant: "OpenClaw", user: "User" },
     },
     access: {
-      commands: {
-        authorized: commandAuthorized,
-      },
-      toolPolicy: isGroup
-        ? undefined
-        : resolveTelegramDirectToolPolicy({
-            directConfig: groupConfig,
-            senderId,
-            senderName,
-            senderUsername,
-          }),
+      commands: { authorized: commandAuthorized },
       mentions: mentionFacts,
     },
     command:
@@ -680,6 +660,7 @@ export async function buildTelegramInboundContextPayload(
       LocationLivePeriodSeconds: primaryCtx.message?.location?.live_period,
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
+      ThreadLabel: !isGroup && threadSpec.scope === "dm" ? topicName : undefined,
     },
   } satisfies BuildChannelInboundEventContextAsyncParams);
 
@@ -731,14 +712,6 @@ export async function buildTelegramInboundContextPayload(
         }
       : undefined;
 
-  if (shouldLogVerbose()) {
-    const mediaInfo = allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
-    const topicInfo = resolvedThreadId != null ? ` topic=${resolvedThreadId}` : "";
-    logVerbose(
-      `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo}`,
-    );
-  }
-
   return {
     ctxPayload,
     skillFilter,
@@ -754,4 +727,3 @@ export async function buildTelegramInboundContextPayload(
     },
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

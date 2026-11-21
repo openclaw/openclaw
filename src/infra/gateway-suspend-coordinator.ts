@@ -22,47 +22,33 @@ import {
 } from "./gateway-active-work.js";
 
 const GATEWAY_SUSPEND_TTL_MS = 2 * 60_000;
-// Thirty seconds to drain, then fifteen to hand off or release. Reconnects do not
-// extend user-visible downtime; freeze/snapshot leases retain their own TTL.
+// Drain preparation waits for persistence, then hands running work to committed
+// shutdown. Reconnects do not extend its deadline; freeze retains its own TTL.
 const GATEWAY_SUSPEND_DRAIN_BUDGET_MS = 45_000;
 const GATEWAY_SUSPEND_BUSY_RETRY_AFTER_MS = 20_000;
 const GATEWAY_SUSPEND_DRAIN_POLL_MS = 5_000;
-const GATEWAY_SCHEDULER_RECOVERY_RETRY_MS = 1_000;
 
 type GatewaySuspendTerminalPolicy = NonNullable<GatewaySuspendPrepareParams["terminalPolicy"]>;
 
-type GatewaySchedulerRecoveryResult = {
-  status: "recovering";
-  reason: "scheduler-resume-failed";
-  retryAfterMs: number;
-};
-
 type GatewaySuspendPrepareResult =
   | GatewaySuspendPrepareWireResult
-  | { status: "conflict"; expiresAtMs: number }
-  | GatewaySchedulerRecoveryResult;
+  | { status: "conflict"; expiresAtMs: number };
 
 type GatewaySuspendStatusResult =
   | GatewaySuspendStatusWireResult
-  | { status: "conflict"; expiresAtMs: number }
-  | GatewaySchedulerRecoveryResult;
+  | { status: "conflict"; expiresAtMs: number };
 
 type GatewaySuspendResumeResult =
   | GatewaySuspendResumeWireResult
   | { ok: false; reason: "suspension-mismatch" }
-  | { ok: false; reason: "gateway-restarting" }
-  | { ok: false; reason: "scheduler-resume-failed"; retryAfterMs: number };
+  | { ok: false; reason: "gateway-restarting" };
 
-type GatewaySuspendCoordinatorEntryBase = {
+type HeldGatewaySuspension = {
   owner: object;
   resumeScheduling: () => void;
   reopenAdmission: (reason?: string) => boolean;
   warn?: (message: string) => void;
   timer?: ReturnType<typeof setTimeout>;
-};
-
-type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
-  kind: "held";
   requestId: string;
   terminalPolicy: GatewaySuspendTerminalPolicy;
   drain: boolean;
@@ -84,15 +70,9 @@ export type GatewaySuspendHandoffOwner = {
   commitStop?: () => void;
 };
 
-type GatewaySchedulerRecovery = GatewaySuspendCoordinatorEntryBase & {
-  kind: "recovering";
-};
-
-type GatewaySuspendCoordinatorEntry = HeldGatewaySuspension | GatewaySchedulerRecovery;
-
 type GatewaySuspendCoordinatorState = {
-  current: GatewaySuspendCoordinatorEntry | null;
-  retiredForLifecycleReset?: GatewaySuspendCoordinatorEntry | null;
+  current: HeldGatewaySuspension | null;
+  retiredForLifecycleReset?: HeldGatewaySuspension | null;
 };
 
 const COORDINATOR_STATE = resolveGlobalSingleton(
@@ -103,80 +83,42 @@ const COORDINATOR_STATE = resolveGlobalSingleton(
   }),
 );
 
-function schedulerRecoveryResult(): GatewaySchedulerRecoveryResult {
-  return {
-    status: "recovering",
-    reason: "scheduler-resume-failed",
-    retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-  };
-}
-
-function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
+function clearEntryTimer(entry: HeldGatewaySuspension): void {
   if (entry.timer) {
     clearTimeout(entry.timer);
     entry.timer = undefined;
   }
 }
 
-function scheduleResume(entry: GatewaySuspendCoordinatorEntry, delayMs: number): void {
+function scheduleResume(entry: HeldGatewaySuspension, delayMs: number): void {
   clearEntryTimer(entry);
   entry.timer = setTimeout(() => {
     if (COORDINATOR_STATE.current === entry) {
-      resumeAndReopen(entry, entry.kind === "held" ? "expired" : "scheduler-recovered");
+      resumeAndReopen(entry, "expired");
     }
   }, delayMs);
   entry.timer.unref?.();
 }
 
-function resumeAndReopen(entry: GatewaySuspendCoordinatorEntry, reason = "resume"): boolean {
-  if (reason === "expired" && entry.kind === "held") {
+function resumeAndReopen(entry: HeldGatewaySuspension, reason = "resume"): void {
+  if (reason === "expired") {
     entry.warn?.(
       `gateway suspension ${entry.drain ? "drain deadline" : "lease"} expired owner=${JSON.stringify(entry.requestId)} leaseId=${JSON.stringify(entry.suspensionId)}; reopening admission`,
     );
   }
-  try {
-    entry.resumeScheduling();
-  } catch (err) {
-    entry.warn?.(`gateway scheduler recovery failed: ${String(err)}`);
-    enterSchedulerRecovery(entry);
-    return false;
-  }
-  if (COORDINATOR_STATE.current !== entry) {
-    return true;
-  }
-  if (!entry.reopenAdmission(reason)) {
-    entry.warn?.("gateway scheduler recovery could not reopen admission");
-    enterSchedulerRecovery(entry);
-    return false;
-  }
   clearEntryTimer(entry);
-  COORDINATOR_STATE.current = null;
-  return true;
-}
-
-function enterSchedulerRecovery(entry: GatewaySuspendCoordinatorEntry): void {
-  if (COORDINATOR_STATE.current !== entry) {
-    return;
-  }
-  if (entry.kind === "recovering") {
-    scheduleResume(entry, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
-    return;
-  }
-  clearEntryTimer(entry);
-  const recovery: GatewaySchedulerRecovery = {
-    kind: "recovering",
-    owner: entry.owner,
+  resumeSchedulingBeforeReopen({
     resumeScheduling: entry.resumeScheduling,
-    reopenAdmission: entry.reopenAdmission,
+    reopenAdmission: () => entry.reopenAdmission(reason),
+    isInvalidated: () => COORDINATOR_STATE.current !== entry,
     warn: entry.warn,
-  };
-  COORDINATOR_STATE.current = recovery;
-  scheduleResume(recovery, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
+  });
+  if (COORDINATOR_STATE.current === entry) {
+    COORDINATOR_STATE.current = null;
+  }
 }
 
-function normalizeExpiredHeldSuspension(
-  held: HeldGatewaySuspension,
-): GatewaySuspendCoordinatorEntry | null {
+function normalizeExpiredHeldSuspension(held: HeldGatewaySuspension): HeldGatewaySuspension | null {
   if (held.nowMs() < held.expiresAtMs && performance.now() < held.deadlineAtMs) {
     return held;
   }
@@ -184,51 +126,31 @@ function normalizeExpiredHeldSuspension(
   return COORDINATOR_STATE.current;
 }
 
-function currentSuspension(): GatewaySuspendCoordinatorEntry | null {
+function currentSuspension(): HeldGatewaySuspension | null {
   const current = COORDINATOR_STATE.current;
-  return current?.kind === "held" ? normalizeExpiredHeldSuspension(current) : current;
+  return current ? normalizeExpiredHeldSuspension(current) : null;
 }
 
-function armSchedulerRecovery(
-  recovery: Omit<GatewaySchedulerRecovery, "kind">,
-): GatewaySchedulerRecovery {
-  const entry: GatewaySchedulerRecovery = { kind: "recovering", ...recovery };
-  scheduleResume(entry, GATEWAY_SCHEDULER_RECOVERY_RETRY_MS);
-  return entry;
-}
-
-// Rollback stays fail-closed: scheduler recovery must finish before admission
-// reopens, otherwise an old retry can resume scheduling under a newer lease.
 function resumeSchedulingBeforeReopen(params: {
-  owner: object;
   resumeScheduling: () => void;
   reopenAdmission: (reason?: string) => boolean;
   isInvalidated: () => boolean;
   warn?: (message: string) => void;
-}): boolean {
+}): void {
   if (params.isInvalidated()) {
-    return true;
+    return;
   }
   try {
     params.resumeScheduling();
   } catch (err) {
-    params.warn?.(`gateway scheduler resume failed during suspension rollback: ${String(err)}`);
-    COORDINATOR_STATE.current = armSchedulerRecovery({
-      owner: params.owner,
-      resumeScheduling: params.resumeScheduling,
-      reopenAdmission: params.reopenAdmission,
-      warn: params.warn,
-    });
-    return false;
+    params.warn?.("gateway scheduler resume failed; retry scheduling through cron: " + String(err));
   }
   if (!params.isInvalidated()) {
     params.reopenAdmission();
   }
-  return true;
 }
 
-function armExpiry(held: Omit<HeldGatewaySuspension, "kind">): HeldGatewaySuspension {
-  const entry: HeldGatewaySuspension = { kind: "held", ...held };
+function armExpiry(entry: HeldGatewaySuspension): HeldGatewaySuspension {
   // Inspection consumes the lease budget even if the wall clock moves back.
   const remainingMs = Math.min(
     entry.expiresAtMs - entry.nowMs(),
@@ -247,6 +169,10 @@ function renewHeldSuspension(held: HeldGatewaySuspension, nowMs: number): void {
   scheduleResume(held, GATEWAY_SUSPEND_TTL_MS);
 }
 
+function suspensionReady(drain: boolean, snapshot: GatewayActiveWorkSnapshot): boolean {
+  return drain ? snapshot.writeCustody.every(({ count }) => count === 0) : snapshot.idle;
+}
+
 function refreshHeldSuspension(held: HeldGatewaySuspension): GatewayActiveWorkSnapshot | undefined {
   // Polls and renewals retain the update's terminal policy even after the first idle observation.
   const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
@@ -255,7 +181,7 @@ function refreshHeldSuspension(held: HeldGatewaySuspension): GatewayActiveWorkSn
   if (COORDINATOR_STATE.current !== held || normalizeExpiredHeldSuspension(held) !== held) {
     return undefined;
   }
-  if (snapshot.idle) {
+  if (suspensionReady(held.drain, snapshot)) {
     if (held.commitAdmission?.() === false) {
       throw new Error("gateway suspension admission changed during drain completion");
     }
@@ -276,12 +202,12 @@ function heldPrepareResult(
     blockers: snapshot.blockers,
     writeCustody: snapshot.writeCustody,
   };
-  return snapshot.idle
+  return suspensionReady(held.drain, snapshot)
     ? { status: "ready", ...result }
     : { status: "draining", ...result, retryAfterMs: GATEWAY_SUSPEND_DRAIN_POLL_MS };
 }
 
-/** Acquire an idle lease, or optionally preserve existing work behind a drain fence. */
+/** Freeze only idle work; drain preparation leaves running work for committed shutdown. */
 export function prepareGatewaySuspend(params: {
   requestId: string;
   terminalPolicy?: GatewaySuspendTerminalPolicy;
@@ -303,9 +229,6 @@ export function prepareGatewaySuspend(params: {
   const ttlMs = drain ? GATEWAY_SUSPEND_DRAIN_BUDGET_MS : GATEWAY_SUSPEND_TTL_MS;
   const deadlineAtMs = performance.now() + ttlMs;
   const existing = currentSuspension();
-  if (existing?.kind === "recovering") {
-    return schedulerRecoveryResult();
-  }
   if (existing) {
     if (
       existing.requestId !== params.requestId ||
@@ -321,9 +244,6 @@ export function prepareGatewaySuspend(params: {
     }
     const snapshot = refreshHeldSuspension(existing);
     if (!snapshot) {
-      if (COORDINATOR_STATE.current?.kind === "recovering") {
-        return schedulerRecoveryResult();
-      }
       throw new Error("gateway suspension changed during preparation");
     }
     return heldPrepareResult(existing, snapshot);
@@ -345,7 +265,7 @@ export function prepareGatewaySuspend(params: {
       // flight. Keep its cleanup until the next in-process lifecycle begins.
       COORDINATOR_STATE.retiredForLifecycleReset = activeEntry;
       const signal = getGatewayRestartDrainSignal();
-      if (activeEntry.kind === "held" && signal.aborted) {
+      if (signal.aborted) {
         activeEntry.handoff = undefined;
         activeEntry.shutdown = { signal, phase: "interrupting" };
       }
@@ -373,7 +293,6 @@ export function prepareGatewaySuspend(params: {
   let reopenAdmission = admission.rollback;
   const resume = () =>
     resumeSchedulingBeforeReopen({
-      owner,
       resumeScheduling: params.resumeScheduling,
       reopenAdmission,
       isInvalidated: () => suspensionInvalidated,
@@ -387,11 +306,8 @@ export function prepareGatewaySuspend(params: {
       throw new Error("gateway suspension expired during preparation");
     }
     if (!snapshot.idle && !drain) {
-      const resumed = resume();
+      resume();
       schedulingPaused = false;
-      if (!resumed) {
-        return schedulerRecoveryResult();
-      }
       return {
         status: "busy",
         reason: "active-work",
@@ -401,7 +317,8 @@ export function prepareGatewaySuspend(params: {
         writeCustody: snapshot.writeCustody,
       };
     }
-    const admissionTransition = snapshot.idle ? admission.commit : admission.drain;
+    const ready = suspensionReady(drain, snapshot);
+    const admissionTransition = ready ? admission.commit : admission.drain;
     if (!admissionTransition()) {
       throw new Error("gateway suspension admission changed during preparation");
     }
@@ -416,7 +333,7 @@ export function prepareGatewaySuspend(params: {
       expiresAtMs,
       deadlineAtMs,
       inspect: params.inspect,
-      commitAdmission: snapshot.idle ? undefined : admission.commit,
+      commitAdmission: ready ? undefined : admission.commit,
       reopenAdmission,
       resumeScheduling: params.resumeScheduling,
       nowMs: params.nowMs ?? Date.now,
@@ -426,9 +343,7 @@ export function prepareGatewaySuspend(params: {
     return heldPrepareResult(held, snapshot);
   } catch (err) {
     if (schedulingPaused) {
-      if (!resume()) {
-        return schedulerRecoveryResult();
-      }
+      resume();
     } else {
       reopenAdmission();
     }
@@ -436,22 +351,76 @@ export function prepareGatewaySuspend(params: {
   }
 }
 
-function handoffRefusal(held: HeldGatewaySuspension, owner: GatewaySuspendHandoffOwner) {
+type HandoffRefusal = {
+  message: string;
+  details?: {
+    terminalPersistence: { count: number; oldestAgeMs: number | null; runIds: string[] };
+  };
+};
+
+/** Late final writes share the original 30-second drain budget, never its cleanup grace. */
+export async function requestGatewaySuspendHandoff(
+  params: Parameters<typeof armGatewaySuspendHandoff>[0] & { assertCurrent: () => void },
+): Promise<ReturnType<typeof armGatewaySuspendHandoff>> {
+  params.assertCurrent();
+  const initial = armGatewaySuspendHandoff(params);
+  if (initial.ok || !initial.error.details?.terminalPersistence) {
+    return initial;
+  }
+  const held = COORDINATOR_STATE.current;
+  if (!held?.drain) {
+    return initial;
+  }
+  while (
+    COORDINATOR_STATE.current === held &&
+    params.owner.isCurrent() &&
+    (held.inspect?.getTerminalPersistence?.() ?? 0) > 0
+  ) {
+    const remainingMs =
+      Math.min(held.expiresAtMs - held.nowMs(), held.deadlineAtMs - performance.now()) - 15_000;
+    if (remainingMs <= 0) {
+      break;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(250, remainingMs));
+    });
+  }
+  params.assertCurrent();
+  return armGatewaySuspendHandoff(params);
+}
+
+function handoffRefusal(
+  held: HeldGatewaySuspension,
+  owner: GatewaySuspendHandoffOwner,
+): HandoffRefusal | undefined {
   if (
     COORDINATOR_STATE.current !== held ||
     held.nowMs() >= held.expiresAtMs ||
     performance.now() >= held.deadlineAtMs ||
     !owner.isCurrent()
   ) {
-    return "gateway suspension or host iteration changed";
+    return { message: "gateway suspension or host iteration changed" };
   }
   // READY retains this server-owned inspector too: final-chat writes can arrive
   // after preparation and must never be replaced by the process-only inventory.
   if (!held.inspect?.getTerminalPersistence) {
-    return "gateway terminal persistence inspection is unavailable";
+    return { message: "gateway terminal persistence inspection is unavailable" };
   }
-  if (held.inspect.getTerminalPersistence() > 0) {
-    return "gateway terminal persistence is still pending";
+  const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
+    ignoreTerminalSessions: held.terminalPolicy === "terminate",
+  });
+  if (snapshot.counts.terminalPersistence > 0) {
+    const terminalPersistence = {
+      count: snapshot.counts.terminalPersistence,
+      ...(held.inspect.getTerminalPersistenceDiagnostics?.() ?? { oldestAgeMs: null, runIds: [] }),
+    };
+    return {
+      message: `gateway terminal persistence is still pending: ${JSON.stringify(terminalPersistence)}`,
+      details: { terminalPersistence },
+    };
+  }
+  if (snapshot.writeCustody.some(({ count }) => count > 0)) {
+    return { message: "gateway write custody is still pending" };
   }
   return undefined;
 }
@@ -461,7 +430,7 @@ export function armGatewaySuspendHandoff(params: {
   suspensionId: string;
   owner: GatewaySuspendHandoffOwner;
   commit?: true;
-}): Result<GatewaySuspendHandoffResult, string> {
+}): Result<GatewaySuspendHandoffResult, HandoffRefusal> {
   const committed = params.commit ? getRestartingSuspension() : undefined;
   if (
     committed?.suspensionId === params.suspensionId &&
@@ -474,25 +443,19 @@ export function armGatewaySuspendHandoff(params: {
     });
   }
   const held = COORDINATOR_STATE.current;
-  if (held?.kind !== "held" || held.suspensionId !== params.suspensionId) {
-    return resultError("gateway suspension id does not match");
+  if (!held || held.suspensionId !== params.suspensionId) {
+    return resultError({ message: "gateway suspension id does not match" });
   }
   const refusal = handoffRefusal(held, params.owner);
   if (refusal) {
     return resultError(refusal);
   }
   if (held.handoff && held.handoff !== params.owner) {
-    return resultError("gateway suspension already belongs to another host iteration");
+    return resultError({ message: "gateway suspension already belongs to another host iteration" });
   }
   if (params.commit) {
     if (!params.owner.commitStop) {
-      return resultError("gateway host does not support committed suspension stop");
-    }
-    const snapshot = createGatewayActiveWorkSnapshot(held.inspect, {
-      ignoreTerminalSessions: held.terminalPolicy === "terminate",
-    });
-    if (snapshot.writeCustody.some(({ count }) => count > 0)) {
-      return resultError("gateway write custody is still pending");
+      return resultError({ message: "gateway host does not support committed suspension stop" });
     }
     const changed = handoffRefusal(held, params.owner);
     if (changed) {
@@ -504,7 +467,7 @@ export function armGatewaySuspendHandoff(params: {
     } catch {
       // The callback may already have committed shutdown. Never reopen admission
       // or turn an unknown stop outcome into permission to replay native effects.
-      return resultError("gateway suspension stop commitment outcome is uncertain");
+      return resultError({ message: "gateway suspension stop commitment outcome is uncertain" });
     }
     const signal = getGatewayRestartDrainSignal();
     if (
@@ -513,7 +476,7 @@ export function armGatewaySuspendHandoff(params: {
       held.shutdown?.signal !== signal ||
       !isGatewayRestartDraining()
     ) {
-      return resultError("gateway suspension stop commitment outcome is uncertain");
+      return resultError({ message: "gateway suspension stop commitment outcome is uncertain" });
     }
     held.committedStopOwner = params.owner;
     return ok({
@@ -531,26 +494,24 @@ export function consumeGatewaySuspendHandoff(
   owner: GatewaySuspendHandoffOwner | undefined,
 ): Result<boolean, string> {
   const held = COORDINATOR_STATE.current;
-  if (held?.kind !== "held" || !owner || held.handoff !== owner) {
+  if (!held || !owner || held.handoff !== owner) {
     return ok(false);
   }
   held.handoff = undefined;
   const refusal = handoffRefusal(held, owner);
-  return refusal ? resultError(refusal) : ok(true);
+  return refusal ? resultError(refusal.message) : ok(true);
 }
 
 export function disarmGatewaySuspendHandoff(owner: GatewaySuspendHandoffOwner): void {
   const held = COORDINATOR_STATE.current;
-  if (held?.kind === "held" && held.handoff === owner) {
+  if (held?.handoff === owner) {
     held.handoff = undefined;
   }
 }
 
 function getRestartingSuspension(): HeldGatewaySuspension | undefined {
   const retired = COORDINATOR_STATE.retiredForLifecycleReset;
-  return retired?.kind === "held" && retired.shutdown?.signal === getGatewayRestartDrainSignal()
-    ? retired
-    : undefined;
+  return retired?.shutdown?.signal === getGatewayRestartDrainSignal() ? retired : undefined;
 }
 
 /** Control reconnects retain authentication and never admit node or worker work. */
@@ -576,9 +537,6 @@ export function getGatewaySuspendStatus(
 ): GatewaySuspendStatusResult {
   const retired = getRestartingSuspension();
   const held = retired ?? currentSuspension();
-  if (held?.kind === "recovering") {
-    return schedulerRecoveryResult();
-  }
   if (!held) {
     return { status: "running" };
   }
@@ -595,7 +553,7 @@ export function getGatewaySuspendStatus(
   if (!snapshot) {
     return getGatewaySuspendStatus(suspensionId, includeLifecycle);
   }
-  if (retired || !snapshot.idle) {
+  if (retired || !suspensionReady(held.drain, snapshot)) {
     return {
       status: "draining",
       ...(includeLifecycle
@@ -628,15 +586,11 @@ export function resumeGatewaySuspend(suspensionId: string): GatewaySuspendResume
     };
   }
   const held = currentSuspension();
-  if (held?.kind === "held" && held.suspensionId !== suspensionId) {
+  if (held && held.suspensionId !== suspensionId) {
     return { ok: false, reason: "suspension-mismatch" };
   }
-  if (held?.kind === "recovering" || (held && !resumeAndReopen(held))) {
-    return {
-      ok: false,
-      reason: "scheduler-resume-failed",
-      retryAfterMs: GATEWAY_SCHEDULER_RECOVERY_RETRY_MS,
-    };
+  if (held) {
+    resumeAndReopen(held);
   }
   return {
     ok: true,

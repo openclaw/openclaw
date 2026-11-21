@@ -10,7 +10,7 @@ describe("file-transfer audit diagnostics", () => {
     vi.restoreAllMocks();
   });
 
-  it("routes append failures through captured console diagnostics", async () => {
+  it("reports append failures and retries directory creation on the next write", async () => {
     await withTempDir("openclaw-file-transfer-audit-", async (root) => {
       const homeFile = path.join(root, "home-file");
       await fs.writeFile(homeFile, "not a directory", "utf8");
@@ -27,6 +27,25 @@ describe("file-transfer audit diagnostics", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("[file-transfer:audit] append failed"),
       );
+      await fs.unlink(homeFile);
+      await fs.mkdir(homeFile);
+      await appendFileTransferAudit({
+        op: "file.fetch",
+        nodeId: "test-node",
+        requestedPath: "/tmp/example",
+        decision: "allowed",
+      });
+      const audit = await fs.readFile(
+        path.join(homeFile, ".openclaw", "audit", "file-transfer.jsonl"),
+        "utf8",
+      );
+      expect(JSON.parse(audit)).toMatchObject({
+        op: "file.fetch",
+        nodeId: "test-node",
+        requestedPath: "/tmp/example",
+        decision: "allowed",
+      });
+      expect(warn).toHaveBeenCalledOnce();
     });
   });
 });

@@ -4,8 +4,130 @@ import { expect } from "vitest";
 import { sessionGatewayTest as it } from "./control-ui-e2e.sessions.test-support.ts";
 import type { ControlUiMockGatewayScenario } from "./control-ui-e2e.ts";
 import { buildWorkboardMocks } from "./control-ui-workboard-fixtures.ts";
+import { sessionClient } from "./session-gateway-client.test-support.ts";
 
 const notes = { key: "agent:ops:notes", sessionId: "notes-generation-1", label: "Notes" };
+
+it("derives history metadata from configured transcripts without overriding explicit facts", async ({
+  connect,
+}) => {
+  const messages = [{ role: "assistant", content: "Saved conversation" }];
+  const rows = [
+    notes,
+    { key: "agent:ops:empty" },
+    { key: "agent:ops:saved" },
+    { key: "agent:ops:explicit-empty", hasMessages: false },
+    { key: "agent:ops:explicit-saved", hasMessages: true },
+  ];
+  const connection = await connect({
+    sessions: rows,
+    historyMessages: messages,
+    sessionTranscripts: {
+      [rows[1]!.key]: { messages: [] },
+      [rows[2]!.key]: { messages },
+      [rows[4]!.key]: { messages: [] },
+    },
+  });
+  const expected = [true, false, true, false, true];
+  for (const [index, row] of rows.entries()) {
+    const client = sessionClient(connection, row.key);
+    expect(await client.session()).toMatchObject({ hasMessages: expected[index] });
+    expect(await client.transcript()).toMatchObject({
+      sessionInfo: { hasMessages: expected[index] },
+    });
+  }
+  const client = sessionClient(connection, notes.key);
+  expect(await client.rows()).toMatchObject(expected.map((hasMessages) => ({ hasMessages })));
+  client.controls.setSessionRow({ ...notes, hasMessages: undefined });
+  expect(await client.session()).not.toHaveProperty("hasMessages");
+  client.controls.setMethodResponse("sessions.describe", { session: notes });
+  expect(await client.session()).not.toHaveProperty("hasMessages");
+});
+
+it("refreshes history metadata after committed input and display-history replacement", async ({
+  connect,
+}) => {
+  const client = sessionClient(await connect({ sessions: [notes] }), notes.key);
+  expect(await client.session()).toMatchObject({ hasMessages: false });
+  await client.sendChat("saved-input");
+  expect(await client.session()).toMatchObject({ hasMessages: true });
+  expect(await client.rows()).toMatchObject([{ hasMessages: true }]);
+  client.controls.setHistoryMessages([]);
+  expect(await client.session()).toMatchObject({ hasMessages: false });
+  expect(await client.rows()).toMatchObject([{ hasMessages: false }]);
+  client.controls.setHistoryMessages([{ role: "assistant", content: "Replacement" }]);
+  expect(await client.session()).toMatchObject({ hasMessages: true });
+});
+
+it.for(["chat.startup", "chat.history"])(
+  "derives scoped metadata from $0 fixtures without consuming their responses",
+  async (method, { connect }) => {
+    const messages = [{ role: "assistant", content: "Wire conversation" }];
+    const sibling = { key: "agent:ops:other" };
+    const connection = await connect({
+      sessions: [notes, sibling],
+      methodResponses: {
+        [method]: { cases: [{ match: { sessionKey: notes.key }, response: { messages } }] },
+      },
+    });
+    const client = sessionClient(connection, notes.key);
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    expect(await sessionClient(connection, sibling.key).session()).toMatchObject({
+      hasMessages: false,
+    });
+    client.controls.setMethodResponse(method, { sequence: [{ messages }, { messages: [] }] });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    expect(await client.rows()).toMatchObject([{ hasMessages: true }, { hasMessages: true }]);
+    expect(await client.transcript(method)).toMatchObject({ messages });
+    expect(await client.session()).toMatchObject({ hasMessages: false });
+    expect(await client.transcript(method)).toMatchObject({ messages: [] });
+    client.controls.setMethodResponse(method, { messages });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+    client.controls.setHistoryMessages([]);
+    expect(await client.session()).toMatchObject({ hasMessages: false });
+    client.controls.setMethodResponse(method, { messages: [], hasMore: true });
+    expect(await client.session()).toMatchObject({ hasMessages: true });
+  },
+);
+
+it("serves requested initial history through the startup response owner", async ({ connect }) => {
+  const messages = [{ role: "assistant", content: "Cached conversation" }];
+  const client = sessionClient(
+    await connect({ sessions: [notes], sessionTranscripts: { [notes.key]: { messages } } }),
+    notes.key,
+  );
+  const subscribe = (initialHistory?: Record<string, unknown>) =>
+    client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory });
+  expect(await subscribe()).not.toHaveProperty("initialHistory");
+  expect(await subscribe({})).toMatchObject({
+    key: notes.key,
+    initialHistory: {
+      ok: true,
+      payload: { messages, sessionId: notes.sessionId, sessionInfo: notes },
+    },
+  });
+  const delta = { kind: "delta", deltaCursor: "next", messages: [] };
+  client.controls.setMethodResponse("chat.startup", {
+    cases: [{ match: { sessionKey: notes.key, cursor: "cached" }, response: delta }],
+  });
+  expect(await subscribe({ cursor: "cached" })).toMatchObject({
+    initialHistory: { ok: true, payload: delta },
+  });
+  const error = { code: "UNAVAILABLE", message: "History is not ready", retryable: true };
+  client.controls.setMethodResponse("chat.startup", { __mockError: error });
+  expect(
+    await client.request("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).toMatchObject({ ok: true, payload: { initialHistory: { ok: false, error } } });
+});
+
+it("omits initial history only when the scenario explicitly exercises the fallback", async ({
+  connect,
+}) => {
+  const client = sessionClient(await connect({ subscriptionInitialHistory: false }), notes.key);
+  expect(
+    await client.payload("sessions.messages.subscribe", { key: notes.key, initialHistory: {} }),
+  ).not.toHaveProperty("initialHistory");
+});
 
 it("preserves stale wire responses without consuming sequences or replacing canonical identity", async ({
   connect,
@@ -14,7 +136,7 @@ it("preserves stale wire responses without consuming sequences or replacing cano
   const firstList = { sessions: [stale], offset: 10 };
   const lastList = { sessions: [], offset: 20 };
   const transcript = { messages: [], sessionId: "retired-transcript", sessionInfo: stale };
-  const { request, controls, send, response } = await connect({
+  const connection = await connect({
     sessions: [notes],
     methodResponses: {
       "sessions.list": { sequence: [firstList, lastList] },
@@ -23,85 +145,60 @@ it("preserves stale wire responses without consuming sequences or replacing cano
       },
     },
   });
-  expect((await request("chat.history", { sessionKey: notes.key })).payload.sessionId).toBe(
-    notes.sessionId,
-  );
-  expect((await request("chat.startup", { sessionKey: notes.key })).payload.sessionId).toBe(
-    notes.sessionId,
-  );
-  expect((await request("sessions.list")).payload).toMatchObject(firstList);
-  expect((await request("sessions.list")).payload).toEqual(lastList);
-  expect((await request("sessions.list")).payload).toEqual(lastList);
-  expect((await request("chat.history", { sessionKey: notes.key, offset: 10 })).payload).toEqual(
-    transcript,
-  );
+  const client = sessionClient(connection, notes.key);
+  const { controls, send, response } = client;
+  expect((await client.transcript("chat.history")).sessionId).toBe(notes.sessionId);
+  expect((await client.transcript()).sessionId).toBe(notes.sessionId);
+  expect(await client.payload("sessions.list")).toMatchObject(firstList);
+  expect(await client.payload("sessions.list")).toEqual(lastList);
+  expect(await client.payload("sessions.list")).toEqual(lastList);
+  expect(await client.transcript("chat.history", { offset: 10 })).toEqual(transcript);
   controls.deferNext("chat.startup");
   const id = await send("chat.startup", { sessionKey: notes.key });
   controls.resolveDeferred("chat.startup", transcript);
   expect(response(id)?.payload).toEqual(transcript);
   controls.setMethodResponse("chat.history", transcript);
-  expect((await request("chat.history", { sessionKey: notes.key })).payload).toEqual(transcript);
-  expect((await request("chat.startup", { sessionKey: notes.key })).payload).toMatchObject(
-    transcript,
-  );
-  expect((await request("sessions.describe", { key: notes.key })).payload).toMatchObject({
-    session: notes,
-  });
+  expect(await client.transcript("chat.history")).toEqual(transcript);
+  expect(await client.transcript()).toMatchObject(transcript);
+  expect(await client.session()).toMatchObject(notes);
 });
 
 it("does not commit rejected patches or unresolved deferrals", async ({ connect }) => {
-  const { request, send, response, controls } = await connect({ sessionKey: notes.key });
+  const client = sessionClient(await connect({ sessionKey: notes.key }), notes.key);
+  const { send, response, controls } = client;
   controls.setMethodResponse("sessions.patch", {
     __mockError: { code: "INVALID_REQUEST", message: "rejected" },
   });
-  expect(await request("sessions.patch", { key: notes.key, pinned: true })).toMatchObject({
-    ok: false,
-  });
-  expect((await request("sessions.list")).payload).toMatchObject({ sessions: [{ pinned: false }] });
+  expect(await client.patch({ pinned: true })).toMatchObject({ ok: false });
+  expect(await client.rows()).toMatchObject([{ pinned: false }]);
   controls.setMethodResponse("sessions.patch", { ok: true });
   controls.deferNext("sessions.patch");
   const pending = await send("sessions.patch", { key: notes.key, pinned: true });
   expect(response(pending)).toBeUndefined();
-  expect((await request("sessions.list")).payload).toMatchObject({ sessions: [{ pinned: false }] });
+  expect(await client.rows()).toMatchObject([{ pinned: false }]);
   controls.rejectDeferred("sessions.patch");
-  expect((await request("sessions.list")).payload).toMatchObject({ sessions: [{ pinned: false }] });
+  expect(await client.rows()).toMatchObject([{ pinned: false }]);
   controls.deferNext("sessions.patch");
   await send("sessions.patch", { key: notes.key, pinned: true });
   controls.resolveDeferred("sessions.patch", { ok: true });
-  expect((await request("sessions.list")).payload).toMatchObject({
-    sessions: [{ pinned: true, pinnedAt: expect.any(Number) }],
-  });
-  const beforeStalePatch = (await request("sessions.list")).payload.sessions;
+  expect(await client.rows()).toMatchObject([{ pinned: true, pinnedAt: expect.any(Number) }]);
+  const beforeStalePatch = await client.rows();
   expect(
-    await request("sessions.patch", {
-      key: notes.key,
-      expectedSessionId: "retired-generation",
-      label: "Wrong generation",
-    }),
+    await client.patch({ expectedSessionId: "retired-generation", label: "Wrong generation" }),
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-  expect((await request("sessions.list")).payload.sessions).toEqual(beforeStalePatch);
-  const replacementSessionId = "replacement-generation";
-  controls.setSessionsListResponse({
-    sessions: [{ ...notes, sessionId: replacementSessionId }],
-  });
+  expect(await client.rows()).toEqual(beforeStalePatch);
+  const replacement = { ...notes, sessionId: "replacement-generation", label: "Replacement label" };
+  controls.setSessionsListResponse({ sessions: [{ ...notes, sessionId: replacement.sessionId }] });
   expect(
-    await request("sessions.patch", {
-      key: notes.key,
-      expectedSessionId: replacementSessionId,
-      label: "Replacement label",
-    }),
+    await client.patch({ expectedSessionId: replacement.sessionId, label: replacement.label }),
   ).toMatchObject({ ok: true });
-  expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ sessionId: replacementSessionId, label: "Replacement label" }),
-  ]);
-  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
-    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
-    expect((await request(method, params)).payload).toEqual(
-      expect.objectContaining(
-        method === "sessions.describe"
-          ? { session: expect.objectContaining({ sessionId: replacementSessionId }) }
-          : { sessionId: replacementSessionId },
-      ),
+  expect(await client.rows()).toMatchObject([replacement]);
+  for (const method of ["sessions.describe", "sessions.dispatch", "chat.history", "chat.startup"]) {
+    const params = method.startsWith("sessions.") ? { key: notes.key } : { sessionKey: notes.key };
+    expect(await client.payload(method, params)).toMatchObject(
+      method === "sessions.describe"
+        ? { session: { sessionId: replacement.sessionId } }
+        : { sessionId: replacement.sessionId },
     );
   }
 });
@@ -109,26 +206,21 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
 it("replays later commits onto an injected list without adopting its stale generation", async ({
   connect,
 }) => {
-  const { request, controls } = await connect({ sessions: [notes] });
-  await request("sessions.patch", { key: notes.key, archived: true });
+  const client = sessionClient(await connect({ sessions: [notes] }), notes.key);
+  const { controls } = client;
+  await client.patch({ archived: true });
   const stale = { ...notes, archived: false, sessionId: "retired-generation" };
   controls.setMethodResponse("sessions.list", { sessions: [stale] });
-  expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ ...stale, archived: true }),
-  ]);
+  expect(await client.rows()).toMatchObject([{ ...stale, archived: true }]);
   expect(
-    await request("sessions.patch", {
-      key: notes.key,
-      expectedSessionId: stale.sessionId,
-      label: "Wrong generation",
-    }),
+    await client.patch({ expectedSessionId: stale.sessionId, label: "Wrong generation" }),
   ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-  await request("sessions.patch", { key: notes.key, label: "Renamed" });
-  expect((await request("sessions.list")).payload.sessions).toEqual([
-    expect.objectContaining({ ...stale, archived: true, label: "Renamed" }),
-  ]);
-  expect((await request("sessions.describe", { key: notes.key })).payload).toMatchObject({
-    session: { sessionId: notes.sessionId, archived: true, label: "Renamed" },
+  await client.patch({ label: "Renamed" });
+  expect(await client.rows()).toMatchObject([{ ...stale, archived: true, label: "Renamed" }]);
+  expect(await client.session()).toMatchObject({
+    sessionId: notes.sessionId,
+    archived: true,
+    label: "Renamed",
   });
 });
 
@@ -137,43 +229,43 @@ it("replaces canonical rows and membership without retaining omitted fields", as
 }) => {
   const omitted = { key: "agent:ops:omitted", sessionId: "omitted-generation" };
   const scenario = { sessions: [notes, omitted] };
-  const { request, controls } = await connect(scenario);
-  await request("sessions.patch", { key: notes.key, color: "purple", label: "Patched" });
-  await request("sessions.create", { key: "agent:ops:materialized", label: "Materialized" });
+  const initial = sessionClient(await connect(scenario), notes.key);
+  await initial.patch({ color: "purple", label: "Patched" });
+  await initial.request("sessions.create", {
+    key: "agent:ops:materialized",
+    label: "Materialized",
+  });
   const replacement = { key: notes.key, sessionId: notes.sessionId, label: "Exact replacement" };
 
-  controls.setSessionsListResponse({ sessions: [replacement] });
+  initial.controls.setSessionsListResponse({ sessions: [replacement] });
 
-  const assertReplacement = async (currentRequest: typeof request) => {
-    const list = (await currentRequest("sessions.list")).payload;
+  const assertReplacement = async (client: ReturnType<typeof sessionClient>) => {
+    const list = await client.payload("sessions.list");
     expect(list).toMatchObject({
       count: 1,
       defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
       path: "",
       ts: expect.any(Number),
-      sessions: [replacement],
     });
-    expect(list.sessions).toEqual([{ ...replacement, snapshotAt: expect.any(Number) }]);
-    expect((await currentRequest("sessions.describe", { key: notes.key })).payload.session).toEqual(
-      { ...replacement, snapshotAt: expect.any(Number) },
-    );
+    const expected = { ...replacement, hasMessages: false, snapshotAt: expect.any(Number) };
+    expect(list.sessions).toEqual([expected]);
+    expect(await client.session()).toEqual(expected);
     for (const method of ["chat.history", "chat.startup"]) {
-      expect((await currentRequest(method, { sessionKey: notes.key })).payload).toMatchObject({
+      expect(await client.transcript(method)).toMatchObject({
         sessionId: notes.sessionId,
         sessionInfo: replacement,
       });
     }
     for (const key of [omitted.key, "agent:ops:materialized"]) {
-      expect((await currentRequest("sessions.describe", { key })).payload.session).toBeNull();
-      expect(
-        (await currentRequest("chat.startup", { sessionKey: key })).payload,
-      ).not.toHaveProperty("sessionInfo");
+      expect((await client.payload("sessions.describe", { key })).session).toBeNull();
+      expect(await client.payload("chat.startup", { sessionKey: key })).not.toHaveProperty(
+        "sessionInfo",
+      );
     }
   };
-  await assertReplacement(request);
+  await assertReplacement(initial);
 
-  const reloaded = await connect(scenario);
-  await assertReplacement(reloaded.request);
+  await assertReplacement(sessionClient(await connect(scenario), notes.key));
 });
 
 it.for(
@@ -190,27 +282,22 @@ it.for(
     const history = expectDefined(transcripts[key], "onboarding history");
     const runId = "workboard-onboarding-run";
     const preview = expectDefined(history.inFlightRun, "onboarding run preview");
-    const { request } = await connect({
+    const connection = await connect({
       sessions: seed.cardSessions,
       sessionTranscripts:
         source === "transcript" ? transcripts : { [key]: { messages: history.messages } },
       ...(source === "scenario" ? { inFlightRun: preview } : {}),
     });
-    expect((await request(method, { sessionKey: key })).payload.inFlightRun).toMatchObject({
+    const client = sessionClient(connection, key);
+    expect((await client.transcript(method)).inFlightRun).toMatchObject({
       runId,
       text: "Checking first-task navigation and recovery after a validation error…",
     });
-    expect((await request("chat.abort", { sessionKey: key, runId })).payload).toEqual({
-      aborted: true,
-      runIds: [runId],
-    });
-    const reopened = (await request(method, { sessionKey: key })).payload;
-    expect(reopened.inFlightRun).toBeNull();
-    expect(reopened.sessionInfo).toMatchObject({
-      key,
-      status: "killed",
-      hasActiveRun: false,
-      activeRunIds: [],
+    expect(await client.abort({ runId })).toEqual({ aborted: true, runIds: [runId] });
+    const reopened = await client.transcript(method);
+    expect(reopened).toMatchObject({
+      inFlightRun: null,
+      sessionInfo: { key, status: "killed", hasActiveRun: false, activeRunIds: [] },
     });
     expect(reopened.messages).toEqual(history.messages);
   },

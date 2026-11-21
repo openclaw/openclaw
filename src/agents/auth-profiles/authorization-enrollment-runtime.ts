@@ -4,7 +4,7 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -82,13 +82,13 @@ export async function enrollOwnedAuthProfileAuthorization(params: {
         { agentId: params.agentId, path: databasePath, env: params.env },
         {
           operationLabel: "auth-profiles.doctor-enroll-authorization",
-          repairAdmission: { assertCurrent },
+          repairAdmission: { assertCurrent, integrityTables: ["auth_profile_store"] },
         },
       );
       noteAuthProfileFileWrite(databasePath);
     } else {
       const options = { agentId: params.agentId, path: databasePath, env: params.env };
-      const execution = captureOpenClawAgentDatabaseExecution(options);
+      const execution = await captureOpenClawAgentDatabaseExecutionAsync(options);
       try {
         await execution.prepare({
           assertCurrent,

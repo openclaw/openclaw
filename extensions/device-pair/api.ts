@@ -1,4 +1,3 @@
-// Device Pair API module exposes the plugin public contract.
 export {
   approveDevicePairing,
   clearDeviceBootstrapTokens,
@@ -14,8 +13,4 @@ export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,
 } from "openclaw/plugin-sdk/sandbox";
-export {
-  renderQrPngBase64,
-  renderQrPngDataUrl,
-  writeQrPngTempFile,
-} from "openclaw/plugin-sdk/media-runtime";
+export { renderQrPngBase64, writeQrPngTempFile } from "openclaw/plugin-sdk/media-runtime";

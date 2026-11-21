@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { SystemRunApprovalFileOperand, SystemRunApprovalPlan } from "./exec-approvals.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+  readNonBlankString,
+} from "./system-run-normalize.js";
 
 function normalizeSystemRunApprovalFileOperand(
   candidate: unknown,
@@ -53,7 +57,7 @@ export function normalizeSystemRunApprovalPlan(candidate: unknown): SystemRunApp
   }
   return {
     argv,
-    cwd: normalizeNonEmptyString(candidate.cwd),
+    cwd: readNonBlankString(candidate.cwd) ?? null,
     commandText,
     commandPreview: normalizeNonEmptyString(candidate.commandPreview),
     agentId: normalizeNonEmptyString(candidate.agentId),

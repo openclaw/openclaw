@@ -11,19 +11,17 @@ import { detectLegacyAuditLogs, migrateLegacyAuditLogs } from "./state-migration
 
 const AUDIT_SCRUB_PATTERN = Buffer.from(" \t".repeat(16));
 
-type SystemAuditEvent = {
-  timestamp: string;
-  operation: string;
-  summary: string;
+const SYSTEM_EVENT = {
+  timestamp: "2026-07-03T00:00:00.000Z",
+  operation: "gateway.restart",
+  summary: "",
 };
-
-type ConfigAuditRecord = {
-  ts: string;
-  source: string;
-  event: string;
-  argv: string[];
-  execArgv: string[];
+const CONFIG_RECORD = {
+  ts: "2026-07-01T00:00:00.000Z",
+  source: "config-io",
+  event: "config.write",
 };
+const jsonLine = (record: unknown) => `${JSON.stringify(record)}\n`;
 
 function auditPaths(stateDir: string, relativePath: string) {
   const source = path.join(stateDir, relativePath);
@@ -37,26 +35,16 @@ function auditPaths(stateDir: string, relativePath: string) {
   };
 }
 
-export function systemAuditEvent(
-  summary: string,
-  overrides: Partial<SystemAuditEvent> = {},
-): SystemAuditEvent {
-  return {
-    timestamp: "2026-07-03T00:00:00.000Z",
-    operation: "gateway.restart",
-    summary,
-    ...overrides,
-  };
+export function systemAuditEvent(summary: string, overrides: Partial<typeof SYSTEM_EVENT> = {}) {
+  return { ...SYSTEM_EVENT, summary, ...overrides };
 }
 
 export function configAuditRecord(
   marker: string,
-  overrides: Partial<ConfigAuditRecord> = {},
-): ConfigAuditRecord {
+  overrides: Partial<typeof CONFIG_RECORD> & { argv?: string[]; execArgv?: string[] } = {},
+) {
   return {
-    ts: "2026-07-01T00:00:00.000Z",
-    source: "config-io",
-    event: "config.write",
+    ...CONFIG_RECORD,
     argv: ["openclaw", "config", "set", "token", marker],
     execArgv: [],
     ...overrides,
@@ -65,8 +53,8 @@ export function configAuditRecord(
 
 export class AuditMigrationFixture {
   readonly env: NodeJS.ProcessEnv;
-  readonly config;
-  readonly system;
+  readonly config: ReturnType<typeof auditPaths>;
+  readonly system: ReturnType<typeof auditPaths>;
 
   constructor(readonly stateDir: string) {
     this.env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -146,34 +134,38 @@ export async function writeAuditRestoreJournal(
   },
 ): Promise<void> {
   const stat = await fs.stat(rawPath);
-  const journal = `${JSON.stringify({
+  const journal = jsonLine({
     schemaVersion: 6,
     rawBase64: sourceRaw.toString("base64"),
     scrubPatternBase64: AUDIT_SCRUB_PATTERN.toString("base64"),
     target: { dev: stat.dev, ino: stat.ino, size: sourceRaw.length },
-  })}\n`;
+  });
   await fs.writeFile(
     `${rawPath}.doctor-scrub-progress`,
-    `${JSON.stringify({
+    jsonLine({
       schemaVersion: 1,
       journalHash: createHash("sha256").update(journal).digest("hex"),
       direction: progress.restoredBytes > 0 ? "restoring" : "scrubbing",
       committedBytes: progress.restoredBytes || progress.scrubbedBytes,
       pendingEnd: progress.restoredBytes || progress.scrubbedBytes,
       extentBytes: progress.restoredBytes > 0 ? progress.scrubbedBytes : sourceRaw.length,
-    })}\n`,
+    }),
   );
   await fs.writeFile(`${rawPath}.doctor-scrub-restore`, journal);
 }
 
-async function fileHandlePrototype<T>(
+function onStateRoot(
   fixture: AuditMigrationFixture,
-  probeName: string,
-): Promise<T> {
-  const probe = await fs.open(path.join(fixture.stateDir, probeName), "w+");
-  const prototype = Object.getPrototypeOf(probe) as T;
-  await probe.close();
-  return prototype;
+  opened: (root: Awaited<ReturnType<typeof fsSafe.root>>) => void,
+) {
+  const openRoot = fsSafe.root;
+  return vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
+    const root = await openRoot(rootPath, defaults);
+    if (rootPath === fixture.stateDir) {
+      opened(root);
+    }
+    return root;
+  });
 }
 
 export function failArchiveHardening(
@@ -181,39 +173,30 @@ export function failArchiveHardening(
   archivePath: string,
   message: string,
 ) {
-  const openRoot = fsSafe.root;
-  const restorers: Array<() => void> = [];
+  const spies: Array<{ mockRestore(): void }> = [];
   let armed = true;
-  const rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
-    const root = await openRoot(rootPath, defaults);
-    if (rootPath === fixture.stateDir) {
-      const openWritable = root.openWritable.bind(root);
-      const openSpy = vi
-        .spyOn(root, "openWritable")
-        .mockImplementation(async (relativePath, options) => {
-          const opened = await openWritable(relativePath, options);
-          // Publication uses a backend-dependent chmod path; fail the explicit hardening only.
-          if (
-            armed &&
-            options?.writeMode === "update" &&
-            path.resolve(rootPath, relativePath) === archivePath
-          ) {
-            armed = false;
-            const chmodSpy = vi
-              .spyOn(opened.handle, "chmod")
-              .mockRejectedValueOnce(new Error(message));
-            restorers.push(() => chmodSpy.mockRestore());
-          }
-          return opened;
-        });
-      restorers.push(() => openSpy.mockRestore());
-    }
-    return root;
+  const rootSpy = onStateRoot(fixture, (root) => {
+    const openWritable = root.openWritable.bind(root);
+    spies.push(
+      vi.spyOn(root, "openWritable").mockImplementation(async (relativePath, options) => {
+        const opened = await openWritable(relativePath, options);
+        // Publication uses a backend-dependent chmod path; fail the explicit hardening only.
+        if (
+          armed &&
+          options?.writeMode === "update" &&
+          path.resolve(fixture.stateDir, relativePath) === archivePath
+        ) {
+          armed = false;
+          spies.push(vi.spyOn(opened.handle, "chmod").mockRejectedValueOnce(new Error(message)));
+        }
+        return opened;
+      }),
+    );
   });
   return {
     mockRestore() {
-      for (const restore of restorers.toReversed()) {
-        restore();
+      for (const spy of spies.toReversed()) {
+        spy.mockRestore();
       }
       rootSpy.mockRestore();
     },
@@ -237,61 +220,47 @@ export function failAuditMove(
   ),
   beforeRefusal?: () => void,
 ) {
-  const openRoot = fsSafe.root;
-  return vi.spyOn(fsSafe, "root").mockImplementation(async (rootPath, defaults) => {
-    const root = await openRoot(rootPath, defaults);
-    if (rootPath === fixture.stateDir) {
-      const move = root.move.bind(root);
-      vi.spyOn(root, "move").mockImplementation(async (...args) => {
-        if (path.resolve(rootPath, args[0]) === sourcePath) {
-          beforeRefusal?.();
-          throw error;
-        }
-        return move(...args);
-      });
-    }
-    return root;
+  return onStateRoot(fixture, (root) => {
+    const move = root.move.bind(root);
+    vi.spyOn(root, "move").mockImplementation(async (...args) => {
+      if (path.resolve(fixture.stateDir, args[0]) === sourcePath) {
+        beforeRefusal?.();
+        throw error;
+      }
+      return move(...args);
+    });
   });
 }
 
 export async function failSecondScrubWrite(fixture: AuditMigrationFixture) {
   // The source inode becomes the raw archive; sibling publication writes must succeed.
   const sourceIdentity = await fs.stat(fixture.config.source, { bigint: true });
-  const prototype = await fileHandlePrototype<{
+  const probe = await fs.open(path.join(fixture.stateDir, "write-probe"), "w+");
+  type WriteArgs = [Uint8Array, number, number, number | null];
+  const prototype = Object.getPrototypeOf(probe) as {
     stat(options: { bigint: true }): Promise<{ dev: bigint; ino: bigint }>;
-    write(
-      buffer: Uint8Array,
-      offset: number,
-      length: number,
-      position: number | null,
-    ): Promise<{ bytesWritten: number; buffer: Uint8Array }>;
-  }>(fixture, "write-probe");
+    write(...args: WriteArgs): Promise<{ bytesWritten: number; buffer: Uint8Array }>;
+  };
+  await probe.close();
   const original = Reflect.get(prototype, "write") as typeof prototype.write;
   let calls = 0;
   return vi.spyOn(prototype, "write").mockImplementation(async function (
     this: typeof prototype,
-    buffer: Uint8Array,
-    offset: number,
-    length: number,
-    position: number | null,
+    ...args: Parameters<typeof original>
   ) {
+    const [buffer, offset, length, position] = args;
     const identity = await this.stat({ bigint: true });
     if (identity.dev !== sourceIdentity.dev || identity.ino !== sourceIdentity.ino) {
-      return await original.call(this, buffer, offset, length, position);
+      return await original.apply(this, args);
     }
     calls += 1;
     if (calls === 1) {
-      return await original.call(
-        this,
-        buffer,
-        offset,
-        Math.max(1, Math.floor(length / 2)),
-        position,
-      );
+      const half = Math.max(1, Math.floor(length / 2));
+      return await original.call(this, buffer, offset, half, position);
     }
     if (calls === 2) {
       throw new Error("simulated scrub write failure");
     }
-    return await original.call(this, buffer, offset, length, position);
+    return await original.apply(this, args);
   });
 }

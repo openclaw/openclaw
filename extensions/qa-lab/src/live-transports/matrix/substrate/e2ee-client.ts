@@ -12,10 +12,10 @@ import type {
   OpenAsyncKeyedStoreOptions,
   PluginStateActionAuthority,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { buildMatrixQaMessageContent } from "./client-message-content.js";
 import {
   MATRIX_QA_E2EE_SYNC_FILTER,
-  createMatrixQaE2eeClientLifecycle,
   createMatrixQaE2eeObservedEventRecorder,
   prepareMatrixQaE2eeStorage,
   type MatrixQaE2eeActorId,
@@ -38,6 +38,23 @@ type MatrixQaE2eeClientParams = {
   timeoutMs: number;
   userId: string;
 };
+
+async function withMatrixQaE2eeTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string,
+  onTimeout?: () => void,
+): Promise<T> {
+  return await raceWithTimeout(
+    promise,
+    timeoutMs,
+    () => {
+      onTimeout?.();
+      throw new Error(message);
+    },
+    { ref: false },
+  );
+}
 
 export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
   const { loadQaRunnerBundledPluginTestApi } =
@@ -162,22 +179,59 @@ export async function createMatrixQaE2eeScenarioClient(
   client.on("verification.summary", recordVerificationSummary);
 
   const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
-  const lifecycle = createMatrixQaE2eeClientLifecycle({
-    abortPendingRequests: () => client.abortPendingRequests(),
-    detachListeners: () => {
+  const activeOperations = new Set<Promise<unknown>>();
+  let shutdownStarted = false;
+  let stopPromise: Promise<void> | undefined;
+
+  const failShutdown = async (phase: string, cause: unknown): Promise<never> => {
+    try {
+      await client.stopWithoutPersist().finally(closeState);
+    } catch {
+      // Preserve the lifecycle failure that explains why persistence was skipped.
+    }
+    throw new Error(
+      `Matrix E2EE client shutdown failed while ${phase}; crypto state was discarded. Retry the QA scenario with a fresh client.`,
+      { cause },
+    );
+  };
+  const stop = (): Promise<void> => {
+    if (stopPromise) {
+      return stopPromise;
+    }
+    shutdownStarted = true;
+    stopPromise = (async () => {
+      const deadline = Date.now() + shutdownTimeoutMs;
       client.off("room.message", recordEvent);
       client.off("verification.summary", recordVerificationSummary);
-    },
-    drainPendingDecryptions: () => client.drainPendingDecryptions(),
-    shutdownTimeoutMs,
-    stopAndPersist: () => client.stopAndPersist().finally(closeState),
-    stopWithoutPersist: () => client.stopWithoutPersist().finally(closeState),
-  });
+      if (activeOperations.size > 0) {
+        const graceMs = Math.min(1_000, Math.max(0, deadline - Date.now()));
+        await withMatrixQaE2eeTimeout(
+          Promise.allSettled(activeOperations),
+          graceMs,
+          "active Matrix SDK operations did not settle before shutdown",
+        ).catch(async (error: unknown) => {
+          client.abortPendingRequests();
+          // The grace deadline decides whether persistence is safe, not whether
+          // non-abortable work has settled. Requests are already canceled; join
+          // the admitted work before discard can destroy its client resources.
+          await Promise.allSettled(activeOperations);
+          return await failShutdown("waiting for active Matrix SDK operations", error);
+        });
+      }
+      await withMatrixQaE2eeTimeout(
+        client.drainPendingDecryptions(),
+        Math.max(0, deadline - Date.now()),
+        "pending Matrix decryptions did not drain before shutdown",
+      ).catch((error: unknown) => failShutdown("draining pending Matrix decryptions", error));
+      await client.stopAndPersist().finally(closeState);
+    })();
+    return stopPromise;
+  };
 
   try {
     await client.start({ readyTimeoutMs: Math.min(45_000, Math.max(15_000, params.timeoutMs)) });
   } catch (error) {
-    await lifecycle.stop().catch(() => undefined);
+    await stop().catch(() => undefined);
     throw error;
   }
 
@@ -227,17 +281,30 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
-  const runClientOperation = <T>(
+  const runClientOperation = async <T>(
     label: string,
     roomId: string,
     run: (assertCurrent: () => void) => Promise<T>,
-  ) =>
-    lifecycle.runOperation({
-      label,
-      run: (assertActive) =>
-        client.withLiveEncryptedRoom(roomId, run, { assertCurrent: assertActive }),
-      timeoutMs: params.timeoutMs,
-    });
+  ): Promise<T> => {
+    const assertActive = () => {
+      if (shutdownStarted) {
+        throw new Error(
+          `Matrix E2EE client shutdown has started; cannot start ${label}. Retry the QA scenario with a fresh client.`,
+        );
+      }
+    };
+    assertActive();
+    const active = client.withLiveEncryptedRoom(roomId, run, { assertCurrent: assertActive });
+    activeOperations.add(active);
+    void active.finally(() => activeOperations.delete(active)).catch(() => undefined);
+
+    return withMatrixQaE2eeTimeout(
+      active,
+      params.timeoutMs,
+      `${label} timed out after ${params.timeoutMs}ms`,
+      () => void stop().catch(() => undefined),
+    );
+  };
 
   return {
     async acceptVerification(id: string) {
@@ -350,7 +417,7 @@ export async function createMatrixQaE2eeScenarioClient(
     ) {
       return await requireCrypto().startVerification(id, method);
     },
-    stop: lifecycle.stop,
+    stop,
     waitForOptionalRoomEvent,
     async waitForRoomEvent(waitParams: Parameters<typeof waitForOptionalRoomEvent>[0]) {
       const result = await waitForOptionalRoomEvent(waitParams);

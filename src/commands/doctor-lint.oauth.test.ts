@@ -1,5 +1,5 @@
 // Read-only Doctor must not rotate a server credential into a discarded database.
-import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import type { FetchLike } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundleMcpToolRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";

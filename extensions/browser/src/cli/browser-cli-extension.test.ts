@@ -1,30 +1,27 @@
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createCliRuntimeCapture } from "../../test-support.js";
 import type { installChromeExtensionBootstrap } from "../browser/extension-install.js";
 import { relayKeyIdFromHex } from "../browser/extension-relay/auth-v2-crypto.js";
+import { createBrowserCliCapture } from "./browser-cli-extension.test-support.js";
 
 // Metadata output must remain usable without loading browser or agent execution runtimes.
-vi.mock("../control-service.js", () => {
-  throw new Error("Browser extension CLI must not load browser control services");
+const rejectRuntimeImport = vi.hoisted(() => () => {
+  throw new Error("Browser extension metadata must not load execution runtimes");
 });
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => {
-  throw new Error("Browser extension CLI must not load agent runtime");
-});
-vi.mock("openclaw/plugin-sdk/media-runtime", () => {
-  throw new Error("Browser extension CLI must not load media runtime");
-});
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => {
-  throw new Error("Browser extension CLI must not load media understanding runtime");
-});
+// mock-isolation: fail if metadata commands load the browser control runtime.
+vi.mock("../control-service.js", rejectRuntimeImport);
+// mock-isolation: fail if metadata commands load the agent execution runtime.
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", rejectRuntimeImport);
+// mock-isolation: fail if metadata commands load the media execution runtime.
+vi.mock("openclaw/plugin-sdk/media-runtime", rejectRuntimeImport);
+// mock-isolation: fail if metadata commands load the media understanding runtime.
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", rejectRuntimeImport);
 
 const relayMocks = vi.hoisted(() => {
-  let relayKey = "";
-  for (let byteIndex = 0; byteIndex < 32; byteIndex += 1) {
-    relayKey += ((1 + byteIndex * 17) & 0xff).toString(16).padStart(2, "0");
-  }
+  const relayKey = Buffer.from(Array.from({ length: 32 }, (_, i) => (1 + i * 17) & 0xff)).toString(
+    "hex",
+  );
   return { relayKey, ensureExtensionRelayToken: vi.fn(() => relayKey) };
 });
 const installMocks = vi.hoisted(() => ({
@@ -48,50 +45,40 @@ vi.mock("../browser/extension-relay/relay-auth.js", async (importOriginal) => ({
 
 vi.mock("../browser/extension-install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../browser/extension-install.js")>()),
-  browserExtensionStatus: installMocks.browserExtensionStatus,
-  installChromeExtensionBootstrap: installMocks.installChromeExtensionBootstrap,
-  removeChromeStoreInstallRequests: installMocks.removeChromeStoreInstallRequests,
-  repairChromeExtensionNativeHosts: installMocks.repairChromeExtensionNativeHosts,
-  uninstallChromeExtensionNativeHosts: installMocks.uninstallChromeExtensionNativeHosts,
+  ...installMocks,
 }));
 
-const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { installRuntime, resetRuntimeCapture } = createBrowserCliCapture();
 
-function createExtensionStatus() {
-  return {
-    platform: "linux" as const,
-    platformSupport: "automatic" as const,
-    installedCopy: { path: "/stable/openclaw-extension", present: true, owned: true },
-    bundledPath: "/bundled/openclaw-extension",
-    approvedPaths: ["/stable/openclaw-extension"],
-    discovered: [],
-    storeDiscovered: [],
-    storeInstallRequests: [],
-    registrations: [],
-    manualSetupRequired: false,
-    issues: [],
-  };
-}
+const createExtensionStatus = () => ({
+  platformSupport: "automatic" as const,
+  discovered: [],
+  storeDiscovered: [],
+  storeInstallRequests: [],
+  manualSetupRequired: false,
+  issues: [],
+});
 
-async function run(args: string[], pluginRoot?: string) {
+async function run(args: string[], pluginRoot?: string, parentJson = false) {
   const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
-  const program = new Command().exitOverride();
-  registerBrowserExtensionCommands(program.command("browser"), () => ({}), pluginRoot);
-  return program.parseAsync(["browser", "extension", ...args], { from: "user" });
+  const program = new Command().exitOverride().enablePositionalOptions();
+  const browser = program.command("browser").option("--json", "Output JSON", false);
+  registerBrowserExtensionCommands(browser, () => browser.opts(), pluginRoot);
+  return program.parseAsync(["browser", ...(parentJson ? ["--json"] : []), "extension", ...args], {
+    from: "user",
+  });
 }
 
 describe("browser extension pairing Gateway URL", () => {
-  const output = {
-    json: vi.fn(defaultRuntime.writeJson),
-    log: vi.fn(defaultRuntime.log),
-    error: vi.fn(defaultRuntime.error),
-  };
+  let output: ReturnType<typeof installRuntime>;
+  const loggedMessages = () => output.log.mock.calls.map(([message]) => String(message));
+  async function expectFailure(args: string[], message: string) {
+    await expect(run(args)).rejects.toThrow("__exit__:1");
+    expect(output.error).toHaveBeenCalledWith(expect.stringContaining(message));
+  }
   beforeEach(() => {
     configMocks.read.mockReset().mockReturnValue({});
-    output.json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(runtime.writeJson);
-    output.log = vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
-    output.error = vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
-    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    output = installRuntime();
     installMocks.browserExtensionStatus.mockResolvedValue(createExtensionStatus());
     installMocks.installChromeExtensionBootstrap.mockResolvedValue(createExtensionStatus());
     installMocks.removeChromeStoreInstallRequests.mockResolvedValue({ removed: [], refused: [] });
@@ -104,23 +91,14 @@ describe("browser extension pairing Gateway URL", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    installMocks.browserExtensionStatus.mockReset();
-    installMocks.installChromeExtensionBootstrap.mockReset();
-    installMocks.removeChromeStoreInstallRequests.mockReset();
-    installMocks.repairChromeExtensionNativeHosts.mockReset();
-    installMocks.uninstallChromeExtensionNativeHosts.mockReset();
+    for (const mock of Object.values(installMocks)) {
+      mock.mockReset();
+    }
     resetRuntimeCapture();
   });
 
   it("repairs only the explicitly selected native target without profile discovery or pairing", async () => {
-    const report = {
-      changes: ["Repaired Google Chrome OpenClaw native messaging registration."],
-      warnings: [],
-      registrations: [],
-      retainedNativeHostPaths: ["/new/native-host-entry.js"],
-      retentionSafe: true,
-      manualRequired: false,
-    };
+    const report = { warnings: [], retentionSafe: true, manualRequired: false };
     installMocks.repairChromeExtensionNativeHosts.mockResolvedValue(report);
     await run(["repair", "--from", "/old/native-host-entry.js", "--json"], "/new/browser");
     expect(output.json).toHaveBeenCalledWith(report);
@@ -142,20 +120,7 @@ describe("browser extension pairing Gateway URL", () => {
         params.onProgress?.(
           "Native bootstrap is ready. Add OpenClaw from the Chrome Web Store. For development, load unpacked from /stable/openclaw-extension.",
         );
-        return {
-          ...createExtensionStatus(),
-          discovered: [
-            {
-              product: "chromium",
-              browser: "Chromium",
-              userDataDir: "/chrome",
-              profile: "Default",
-              securePreferencesPath: "/chrome/Default/Secure Preferences",
-              extensionId: "abcdefghijklmnopabcdefghijklmnop",
-              extensionPath: "/stable/openclaw-extension",
-            },
-          ],
-        };
+        return createExtensionStatus();
       },
     );
 
@@ -164,7 +129,7 @@ describe("browser extension pairing Gateway URL", () => {
       expect.objectContaining({ requestStoreInstall: false }),
     );
 
-    const messages = output.log.mock.calls.map(([message]) => String(message));
+    const messages = loggedMessages();
     expect(messages[0]).toContain("Preparing");
     expect(messages.findIndex((message) => message.includes("Pre-registered"))).toBeLessThan(
       messages.findIndex((message) => message.includes("Chrome Web Store")),
@@ -176,18 +141,10 @@ describe("browser extension pairing Gateway URL", () => {
     installMocks.installChromeExtensionBootstrap.mockResolvedValue({
       ...createExtensionStatus(),
       manualSetupRequired: true,
-      storeInstallRequests: [
-        {
-          browser: "Google Chrome",
-          path: "/chrome/External Extensions/openclaw.json",
-          state: "requested",
-        },
-      ],
+      storeInstallRequests: [{ state: "requested" }],
     });
     await expect(run(["install"])).rejects.toThrow("__exit__:1");
-    expect(output.log.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
-      "approve Chrome's prompt",
-    );
+    expect(loggedMessages().join("\n")).toContain("approve Chrome's prompt");
   });
 
   it("removes Store requests without removing native hosts", async () => {
@@ -197,58 +154,24 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("rejects path-rewriting proxy prefixes for strict v2 resource binding", async () => {
-    await expect(
-      run(["pair", "--gateway-url", "wss://gateway.example/proxy-prefix"]),
-    ).rejects.toThrow("__exit__:1");
-    expect(output.error).toHaveBeenCalledWith(
-      expect.stringContaining("must not include a path prefix"),
+    await expectFailure(
+      ["pair", "--gateway-url", "wss://gateway.example/proxy-prefix"],
+      "must not include a path prefix",
     );
   });
 
   it.each(["status", "uninstall-host"])(
     "honors browser-level and leaf JSON placement for extension %s",
     async (subcommand) => {
-      const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
-      const placements = [
-        ["browser", "--json", "extension", subcommand],
-        ["browser", "extension", subcommand, "--json"],
-      ];
-
-      for (const argv of placements) {
-        const program = new Command().enablePositionalOptions();
-        const browser = program.command("browser").option("--json", "Output JSON", false);
-        registerBrowserExtensionCommands(browser, (command) => {
-          let owner: Command | null = command;
-          while (owner && owner.name() !== "browser") {
-            owner = owner.parent;
-          }
-          return owner?.opts() ?? {};
-        });
+      for (const parentJson of [true, false]) {
         output.json.mockClear();
         output.log.mockClear();
-
-        await program.parseAsync(argv, { from: "user" });
-
-        expect(output.json, argv.join(" ")).toHaveBeenCalledTimes(1);
-        expect(output.log, argv.join(" ")).not.toHaveBeenCalled();
+        await run(parentJson ? [subcommand] : [subcommand, "--json"], undefined, parentJson);
+        expect(output.json).toHaveBeenCalledTimes(1);
+        expect(output.log).not.toHaveBeenCalled();
       }
     },
   );
-
-  it("pairs desktop helpers through the local Gateway wake-up route", async () => {
-    configMocks.read.mockReturnValue({
-      gateway: { mode: "local" },
-    });
-
-    await run(["pair", "--local-gateway", "--json"]);
-
-    expect(output.json).toHaveBeenCalledWith({
-      pairingString: expect.stringContaining("/browser/extension?gateway="),
-      relayPort: 18799,
-      remote: false,
-    });
-    expect(output.log).not.toHaveBeenCalled();
-  });
 
   it.each([
     { config: {}, args: ["--gateway-url", "wss://gateway.example"], message: "cannot be combined" },
@@ -263,47 +186,41 @@ describe("browser extension pairing Gateway URL", () => {
       configMocks.read.mockReturnValue(config);
       relayMocks.ensureExtensionRelayToken.mockClear();
 
-      await expect(run(["pair", "--local-gateway", "--json", ...args])).rejects.toThrow(
-        "__exit__:1",
-      );
-
-      expect(output.error).toHaveBeenCalledWith(expect.stringContaining(message));
+      await expectFailure(["pair", "--local-gateway", "--json", ...args], message);
       expect(relayMocks.ensureExtensionRelayToken).not.toHaveBeenCalled();
     },
   );
 
-  it("pairs with the allocated extension relay when another profile pins the default port", async () => {
-    configMocks.read.mockReturnValue({
-      browser: {
-        profiles: {
-          pinned: { cdpPort: 18799, color: "#00AA00" },
-        },
-      },
-    });
-
-    await run(["pair", "--json"]);
-
+  it.each([
+    {
+      config: { gateway: { mode: "local" as const } },
+      args: ["--local-gateway"],
+      port: 18799,
+      route: "/browser/extension?gateway=",
+    },
+    {
+      config: { browser: { profiles: { pinned: { cdpPort: 18799, color: "#00AA00" } } } },
+      args: [],
+      port: 18798,
+      route: "127.0.0.1:18798/extension",
+    },
+  ])("pairs through $route on port $port", async ({ config, args, port, route }) => {
+    configMocks.read.mockReturnValue(config);
+    await run(["pair", "--json", ...args]);
     expect(output.json).toHaveBeenCalledWith({
-      pairingString: expect.stringContaining("127.0.0.1:18798/extension"),
-      relayPort: 18798,
+      pairingString: expect.stringContaining(route),
+      relayPort: port,
       remote: false,
     });
     expect(JSON.stringify(output.json.mock.calls)).toContain(`#${relayMocks.relayKey}`);
     expect(output.log).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      label: "configured",
-      config: {
-        browser: {
-          profiles: { custom: { driver: "extension" as const, cdpPort: 21117, color: "#00AA00" } },
-        },
-      },
-      port: 21117,
-    },
-  ])("prints safe $label v2 metadata through the lazy root CLI", async ({ config, port }) => {
-    configMocks.read.mockReturnValue(config);
+  it("prints safe configured v2 metadata through the lazy root CLI", async () => {
+    const port = 21117;
+    configMocks.read.mockReturnValue({
+      browser: { profiles: { custom: { driver: "extension", cdpPort: port, color: "#00AA00" } } },
+    });
     const { registerBrowserCli } = await import("./browser-cli.js");
     const program = new Command();
     registerBrowserCli(program, ["node", "openclaw", "browser", "extension", "cdp", "--json"]);
@@ -343,16 +260,13 @@ describe("browser extension pairing Gateway URL", () => {
   });
 
   it("refuses --legacy-bearer when legacy auth is disabled", async () => {
-    configMocks.read.mockReturnValue({
-      browser: { extensionRelay: { allowLegacyAuth: false } },
-    });
+    configMocks.read.mockReturnValue({ browser: { extensionRelay: { allowLegacyAuth: false } } });
 
-    await expect(run(["cdp", "--legacy-bearer", "--json"])).rejects.toThrow("__exit__:1");
-
-    expect(output.json).not.toHaveBeenCalled();
-    expect(output.error).toHaveBeenCalledWith(
-      expect.stringContaining("Legacy browser relay auth is disabled"),
+    await expectFailure(
+      ["cdp", "--legacy-bearer", "--json"],
+      "Legacy browser relay auth is disabled",
     );
+    expect(output.json).not.toHaveBeenCalled();
     expect(output.error.mock.calls.flat().join("\n")).not.toContain(relayMocks.relayKey);
   });
 });

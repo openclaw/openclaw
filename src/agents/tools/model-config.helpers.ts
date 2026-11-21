@@ -5,8 +5,8 @@ import {
 } from "../../config/model-input.js";
 import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveProviderAuthScope } from "../../plugins/provider-auth-scope.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   listProfilesForProvider,
   resolveAuthProfileOrder,
@@ -81,12 +81,13 @@ export function hasAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   runtimeLookup?: RuntimeProviderAuthLookup;
   capability?: string;
 }): boolean {
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return false;
+  }
   // Env-key resolution is config/workspace aware: plugin-provider env candidates
   // come from the metadata snapshot resolved for this config. Non-bundled or
   // config-scoped provider plugins are invisible without it, so a config-blind
@@ -108,20 +109,14 @@ export function hasAuthForProvider(params: {
   }
   return hasAuthProfileForProvider({
     provider: params.provider,
-    agentDir: params.agentDir,
     authStore: params.authStore,
-    authProfileStoreSource: params.authProfileStoreSource,
-    includeExternalCli: true,
     capability: params.capability,
   });
 }
 
 export function hasAuthProfileForProvider(params: {
   provider: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
-  includeExternalCli?: boolean;
   type?: AuthProfileCredential["type"];
   capability?: string;
 }): boolean {
@@ -146,19 +141,10 @@ export function hasAuthProfileForProvider(params: {
   });
 }
 
-/**
- * @deprecated Direct synchronous tool factories retain directory discovery until
- * their next breaking API change. Runtime construction prepares the store asynchronously.
- */
-export function loadLegacyToolAuthProfileStore(agentDir: string): AuthProfileStore {
-  return ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false });
-}
-
 /** Runtime callers prepare one owner snapshot before synchronous tool selection. */
 export async function prepareToolAuthProfileStore(options?: {
   agentDir?: string;
   authProfileStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
 }): Promise<AuthProfileStore | undefined> {
   return (
     options?.authProfileStore ??
@@ -171,6 +157,10 @@ export async function prepareToolAuthProfileStore(options?: {
 }
 
 export function hasProviderAuthForTool(params: Parameters<typeof hasAuthForProvider>[0]): boolean {
+  // Tool preparation excludes plugin auth; agent profiles cannot substitute for its owner.
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return false;
+  }
   const store = params.authStore;
   if (params.capability && store) {
     const binding = resolveProviderEntryApiKeyProfileReference({ ...params, store });
@@ -240,7 +230,6 @@ function hasAuthProfileTypeInStore(params: {
 function hasAuthProfileTypeForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   includeExternalCli?: boolean;
   type: AuthProfileCredential["type"] | readonly AuthProfileCredential["type"][];
@@ -267,7 +256,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
   modelApi?: string;
 }): boolean {
@@ -292,7 +280,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
   return hasAuthProfileTypeForProvider({
     provider: params.provider,
     cfg: params.cfg,
-    agentDir: params.agentDir,
     authStore: params.authStore,
     type: "api_key",
   });
@@ -301,7 +288,6 @@ function hasDirectProviderApiKeyAuthForTool(params: {
 function resolveDirectProviderEntryAuthFromProfileReference(params: {
   provider: string;
   cfg?: OpenClawConfig;
-  agentDir?: string;
   authStore?: AuthProfileStore;
 }): boolean | undefined {
   const resolveFromStore = (store: AuthProfileStore): boolean | undefined => {
@@ -341,11 +327,19 @@ function resolveDirectProviderEntryAuthFromProfileReference(params: {
 export function resolveOpenAiImageMediaCandidate(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir: string;
   authStore?: AuthProfileStore;
   openAiModel: string;
   resolveCodexMediaRoute?: () => { model: string } | undefined;
 }): OpenAiImageMediaCandidateDecision {
+  if (
+    resolveProviderAuthScope({
+      provider: OPENAI_PROVIDER_ID,
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) === "plugin"
+  ) {
+    return { kind: "drop" };
+  }
   const openAiModel = params.openAiModel.trim();
   if (!openAiModel) {
     return { kind: "drop" };
@@ -355,7 +349,6 @@ export function resolveOpenAiImageMediaCandidate(params: {
       provider: OPENAI_PROVIDER_ID,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       modelApi: OPENAI_RESPONSES_MODEL_API,
     })
@@ -372,7 +365,6 @@ export function resolveOpenAiImageMediaCandidate(params: {
     !hasAuthProfileTypeForProvider({
       provider: OPENAI_PROVIDER_ID,
       cfg: params.cfg,
-      agentDir: params.agentDir,
       authStore: params.authStore,
       includeExternalCli: true,
       type: ["oauth", "token"],
@@ -407,9 +399,7 @@ export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   candidates: Array<string | null | undefined>;
   isProviderConfigured?: (provider: string) => boolean | undefined;
 }): ToolModelConfig | null {
@@ -432,9 +422,7 @@ export function buildToolModelConfigFromCandidates(params: {
         provider,
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
         authStore: params.authStore,
-        authProfileStoreSource: params.authProfileStoreSource,
       });
     if (!provider || !providerConfigured) {
       continue;

@@ -4,7 +4,9 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlite-owner.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -37,6 +39,20 @@ function issueAuthority(profileId: string, scopes: readonly string[] = ["operato
   };
 }
 
+type Capture = Awaited<ReturnType<typeof prepareSessionControlTarget>>;
+async function withCapture(
+  request: Parameters<typeof prepareSessionControlTarget>[0],
+  check: (capture: Capture) => void | Promise<void>,
+) {
+  const capture = await prepareSessionControlTarget(request);
+  try {
+    await check(capture);
+  } finally {
+    capture.release();
+  }
+  return capture;
+}
+
 describe("session control source capability", () => {
   it("never mints authority from absence, matching fields, a copy, or a revoked source", () => {
     expect(captureSessionControlAuthority()?.authority).toBeUndefined();
@@ -67,6 +83,46 @@ describe("session control source capability", () => {
         expect(captureSessionControlAuthority()?.authority).toBe(authority);
         expect(hasSessionControlAuthority()).toBe(false);
         expect(() => hasSessionControlAuthority(upgrade)).toThrow(/source changed/i);
+      },
+    );
+  });
+
+  const ambientScope = (
+    authority: AdmittedRunOperatorAuthority,
+    hasCurrentClientAuthority?: () => boolean,
+  ) => ({
+    isWebchatConnect: () => false,
+    hasCurrentClientAuthority,
+    client: createSyntheticPluginRuntimeClient({
+      operatorRoleActor: { kind: "operator", profileId: "control-profile" },
+      operatorRunAuthority: authority,
+      scopes: ["operator.write"],
+    }),
+  });
+
+  it("keeps a completed request's client out of an admitted run's session controls", () => {
+    const { authority: ambient, revoke } = issueAuthority("control-profile");
+    const { authority: admitted } = issueAuthority("control-profile");
+    revoke();
+    withPluginRuntimeGatewayRequestScope(ambientScope(ambient), () => {
+      expect(hasSessionControlAuthority(admitted)).toBe(true);
+      // Without an admitted run the ambient client is still the caller's authority.
+      expect(() => captureSessionControlAuthority()).toThrow("session control source revoked");
+    });
+  });
+
+  it("keeps the live client check when the ambient authority is passed back as prepared", () => {
+    const { authority } = issueAuthority("control-profile");
+    let connected = true;
+    withPluginRuntimeGatewayRequestScope(
+      ambientScope(authority, () => connected),
+      () => {
+        const target = captureSessionControlAuthority();
+        expect(() => captureSessionControlAuthority(target?.authority)).not.toThrow();
+        connected = false;
+        expect(() => captureSessionControlAuthority(target?.authority)).toThrow(
+          "Session control caller authority is no longer active.",
+        );
       },
     );
   });
@@ -129,20 +185,11 @@ describe("prepared session control target", () => {
   ] as const)(
     "checks the persisted $relationship relationship",
     async ({ relationship, allowed }) => {
-      const createdActor: SessionEntry["createdActor"] =
-        relationship === "creator"
-          ? {
-              type: "human",
-              source: "profile",
-              id: callerId,
-            }
-          : relationship === "channel-creator"
-            ? {
-                type: "human",
-                source: "channel",
-                id: callerId,
-              }
-            : { type: "human", source: "profile", id: otherId };
+      const createdActor: SessionEntry["createdActor"] = {
+        type: "human",
+        source: relationship === "channel-creator" ? "channel" : "profile",
+        id: ["creator", "channel-creator"].includes(relationship) ? callerId : otherId,
+      };
       const { scope, entry, request } = seedTarget(relationship, { createdActor });
       if (relationship === "human-assignee-alias") {
         assign(scope, "human", aliasId);
@@ -152,20 +199,20 @@ describe("prepared session control target", () => {
       const { authority } = issueAuthority(callerId, [
         relationship === "unrelated-admin" ? "operator.admin" : "operator.write",
       ]);
-      const pending = prepareSessionControlTarget({ ...request, authority });
       if (!allowed) {
-        await expect(pending).rejects.toThrow(/creator or assigned human owner/i);
+        await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
+          /creator or assigned human owner/i,
+        );
         return;
       }
-      const capture = await pending;
-      try {
-        expect(capture.sessionId).toBe(entry.sessionId);
-        expect(capture.lifecycleRevision).toBe("generation-1");
-        expect(() => capture.assertCurrent()).not.toThrow();
-      } finally {
-        capture.release();
-      }
-      expect(() => capture.assertCurrent()).toThrow(/facts are unavailable/i);
+      const capture = await withCapture({ ...request, authority }, (current) => {
+        expect(current).toMatchObject({
+          sessionId: entry.sessionId,
+          lifecycleRevision: "generation-1",
+        });
+        expect(current.assertCurrent).not.toThrow();
+      });
+      expect(capture.assertCurrent).toThrow(/facts are unavailable/i);
     },
   );
 
@@ -193,7 +240,7 @@ describe("prepared session control target", () => {
     const { scope, entry } = seedTarget("assignee-self-archive");
     assign(scope, "human", callerId);
     const { authority } = issueAuthority(callerId);
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: scope.agentId }),
       identities: [scope.sessionKey, entry.sessionId],
       assertAllowed: () => {},
@@ -220,115 +267,93 @@ describe("prepared session control target", () => {
     const { scope, request } = seedTarget("revocation");
     assign(scope, "human", callerId);
     const { authority, revoke } = issueAuthority(callerId);
-    const assigned = await prepareSessionControlTarget({ ...request, authority });
-    try {
-      expect(() => assigned.assertCurrent()).not.toThrow();
+    const authorized = { ...request, authority };
+    await withCapture(authorized, async (assigned) => {
+      expect(assigned.assertCurrent).not.toThrow();
       assign(scope, "human", otherId);
-      expect(() => assigned.assertCurrent()).toThrow(
+      expect(assigned.assertCurrent).toThrow(
         /facts are unavailable|creator or assigned human owner/i,
       );
-      await expect(prepareSessionControlTarget({ ...request, authority })).rejects.toThrow(
+      await expect(prepareSessionControlTarget(authorized)).rejects.toThrow(
         /creator or assigned human owner/i,
       );
       assign(scope, "human", callerId);
       // Reassignment can authorize a fresh capture, never revive the already-retired one.
-      expect(() => assigned.assertCurrent()).toThrow(/facts are unavailable/i);
-    } finally {
-      assigned.release();
-    }
-    const unobserved = await prepareSessionControlTarget({ ...request, authority });
-    try {
+      expect(assigned.assertCurrent).toThrow(/facts are unavailable/i);
+    });
+    await withCapture(authorized, (unobserved) => {
       assign(scope, "human", otherId);
       assign(scope, "human", callerId);
-      expect(() => unobserved.assertCurrent()).toThrow(/facts are unavailable/i);
-    } finally {
-      unobserved.release();
-    }
-    const profileCapture = await prepareSessionControlTarget({ ...request, authority });
+      expect(unobserved.assertCurrent).toThrow(/facts are unavailable/i);
+    });
     try {
-      setUserProfileRole(callerId, "reader");
-      expect(() => profileCapture.assertCurrent()).toThrow(
-        /facts are unavailable|current authenticated profile/i,
-      );
+      await withCapture(authorized, (profileCapture) => {
+        setUserProfileRole(callerId, "reader");
+        expect(profileCapture.assertCurrent).toThrow(
+          /facts are unavailable|current authenticated profile/i,
+        );
+      });
     } finally {
-      profileCapture.release();
       setUserProfileRole(callerId, null);
     }
-    const sourceCapture = await prepareSessionControlTarget({ ...request, authority });
     const { authority: adminAuthority, revoke: revokeAdmin } = issueAuthority(callerId, [
       "operator.admin",
     ]);
-    try {
-      const adminCapture = await prepareSessionControlTarget({
-        ...request,
-        authority: adminAuthority,
-      });
-      try {
-        expect(() => sourceCapture.assertCurrent()).not.toThrow();
-        expect(() => adminCapture.assertCurrent()).not.toThrow();
+    await withCapture(authorized, async (sourceCapture) => {
+      await withCapture({ ...request, authority: adminAuthority }, (adminCapture) => {
+        expect(sourceCapture.assertCurrent).not.toThrow();
+        expect(adminCapture.assertCurrent).not.toThrow();
         revoke();
-        expect(() => sourceCapture.assertCurrent()).toThrow("session control source revoked");
-        expect(() => adminCapture.assertCurrent()).not.toThrow();
+        expect(sourceCapture.assertCurrent).toThrow("session control source revoked");
+        expect(adminCapture.assertCurrent).not.toThrow();
         revokeAdmin();
-        expect(() => adminCapture.assertCurrent()).toThrow("session control source revoked");
-      } finally {
-        adminCapture.release();
-      }
-    } finally {
-      sourceCapture.release();
-    }
+        expect(adminCapture.assertCurrent).toThrow("session control source revoked");
+      });
+    });
   });
 
   it("binds identity-only captures to the exact session and lifecycle generation", async () => {
     const { scope, entry, request } = seedTarget("identity-only", { lifecycleRevision: undefined });
     // Trusted callers compose their own source guard; omitting it grants no operator capability.
     expect(hasSessionControlAuthority()).toBe(false);
-    const initial = await prepareSessionControlTarget({
-      ...request,
-      expectedSessionId: entry.sessionId,
-      expectedLifecycleRevision: null,
-    });
-    try {
-      expect(initial.lifecycleRevision).toBeNull();
-      expect(() => initial.assertCurrent()).not.toThrow();
-      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
-      expect(() => initial.assertCurrent()).toThrow(/facts are unavailable|target changed/i);
-      await expect(
-        prepareSessionControlTarget({ ...request, expectedLifecycleRevision: null }),
-      ).rejects.toThrow(/target changed/i);
-    } finally {
-      initial.release();
-    }
-    const reset = await prepareSessionControlTarget({
-      ...request,
-      expectedSessionId: entry.sessionId,
-      expectedLifecycleRevision: "reset-generation",
-    });
-    try {
-      expect(reset.sessionId).toBe(entry.sessionId);
-      expect(() => reset.assertCurrent()).not.toThrow();
-      replaceSessionEntrySync(scope, {
-        ...entry,
-        sessionId: "replacement-session",
-        lifecycleRevision: "reset-generation",
+    for (const [before, after] of [
+      [entry, { ...entry, lifecycleRevision: "reset-generation" }],
+      [
+        { ...entry, lifecycleRevision: "reset-generation" },
+        { ...entry, sessionId: "replacement-session", lifecycleRevision: "reset-generation" },
+      ],
+    ] as const) {
+      const expected = {
+        expectedSessionId: before.sessionId,
+        expectedLifecycleRevision: before.lifecycleRevision ?? null,
+      };
+      await withCapture({ ...request, ...expected }, async (capture) => {
+        expect(capture).toMatchObject({
+          sessionId: before.sessionId,
+          lifecycleRevision: before.lifecycleRevision ?? null,
+        });
+        expect(capture.assertCurrent).not.toThrow();
+        replaceSessionEntrySync(scope, after);
+        expect(capture.assertCurrent).toThrow(/facts are unavailable|target changed/i);
+        const mismatch =
+          before.sessionId === after.sessionId
+            ? { expectedLifecycleRevision: expected.expectedLifecycleRevision }
+            : { expectedSessionId: expected.expectedSessionId };
+        await expect(prepareSessionControlTarget({ ...request, ...mismatch })).rejects.toThrow(
+          /target changed/i,
+        );
       });
-      expect(() => reset.assertCurrent()).toThrow(/facts are unavailable|target changed/i);
-      await expect(
-        prepareSessionControlTarget({ ...request, expectedSessionId: entry.sessionId }),
-      ).rejects.toThrow(/target changed/i);
-    } finally {
-      reset.release();
     }
-    const replacement = await prepareSessionControlTarget({
-      ...request,
-      expectedSessionId: "replacement-session",
-      expectedLifecycleRevision: "reset-generation",
-    });
-    try {
-      expect(() => replacement.assertCurrent()).not.toThrow();
-    } finally {
-      replacement.release();
-    }
-    expect(() => replacement.assertCurrent()).toThrow(/facts are unavailable/i);
+    const replacement = await withCapture(
+      {
+        ...request,
+        expectedSessionId: "replacement-session",
+        expectedLifecycleRevision: "reset-generation",
+      },
+      (capture) => {
+        expect(capture.assertCurrent).not.toThrow();
+      },
+    );
+    expect(replacement.assertCurrent).toThrow(/facts are unavailable/i);
   });
 });

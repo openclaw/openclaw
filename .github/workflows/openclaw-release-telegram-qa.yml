@@ -56,7 +56,7 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -557,7 +557,8 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Validate candidate artifact metadata
+      - &telegram_candidate_metadata_step
+        name: Validate candidate artifact metadata
         id: metadata
         env:
           ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
@@ -754,7 +755,7 @@ jobs:
     needs: [trusted_identity, build_candidate, attest_candidate]
     if: always()
     runs-on: *linux_runner_ubuntu
-    timeout-minutes: 60
+    timeout-minutes: 90
     environment: qa-live-shared
     permissions:
       actions: read
@@ -802,45 +803,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build qaRuntime
 
-      - name: Validate candidate artifact metadata
-        id: metadata
-        env:
-          ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
-          ARTIFACT_DIGEST: ${{ needs.build_candidate.outputs.artifact_digest }}
-          ARTIFACT_ID: ${{ needs.build_candidate.outputs.artifact_id }}
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ && "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ ]]
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --argjson id "$ARTIFACT_ID" \
-            --argjson runId "$GITHUB_RUN_ID" \
-            --arg name "$ARCHIVE_NAME" \
-            --arg repositoryId "$GITHUB_REPOSITORY_ID" \
-            --arg sourceSha "$GITHUB_SHA" \
-            '
-              .id == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              .workflow_run.id == $runId and
-              .workflow_run.head_sha == $sourceSha and
-              (.workflow_run.repository_id | tostring) == $repositoryId and
-              (.workflow_run.head_repository_id | tostring) == $repositoryId
-            ' <<<"$artifact_json" >/dev/null
-          run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}")"
-          jq -e \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --argjson runId "$GITHUB_RUN_ID" \
-            --arg sourceSha "$GITHUB_SHA" \
-            '
-              .id == $runId and
-              .run_attempt == $runAttempt and
-              .head_sha == $sourceSha
-            ' <<<"$run_json" >/dev/null
+      - *telegram_candidate_metadata_step
 
       - name: Download raw candidate archive
         id: download

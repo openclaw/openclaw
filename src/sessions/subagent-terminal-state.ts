@@ -6,7 +6,7 @@ import {
   prepareSessionWatcherStorePaths,
 } from "../config/sessions/session-store-path.js";
 import { recordSessionStateEventAsync } from "./session-state-events.js";
-import type { SessionStateWorkerOperations } from "./session-state-events.worker-contract.js";
+import type { SessionStateEventWrite } from "./session-state-events.worker-contract.js";
 
 type SubagentTerminalStatus = "ok" | "error" | "timeout" | "cancelled";
 
@@ -32,7 +32,7 @@ export function prepareSubagentTerminalState(
   params: SubagentTerminalState,
   now = Date.now(),
 ): {
-  input: SessionStateWorkerOperations["sessionState.record"]["input"];
+  input: SessionStateEventWrite;
   sessionEntryCurrent?: SessionEntryCurrentCheck;
 } {
   const watcherSessionKeys = [params.requesterSessionKey];

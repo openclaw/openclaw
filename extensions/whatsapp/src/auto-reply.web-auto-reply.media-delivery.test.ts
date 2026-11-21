@@ -1,4 +1,4 @@
-// WhatsApp web auto-reply media and terminal failure delivery behavior.
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
@@ -11,135 +11,90 @@ import {
   sendWebGroupInboundMessage,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundCallbackMessage } from "./inbound.js";
 import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
+import type { WebInboundCallbackMessage } from "./inbound/types.js";
 
 installWebAutoReplyTestHomeHooks();
+installWebAutoReplyUnitTestHooks({ pinDns: true });
 
 let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
+type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+beforeAll(async () => {
+  ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
+});
+
+async function captureInbound(resolverValue: ReplyPayload) {
+  let captured: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
+  const listenerFactory: ListenerFactory = async ({ onMessage }) => {
+    captured = onMessage;
+    return createMockWebListener();
+  };
+  await monitorWebChannel(false, listenerFactory, false, vi.fn().mockResolvedValue(resolverValue));
+  if (!captured) {
+    throw new Error("expected WhatsApp web message handler");
+  }
+  return captured;
+}
 
 describe("web auto-reply media delivery", () => {
-  installWebAutoReplyUnitTestHooks({ pinDns: true });
-  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
   type WebInboundPlatform = WebInboundCallbackMessage["platform"];
-  type ReplyMock = ReturnType<typeof vi.fn<WebInboundPlatform["reply"]>>;
-  type SendMediaMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendMedia"]>>;
-  type SendComposingMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendComposing"]>>;
+  type DeliverySpies = {
+    [K in "reply" | "sendMedia" | "sendComposing"]: ReturnType<typeof vi.fn<WebInboundPlatform[K]>>;
+  };
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
-
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
-    sendMedia?: SendMediaMock;
-    reply?: ReplyMock;
+    sendMedia?: DeliverySpies["sendMedia"];
   }) {
-    const spies = createWebInboundDeliverySpies() as {
-      sendMedia: SendMediaMock;
-      reply: ReplyMock;
-      sendComposing: SendComposingMock;
-    };
-    const reply = params.reply ?? spies.reply;
+    const spies: DeliverySpies = createWebInboundDeliverySpies();
+    const reply = spies.reply;
     const sendMedia = params.sendMedia ?? spies.sendMedia;
-    const resolver = vi.fn().mockResolvedValue(params.resolverValue);
-
-    let capturedOnMessage: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
-    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
-      capturedOnMessage = onMessage;
-      return createMockWebListener();
-    };
-
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    if (!capturedOnMessage) {
-      throw new Error("expected WhatsApp web message handler");
-    }
-    const onMessage = capturedOnMessage;
+    const onMessage = await captureInbound(params.resolverValue);
 
     return {
       reply,
       sendMedia,
-      dispatch: async (
-        id = "msg1",
-        overrides?: Partial<{
-          from: string;
-          conversationId: string;
-          accountId: string;
-          recipientJid: string;
-          chatJid: string;
-        }>,
-      ) => {
-        const from = overrides?.from ?? "+1";
-        const conversationId = overrides?.conversationId ?? from;
-        const chatJid = overrides?.chatJid ?? from;
-        await onMessage(
+      dispatch: (id = "msg1", { accountId = "default" } = {}) =>
+        onMessage(
           createTestWebInboundMessage({
-            event: {
-              id,
-            },
-            payload: {
-              body: "hello",
-            },
+            event: { id },
+            payload: { body: "hello" },
             platform: {
-              chatJid,
-              recipientJid: overrides?.recipientJid ?? "+2",
+              chatJid: "+1",
+              recipientJid: "+2",
               sendComposing: spies.sendComposing,
               reply,
               sendMedia,
             },
             admission: {
-              accountId: overrides?.accountId ?? "default",
-              conversation: {
-                kind: "direct",
-                id: conversationId,
-              },
-              sender: {
-                id: from,
-              },
+              accountId,
+              conversation: { kind: "direct", id: "+1" },
+              sender: { id: "+1" },
             },
           }),
-        );
-      },
+        ),
     };
   }
 
   function getSingleImagePayload(sendMedia: ReturnType<typeof vi.fn>) {
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    return imagePayloadAt(sendMedia, 0);
-  }
-
-  function imagePayloadAt(sendMedia: ReturnType<typeof vi.fn>, callIndex: number) {
-    const call = sendMedia.mock.calls.at(callIndex);
-    if (!call) {
-      throw new Error(`Expected sendMedia call ${callIndex}`);
-    }
-    return call[0] as {
+    return sendMedia.mock.calls[0]?.[0] as {
       image: Buffer;
       caption?: string;
       mimetype?: string;
+      document?: Buffer;
+      fileName?: string;
     };
-  }
-
-  function replyText(reply: ReturnType<typeof vi.fn>): string {
-    const call = reply.mock.calls.at(0);
-    if (!call || typeof call[0] !== "string") {
-      throw new Error("Expected text reply call");
-    }
-    return call[0];
-  }
-
-  function fetchResponse(body: Buffer, mime: string): Response {
-    return new Response(Uint8Array.from(body), {
-      headers: { "content-type": mime },
-    });
   }
 
   function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
     return vi
       .spyOn(globalThis, "fetch")
-      .mockImplementation(async () => fetchResponse(buffer, mime));
+      .mockImplementation(
+        async () => new Response(Uint8Array.from(buffer), { headers: { "content-type": mime } }),
+      );
   }
 
   it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
@@ -151,11 +106,7 @@ describe("web auto-reply media delivery", () => {
         whatsapp: {
           allowFrom: ["*"],
           mediaMaxMb: 1,
-          accounts: {
-            work: {
-              mediaMaxMb: SMALL_MEDIA_CAP_MB,
-            },
-          },
+          accounts: { work: { mediaMaxMb: SMALL_MEDIA_CAP_MB } },
         },
       },
     }));
@@ -186,15 +137,11 @@ describe("web auto-reply media delivery", () => {
 
     await dispatch("msg-pdf");
 
-    expect(sendMedia).toHaveBeenCalledTimes(1);
-    const payload = imagePayloadAt(sendMedia, 0) as {
-      document?: Buffer;
-      caption?: string;
-      fileName?: string;
-    };
-    expect(payload.document).toBeInstanceOf(Buffer);
-    expect(payload.fileName).toBe("file.pdf");
-    expect(payload.caption).toBe("hi");
+    expect(getSingleImagePayload(sendMedia)).toMatchObject({
+      document: expect.any(Buffer),
+      fileName: "file.pdf",
+      caption: "hi",
+    });
     expect(reply).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
@@ -203,10 +150,7 @@ describe("web auto-reply media delivery", () => {
   it("falls back to text when media send fails", async () => {
     const sendMedia = vi.fn<WebInboundPlatform["sendMedia"]>().mockRejectedValue(new Error("boom"));
     const { reply, dispatch } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "hi",
-        mediaUrl: "https://example.com/img.png",
-      },
+      resolverValue: { text: "hi", mediaUrl: "https://example.com/img.png" },
       sendMedia,
     });
 
@@ -216,7 +160,8 @@ describe("web auto-reply media delivery", () => {
     await dispatch("msg1");
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    const fallback = replyText(reply);
+    const fallback = reply.mock.calls[0]?.[0];
+    expect(fallback).toBeTypeOf("string");
     expect(fallback).toContain("hi");
     expect(fallback).toContain("Media failed");
     fetchMock.mockRestore();
@@ -224,70 +169,43 @@ describe("web auto-reply media delivery", () => {
 });
 
 describe("web auto-reply terminal failure delivery", () => {
-  installWebAutoReplyUnitTestHooks({ pinDns: true });
   const TERMINAL_FAILURE_TEXT = "⚠️ The model ended this turn without answering.";
   const SELF_JID = "123@s.whatsapp.net";
-  type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
 
-  beforeAll(async () => {
-    ({ monitorWebChannel } = await import("./auto-reply/monitor.js"));
-  });
-
-  async function startMonitorWithTerminalFailure(): Promise<{
-    spies: ReturnType<typeof createWebInboundDeliverySpies>;
-    onMessage: (msg: WebInboundCallbackMessage) => Promise<void>;
-  }> {
+  async function startMonitorWithTerminalFailure() {
     const spies = createWebInboundDeliverySpies();
-    const resolver = vi.fn().mockResolvedValue({ text: TERMINAL_FAILURE_TEXT, isError: true });
-    let capturedOnMessage: Parameters<ListenerFactory>[0]["onMessage"] | undefined;
-    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
-      capturedOnMessage = onMessage;
-      return createMockWebListener();
-    };
-
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    if (!capturedOnMessage) {
-      throw new Error("expected WhatsApp web message handler");
-    }
-    return { spies, onMessage: capturedOnMessage };
+    const onMessage = await captureInbound({ text: TERMINAL_FAILURE_TEXT, isError: true });
+    return { spies, onMessage };
   }
 
-  it("sends a terminal failure final to a direct chat", async () => {
-    const { spies, onMessage } = await startMonitorWithTerminalFailure();
-
-    await sendWebDirectInboundMessage({
-      onMessage,
-      spies,
-      id: "direct-terminal-failure",
-      from: "+1000",
-      to: "+2000",
-      body: "hello",
-    });
-
-    expect(spies.reply).toHaveBeenCalledTimes(1);
-    const sentText = spies.reply.mock.calls[0]?.[0];
-    expect(sentText).toContain(TERMINAL_FAILURE_TEXT);
-    // Suppressing the terminal failure previously left core to substitute its generic
-    // no-visible-reply fallback, which hides the real reason the turn ended.
-    expect(sentText).not.toContain("No reply was generated");
-  });
-
-  it("sends a terminal failure final to a group chat", async () => {
-    const { spies, onMessage } = await startMonitorWithTerminalFailure();
-
-    await sendWebGroupInboundMessage({
-      onMessage,
-      spies,
-      id: "group-terminal-failure",
-      body: "hello",
-      senderE164: "+1000",
-      senderName: "Tester",
-      selfE164: "+2000",
-      selfJid: SELF_JID,
-      mentionedJids: [SELF_JID],
-    });
-
-    expect(spies.reply).toHaveBeenCalledTimes(1);
-    expect(spies.reply.mock.calls[0]?.[0]).toContain(TERMINAL_FAILURE_TEXT);
-  });
+  it.each(["direct", "group"] as const)(
+    "sends a terminal failure final to a %s chat",
+    async (kind) => {
+      const { spies, onMessage } = await startMonitorWithTerminalFailure();
+      const inbound = { onMessage, spies, body: "hello" };
+      if (kind === "direct") {
+        await sendWebDirectInboundMessage({
+          ...inbound,
+          id: "direct-terminal-failure",
+          from: "+1000",
+          to: "+2000",
+        });
+      } else {
+        await sendWebGroupInboundMessage({
+          ...inbound,
+          id: "group-terminal-failure",
+          senderE164: "+1000",
+          senderName: "Tester",
+          selfE164: "+2000",
+          selfJid: SELF_JID,
+          mentionedJids: [SELF_JID],
+        });
+      }
+      expect(spies.reply).toHaveBeenCalledTimes(1);
+      const sentText = spies.reply.mock.calls[0]?.[0];
+      expect(sentText).toContain(TERMINAL_FAILURE_TEXT);
+      // Preserve the terminal reason instead of core's generic no-visible-reply fallback.
+      expect(sentText).not.toContain("No reply was generated");
+    },
+  );
 });

@@ -2,6 +2,8 @@ import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { gatewayOwnerPayload } from "../../infra/gateway-owner-payload.test-support.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -171,13 +173,7 @@ describe("reconciliation cleanup transport native custody", () => {
           const parent = owned
             ? acquireGatewayStateOwner({
                 databasePath: context.admission.databasePath,
-                payload: {
-                  pid: process.pid,
-                  createdAt: new Date().toISOString(),
-                  configPath: state.configPath,
-                  stateDir: state.stateDir,
-                  role: "gateway",
-                },
+                payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
               })
             : undefined;
           const pool = createPool();
@@ -255,13 +251,7 @@ it.each([false, true])(
         const parent = owned
           ? acquireGatewayStateOwner({
               databasePath: context.admission.databasePath,
-              payload: {
-                pid: process.pid,
-                createdAt: new Date().toISOString(),
-                configPath: state.configPath,
-                stateDir: state.stateDir,
-                role: "gateway",
-              },
+              payload: gatewayOwnerPayload(state, readGatewayLockProcessNamespace),
             })
           : undefined;
         const pool = createPool();

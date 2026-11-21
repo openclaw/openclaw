@@ -175,7 +175,6 @@ internal class AndroidAudioInputSession private constructor(
     audioRecord.startRecording()
     check(audioRecord.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Microphone did not start recording" }
     refreshActualRouteSafely()
-    Log.d(tag, "capture started preferred=${preferredInputType ?: "default"} routed=${audioRecord.routedDevice?.type ?: "pending"}")
   }
 
   fun read(buffer: ByteArray): Int = checkAudioRecordReadResult(audioRecord.read(buffer, 0, buffer.size))
@@ -248,7 +247,6 @@ internal class AndroidAudioInputSession private constructor(
     requestedInput = input
     return if (setPreferredDevice(input)) {
       selectedInput = input
-      Log.d(tag, "preferred input changed type=${input?.type ?: "default"}")
       true
     } else {
       selectedInput = null

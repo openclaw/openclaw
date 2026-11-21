@@ -1,5 +1,8 @@
 import type { CallbackQuery, Message } from "grammy/types";
-import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -79,12 +82,11 @@ type LegacyApprovalCallback = NonNullable<ReturnType<typeof parseExecApprovalCom
 
 export function createTelegramCallbackApprovalRuntime(params: {
   accountId: RegisterTelegramHandlerParams["accountId"];
-  telegramDeps: RegisterTelegramHandlerParams["telegramDeps"];
   runtimeCfg: OpenClawConfig;
   senderId: string;
   actions: TelegramCallbackMessageActions;
 }) {
-  const { accountId, telegramDeps, runtimeCfg, senderId, actions } = params;
+  const { accountId, runtimeCfg, senderId, actions } = params;
   const { clearCallbackButtons, editCallbackMessage, replyToCallbackChat } = actions;
 
   const resolveAuthorizedApprovalKinds = (): ChannelApprovalKind[] => {
@@ -143,12 +145,10 @@ export function createTelegramCallbackApprovalRuntime(params: {
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));
 
-  const resolveApproval = telegramDeps.resolveApproval;
-
   const resolveCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
   ): Promise<ApprovalResolveResult> =>
-    (await resolveApproval({
+    await resolveApprovalOverGateway({
       cfg: runtimeCfg,
       approvalId: approvalCallback.approvalId,
       approvalKind: approvalCallback.approvalKind,
@@ -156,7 +156,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       channel: "telegram",
       accountId,
       senderId,
-    })) as ApprovalResolveResult;
+    });
 
   const terminalizeCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,
@@ -230,7 +230,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
       };
       try {
         // Legacy callbacks lack an owner. Probe only adapters this sender may use.
-        await resolveApproval({
+        await resolveApprovalOverGateway({
           cfg: runtimeCfg,
           approvalId: approvalCallback.approvalId,
           decision: approvalCallback.decision,
@@ -392,7 +392,7 @@ export async function handleTelegramInteractiveCallback(params: {
     });
     return { ctx: buildSyntheticContext(ctx, message), message };
   };
-  const processSubmitText = async (text: string): Promise<"completed" | "skipped"> => {
+  const processSubmitText = async (text: string): Promise<"completed" | "skipped" | "dropped"> => {
     const synthetic = buildSynthetic(text);
     const participant = isTelegramSpooledReplayUpdate(synthetic.ctx.update)
       ? (getTelegramSpooledReplayDeferredParticipant() ??
@@ -413,7 +413,7 @@ export async function handleTelegramInteractiveCallback(params: {
         },
         spooledReplayAbortSignal: participant?.abortSignal,
       });
-      if (result.kind === "completed" || result.kind === "skipped") {
+      if (result.kind !== "failed-retryable") {
         participant?.settle(result);
         return result.kind;
       }
@@ -489,7 +489,7 @@ export async function handleTelegramInteractiveCallback(params: {
         return;
       }
       const submitText = normalizeOptionalString(result?.submitText);
-      if (!submitText || (await processSubmitText(submitText)) === "skipped") {
+      if (!submitText || (await processSubmitText(submitText)) !== "completed") {
         return;
       }
       await clearCallbackButtons().catch((err: unknown) => {

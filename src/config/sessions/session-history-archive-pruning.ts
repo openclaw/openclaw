@@ -46,7 +46,6 @@ type OwnedArchivePruningParams = ArchivePruningParams & {
 export type SessionArchivePruningResult = {
   removedFiles: number;
   usage: SessionPhysicalDiskUsage;
-  completed: boolean;
   checkpointIncomplete: number;
   checkpoint?: SqliteWalHealth;
 };
@@ -149,11 +148,12 @@ async function pruneCanonicalSessionTranscriptArchivesToHighWater(
       ) {
         throw new Error(`Invalid canonical session archive name for ${row.session_id}`);
       }
-      params.assertCurrent();
+      await params.archives.revalidateSource();
       try {
-        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () =>
-          fs.promises.rm(archivePath),
-        );
+        await timeArchivePruningAsync(diagnostics, "fileRemovalMs", () => {
+          params.assertCurrent();
+          return fs.promises.rm(archivePath);
+        });
         removedFiles += 1;
         if (diagnostics) {
           diagnostics.removedFiles = (diagnostics.removedFiles ?? 0) + 1;
@@ -240,7 +240,6 @@ async function pruneSessionArchivesWithOwner(
     diagnostics.completed = checkpointIncomplete === 0 && !diagnostics.failedRemovals;
     return {
       ...result,
-      completed: diagnostics.completed,
       checkpointIncomplete,
       checkpoint: diagnostics.checkpoint,
     };

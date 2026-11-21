@@ -1,4 +1,4 @@
-import { createApproverRestrictedNativeApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
+import { createApproverRestrictedNativeApprovalCapabilityAsync } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import {
   createChannelApproverDmTargetResolverAsync,
@@ -113,8 +113,8 @@ function createDiscordOriginTargetResolver() {
   });
 }
 
-function createDiscordApprovalCapability() {
-  return createApproverRestrictedNativeApprovalCapability({
+export function getDiscordApprovalCapability() {
+  return createApproverRestrictedNativeApprovalCapabilityAsync({
     channel: "discord",
     channelLabel: "Discord",
     describeExecApprovalSetup: ({
@@ -131,7 +131,7 @@ function createDiscordApprovalCapability() {
       getDiscordExecApprovalApprovers({ cfg, accountId }).length > 0,
     isExecAuthorizedSender: ({ cfg, accountId, senderId }) =>
       isDiscordExecApprovalApprover({ cfg, accountId, senderId }),
-    isNativeDeliveryEnabled: ({ cfg, accountId }) =>
+    isNativeDeliveryEnabled: async ({ cfg, accountId }) =>
       isDiscordExecApprovalClientEnabled({ cfg, accountId }),
     resolveNativeDeliveryMode: ({ cfg, accountId }) =>
       resolveDiscordAccount({ cfg, accountId }).config.execApprovals?.target ?? "dm",
@@ -151,11 +151,4 @@ function createDiscordApprovalCapability() {
         (await import("./approval-handler.runtime.js")).discordApprovalNativeRuntime,
     }),
   });
-}
-
-let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
-
-export function getDiscordApprovalCapability() {
-  cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
-  return cachedDiscordApprovalCapability;
 }

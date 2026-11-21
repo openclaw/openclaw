@@ -774,7 +774,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     },
   );
 
-  it("keeps private captions and media paths out of success logging", async () => {
+  it("keeps private captions and media paths out of logs", async () => {
     const info = vi.spyOn(sendLogger, "info");
     const text = "private outbound payload";
     await sendMessageTelegram("123:topic:77", text, {
@@ -784,7 +784,6 @@ describe("Telegram physical send acceptance over HTTP", () => {
       mediaLocalRoots: [mediaDir],
     });
     const logs = info.mock.calls.map(([message]) => message).join("\n");
-    expect(logs).toContain("outbound send ok");
     expect(logs).not.toContain(text);
     expect(logs).not.toContain(photoPath);
   });

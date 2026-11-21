@@ -1,8 +1,8 @@
 // Declaration closure rendering keeps compiler-owned dependencies in API baselines.
 import { createHash } from "node:crypto";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import type { Printer, Program, Project } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import type { Printer, Program, Project } from "typescript/sync";
 import { formatNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import {
   normalizePluginSdkApiDeclarationText,
@@ -213,7 +213,7 @@ export function createDeclarationClosureRenderer(params: {
     if (cached) {
       return cached;
     }
-    if (!sourceFile.isDeclarationFile && !emittedSources.has(sourceFile.fileName)) {
+    if (!sourceFile.isDeclarationFile && !emittedSources.has(key)) {
       throw new Error(
         `Missing emitted declaration for ${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)}`,
       );
@@ -446,10 +446,18 @@ export function createDeclarationClosureRenderer(params: {
 
   // Fail toward recall: an unindexable declaration retains the whole declaration subtree;
   // omitting it could let a reachable private type change escape the API baseline.
-  const recallFallback = (sourceFile: ts.SourceFile): Walk => ({
-    sections: fallbackFile(sourceFile),
-    tainted: false,
-  });
+  const fallbackRoots = new Map<string, Walk>();
+  const recallFallback = (sourceFile: ts.SourceFile): Walk => {
+    const key = canonical(sourceFile.fileName);
+    let result = fallbackRoots.get(key);
+    if (!result) {
+      // Only complete roots are reusable in this immutable renderer. Recursive fallbackFile
+      // results omit visited ancestors and must not be cached independently.
+      result = { sections: fallbackFile(sourceFile), tainted: false };
+      fallbackRoots.set(key, result);
+    }
+    return result;
+  };
 
   const ambientContribution = (sourceFile: ts.SourceFile): Walk => {
     const key = canonical(sourceFile.fileName);

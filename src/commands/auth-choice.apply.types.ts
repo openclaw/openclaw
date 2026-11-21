@@ -1,4 +1,3 @@
-// Shared types for applying auth-choice selections during onboarding and agent setup.
 import type { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";

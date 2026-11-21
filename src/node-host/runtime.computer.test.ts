@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NODE_WORKER_DESKTOP_COMPUTER_COMMAND } from "../infra/node-commands.js";
 import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
@@ -78,8 +79,7 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     requests.push(args);
     return {};
   }
-  const onManifestChanged = vi.fn();
-  const runtime = prepared.start({ client: { request }, onManifestChanged });
+  const runtime = prepared.start({ client: { request }, onManifestChanged: vi.fn() });
   let invokeId = 0;
   const invoke = async (input: unknown, command = NODE_WORKER_DESKTOP_COMPUTER_COMMAND) => {
     const id = `invoke-${++invokeId}`;
@@ -104,7 +104,6 @@ async function startComputer(ephemeral = true, prepare?: () => Promise<void>) {
     close,
     stopWatching,
     openExecution,
-    onManifestChanged,
     setProviderGeneration(value: string) {
       providerGeneration = value;
     },
@@ -183,9 +182,7 @@ describe("private worker computer runtime", () => {
         closed = true;
       });
       await vi.waitFor(() => expect(host.close).toHaveBeenCalledOnce());
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(physicalCloseFinished).toBe(false);
       expect(closed).toBe(false);
 
@@ -225,9 +222,7 @@ describe("private worker computer runtime", () => {
     );
     try {
       await entered.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await setImmediate();
       expect(closed).toBe(false);
       expect(host.runtime.close()).toBe(closing);
       expect(reentrant).toBe(closing);

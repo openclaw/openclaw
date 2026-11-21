@@ -17,7 +17,6 @@ import {
   REMOTE_WORKSPACE_MANIFEST_JS,
 } from "../gateway/worker-environments/workspace-sync-scripts.js";
 import { executeGitCommandBuffered, executeGitCommandBytes } from "../infra/git-exec.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
   NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES,
@@ -26,7 +25,6 @@ import {
 } from "../worker/node-workspace-protocol.js";
 
 export const TRANSFER_TIMEOUT_MS = 10 * 60_000;
-const commandLog = createSubsystemLogger("node-host/worker-workspace");
 const NODE_MANIFEST_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4096;
 const boundedManifestScript = createRemoteWorkspaceManifestScript(NODE_MANIFEST_MEMO_BYTES);
 
@@ -43,7 +41,8 @@ export function nodeWorkspaceManifestCapture(argv: readonly string[], workspaceD
   const baseCommit = argv[4] || null;
   if (
     baseCommit
-      ? !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(baseCommit) || argv[5] !== "eligible"
+      ? !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(baseCommit) ||
+        (argv[5] !== "eligible" && argv[5] !== "all")
       : argv[5] !== "all"
   ) {
     return undefined;
@@ -119,7 +118,7 @@ export function workspaceCommandEnv(
   };
 }
 
-/** Runs one workspace-scoped command and returns stdout, failing on nonzero exit. */
+/** Runs one workspace-scoped command, requiring successful exit and complete stdout. */
 export async function runWorkspaceCommand(params: {
   workspaceDir: string;
   homeDir: string;
@@ -130,6 +129,7 @@ export async function runWorkspaceCommand(params: {
 }): Promise<string> {
   const maxOutputBytes = params.maxOutputBytes ?? 128 * 1024;
   const result = await runCommandWithTimeout(params.argv, {
+    executionIntent: "gateway-internal",
     cwd: params.workspaceDir,
     baseEnv: workspaceCommandEnv(params.homeDir),
     ...(params.input === undefined ? {} : { input: params.input }),
@@ -141,10 +141,14 @@ export async function runWorkspaceCommand(params: {
   if (result.termination !== "exit" || result.code !== 0) {
     throw new Error(`workspace transfer apply failed: ${(result.stderr || result.stdout).trim()}`);
   }
+  if (result.stdoutTruncatedBytes || result.outputLimitExceeded) {
+    throw new Error("workspace transfer apply failed: command output was truncated");
+  }
   return result.stdout;
 }
 
 export async function captureManifest(params: {
+  mode: "eligible" | "all";
   workspaceDir: string;
   manifestHome: string;
   baseCommit: string | null;
@@ -168,7 +172,7 @@ export async function captureManifest(params: {
       argv: [
         params.workspaceDir,
         params.baseCommit ?? "",
-        params.baseCommit ? "eligible" : "all",
+        params.mode,
         ...priorManifestDigests,
         ...(input === undefined ? [] : ["memo-v1"]),
       ],
@@ -186,10 +190,6 @@ export async function captureManifest(params: {
   }
   const envelope = parseRemoteWorkspaceManifestEnvelope(stdout);
   replaceWorkerWorkspaceHashMemoEntries(params.hashMemo, envelope.memo);
-  commandLog.debug("node worker manifest capture completed", {
-    workspaceDir: params.workspaceDir,
-    ...envelope.metrics,
-  });
   return envelope.manifestRef;
 }
 

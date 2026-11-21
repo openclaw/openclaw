@@ -1,12 +1,15 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { PROGRESS_CARD_MAX_STEPS } from "../progress-card-limits.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const PROGRESS_CARD_MAX_UTF8_BYTES = 8192;
-export const PROGRESS_CARD_MAX_STEPS = 50;
-export const PROGRESS_CARD_MAX_STEP_UTF8_BYTES = 512;
+export {
+  PROGRESS_CARD_MAX_UTF8_BYTES,
+  PROGRESS_CARD_MAX_STEPS,
+  PROGRESS_CARD_MAX_STEP_UTF8_BYTES,
+} from "../progress-card-limits.js";
 
 export const ProgressCardStepStatusSchema = stringLiteralUnion([
   "pending",

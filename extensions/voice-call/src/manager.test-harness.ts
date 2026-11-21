@@ -6,7 +6,7 @@ import path from "node:path";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
@@ -101,8 +101,8 @@ export function createTestStorePath(): string {
 export function createVoiceCallStateRuntimeForTests(): VoiceCallStateRuntime["state"] {
   return {
     resolveStateDir: () => "",
-    openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
-      createPluginStateKeyedStoreForTests<T>("voice-call", options),
+    openKeyedStoreV2: <T>(options: OpenAsyncKeyedStoreOptions) =>
+      createPluginStateKeyedStoreV2ForTests<T>("voice-call", options, { assertCurrent() {} }),
     openChannelIngressQueue: (() => {
       throw new Error("openChannelIngressQueue is not used by voice-call manager tests");
     }) as VoiceCallStateRuntime["state"]["openChannelIngressQueue"],
@@ -227,11 +227,13 @@ export function createEventManagerHarness() {
     setVoiceCallStateRuntime({
       state: {
         resolveStateDir: () => "",
-        openKeyedStore: (options: OpenAsyncKeyedStoreOptions) => {
+        openKeyedStoreV2: (options: OpenAsyncKeyedStoreOptions) => {
           if (shouldFail?.()) {
             throw new Error("synthetic SQLite persistence failure");
           }
-          return createPluginStateKeyedStoreForTests("voice-call", options);
+          return createPluginStateKeyedStoreV2ForTests("voice-call", options, {
+            assertCurrent() {},
+          });
         },
         openChannelIngressQueue: (() => {
           throw new Error("openChannelIngressQueue is not used by voice-call event tests");

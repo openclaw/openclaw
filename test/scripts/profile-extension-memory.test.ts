@@ -569,6 +569,11 @@ describe("scripts/profile-extension-memory", () => {
       }),
     ),
     {
+      name: "isolates inherited child environment",
+      scenario: "environment isolation",
+      signalFailureCase: null,
+    },
+    {
       name: "does not qualify a completed import report before home cleanup",
       scenario: "report home deletion failure",
       signalFailureCase: null,
@@ -602,7 +607,9 @@ describe("scripts/profile-extension-memory", () => {
     const reportHomeFailure = scenario === "report home deletion failure";
     const homeDeletionFailure = scenario === "home deletion failure" || reportHomeFailure;
     const signalFailure = scenario === "settled signal failure";
-    const completeImports = signalFailure || reportHomeFailure;
+    const environmentIsolation = scenario === "environment isolation";
+    const includeCombined = signalFailureCase === "combined" || environmentIsolation;
+    const completeImports = signalFailure || reportHomeFailure || environmentIsolation;
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-mappers-"));
     const journalPath = path.join(root, "journal.json");
     const preloadPath = path.join(root, "spawn-fixture.mjs");
@@ -617,11 +624,14 @@ describe("scripts/profile-extension-memory", () => {
       writeFileSync(
         preloadPath,
         [
+          "import assert from 'node:assert/strict';",
           "import cp from 'node:child_process';",
           "import { EventEmitter } from 'node:events';",
           "import fs, { existsSync, writeFileSync } from 'node:fs';",
           "import { syncBuiltinESMExports } from 'node:module';",
+          "import path from 'node:path';",
           "import { PassThrough } from 'node:stream';",
+          "import { fileURLToPath } from 'node:url';",
           "let home, finishHeld, homeDuringClose, failedPid;",
           "const started = [], closed = [], signals = [], live = new Map();",
           "let now = 1_000;",
@@ -674,6 +684,21 @@ describe("scripts/profile-extension-memory", () => {
           "};",
           "cp.spawn = (_command, args, options) => {",
           "  home = options.env.HOME;",
+          `  if (${environmentIsolation}) {`,
+          "    const expectedHome = path.dirname(fileURLToPath(args[1]));",
+          "    assert.equal(options.env.HOME, expectedHome);",
+          "    assert.equal(options.env.USERPROFILE, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_HOME, expectedHome);",
+          "    assert.equal(options.env.OPENCLAW_STATE_DIR, path.join(expectedHome, '.openclaw'));",
+          "    assert.equal(options.env.OPENCLAW_CONFIG_PATH, path.join(expectedHome, '.openclaw', 'openclaw.json'));",
+          "    assert.equal(options.env.XDG_CONFIG_HOME, path.join(expectedHome, '.config'));",
+          "    assert.equal(options.env.XDG_CACHE_HOME, path.join(expectedHome, '.cache'));",
+          "    assert.equal(options.env.XDG_DATA_HOME, path.join(expectedHome, '.local', 'share'));",
+          "    assert.equal(options.env.XDG_STATE_HOME, path.join(expectedHome, '.local', 'state'));",
+          "    assert.equal(options.env.XDG_RUNTIME_DIR, path.join(expectedHome, '.run'));",
+          "    assert.equal(options.env.NODE_DISABLE_COMPILE_CACHE, '1');",
+          "    assert.equal(options.env.OPENCLAW_NO_RESPAWN, '1');",
+          "  }",
           "  const body = args.at(-1);",
           "  const completion = body.match(/__OPENCLAW_IMPORT_COMPLETE__=[a-f0-9-]+/)?.[0];",
           "  const name = body.includes('IMPORTED_ALL') ? 'combined' :",
@@ -726,7 +751,7 @@ describe("scripts/profile-extension-memory", () => {
           "--import",
           preloadPath,
           SCRIPT_PATH,
-          ...(signalFailureCase === "combined" ? [] : ["--skip-combined"]),
+          ...(includeCombined ? [] : ["--skip-combined"]),
           "--concurrency",
           "2",
           "--json",
@@ -734,7 +759,24 @@ describe("scripts/profile-extension-memory", () => {
         ],
         {
           cwd: root,
-          env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
+          env: {
+            ...process.env,
+            ...(environmentIsolation
+              ? {
+                  HOME: path.join(root, "inherited-home"),
+                  USERPROFILE: path.join(root, "inherited-userprofile"),
+                  OPENCLAW_HOME: path.join(root, "inherited-openclaw-home"),
+                  OPENCLAW_STATE_DIR: path.join(root, "inherited-state"),
+                  OPENCLAW_CONFIG_PATH: path.join(root, "inherited-config.json"),
+                  XDG_CONFIG_HOME: path.join(root, "inherited-xdg-config"),
+                  XDG_CACHE_HOME: path.join(root, "inherited-xdg-cache"),
+                  XDG_DATA_HOME: path.join(root, "inherited-xdg-data"),
+                  XDG_STATE_HOME: path.join(root, "inherited-xdg-state"),
+                  XDG_RUNTIME_DIR: path.join(root, "inherited-xdg-runtime"),
+                }
+              : {}),
+            TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH,
+          },
           encoding: "utf8",
           timeout: 10_000,
           killSignal: "SIGKILL",
@@ -742,16 +784,21 @@ describe("scripts/profile-extension-memory", () => {
       );
       const journal = JSON.parse(readFileSync(journalPath, "utf8"));
       home = journal.home;
-      expect(result.status, result.stderr).toBe(parentSignal ? 143 : 1);
+      expect(result.status, result.stderr).toBe(environmentIsolation ? 0 : parentSignal ? 143 : 1);
       expect(journal.pending).toBe(linuxDeadline);
       expect(journal.started).toEqual([
         "baseline",
-        ...(signalFailureCase === "combined" ? ["combined"] : []),
+        ...(includeCombined ? ["combined"] : []),
         "a-held",
         "b-error",
         ...(completeImports ? ["c-unused"] : []),
       ]);
-      if (parentSignal) {
+      if (environmentIsolation) {
+        const report = JSON.parse(readFileSync(reportPath, "utf8"));
+        expect(report.counts.fail).toBe(0);
+        expect(journal.closed).toEqual(expect.arrayContaining(journal.started));
+        expect(journal.homeExists).toBe(false);
+      } else if (parentSignal) {
         if (!linuxDeadline) {
           expect(result.stderr).toContain("group signal failed");
         }

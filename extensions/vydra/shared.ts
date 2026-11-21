@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
@@ -124,18 +128,12 @@ export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
   timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
   maxBytes: number;
   requestPolicy: VydraRequestPolicy;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const requestedTimeoutMs =
     typeof params.timeoutMs === "function" ? params.timeoutMs() : params.timeoutMs;
-  const timeoutMs =
-    typeof requestedTimeoutMs === "number" &&
-    Number.isFinite(requestedTimeoutMs) &&
-    requestedTimeoutMs > 0
-      ? requestedTimeoutMs
-      : DEFAULT_HTTP_TIMEOUT_MS;
+  const timeoutMs = resolvePositiveTimerTimeoutMs(requestedTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   const deadline = createProviderOperationDeadline({
     timeoutMs,
     label: `Vydra ${params.kind} download`,
@@ -158,7 +156,7 @@ export async function downloadVydraAsset(params: {
       ...(headers ? { headers } : {}),
     },
     resolveTimeoutMs(),
-    params.fetchFn,
+    fetch,
     {
       ...(ssrfPolicy ? { ssrfPolicy } : {}),
       ...(policy.dispatcherPolicy ? { dispatcherPolicy: policy.dispatcherPolicy } : {}),
@@ -313,8 +311,10 @@ export async function runVydraGeneration(params: {
           defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,
         })
       : params.timeoutMs,
-    fetchFn,
-    maxBytes: resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
+    maxBytes:
+      params.kind === "image"
+        ? resolveGeneratedImageDownloadMaxBytes(params.cfg)
+        : resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
     requestPolicy,
   });
   const jobId = resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted);

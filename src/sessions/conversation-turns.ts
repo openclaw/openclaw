@@ -79,10 +79,8 @@ export function registerPendingConversationTurn(params: {
   const { promise: correlationReady, resolve: markCorrelationReady } = createDeferredCore();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const stopTimeout = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = undefined;
-    }
+    clearTimeout(timer);
+    timer = undefined;
   };
   const settle = (reply: ConversationTurnReply | undefined) => {
     if (settled) {

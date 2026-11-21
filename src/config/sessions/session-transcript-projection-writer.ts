@@ -13,7 +13,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureOpenClawAgentDatabaseExecutionAsync,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import {
@@ -31,6 +31,7 @@ import {
   publishUnchangedSessionTranscriptReceipts,
 } from "./session-transcript-authority.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
+import { isSessionTranscriptIndexReady } from "./session-transcript-index-readiness.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
   listSessionsNeedingTranscriptIndexReconcile,
@@ -235,7 +236,7 @@ export async function finalizePreparedProjection(
   );
 }
 
-/** Global readiness is a fact maintained on the projection writer's connection. */
+/** Consume the projection writer's committed readiness before borrowing a native writer. */
 export async function readSessionTranscriptIndexStatus(
   params: OpenClawAgentDatabaseOptions,
   assertCurrent?: () => void,
@@ -258,11 +259,16 @@ export async function readSessionTranscriptIndexStatus(
     path: resolveOpenClawAgentSqlitePath(params),
     assertCurrent,
   };
+  if (isSessionTranscriptIndexReady(options.path)) {
+    return false;
+  }
   const execution = supportsOpenClawAgentDatabaseExecution(options)
-    ? captureOpenClawAgentDatabaseExecution(options)
+    ? await captureOpenClawAgentDatabaseExecutionAsync(options)
     : undefined;
   let client: OpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations> | undefined;
   try {
+    signal?.throwIfAborted();
+    assertCurrent?.();
     if (execution) {
       client = await openOpenClawAgentSqliteWorkerStore<TranscriptProjectionPublicationOperations>(
         options,

@@ -1,19 +1,7 @@
-// Applies legacy config rules during load-time compatibility checks.
+// Collects full Doctor diagnostics after runtime config validation fails.
 import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-migrations.js";
-import type { LegacyConfigRule } from "./legacy.shared.js";
+import { findLegacyConfigRuleIssues, type LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
-
-// Legacy checks use raw dotted paths so doctor can report exact config keys.
-function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
-  let cursor: unknown = root;
-  for (const key of path) {
-    if (!cursor || typeof cursor !== "object") {
-      return undefined;
-    }
-    cursor = (cursor as Record<string, unknown>)[key];
-  }
-  return cursor;
-}
 
 /** Finds legacy config issues using built-in rules plus optional caller rules. */
 export function findLegacyConfigIssues(
@@ -22,35 +10,4 @@ export function findLegacyConfigIssues(
   extraRules: LegacyConfigRule[] = [],
 ): LegacyConfigIssue[] {
   return findLegacyConfigRuleIssues(raw, [...LEGACY_CONFIG_RULES, ...extraRules], sourceRaw);
-}
-
-/** Evaluate exactly the rules selected by the migration owner. */
-export function findLegacyConfigRuleIssues(
-  raw: unknown,
-  rules: readonly LegacyConfigRule[],
-  sourceRaw?: unknown,
-): LegacyConfigIssue[] {
-  if (!raw || typeof raw !== "object") {
-    return [];
-  }
-  const root = raw as Record<string, unknown>;
-  const sourceRoot =
-    sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
-  const issues: LegacyConfigIssue[] = [];
-  for (const rule of rules) {
-    const cursor = getPathValue(root, rule.path);
-    if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
-      if (rule.requireSourceLiteral) {
-        const sourceCursor = getPathValue(sourceRoot, rule.path);
-        if (sourceCursor === undefined) {
-          continue;
-        }
-        if (rule.match && !rule.match(sourceCursor, sourceRoot)) {
-          continue;
-        }
-      }
-      issues.push({ path: rule.path.join("."), message: rule.message });
-    }
-  }
-  return issues;
 }

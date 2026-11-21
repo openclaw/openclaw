@@ -1,12 +1,17 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
+import { promptReport } from "../config/sessions/system-prompt-report.test-support.js";
 import { importSessionCatalogHistory } from "../plugins/session-catalog-history-import.js";
-import type { SessionCatalogProvider, SessionUpstreamProbe } from "../plugins/session-catalog.js";
+import type {
+  SessionCatalogProvider,
+  SessionUpstreamActivity,
+} from "../plugins/session-catalog.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -24,421 +29,294 @@ import * as upstreamLinks from "./session-upstream-links.js";
 import { deleteSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
 import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 import { startSessionUpstreamMonitor } from "./session-upstream-monitor.js";
-import { runSessionUpstreamMonitorTick } from "./session-upstream-monitor.test-support.js";
+import {
+  mockEntry,
+  mockOwnTexts,
+  mockRunActive,
+  runSessionUpstreamMonitorTick,
+} from "./session-upstream-monitor.test-support.js";
 
+type Check = NonNullable<SessionCatalogProvider["checkUpstreamActivity"]>;
+type TickOptions = NonNullable<Parameters<typeof runSessionUpstreamMonitorTick>[0]>;
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-upstream-monitor-");
-const watcherSessionKey = "agent:main:main";
+const sessionKey = "agent:main:adopted:a-watched";
+const otherKey = "agent:main:adopted:b-other";
+let database: { env: NodeJS.ProcessEnv };
+let missingCounts: Map<string, { count: number; linkUpdatedAt: number }>;
+let check = vi.fn<Check>();
 
-function createMissingCounts() {
-  return new Map<string, { count: number; linkUpdatedAt: number }>();
-}
-
-function createDatabaseOptions() {
+beforeEach(() => {
   const stateDir = sessionDirs.make();
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setRuntimeConfigSnapshot({});
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
-async function createLink(
-  sessionKey: string,
-  catalogId: string,
-  database: ReturnType<typeof createDatabaseOptions>,
-  watched = true,
-) {
-  upsertSessionUpstreamLink(
-    {
-      sessionKey,
-      agentId: "main",
-      catalogId,
-      hostId: "gateway:local",
-      threadId: `thread-${catalogId}`,
-      upstreamKind: catalogId === "claude" ? "claude-cli" : "codex-app-server",
-      upstreamRef: { source: catalogId },
-      marker: { offset: 0 },
-    },
-    database,
-  );
-  if (watched) {
-    await registerSessionStateWatch({ watcherSessionKey, targetSessionKey: sessionKey }, database);
-  }
-}
-
-function provider(
-  id: string,
-  checkUpstreamActivity: NonNullable<SessionCatalogProvider["checkUpstreamActivity"]>,
-): SessionCatalogProvider {
-  return {
-    id,
-    label: id,
-    list: async () => [],
-    read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-    checkUpstreamActivity,
-  };
-}
-
+  database = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
+  missingCounts = new Map();
+  check = vi.fn<Check>(async () => []);
+});
 afterEach(async () => {
-  vi.useRealTimers();
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetConfigRuntimeState();
   vi.unstubAllEnvs();
 });
 
-describe("session upstream monitor", () => {
-  it("skips watched-link reads without a capable provider and reads fresh links when one appears", async () => {
-    const database = createDatabaseOptions();
-    const list = vi.spyOn(upstreamLinks, "listWatchedSessionUpstreamLinks");
-    const missingCounts = createMissingCounts();
-    missingCounts.set("old-watch", { count: 2, linkUpdatedAt: 100 });
-    try {
-      await runSessionUpstreamMonitorTick({ ...database, providers: [] }, missingCounts);
-      expect(list).not.toHaveBeenCalled();
-      expect(missingCounts.size).toBe(0);
+function provider(id = "claude", probe: Check = check): SessionCatalogProvider {
+  return {
+    id,
+    label: id,
+    list: async () => [],
+    read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+    checkUpstreamActivity: probe,
+  };
+}
+function linkInput(key = sessionKey, catalogId = "claude") {
+  return {
+    sessionKey: key,
+    agentId: "main",
+    catalogId,
+    hostId: "gateway:local",
+    threadId: `thread-${catalogId}`,
+    upstreamKind: catalogId === "claude" ? ("claude-cli" as const) : ("codex-app-server" as const),
+    upstreamRef: { source: catalogId },
+    marker: { offset: 0 },
+  };
+}
+async function createLink(key = sessionKey, catalogId = "claude", watched = true) {
+  upsertSessionUpstreamLink(linkInput(key, catalogId), database);
+  if (watched) {
+    await registerSessionStateWatch(
+      { watcherSessionKey: "agent:main:main", targetSessionKey: key },
+      database,
+    );
+  }
+}
+async function watch(catalogId = "claude") {
+  await createLink(sessionKey, catalogId);
+  mockEntry(async () => ({ sessionId: "session", updatedAt: 0 }));
+  mockOwnTexts();
+}
+function link(key = sessionKey) {
+  return readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, key, "main");
+}
+async function events(key = sessionKey) {
+  return (await listSessionStateEventsSince(key, "main", 0, 20, database)).events;
+}
+async function run(count = 1, options: TickOptions = {}) {
+  for (let index = 0; index < count; index += 1) {
+    await runSessionUpstreamMonitorTick(
+      { ...database, providers: [provider()], ...options },
+      missingCounts,
+    );
+  }
+}
+function activity(
+  overrides: Partial<Extract<SessionUpstreamActivity, { kind: "activity" }>> = {},
+): SessionUpstreamActivity {
+  return {
+    kind: "activity",
+    sessionKey,
+    occurredAt: 2_000,
+    humanTurns: 1,
+    nextMarker: { offset: 8 },
+    dedupeId: "8",
+    ...overrides,
+  };
+}
+const missing = (): SessionUpstreamActivity[] => [{ kind: "missing", sessionKey }];
+function refresh(changedSource = true) {
+  const input = linkInput();
+  if (changedSource) {
+    input.threadId = "thread-refreshed";
+    input.upstreamRef.source = "refreshed";
+    input.marker.offset = 999;
+  }
+  upsertSessionUpstreamLink(input, { ...database, now: 7_777 });
+}
+const counts = () => [...missingCounts.values()].map((counter) => counter.count);
 
-      const sessionKey = "agent:main:adopted:new-provider";
-      await createLink(sessionKey, "claude", database);
-      const check = vi.fn(async () => []);
-      await runSessionUpstreamMonitorTick({
-        ...database,
-        providers: [provider("claude", check)],
-        loadEntry: () => ({ sessionId: "new-provider", updatedAt: 100 }),
-        isRunActive: () => false,
-        loadOwnRecentUserTexts: async () => [],
-      });
-      expect(list).toHaveBeenCalledOnce();
-      expect(check).toHaveBeenCalledWith(
-        [expect.objectContaining({ sessionKey })],
-        expect.anything(),
-      );
-    } finally {
-      list.mockRestore();
-    }
+describe("session upstream monitor", () => {
+  it("skips discovery without a capable provider and discovers new providers", async () => {
+    const list = vi.spyOn(upstreamLinks, "listWatchedSessionUpstreamLinks");
+    missingCounts.set("old-watch", { count: 2, linkUpdatedAt: 100 });
+    await run(1, { providers: [] });
+    expect(list).not.toHaveBeenCalled();
+    expect(missingCounts.size).toBe(0);
+    await watch();
+    check.mockResolvedValue([activity()]);
+    await run();
+    expect(await events()).toHaveLength(1);
   });
 
   it("discards discovery after the monitor is aborted", async () => {
-    const database = createDatabaseOptions();
-    await createLink("agent:main:adopted:aborted-discovery", "claude", database);
+    await createLink();
     const lifecycle = new AbortController();
-    const loadEntry = vi.fn(() => ({ sessionId: "session-aborted", updatedAt: 100 }));
-    const check = vi.fn(async () => []);
-    const missingCounts = createMissingCounts();
+    const loadEntry = mockEntry(async () => ({ sessionId: "session", updatedAt: 100 }));
     missingCounts.set("previous-watch", { count: 2, linkUpdatedAt: 100 });
-    const tick = runSessionUpstreamMonitorTick(
-      {
-        ...database,
-        signal: lifecycle.signal,
-        providers: [provider("claude", check)],
-        loadEntry,
-        isRunActive: () => false,
-        loadOwnRecentUserTexts: async () => [],
-      },
-      missingCounts,
-    );
+    const tick = run(1, { signal: lifecycle.signal });
     lifecycle.abort();
     await tick;
-
     expect(loadEntry).not.toHaveBeenCalled();
     expect(check).not.toHaveBeenCalled();
     expect([...missingCounts]).toEqual([["previous-watch", { count: 2, linkUpdatedAt: 100 }]]);
   });
 
   it("continues the provider batch when one marker settlement loses its owner", async () => {
-    const database = createDatabaseOptions();
-    const stale = "agent:main:adopted:a-stale";
-    const healthy = "agent:main:adopted:b-healthy";
-    await createLink(stale, "claude", database);
-    await createLink(healthy, "claude", database);
-    const settlement = vi
-      .spyOn(upstreamRuntime, "settleSessionUpstreamLink")
-      .mockRejectedValueOnce(new Error("Upstream observation lost its idle session owner"));
-    try {
-      await runSessionUpstreamMonitorTick({
-        ...database,
-        providers: [
-          provider("claude", async (probes) =>
-            probes.map((probe) => ({
-              kind: "activity",
-              sessionKey: probe.sessionKey,
-              humanTurns: 0,
-              nextMarker: { offset: 9 },
-              dedupeId: "none",
-            })),
-          ),
-        ],
-        loadEntry: ({ sessionKey }) => ({ sessionId: sessionKey, updatedAt: 1_000 }),
-        loadOwnRecentUserTexts: async () => [],
-      });
-    } finally {
-      settlement.mockRestore();
-    }
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, stale, "main")
-        ?.marker,
-    ).toEqual({ offset: 0 });
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, healthy, "main")
-        ?.marker,
-    ).toEqual({ offset: 9 });
+    await watch();
+    await createLink(otherKey);
+    vi.spyOn(upstreamRuntime, "settleSessionUpstreamLink").mockRejectedValueOnce(
+      new Error("Upstream observation lost its idle session owner"),
+    );
+    check.mockImplementation(async (probes) =>
+      probes.map((probe) =>
+        activity({ sessionKey: probe.sessionKey, humanTurns: 0, nextMarker: { offset: 9 } }),
+      ),
+    );
+    await run();
+    const markers = [link()?.marker, link(otherKey)?.marker];
+    expect(markers).toEqual([{ offset: 0 }, { offset: 9 }]);
   });
 
-  it("keeps the upstream marker available when its durable event insert fails", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:failed-event";
-    await createLink(sessionKey, "claude", database);
+  it("keeps the marker available when its durable event insert fails", async () => {
+    await watch();
     openOpenClawStateDatabase(database).db.exec(`
       CREATE TRIGGER reject_upstream_event BEFORE INSERT ON session_state_events
       BEGIN SELECT RAISE(FAIL, 'synthetic event write failure'); END;
     `);
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [
-        provider("claude", async () => [
-          {
-            kind: "activity",
-            sessionKey,
-            humanTurns: 1,
-            occurredAt: 2_000,
-            nextMarker: { offset: 9 },
-            dedupeId: "failed-event",
-          },
-        ]),
-      ],
-      loadEntry: () => ({ sessionId: "session-failed-event", updatedAt: 1_000 }),
-      loadOwnRecentUserTexts: async () => [],
-    });
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main")
-        ?.marker,
-    ).toEqual({ offset: 0 });
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
+    check.mockResolvedValue([activity()]);
+    await run();
+    expect(link()?.marker).toEqual({ offset: 0 });
+    expect(await events()).toEqual([]);
   });
 
-  it("records watched activity once and advances its marker without host SQL", async () => {
-    const database = createDatabaseOptions();
-    const watched = "agent:main:adopted:watched";
-    const unwatched = "agent:main:adopted:unwatched";
-    await createLink(watched, "claude", database);
-    await createLink(unwatched, "claude", database, false);
-    const checkUpstreamActivity = vi.fn(async (probes: SessionUpstreamProbe[]) =>
-      probes.map((probe) => ({
-        kind: "activity" as const,
-        sessionKey: probe.sessionKey,
-        occurredAt: 2_000,
-        humanTurns: 1,
-        nextMarker: { offset: 8 },
-        dedupeId: "8",
-      })),
-    );
-    const claude = provider("claude", checkUpstreamActivity);
+  it("records watched activity without loading session snapshots or issuing host SQL", async () => {
+    await createLink();
+    await createLink(otherKey, "claude", false);
     await upsertSessionEntryCore(
-      { sessionKey: watched, agentId: "main", env: database.env },
-      { sessionId: "session-watched", updatedAt: 100 },
+      { sessionKey, agentId: "main", env: database.env },
+      {
+        sessionId: "session",
+        updatedAt: 100,
+        skillsSnapshot: { prompt: "saved prompt".repeat(2048), skills: [] },
+        sessionDiffBaseline: { version: 1, sessionId: "session", root: "/synthetic", files: [] },
+        systemPromptReport: promptReport(1, 1, 0),
+      },
+    );
+    mockOwnTexts();
+    check.mockImplementation(async (probes) =>
+      probes.map((probe) => activity({ sessionKey: probe.sessionKey })),
     );
     const hostSql = observeMainThreadSql();
+    const reads = vi.spyOn(sessionReads, "readSessionEntryReadOnlyInWorker");
     try {
-      for (const now of [3_000, 4_000]) {
-        await runSessionUpstreamMonitorTick({
-          ...database,
-          providers: [claude],
-          now: () => now,
-          loadOwnRecentUserTexts: async () => [],
-        });
-      }
+      await run(2, { now: () => 3_000 });
       hostSql.expectIdle();
     } finally {
       hostSql.restore();
     }
-
-    expect(checkUpstreamActivity).toHaveBeenCalledTimes(2);
-    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
-      1,
-      [expect.objectContaining({ sessionKey: watched, marker: { offset: 0 } })],
-      { allowProcessHomeFallback: false },
-    );
-    expect(checkUpstreamActivity).toHaveBeenNthCalledWith(
-      2,
-      [expect.objectContaining({ sessionKey: watched, marker: { offset: 8 } })],
-      { allowProcessHomeFallback: false },
-    );
-    const events = (await listSessionStateEventsSince(watched, "main", 0, 20, database)).events;
-    expect(events).toHaveLength(1);
-    expect(events[0]).toEqual(
-      expect.objectContaining({
-        kind: "human_direct_message",
-        summary: "human message via claude",
-        occurredAt: 2_000,
-      }),
-    );
-    expect(events[0]?.payload).toBeUndefined();
-    const dedupeRow = openOpenClawStateDatabase(database)
+    expect(reads.mock.results).toHaveLength(4);
+    for (const result of reads.mock.results) {
+      const entry = await result.value;
+      expect(entry).toMatchObject({ sessionId: "session" });
+      expect(entry).not.toHaveProperty("skillsSnapshot");
+      expect(entry).not.toHaveProperty("sessionDiffBaseline");
+      expect(entry).not.toHaveProperty("systemPromptReport");
+    }
+    expect(await events()).toEqual([
+      expect.objectContaining({ kind: "human_direct_message", occurredAt: 2_000 }),
+    ]);
+    expect(await events(otherKey)).toEqual([]);
+    expect(link()?.marker).toEqual({ offset: 8 });
+    expect(check.mock.calls.map(([probes]) => probes.map((probe) => probe.marker))).toEqual([
+      [{ offset: 0 }],
+      [{ offset: 8 }],
+    ]);
+    expect(check.mock.calls[0]?.[1]).toEqual({ allowProcessHomeFallback: false });
+    const row = openOpenClawStateDatabase(database)
       .db.prepare("SELECT dedupe_key FROM session_state_events WHERE session_key = ?")
-      .get(watched) as { dedupe_key: string };
-    // Source identity is hashed into the dedupe key so a rebased source cannot
-    // collide with a prior source's activity id.
-    expect(dedupeRow.dedupe_key).toMatch(new RegExp(`^upstream:${watched}:[0-9a-f]{16}:8$`));
+      .get(sessionKey) as { dedupe_key: string };
+    expect(row.dedupe_key).toMatch(new RegExp(`^upstream:${sessionKey}:[0-9a-f]{16}:8$`));
+    expect((await events())[0]?.payload).toBeUndefined();
   });
 
-  it("records one upstream-missing event after three misses and removes the link", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing";
-    await createLink(sessionKey, "claude", database);
-    const check = vi.fn(async (probes: SessionUpstreamProbe[]) =>
-      probes.map((probe) => ({ kind: "missing" as const, sessionKey: probe.sessionKey })),
-    );
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      now: () => 3_000,
-      loadEntry: () => ({ sessionId: "session-missing" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect(check).toHaveBeenCalledTimes(3);
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeUndefined();
+  it("records one missing event after three misses and removes the link", async () => {
+    await watch();
+    check.mockImplementation(async () => missing());
+    await run(4);
+    expect(link()).toBeUndefined();
     expect(missingCounts.size).toBe(0);
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [
-        expect.objectContaining({
-          kind: "upstream_missing",
-          actorType: "system",
-          summary: "upstream missing via claude",
-          payload: { channel: "claude" },
-        }),
-      ],
-    );
+    expect(await events()).toEqual([
+      expect.objectContaining({
+        kind: "upstream_missing",
+        actorType: "system",
+        payload: { channel: "claude" },
+      }),
+    ]);
   });
 
-  it("defers a third missing result when a run starts during the provider scan", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-active-race";
-    await createLink(sessionKey, "claude", database);
+  it("defers a third missing result when a run starts during the scan", async () => {
+    await watch();
     let active = false;
     let scan = 0;
-    const check = vi.fn(async () => {
-      scan += 1;
-      if (scan === 3) {
-        active = true;
-      }
-      return [{ kind: "missing" as const, sessionKey }];
+    check.mockImplementation(async () => {
+      active = ++scan === 3;
+      return missing();
     });
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-active-race" }) as never,
-      isRunActive: () => active,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-    expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
-
+    mockRunActive(() => active);
+    await run(3);
+    expect(link()).toBeDefined();
+    expect(await events()).toEqual([]);
+    expect(counts()).toEqual([2]);
     active = false;
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect(check).toHaveBeenCalledTimes(4);
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeUndefined();
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [expect.objectContaining({ kind: "upstream_missing" })],
-    );
+    await run();
+    expect(link()).toBeUndefined();
+    expect(await events()).toEqual([expect.objectContaining({ kind: "upstream_missing" })]);
   });
 
-  it("resets a missing streak when the session is replaced during the provider scan", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-session-replaced";
-    await createLink(sessionKey, "claude", database);
-    let sessionId = "session-before";
+  it("resets a missing streak when the session is replaced during the scan", async () => {
+    await watch();
+    let sessionId = "before";
     let scan = 0;
-    const check = vi.fn(async () => {
-      scan += 1;
-      if (scan === 3) {
-        sessionId = "session-after";
+    mockEntry(async () => ({ sessionId, updatedAt: 0 }));
+    check.mockImplementation(async () => {
+      if (++scan === 3) {
+        sessionId = "after";
       }
-      return [{ kind: "missing" as const, sessionKey }];
+      return missing();
     });
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId }) as never,
-      isRunActive: () => false,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
+    await run(3);
     expect(missingCounts.size).toBe(0);
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
+    expect(await events()).toEqual([]);
+    await run(2);
+    expect(counts()).toEqual([2]);
+    expect(link()).toBeDefined();
   });
 
   it.each(["monitor", "scheduler"])(
     "joins a deferred probe without publication after %s stop",
     async (stopOwner) => {
+      await watch();
+      mockRunActive(() => false);
       const clock = createGatewaySchedulerClock(1_000);
       const scheduler = createTestGatewayScheduler(clock.clock);
-      const database = createDatabaseOptions();
-      const sessionKey = "agent:main:adopted:missing-stopped";
-      await createLink(sessionKey, "claude", database);
-      const thirdResult = createDeferred<Array<{ kind: "missing"; sessionKey: string }>>();
+      const thirdResult = createDeferred<SessionUpstreamActivity[]>();
       const scanStarted = [createDeferred(), createDeferred(), createDeferred()] as const;
       let scan = 0;
       let probeSettled = false;
-      const check = vi.fn(async () => {
-        scan += 1;
-        scanStarted[scan - 1]?.resolve();
-        if (scan === 3) {
-          const result = await thirdResult.promise;
-          probeSettled = true;
-          return result;
+      check.mockImplementation(async () => {
+        scanStarted[scan++]?.resolve();
+        if (scan !== 3) {
+          return missing();
         }
-        return [{ kind: "missing" as const, sessionKey }];
+        const result = await thirdResult.promise;
+        probeSettled = true;
+        return result;
       });
       const monitor = startSessionUpstreamMonitor({
         scheduler,
         ...database,
-        providers: [provider("claude", check)],
-        loadEntry: () => ({ sessionId: "session-missing-stopped", updatedAt: 1_000 }),
-        isRunActive: () => false,
-        loadOwnRecentUserTexts: async () => [],
+        providers: [provider()],
       });
-
       try {
         await clock.advanceBy(15_000);
         await scanStarted[0].promise;
@@ -446,8 +324,6 @@ describe("session upstream monitor", () => {
         await scanStarted[1].promise;
         const thirdWake = clock.advanceBy(60_000);
         await scanStarted[2].promise;
-        expect(check).toHaveBeenCalledTimes(3);
-
         let joined = false;
         const stopping = (stopOwner === "scheduler" ? scheduler.stop() : monitor.stop()).then(
           () => {
@@ -456,28 +332,17 @@ describe("session upstream monitor", () => {
           },
         );
         expect(joined).toBe(false);
-        thirdResult.resolve([{ kind: "missing", sessionKey }]);
+        thirdResult.resolve(missing());
         await stopping;
         await thirdWake;
-
-        expect(
-          readSessionUpstreamLinkInDatabase(
-            openOpenClawStateDatabase(database).db,
-            sessionKey,
-            "main",
-          ),
-        ).toMatchObject({
-          marker: { offset: 0 },
-        });
-        expect(
-          (await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events,
-        ).toEqual([]);
+        expect(link()?.marker).toEqual({ offset: 0 });
+        expect(await events()).toEqual([]);
         if (stopOwner === "monitor") {
           const sibling = vi.fn();
           scheduler.schedule({ id: "sibling", delayMs: 1, run: sibling });
           await clock.advanceBy(60_000);
           expect(sibling).toHaveBeenCalledOnce();
-          expect(check).toHaveBeenCalledTimes(3);
+          expect(scan).toBe(3);
         }
       } finally {
         thirdResult.resolve([]);
@@ -487,564 +352,203 @@ describe("session upstream monitor", () => {
     },
   );
 
-  it("resets consecutive misses on activity", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-reset";
-    await createLink(sessionKey, "claude", database);
+  it.each(["activity", "quiet"])("resets consecutive misses on %s", async (outcome) => {
+    await watch();
     let scan = 0;
-    const check = vi.fn(async () => {
-      scan += 1;
-      return scan === 3
-        ? [
-            {
-              kind: "activity" as const,
-              sessionKey,
-              humanTurns: 0,
-              nextMarker: { offset: 3 },
-            },
-          ]
-        : [{ kind: "missing" as const, sessionKey }];
-    });
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-reset" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    for (let index = 0; index < 5; index += 1) {
-      await runSessionUpstreamMonitorTick(options, missingCounts);
-    }
-
-    expect(check).toHaveBeenCalledTimes(5);
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
+    check.mockImplementation(async () =>
+      ++scan === 3 ? (outcome === "quiet" ? [] : [activity({ humanTurns: 0 })]) : missing(),
     );
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
-    expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
-  });
-
-  it("breaks a missing streak when a successful probe has no missing outcome", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-quiet";
-    await createLink(sessionKey, "claude", database);
-    let scan = 0;
-    const check = vi.fn(async () => {
-      scan += 1;
-      return scan === 2 ? [] : [{ kind: "missing" as const, sessionKey }];
-    });
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-quiet" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    for (let index = 0; index < 4; index += 1) {
-      await runSessionUpstreamMonitorTick(options, missingCounts);
-    }
-
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
-    expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([2]);
+    await run(5);
+    expect(await events()).toEqual([]);
+    expect(link()).toBeDefined();
+    expect(counts()).toEqual([2]);
   });
 
   it("starts a fresh streak when Continue refreshes the same source", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-same-source";
-    await createLink(sessionKey, "claude", database);
-    const check = vi.fn(async () => [{ kind: "missing" as const, sessionKey }]);
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-same-source" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    upsertSessionUpstreamLink(
-      {
-        sessionKey,
-        agentId: "main",
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: "thread-claude",
-        upstreamKind: "claude-cli",
-        upstreamRef: { source: "claude" },
-        marker: { offset: 0 },
-      },
-      { ...database, now: 7_777 },
-    );
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toBeDefined();
-    expect([...missingCounts.values()].map((counter) => counter.count)).toEqual([1]);
+    await watch();
+    check.mockImplementation(async () => missing());
+    await run(2);
+    refresh(false);
+    await run();
+    expect(await events()).toEqual([]);
+    expect(link()).toBeDefined();
+    expect(counts()).toEqual([1]);
   });
 
-  it("aborts missing record and deletion when Continue changes the source", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-refreshed";
-    await createLink(sessionKey, "claude", database);
-    let scan = 0;
-    const check = vi.fn(async () => {
-      scan += 1;
-      if (scan === 3) {
-        upsertSessionUpstreamLink(
-          {
-            sessionKey,
-            agentId: "main",
-            catalogId: "claude",
-            hostId: "gateway:local",
-            threadId: "thread-refreshed",
-            upstreamKind: "claude-cli",
-            upstreamRef: { source: "refreshed" },
-            marker: { offset: 999 },
-          },
-          { ...database, now: 7_777 },
-        );
-      }
-      return [{ kind: "missing" as const, sessionKey }];
-    });
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-refreshed" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
+  it.each(["missing", "activity"])(
+    "discards %s when Continue changes the source mid-scan",
+    async (kind) => {
+      await watch();
+      let scan = 0;
+      check.mockImplementation(async () => {
+        if (kind === "activity" || ++scan === 3) {
+          refresh();
+        }
+        return kind === "missing" ? missing() : [activity()];
+      });
+      await run(kind === "missing" ? 3 : 1);
+      expect(await events()).toEqual([]);
+      expect(link()).toEqual(
+        expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }),
+      );
+    },
+  );
 
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main"),
-    ).toEqual(expect.objectContaining({ threadId: "thread-refreshed", marker: { offset: 999 } }));
-  });
-
-  it("prunes missing counters when a link leaves the watched set", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:missing-pruned";
-    await createLink(sessionKey, "claude", database);
-    const check = vi.fn(async () => [{ kind: "missing" as const, sessionKey }]);
-    const options = {
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-missing-pruned" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    };
-    const missingCounts = createMissingCounts();
-
-    await runSessionUpstreamMonitorTick(options, missingCounts);
+  it("prunes counters when a link leaves the watched set", async () => {
+    await watch();
+    check.mockImplementation(async () => missing());
+    await run();
     expect(missingCounts.size).toBe(1);
     deleteSessionUpstreamLink(sessionKey, "main", database);
-    await runSessionUpstreamMonitorTick(options, missingCounts);
-
-    expect(check).toHaveBeenCalledOnce();
+    await run();
     expect(missingCounts.size).toBe(0);
   });
 
-  it("clamps skewed upstream event times without touching bookkeeping clocks", async () => {
-    const database = createDatabaseOptions();
-    const watched = "agent:main:adopted:clamped";
-    await createLink(watched, "claude", database);
+  it("clamps skewed event times without touching bookkeeping clocks", async () => {
+    await watch();
     const now = 100 * 24 * 60 * 60_000;
-    const ancient = 1_000; // far beyond the 24h clamp window
-    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) =>
-      probes.map((probe) => ({
-        kind: "activity" as const,
-        sessionKey: probe.sessionKey,
-        occurredAt: ancient,
-        humanTurns: 1,
-        nextMarker: { offset: 4 },
-        dedupeId: "4",
-      })),
-    );
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [claude],
-      now: () => now,
-      loadEntry: vi.fn(() => ({ sessionId: "session-clamped" }) as never),
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    const events = (await listSessionStateEventsSince(watched, "main", 0, 20, database)).events;
-    expect(events).toHaveLength(1);
-    // Event time is clamped into [now - 24h, now]; cursor rows keep the local clock
-    // so a skewed upstream timestamp cannot age watch state into retention pruning.
-    expect(events[0]?.occurredAt).toBe(now - 24 * 60 * 60_000);
+    check.mockResolvedValue([activity({ occurredAt: 1_000 })]);
+    await run(1, { now: () => now });
+    expect(await events()).toEqual([
+      expect.objectContaining({ occurredAt: now - 24 * 60 * 60_000 }),
+    ]);
     const cursor = openOpenClawStateDatabase(database)
       .db.prepare("SELECT updated_at FROM session_watch_cursors WHERE target_session_key = ?")
-      .get(watched) as { updated_at: number };
+      .get(sessionKey) as { updated_at: number };
     expect(cursor.updated_at).toBe(now);
   });
 
-  it("skips recording and marker writes when the link was refreshed mid-scan", async () => {
-    const database = createDatabaseOptions();
-    const watched = "agent:main:adopted:refreshed";
-    await createLink(watched, "claude", database);
-    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) => {
-      // Simulate a Continue refreshing the link while the scan is in flight.
-      upsertSessionUpstreamLink(
-        {
-          sessionKey: watched,
-          agentId: "main",
-          catalogId: "claude",
-          hostId: "gateway:local",
-          threadId: "thread-refreshed",
-          upstreamKind: "claude-cli",
-          upstreamRef: { source: "refreshed" },
-          marker: { offset: 999 },
-        },
-        { ...database, now: 7_777 },
-      );
-      return probes.map((probe) => ({
-        kind: "activity" as const,
-        sessionKey: probe.sessionKey,
-        occurredAt: 2_000,
-        humanTurns: 1,
-        nextMarker: { offset: 8 },
-        dedupeId: "stale-8",
-      }));
-    });
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [claude],
-      now: () => 3_000,
-      loadEntry: vi.fn(() => ({ sessionId: "session-refreshed" }) as never),
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    expect(
-      (await listSessionStateEventsSince(watched, "main", 0, 20, database)).events,
-    ).toHaveLength(0);
-    const row = openOpenClawStateDatabase(database)
-      .db.prepare("SELECT last_marker_json FROM session_upstream_links WHERE session_key = ?")
-      .get(watched) as { last_marker_json: string };
-    expect(JSON.parse(row.last_marker_json)).toEqual({ offset: 999 });
-  });
-
-  it("isolates a session-entry load failure to that link", async () => {
-    const database = createDatabaseOptions();
-    const broken = "agent:main:adopted:broken";
-    const healthy = "agent:main:adopted:healthy";
-    await createLink(broken, "claude", database);
-    await createLink(healthy, "claude", database);
-    const claude = provider("claude", async (probes: SessionUpstreamProbe[]) =>
-      probes.map((probe) => ({
-        kind: "activity" as const,
-        sessionKey: probe.sessionKey,
-        occurredAt: 2_500,
-        humanTurns: 1,
-        nextMarker: { offset: 6 },
-        dedupeId: "6",
-      })),
-    );
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [claude],
-      now: () => 3_000,
-      loadEntry: vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey === broken) {
+  it.each(["entry", "provider"])("isolates %s failures", async (failure) => {
+    await watch();
+    await createLink(otherKey, failure === "provider" ? "codex" : "claude");
+    if (failure === "entry") {
+      mockEntry(async ({ sessionKey: key }) => {
+        if (key === sessionKey) {
           throw new Error("corrupt session store");
         }
-        return { sessionId: "session-healthy" } as never;
-      }) as never,
-      loadOwnRecentUserTexts: async () => [],
+        return { sessionId: "healthy", updatedAt: 0 };
+      });
+    }
+    check.mockImplementation(async (probes) => {
+      if (failure === "provider") {
+        throw new Error("broken");
+      }
+      return probes.map((probe) => activity({ sessionKey: probe.sessionKey }));
     });
-
-    expect(
-      (await listSessionStateEventsSince(broken, "main", 0, 20, database)).events,
-    ).toHaveLength(0);
-    expect(
-      (await listSessionStateEventsSince(healthy, "main", 0, 20, database)).events,
-    ).toHaveLength(1);
+    await run(1, {
+      providers: [provider(), provider("codex", async () => [activity({ sessionKey: otherKey })])],
+    });
+    expect(await events()).toEqual([]);
+    expect(await events(otherKey)).toHaveLength(1);
   });
 
-  it("preserves a coalesced upstream burst count in the event payload", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:burst";
-    await createLink(sessionKey, "codex", database);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [
-        provider("codex", async () => [
-          {
-            kind: "activity" as const,
-            sessionKey,
-            occurredAt: 2_000,
-            humanTurns: 3,
-            nextMarker: { turnId: "turn-3", userMessageCount: 1 },
-            dedupeId: "turn-3:1",
-          },
-        ]),
-      ],
-      loadEntry: () => ({ sessionId: "session-burst" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [
-        expect.objectContaining({
-          kind: "human_direct_message",
-          payload: { turns: 3 },
-        }),
-      ],
-    );
-  });
-
-  it("isolates provider failures", async () => {
-    const database = createDatabaseOptions();
-    const codexSession = "agent:main:adopted:codex";
-    await createLink("agent:main:adopted:claude", "claude", database);
-    await createLink(codexSession, "codex", database);
-    const codexCheck = vi.fn(async () => [
-      {
-        kind: "activity" as const,
-        sessionKey: codexSession,
-        occurredAt: 5_000,
-        humanTurns: 1,
-        nextMarker: { turnId: "turn-2" },
-        dedupeId: "turn-2",
-      },
-    ]);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [
-        provider("claude", async () => {
-          throw new Error("broken");
-        }),
-        provider("codex", codexCheck),
-      ],
-      loadEntry: () => ({ sessionId: "session" }) as never,
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    expect(codexCheck).toHaveBeenCalledOnce();
-    expect(
-      (await listSessionStateEventsSince(codexSession, "main", 0, 20, database)).events,
-    ).toHaveLength(1);
-  });
-
-  it("defers active runs without advancing their marker", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:active";
-    await createLink(sessionKey, "claude", database);
-    const check = vi.fn(async (_probes: SessionUpstreamProbe[]) => []);
-    const claude = provider("claude", check);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [claude],
-      loadEntry: () => ({ sessionId: "session-active" }) as never,
-      isRunActive: () => true,
-      loadOwnRecentUserTexts: async () => [],
-    });
-    expect(check).not.toHaveBeenCalled();
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [claude],
-      loadEntry: () => ({ sessionId: "session-active" }) as never,
-      isRunActive: () => false,
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    expect(check).toHaveBeenCalledWith([expect.objectContaining({ marker: { offset: 0 } })], {
-      allowProcessHomeFallback: false,
-    });
-  });
-
-  it("defers activity when a run starts during the provider scan", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:active-race";
-    await createLink(sessionKey, "claude", database);
-    let active = false;
-    const check = vi.fn(async (_probes: SessionUpstreamProbe[]) => {
-      active = true;
-      return [
-        {
-          kind: "activity" as const,
-          sessionKey,
-          occurredAt: 2_000,
-          humanTurns: 1,
-          nextMarker: { offset: 12 },
-          dedupeId: "12",
-        },
-      ];
-    });
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-active-race" }) as never,
-      isRunActive: () => active,
-      loadOwnRecentUserTexts: async () => [],
-    });
-    active = false;
-    check.mockResolvedValueOnce([]);
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("claude", check)],
-      loadEntry: () => ({ sessionId: "session-active-race" }) as never,
-      isRunActive: () => active,
-      loadOwnRecentUserTexts: async () => [],
-    });
-
-    expect(check.mock.calls[1]?.[0]).toEqual([expect.objectContaining({ marker: { offset: 0 } })]);
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-  });
-
-  it("supplies provenance text so a matching upstream prompt advances without an event", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:provenance";
-    const sessionId = "session-provenance";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, env: database.env },
-      { sessionId, updatedAt: 1 },
-    );
-    await appendTranscriptMessage(
-      { agentId: "main", sessionId, sessionKey, env: database.env },
-      {
-        cwd: process.cwd(),
-        eventId: "user-message",
-        message: {
-          role: "user",
-          content: "visible prompt",
-          __openclaw: {
-            mirrorOrigin: "codex-app-server",
-            upstreamUserText: " exact   decorated prompt ",
-          },
-        },
-      },
-    );
-    await createLink(sessionKey, "claude", database);
-    const check = vi.fn(async (probes: SessionUpstreamProbe[]) => [
-      {
-        kind: "activity" as const,
-        sessionKey,
-        humanTurns: probes[0]?.ownRecentUserTexts.includes("exact decorated prompt") ? 0 : 1,
-        nextMarker: { offset: 20 },
-      },
-    ]);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("claude", check)],
-      isRunActive: () => false,
-    });
-
-    expect(check).toHaveBeenCalledWith(
-      [expect.objectContaining({ ownRecentUserTexts: ["exact decorated prompt"] })],
-      { allowProcessHomeFallback: false },
-    );
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [],
-    );
-    expect(
-      readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase(database).db, sessionKey, "main")
-        ?.marker,
-    ).toEqual({ offset: 20 });
-  });
-
-  it("reports a matching external prompt after catalog history import", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:catalog-import";
-    const sessionId = "session-catalog-import";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey, env: database.env },
-      { sessionId, updatedAt: 1 },
-    );
-    await importSessionCatalogHistory({
-      catalogId: "pi",
-      threadId: "thread-pi",
-      read: async () => ({
-        hostId: "gateway",
-        threadId: "thread-pi",
-        items: [{ id: "native-user-1", type: "userMessage", text: "repeat me" }],
+  it("preserves the coalesced burst count", async () => {
+    await watch("codex");
+    check.mockResolvedValue([
+      activity({
+        humanTurns: 3,
+        nextMarker: { turnId: "turn-3", userMessageCount: 1 },
+        dedupeId: "turn-3:1",
       }),
-      sessionId,
-      sessionKey,
-      agentId: "main",
-      config: {},
-    });
-    await createLink(sessionKey, "pi", database);
-    const check = vi.fn(async (probes: SessionUpstreamProbe[]) => [
-      {
-        kind: "activity" as const,
-        sessionKey,
-        occurredAt: 20_000,
-        humanTurns: probes[0]?.ownRecentUserTexts.includes("repeat me") ? 0 : 1,
-        nextMarker: { offset: 20 },
-        dedupeId: "20",
-      },
     ]);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [provider("pi", check)],
-      isRunActive: () => false,
-    });
-
-    expect(check).toHaveBeenCalledWith([expect.objectContaining({ ownRecentUserTexts: [] })], {
-      allowProcessHomeFallback: false,
-    });
-    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events).toEqual(
-      [expect.objectContaining({ kind: "human_direct_message", summary: "human message via pi" })],
-    );
+    await run(1, { providers: [provider("codex")] });
+    expect(await events()).toEqual([
+      expect.objectContaining({ kind: "human_direct_message", payload: { turns: 3 } }),
+    ]);
   });
+
+  it.each(["before", "during"])("defers activity when a run starts %s the scan", async (timing) => {
+    await watch();
+    let active = timing === "before";
+    mockRunActive(() => active);
+    check.mockImplementation(async () => {
+      active = true;
+      return [activity()];
+    });
+    await run();
+    if (timing === "before") {
+      expect(check).not.toHaveBeenCalled();
+    }
+    active = false;
+    check.mockResolvedValue([]);
+    await run();
+    expect(check.mock.calls.at(-1)?.[0]).toEqual([
+      expect.objectContaining({ marker: { offset: 0 } }),
+    ]);
+    expect(await events()).toEqual([]);
+  });
+
+  it.each([false, true])(
+    "matches only OpenClaw provenance, not catalog-imported prompts (imported: %s)",
+    async (imported) => {
+      const sessionId = "session";
+      const catalogId = imported ? "pi" : "claude";
+      const text = "exact decorated prompt";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey, env: database.env },
+        { sessionId, updatedAt: 1 },
+      );
+      if (imported) {
+        await importSessionCatalogHistory({
+          catalogId,
+          threadId: "thread-pi",
+          read: async () => ({
+            hostId: "gateway",
+            threadId: "thread-pi",
+            items: [{ id: "native-user", type: "userMessage", text }],
+          }),
+          sessionId,
+          sessionKey,
+          agentId: "main",
+          config: {},
+        });
+      } else {
+        await appendTranscriptMessage(
+          { agentId: "main", sessionId, sessionKey, env: database.env },
+          {
+            cwd: process.cwd(),
+            eventId: "user-message",
+            message: {
+              role: "user",
+              content: "visible prompt",
+              __openclaw: {
+                mirrorOrigin: "codex-app-server",
+                upstreamUserText: " exact   decorated prompt ",
+              },
+            },
+          },
+        );
+      }
+      await createLink(sessionKey, catalogId);
+      mockRunActive(() => false);
+      check.mockImplementation(async (probes) => [
+        activity({ humanTurns: probes[0]?.ownRecentUserTexts.includes(text) ? 0 : 1 }),
+      ]);
+      await run(1, { providers: [provider(catalogId)] });
+      expect(check.mock.calls[0]?.[0]).toEqual([
+        expect.objectContaining({ ownRecentUserTexts: imported ? [] : [text] }),
+      ]);
+      expect(await events()).toEqual(
+        imported
+          ? [
+              expect.objectContaining({
+                kind: "human_direct_message",
+                summary: "human message via pi",
+              }),
+            ]
+          : [],
+      );
+      expect(link()?.marker).toEqual({ offset: 8 });
+    },
+  );
 
   it("records an external prompt five seconds after OpenClaw activity", async () => {
-    const database = createDatabaseOptions();
-    const sessionKey = "agent:main:adopted:recent-external";
-    await createLink(sessionKey, "claude", database);
-
-    await runSessionUpstreamMonitorTick({
-      ...database,
-      providers: [
-        provider("claude", async () => [
-          {
-            kind: "activity" as const,
-            sessionKey,
-            occurredAt: 10_000,
-            humanTurns: 1,
-            nextMarker: { offset: 24 },
-            dedupeId: "24",
-          },
-        ]),
-      ],
-      loadEntry: () => ({ sessionId: "session-external", lastActivityAt: 5_000 }) as never,
-      isRunActive: () => false,
-      loadOwnRecentUserTexts: async () => ["OpenClaw prompt"],
-    });
-
-    expect(
-      (await listSessionStateEventsSince(sessionKey, "main", 0, 20, database)).events,
-    ).toHaveLength(1);
+    await watch();
+    mockEntry(async () => ({ sessionId: "session", lastActivityAt: 5_000, updatedAt: 0 }));
+    mockRunActive(() => false);
+    mockOwnTexts(["OpenClaw prompt"]);
+    check.mockResolvedValue([activity({ occurredAt: 10_000 })]);
+    await run();
+    expect(await events()).toHaveLength(1);
   });
 });

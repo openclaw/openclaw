@@ -1,4 +1,5 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
@@ -18,6 +19,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getRpcSource,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { bindInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { bindParentSubagentResume } from "../session-subagent-resume.js";
 import {
@@ -85,7 +90,10 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           }
           // Publication follows the native ACK; abort before the admission frame resumes.
           adopted = loadSubagentRegistryFromSqlite().get(runId);
-          context.chatAbortControllers.get(runId)?.controller.abort(failure);
+          const source = getRpcSource(runId);
+          if (source) {
+            requestRpcSourceCancellation(source, failure);
+          }
         });
         const respond = vi.fn();
         try {
@@ -113,7 +121,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         expectRespondError(respond, { message: expect.stringContaining(failure.message) });
         expect(respond.mock.calls.some(([accepted]) => accepted === true)).toBe(false);
         expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         const terminal = {
           runId,
           taskRunId: previousRunId,
@@ -168,6 +176,14 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           const workerSessionKey = "agent:main:subagent:worker";
           const previousRunId = "orchestrator-before-yield";
           const runId = "orchestrator-completion-followup";
+          await replaceSessionEntry(
+            {
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+              storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+            },
+            { sessionId: "orchestrator-requester", updatedAt: Date.now() },
+          );
           using cleanup = observeAgentSubagentCleanup({ runId, childSessionKey });
           const result = `${"Completed worker detail. ".repeat(200)}All worker results are ready.`;
           const { terminalReply } = prepareAgentRunTerminalReply({ rawText: result });

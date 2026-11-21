@@ -25,10 +25,7 @@ import {
   type SessionsDirFileStat,
 } from "./disk-budget-files.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget-runtime.js";
-import type {
-  SessionDiskBudgetSweepResult,
-  SessionUnreferencedArtifactSweepResult,
-} from "./disk-budget.types.js";
+import type { SessionUnreferencedArtifactSweepResult } from "./disk-budget.types.js";
 import { readLegacyCompactionSnapshotPaths } from "./legacy-compaction-history.js";
 import { resolveSessionArtifactDirectory, resolveSessionFilePathCore } from "./paths.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -396,11 +393,11 @@ export async function enforceSessionDiskBudget(params: {
   warnOnly: boolean;
   log?: SessionDiskBudgetLogger;
   commitEvictedIndex?: () => Promise<void>;
-}): Promise<SessionDiskBudgetSweepResult | null> {
+}): Promise<void> {
   const maxBytes = params.maintenance.maxDiskBytes;
   const highWaterBytes = params.maintenance.highWaterBytes;
   if (maxBytes == null || highWaterBytes == null) {
-    return null;
+    return;
   }
   const log = params.log;
   const sessionsDir = resolveSessionArtifactDirectory(params.storePath);
@@ -453,25 +450,14 @@ export async function enforceSessionDiskBudget(params: {
         highWaterBytes,
       });
     }
-    return {
-      totalBytesBefore: totalBefore,
-      totalBytesAfter: total,
-      removedFiles: 0,
-      removedEntries: 0,
-      freedBytes: 0,
-      maxBytes,
-      highWaterBytes,
-      overBudget,
-    };
+    return;
   }
 
   let removedFiles = 0;
   let removedEntries = 0;
-  let freedBytes = 0;
   const recordRemoval = (removal: FileRemovalResult) => {
     if (removal.ok) {
       total -= removal.value;
-      freedBytes += removal.value;
       removedFiles += 1;
     }
   };
@@ -653,15 +639,4 @@ export async function enforceSessionDiskBudget(params: {
       removedEntries,
     });
   }
-
-  return {
-    totalBytesBefore: totalBefore,
-    totalBytesAfter: total,
-    removedFiles,
-    removedEntries,
-    freedBytes,
-    maxBytes,
-    highWaterBytes,
-    overBudget: true,
-  };
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
-import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
+import { writeConsoleDiagnosticWarning } from "../logging/json-console-line.js";
 import { resolveInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
 import { isOptionalPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
@@ -18,13 +18,24 @@ import {
   resolvePluginVersionDriftUpdateCommand,
 } from "../plugins/plugin-version-drift.js";
 import { VERSION } from "../version.js";
-import {
-  POST_UPGRADE_PROBE_CODES,
-  type PostUpgradeFinding,
-  type PostUpgradeReport,
-} from "./doctor-post-upgrade.types.js";
 
-function buildReport(findings: PostUpgradeFinding[]): PostUpgradeReport {
+type PostUpgradeFinding = {
+  level: "ok" | "warn" | "error";
+  code: string;
+  message: string;
+  plugin?: string;
+  entry?: string;
+};
+
+const POST_UPGRADE_PROBE_CODES = [
+  "plugin.index_unavailable",
+  "plugin.entry_unresolved",
+  "plugin.manifest_unavailable",
+  "plugin.manifest_drift",
+  "plugin.version_drift",
+] as const;
+
+function buildReport(findings: PostUpgradeFinding[]) {
   return { probesRun: [...POST_UPGRADE_PROBE_CODES], findings };
 }
 
@@ -45,12 +56,9 @@ function isBundledSourceCheckoutPluginRoot(pluginRootDir: string): boolean {
   }
 }
 
-export async function runPostUpgradeProbes(params: {
-  stateDir?: string;
-  updateChannel?: UpdateChannel;
-}): Promise<PostUpgradeReport> {
+export async function runPostUpgradeProbes(updateChannel?: UpdateChannel) {
   const findings: PostUpgradeFinding[] = [];
-  const installs = await readPersistedInstalledPluginIndex(params);
+  const installs = await readPersistedInstalledPluginIndex();
   if (!installs) {
     findings.push({
       level: "error",
@@ -77,7 +85,7 @@ export async function runPostUpgradeProbes(params: {
     detectPluginVersionDrift({
       gatewayVersion: VERSION,
       installRecords,
-      config: { update: { channel: params.updateChannel } },
+      config: { update: { channel: updateChannel } },
     }),
   );
   for (const entry of drift.drifts) {
@@ -124,7 +132,7 @@ export async function runPostUpgradeProbes(params: {
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         const message = `[doctor-post-upgrade] could not read package.json for ${record.pluginId} at ${record.rootDir}: ${reason}`;
-        process.stderr.write(`${formatConsoleDiagnosticLine({ level: "warn", message })}\n`);
+        writeConsoleDiagnosticWarning(message);
         // A declared package is required to validate its runtime entry; logging
         // alone otherwise makes a broken enabled plugin exit as healthy.
         addError(

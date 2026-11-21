@@ -27,15 +27,27 @@ export function jsonUtf8BytesOrInfinity(value: unknown): number {
   }
 }
 
-function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
-  // Pre-scan raw UTF-8 only when the code-unit bounds are inconclusive.
-  if (
-    value.length + 2 > remainingBytes ||
-    (value.length * 3 + 2 > remainingBytes && Buffer.byteLength(value, "utf8") + 2 > remainingBytes)
-  ) {
+// oxlint-disable-next-line eslint/no-control-regex -- JSON escapes every C0 control character.
+const JSON_STRING_ESCAPES = /["\\\u0000-\u001f\ud800-\udfff]/gu;
+
+/** Counts a JSON string exactly, rejecting raw UTF-8 overflow before scanning escapes. */
+export function jsonStringByteLengthUpToLimit(value: string, remainingBytes: number): number {
+  if (value.length + 2 > remainingBytes) {
     return remainingBytes + 1;
   }
-  return jsonUtf8BytesOrInfinity(value);
+  let bytes = Buffer.byteLength(value, "utf8") + 2;
+  if (bytes > remainingBytes) {
+    return remainingBytes + 1;
+  }
+  // Short escapes add one byte and other controls add five. Lone surrogates
+  // need six JSON bytes instead of UTF-8's three-byte replacement; Unicode
+  // matching leaves valid surrogate pairs intact. A flat match list avoids a
+  // result array and iterator allocation for every escaped character.
+  for (const character of value.match(JSON_STRING_ESCAPES) ?? []) {
+    const code = character.charCodeAt(0);
+    bytes += code >= 0xd800 ? 3 : code < 0x20 && !"\b\t\n\f\r".includes(character) ? 5 : 1;
+  }
+  return bytes;
 }
 
 /** Returns the first enumerable own keys in JavaScript enumeration order. */
@@ -56,7 +68,7 @@ export function firstEnumerableOwnKeys(value: object, maxKeys: number): string[]
 /** Counts JSON UTF-8 bytes up to a hard limit without fully serializing large objects. */
 export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJsonUtf8Bytes {
   let bytes = 0;
-  const seen = new WeakSet<object>();
+  let seen: WeakSet<object> | undefined;
 
   const add = (amount: number): void => {
     bytes += amount;
@@ -94,7 +106,7 @@ export function boundedJsonUtf8Bytes(value: unknown, maxBytes: number): BoundedJ
     }
 
     const objectEntry = entry as object;
-    if (seen.has(objectEntry)) {
+    if ((seen ??= new WeakSet<object>()).has(objectEntry)) {
       throw new Error("json_byte_length_circular");
     }
     // Custom toJSON can hide arbitrary work or reshape output, so bounded

@@ -9,6 +9,7 @@ import {
   toolCallXmlTextFilter,
 } from "../shared/text/assistant-visible-text.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import { applyTextFilters } from "../shared/text/text-projection.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
@@ -28,8 +29,15 @@ import {
 export function extractAssistantStreamSnapshot(
   ctx: EmbeddedAgentSubscribeContext,
   message: AssistantMessage,
-  options?: { final?: boolean; throughIndex?: number; observedText?: string },
+  options?: {
+    final?: boolean;
+    throughIndex?: number;
+    observedText?: string;
+    nativeToolMarkerBlocks?: ReadonlySet<number>;
+  },
 ) {
+  const nativeToolMarkerBlocks =
+    options?.nativeToolMarkerBlocks ?? findNativeToolMarkerTextBlocks(message);
   let observedMessage = message;
   if (options?.throughIndex !== undefined && Array.isArray(message.content)) {
     const content = message.content.slice(0, options.throughIndex + 1);
@@ -66,11 +74,15 @@ export function extractAssistantStreamSnapshot(
     const preparedPart = protocol.sourceText.slice(preparedStart);
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
-    const visible = preparedFinal
-      ? `${separator}${preparedPart}`
-      : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
-          final: final && options?.final !== false,
-        });
+    const hidden = index !== undefined && nativeToolMarkerBlocks.has(index);
+    // Hidden markers must not leave a pending tag that can consume later prose.
+    const visible = hidden
+      ? ""
+      : preparedFinal
+        ? `${separator}${preparedPart}`
+        : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
+            final: final && options?.final !== false,
+          });
     const previous = blockSources.at(-1);
     if (
       previous &&
@@ -86,7 +98,7 @@ export function extractAssistantStreamSnapshot(
         finalAnswer: preparedFinal,
       });
     }
-    return preparedFinal ? preparedPart : visible;
+    return hidden ? "" : preparedFinal ? preparedPart : visible;
   });
   const visibleBlockSource = blockSources
     .map(({ text, separator, finalAnswer }) => ({
@@ -129,6 +141,7 @@ export function extractAssistantStreamSnapshot(
     parts,
     blockText: blockReply.text,
     message: observedMessage,
+    nativeToolMarkerBlocks,
   };
 }
 
@@ -148,6 +161,7 @@ export function reconcileBlockReplySnapshot(
     const prefix = extractAssistantStreamSnapshot(ctx, snapshot.message, {
       throughIndex: index - 1,
       final: false,
+      nativeToolMarkerBlocks: snapshot.nativeToolMarkerBlocks,
     }).blockText;
     return prefix + (snapshot.parts.find((part) => part.index === index)?.separator ?? "");
   };
@@ -186,22 +200,15 @@ export function reconcileBlockReplySnapshot(
   const consumed = ctx.blockChunker.consumedLength;
   let oldCode: ReturnType<typeof findCodeRegions> | undefined;
   let nextCode: ReturnType<typeof findCodeRegions> | undefined;
-  const crossesCode = (snapshot: typeof next, offset: number, includeCodeEnd = false) => {
-    if (
-      offset <= 0 ||
-      offset > snapshot.blockText.length ||
-      (offset === snapshot.blockText.length && !includeCodeEnd)
-    ) {
+  const crossesCode = (snapshot: typeof next, offset: number) => {
+    if (offset <= 0 || offset >= snapshot.blockText.length) {
       return false;
     }
     const regions =
       snapshot === previous
         ? (oldCode ??= findCodeRegions(previous.blockText))
         : (nextCode ??= findCodeRegions(next.blockText));
-    return regions.some(
-      (region) =>
-        region.start < offset && (offset < region.end || (includeCodeEnd && offset === region.end)),
-    );
+    return regions.some((region) => region.start < offset && offset < region.end);
   };
   const scopeRetained =
     oldScope.valid &&
@@ -274,54 +281,10 @@ export function reconcileBlockReplySnapshot(
     ctx.blockChunker.replace(nextText, 0, retainedPrefix);
     return;
   }
-  const sourceBreaks: number[] = [];
-  if (
-    scopeRetained &&
-    oldScope.index === nextScope.index &&
-    oldPrefix === nextPrefix &&
-    consumed > 0
-  ) {
-    const limit = Math.min(oldText.length, nextText.length);
-    let prefixLength = 0;
-    while (
-      prefixLength < limit &&
-      oldText.charCodeAt(prefixLength) === nextText.charCodeAt(prefixLength)
-    ) {
-      prefixLength += 1;
-    }
-    let suffixLength = 0;
-    while (
-      suffixLength < limit - prefixLength &&
-      oldText.charCodeAt(oldText.length - suffixLength - 1) ===
-        nextText.charCodeAt(nextText.length - suffixLength - 1)
-    ) {
-      suffixLength += 1;
-    }
-    const suffixStart = oldText.length - suffixLength;
-    const shift = next.blockText.length - previous.blockText.length;
-    // Preserve chunk boundaries, not delivery claims: repeated source still
-    // passes through the existing payload/custody decision at the recipient.
-    // Include code ends because a later append can continue an unfinished fence.
-    for (const end of ctx.blockChunker.preparedSourceBreaks) {
-      const unchangedPrefix = end <= prefixLength;
-      const oldBoundary = oldPrefix.length + end;
-      const nextBoundary = oldBoundary + (unchangedPrefix ? 0 : shift);
-      if (
-        (!unchangedPrefix && (suffixLength === 0 || end < suffixStart)) ||
-        end > Math.min(consumed, oldText.length) ||
-        nextBoundary <= restartPrefix.length ||
-        crossesCode(previous, oldBoundary, true) ||
-        crossesCode(next, nextBoundary, true)
-      ) {
-        continue;
-      }
-      sourceBreaks.push(nextBoundary - restartPrefix.length);
-    }
-  }
   ctx.state.blockReplyScopeStart = {
     contentIndex: restartIndex,
     itemId: resolveAssistantStreamItemId({ contentIndex: restartIndex, message: next.message }),
   };
-  ctx.blockChunker.reset(sourceBreaks, restartPrefix.length);
+  ctx.blockChunker.reset([], restartPrefix.length);
   ctx.blockChunker.append(next.blockText.slice(restartPrefix.length));
 }

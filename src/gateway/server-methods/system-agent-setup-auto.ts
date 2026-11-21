@@ -81,7 +81,9 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   const attempts: SystemAgentSetupAutoResult["attempts"] = [];
   const failed = new Set<string>();
   const installedPlugins: string[] = [];
+  let hasNonAuthFailure = false;
   let codexNeedsSignIn = false;
+  let codexFailed = false;
   let shared = false;
   let authOptions = detection.authOptions;
   const result = (
@@ -194,8 +196,18 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       return true;
     }
     failed.add(candidate.kind);
+    hasNonAuthFailure ||= activation.status !== "auth";
     if (candidate.kind === "codex-cli" && activation.status === "auth") {
       codexNeedsSignIn = true;
+    }
+    if (
+      candidate.kind === "codex-cli" &&
+      (activation.status === "unavailable" ||
+        activation.error.includes("Cannot inspect Codex processes."))
+    ) {
+      // Terminal runs carry inspection failures as text. Model rejections still
+      // follow the ordinary candidate ladder; runtime inspection must stay visible.
+      codexFailed = true;
     }
     attempts.push({ kind: candidate.kind, label: candidate.label, error: activation.error });
     return false;
@@ -204,6 +216,9 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   for (const candidate of ranked.slice(0, 3)) {
     if (await activate(candidate)) {
       return result("activated", candidate);
+    }
+    if (codexFailed) {
+      return result("unavailable");
     }
   }
   try {
@@ -298,7 +313,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       );
       if (signIn) {
         return {
-          ...result("needs-sign-in"),
+          ...result(hasNonAuthFailure ? "unavailable" : "needs-sign-in"),
           signIn: { authOptionId: signIn.id, label: signIn.label },
         };
       }

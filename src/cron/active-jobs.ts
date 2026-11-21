@@ -4,6 +4,13 @@ import {
   type AdmittedRunContext,
   type OperationalRunInstanceRef,
 } from "../agents/admitted-run-context.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
+import type { ReplyOperationObservation } from "../sessions/reply-operation-state.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 
@@ -12,7 +19,11 @@ type CronActiveJobState = {
   selfRemovalOwners: WeakMap<() => void, () => CronActiveJobMarker | undefined>;
   admittedJobRuns: WeakMap<
     CronActiveJobMarker,
-    { context: AdmittedRunContext; assertActive: () => void; signal: AbortSignal }
+    {
+      context: AdmittedRunContext;
+      assertActive: NonNullable<ReturnType<typeof resolveAdmittedRunActiveAssertion>>;
+      signal: AbortSignal;
+    }
   >;
   generation: number;
   nextToken: number;
@@ -32,14 +43,14 @@ export function bindCronJobAdmittedRun(
   }
 }
 
-/** Captures one occurrence before admission without granting another prompt its authority. */
+/** Capture occurrence authority once; subsequent uses keep cancellation and source ownership. */
 function captureCronJobMessageAuthority(
   params: {
     jobId: string;
     operationalRunInstance: OperationalRunInstanceRef;
   },
   sourceSensitive: boolean,
-): (() => void) | undefined {
+): SessionSourceAssertion | undefined {
   const { jobId } = params;
   const marker = getCurrentCronActiveJobMarker(jobId);
   const isAuthorityCurrent = sourceSensitive
@@ -51,14 +62,12 @@ function captureCronJobMessageAuthority(
   const { instanceId, runId } = params.operationalRunInstance;
   const { admittedJobRuns } = getCronActiveJobState();
   let owner: ReturnType<typeof admittedJobRuns.get>;
-  const isMarkerCurrent = () =>
-    getCurrentCronActiveJobMarker(jobId) === marker &&
-    !marker.messageActionAuthorityRevoked &&
-    (!sourceSensitive || !marker.messageSourceAuthorityRevoked) &&
-    !marker.jobRemoved &&
-    marker.cancellation?.kind !== "requested";
+  const isMarkerCurrent = () => !marker.jobRemoved && marker.cancellation?.kind !== "requested";
   const inactive = () => new Error("cron message action authority is no longer active");
-  const assertLocal = () => {
+  if (!isAuthorityCurrent()) {
+    throw inactive();
+  }
+  const readOwner = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
       !isMarkerCurrent() ||
@@ -70,21 +79,17 @@ function captureCronJobMessageAuthority(
       throw inactive();
     }
     owner ??= admitted;
-    owner.assertActive();
+    return owner;
   };
-  const assertCurrent = () => {
-    assertLocal();
-    if (!isAuthorityCurrent()) {
-      if (sourceSensitive) {
-        marker.messageSourceAuthorityRevoked = true;
-      } else {
-        marker.messageActionAuthorityRevoked = true;
-      }
-      throw inactive();
-    }
-    assertLocal();
-  };
-  return assertCurrent;
+  // The occurrence binds its admitted run after this capability is created.
+  const source = Object.assign(() => readOwner().assertActive(), {
+    prepareSessionSource: () => prepareSessionSourceAuthority(readOwner().assertActive),
+  });
+  return composeSessionSourceAssertion([source], (assertSource) => {
+    readOwner();
+    assertSource();
+    marker.standingGrantAuthority?.assertCurrent();
+  });
 }
 
 export function captureCronJobMessageActionAuthority(params: {
@@ -99,6 +104,25 @@ export function captureCronJobMessageSourceAuthority(params: {
   operationalRunInstance: OperationalRunInstanceRef;
 }) {
   return captureCronJobMessageAuthority(params, true);
+}
+
+/** Source restoration belongs to one occurrence; returns whether it has removed itself. */
+export function captureCronJobSourceAuthority(jobId: string): (() => boolean) | undefined {
+  const marker = getCurrentCronActiveJobMarker(jobId);
+  const owner = marker?.standingGrantAuthority;
+  if (!marker || !owner) {
+    return undefined;
+  }
+  return () => {
+    if (
+      (marker.jobRemoved && !isCronSelfRemovalCurrent(marker)) ||
+      marker.cancellation?.kind === "requested"
+    ) {
+      throw new Error("Cron occurrence source authority is no longer active");
+    }
+    owner.assertCurrent();
+    return marker.jobRemoved === true;
+  };
 }
 
 export function captureCronJobStandingGrantAuthority(params: {
@@ -116,7 +140,6 @@ export function captureCronJobStandingGrantAuthority(params: {
   const assertCurrent = () => {
     const admitted = admittedJobRuns.get(marker);
     if (
-      getCurrentCronActiveJobMarker(params.jobId) !== marker ||
       marker.jobRemoved ||
       marker.cancellation?.kind === "requested" ||
       !admitted ||
@@ -147,8 +170,7 @@ export function bindCronSelfRemovalCommitGuard(
   const { admittedJobRuns, selfRemovalOwners } = getCronActiveJobState();
   const marker = getCurrentCronActiveJobMarker(jobId);
   const owner = marker && admittedJobRuns.get(marker);
-  const assertOwner = () => {
-    assertCallerActive();
+  const assertBinding = () => {
     if (
       !marker ||
       !owner ||
@@ -161,16 +183,26 @@ export function bindCronSelfRemovalCommitGuard(
         "Cron self-removal requires the exact live run; the job was not removed.",
       );
     }
-    owner.assertActive();
-    return marker;
+    owner.assertActive.assertScopeCurrent();
+    return owner;
   };
+  let validated = false;
   const selfRemovalGuard = () => {
+    validated = false;
     commitGuard();
-    assertOwner();
+    assertCallerActive();
+    assertBinding().assertActive();
+    validated = true;
   };
   selfRemovalOwners.set(selfRemovalGuard, () => {
     try {
-      return assertOwner();
+      // Deletion has already retired the source row. Rechecking that row here
+      // would misclassify its own admitted remover as an operator cancellation.
+      if (!validated) {
+        return undefined;
+      }
+      assertBinding();
+      return marker;
     } catch {
       return undefined;
     }
@@ -193,14 +225,13 @@ export type CronActiveJobMarker = {
   triggerMutated?: true;
   isMessageActionAuthorityCurrent?: () => boolean;
   isMessageSourceAuthorityCurrent?: () => boolean;
-  messageActionAuthorityRevoked?: true;
   messageSourceAuthorityRevoked?: true;
   jobRemoved?: true;
   selfRemovalAccepted?: true;
   preserveAcrossGenerationAdvance?: boolean;
   onInactive?: Set<() => void>;
   inactiveNotified?: true;
-  heartbeatWait?: symbol;
+  idleAdmissionWait?: { replyOperation?: ReplyOperationObservation };
 };
 
 function getCronActiveJobState(): CronActiveJobState {
@@ -302,6 +333,7 @@ export function markCronJobActive(
     ...(opts?.preserveAcrossGenerationAdvance ? { preserveAcrossGenerationAdvance: true } : {}),
   };
   state.activeJobs.set(jobId, marker);
+  notifyGatewayWorkMetricsChanged();
   return marker;
 }
 
@@ -324,6 +356,7 @@ export function clearCronJobActive(jobId: string, marker?: CronActiveJobMarker) 
     notifyCronJobInactive(marker);
   }
   notifyActiveCronJobWaitersIfEmpty(state);
+  notifyGatewayWorkMetricsChanged();
 }
 
 /** Records a durable schedule edit against the exact run that was active for it. */
@@ -346,15 +379,7 @@ export function noteActiveCronJobTriggerMutation(jobId: string): void {
   }
 }
 
-/** A committed permission change cannot be undone by a retry or an A-to-B-to-A edit. */
-export function noteActiveCronJobMessageActionAuthorityMutation(jobId: string): void {
-  const marker = getCurrentCronActiveJobMarker(jobId);
-  if (marker) {
-    marker.messageActionAuthorityRevoked = true;
-  }
-}
-
-/** Revokes source-scoped reads and writes after their authenticated executable source changes. */
+/** A queued on-exit launch checks its executable source at its own admission. */
 export function noteActiveCronJobMessageSourceAuthorityMutation(jobId: string): void {
   const marker = getCurrentCronActiveJobMarker(jobId);
   if (marker) {
@@ -449,6 +474,60 @@ export function listActiveCronJobIds(): string[] {
   return [...getCronActiveJobState().activeJobs.keys()].filter(isCronJobActive);
 }
 
+/** Includes admitted runs that have not entered their executing core yet. */
+export function hasActiveCronJobsForAgent(
+  agentId: string,
+  exceptJobId?: string,
+  options?: { excludeIdleWaiters?: true },
+): boolean {
+  for (const marker of getCronActiveJobState().activeJobs.values()) {
+    if (
+      marker.jobId !== exceptJobId &&
+      !(options?.excludeIdleWaiters && marker.idleAdmissionWait) &&
+      !marker.inactiveNotified &&
+      (!marker.agentId || marker.agentId === agentId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Pending idle work remains drain-visible without making peer waiters block each other. */
+export function markCronJobWaitingForIdle(
+  marker: CronActiveJobMarker | undefined,
+  replyOperation?: ReplyOperationObservation,
+): () => void {
+  if (!marker || !isCronActiveJobMarkerCurrent(marker)) {
+    throw new Error("Cron idle admission lost its active run marker");
+  }
+  const waiting = { replyOperation };
+  marker.idleAdmissionWait = waiting;
+  notifyGatewayWorkMetricsChanged();
+  return () => {
+    if (marker.idleAdmissionWait === waiting) {
+      delete marker.idleAdmissionWait;
+      notifyGatewayWorkMetricsChanged();
+    }
+  };
+}
+
+/** Excludes only the captured reply owner, never a successor that reuses its session key. */
+export function isCronReplyOperationWaitingForIdle(operation: ReplyOperationObservation): boolean {
+  if (operation.abortSignal.aborted || operation.result) {
+    return false;
+  }
+  for (const marker of getCronActiveJobState().activeJobs.values()) {
+    if (
+      marker.idleAdmissionWait?.replyOperation === operation &&
+      isCronActiveJobMarkerCurrent(marker)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Runs a callback when the exact cron job no longer has an active in-process run. */
 export function onCronJobInactive(
   marker: CronActiveJobMarker | undefined,
@@ -471,54 +550,6 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   return (
     activeMarker?.token === marker.token && isMarkerActiveInGeneration(marker, state.generation)
   );
-}
-
-/** Ignores only the exact cron executions represented by one coalesced heartbeat wake. */
-export function hasActiveCronJobsExceptMarkers(
-  markersToIgnore: readonly CronActiveJobMarker[],
-  matches: (marker: CronActiveJobMarker) => boolean = () => true,
-) {
-  const state = getCronActiveJobState();
-  const ignoredMarkers = new Set(markersToIgnore);
-  for (const marker of state.activeJobs.values()) {
-    if (
-      !ignoredMarkers.has(marker) &&
-      isMarkerActiveInGeneration(marker, state.generation) &&
-      matches(marker)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Records that an exact cron execution is idle until its heartbeat wake settles. */
-export function markCronJobWaitingForHeartbeat(
-  marker: CronActiveJobMarker | undefined,
-): () => void {
-  if (!marker || !isCronActiveJobMarkerCurrent(marker)) {
-    return () => {};
-  }
-  const heartbeatWait = Symbol("cron-heartbeat-wait");
-  marker.heartbeatWait = heartbeatWait;
-  return () => {
-    if (marker.heartbeatWait === heartbeatWait) {
-      delete marker.heartbeatWait;
-    }
-  };
-}
-
-/** Returns exact live cron executions currently waiting on heartbeat settlement. */
-export function listCronHeartbeatWaitOwners(): CronActiveJobMarker[] {
-  const state = getCronActiveJobState();
-  const activeJobMarkers: CronActiveJobMarker[] = [];
-  for (const marker of state.activeJobs.values()) {
-    if (!marker.heartbeatWait || !isMarkerActiveInGeneration(marker, state.generation)) {
-      continue;
-    }
-    activeJobMarkers.push(marker);
-  }
-  return activeJobMarkers;
 }
 
 /** Returns the number of active cron runs in this process. */
@@ -569,6 +600,7 @@ export function advanceCronActiveJobGeneration() {
     }
   }
   notifyActiveCronJobWaitersIfEmpty(state);
+  notifyGatewayWorkMetricsChanged();
 }
 
 /** Clears process-global cron active-job state at process-lifecycle boundaries. */
@@ -580,4 +612,5 @@ export function resetCronActiveJobs() {
   }
   state.activeJobs.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
+  notifyGatewayWorkMetricsChanged();
 }

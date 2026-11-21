@@ -3,6 +3,7 @@ import {
   GatewayControlUiIngressError,
   type GatewayControlUiIngressV2,
 } from "openclaw/plugin-sdk/gateway-ingress";
+import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { codeHash } from "./protocol.js";
 import {
@@ -11,6 +12,7 @@ import {
   createPrincipalIngress,
   createTransportFixture,
   GATEWAY_ID,
+  grantFixture,
   HTTP,
   IngressSocket,
   ORIGINS,
@@ -144,6 +146,34 @@ describe("MCP relay transport and authority", () => {
     );
   });
 
+  it.each(["result", "error"])("withholds a revoked %s at publication", async (kind) => {
+    const operations = vi.fn(async () => ({}));
+    const f = await fixture(operations);
+    await createGrant(f);
+    await f.ready();
+    operations.mockImplementationOnce(async () => {
+      await f.state.revoke("gr_one");
+      if (kind === "error") {
+        throw new Error("private provider error");
+      }
+      return { text: "private provider result" };
+    });
+    expect(await f.request({ id: "revoked", op: "status", grantId: "gr_one", params: {} })).toEqual(
+      denied("revoked", "grant_revoked"),
+    );
+  });
+
+  it("normalizes private operation failures at the wire boundary", async () => {
+    const f = await fixture(async () => {
+      throw new Error("private provider error");
+    });
+    await createGrant(f);
+    await f.ready();
+    const response = await f.request({ id: "failed", op: "status", grantId: "gr_one", params: {} });
+    expect(response).toEqual(denied("failed", "internal"));
+    expect(JSON.stringify(response)).not.toContain("private provider error");
+  });
+
   it("requires the current principal-bound ingress capability at startup", async () => {
     await expect(fixture(undefined, { controlUiIngress: undefined })).rejects.toThrow(
       "Update OpenClaw to enable principal-bound MCP and Control UI access.",
@@ -259,9 +289,11 @@ describe("MCP relay transport and authority", () => {
   });
 
   it.each(["owner", "person"] as const)(
-    "persists only the code hash and keeps %s profile IDs out of pairing offers",
+    "pairs %s with definitions alone while keeping profile IDs out of pairing offers",
     async (principal) => {
-      const f = await fixture();
+      const f = await fixture(undefined, {
+        config: () => ({ gateway: { roles: { definitions: {} } } }),
+      });
       await expect(f.service.pair()).rejects.toMatchObject({ code: "unavailable" });
       await f.ready();
       await f.clock.advanceBy(0);
@@ -269,7 +301,11 @@ describe("MCP relay transport and authority", () => {
         undefined,
         principal === "person" ? PERSON_AUTHORITY : undefined,
       );
-      const offer = await f.socket.nextFrame();
+      const offer = await awaitGateBeforeSettlement(
+        f.socket.nextFrame(),
+        pairing,
+        "Pairing settled before offering a code",
+      );
       expect(offer).toEqual({
         type: "req",
         id: expect.any(String),
@@ -322,6 +358,23 @@ describe("MCP relay transport and authority", () => {
     },
   );
 
+  it.each(["default-role", "trusted-proxy"] as const)(
+    "refuses owner pairing for %s without recording a code",
+    async (mode) => {
+      const f = await fixture(undefined, {
+        config: () => ({
+          gateway:
+            mode === "default-role"
+              ? { roles: { default: "guest", definitions: {} } }
+              : { auth: { mode: "trusted-proxy" } },
+        }),
+      });
+      await f.ready();
+      await expect(f.service.pair()).rejects.toThrow("person-bound grant");
+      expect(f.storage.persisted()).not.toContain('"code:');
+    },
+  );
+
   it("acknowledges grant creation only after durable consumption", async () => {
     const f = await fixture();
     await f.ready();
@@ -350,17 +403,12 @@ describe("MCP relay transport and authority", () => {
       ok: true,
       result: {},
     });
+    const issuanceId = f.state.getGrant("accepted")?.issuanceId;
+    expect(issuanceId).toMatch(/^[a-f0-9-]{36}$/u);
     const restarted = f.storage.open();
     await restarted.initialize();
     await expect(restarted.grants()).resolves.toEqual([
-      {
-        grantId: "accepted",
-        clientId: CLIENT.id,
-        clientName: CLIENT.name,
-        createdAt: 1_000,
-        principal: { kind: "owner" },
-        ceiling: ["operator.read", "operator.write"],
-      },
+      grantFixture({ grantId: "accepted", createdAt: 1_000, issuanceId }),
     ]);
   });
 
@@ -485,14 +533,12 @@ describe("MCP relay transport and authority", () => {
     });
     await createGrant(f);
     await f.state.approveGrant(
-      {
+      grantFixture({
         grantId: "gr_person",
-        clientId: CLIENT.id,
-        clientName: CLIENT.name,
         createdAt: f.scheduler.now(),
         principal: { kind: "person", profileId: "profile-private" },
         ceiling: ["operator.read"],
-      },
+      }),
       () => {},
     );
     await f.ready();

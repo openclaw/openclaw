@@ -8,6 +8,7 @@ import JSON5 from "json5";
 import { rejectConfigNonFiniteNumbers } from "../config/value-tree.js";
 import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 
 export type ConfigSetOptions = {
   strictJson?: boolean;
@@ -51,17 +52,6 @@ export type ConfigSetCurrentExpectation = { kind: "absent" } | { kind: "json"; v
 
 const CONFIG_MUTATION_FILE_MAX_BYTES = 8 * 1024 * 1024;
 
-export function decodeConfigMutationInput(
-  bytes: Uint8Array,
-  sourceLabel: "--batch-file" | "--file" | "--stdin",
-): string {
-  try {
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch (error) {
-    throw new Error(`${sourceLabel} must be valid UTF-8.`, { cause: error });
-  }
-}
-
 export function readConfigMutationFileSync(
   filePath: string,
   sourceLabel: "--batch-file" | "--file",
@@ -89,7 +79,7 @@ export function readConfigMutationFileSync(
       );
     }
     try {
-      return decodeConfigMutationInput(
+      return decodeUtf8Input(
         readFileDescriptorBoundedSync(fd, CONFIG_MUTATION_FILE_MAX_BYTES),
         sourceLabel,
       );
@@ -110,18 +100,19 @@ export function readConfigMutationFileSync(
 export function resolveConfigSetMode(
   opts: ConfigSetOptions,
 ): "value" | "json" | "ref_builder" | "provider_builder" | "batch" {
-  const hasRef = Boolean(opts.refProvider || opts.refSource || opts.refId);
+  const hasRef =
+    opts.refProvider !== undefined || opts.refSource !== undefined || opts.refId !== undefined;
   const hasProvider = Boolean(
-    opts.providerSource ||
+    opts.providerSource !== undefined ||
     opts.providerAllowlist?.length ||
-    opts.providerPath ||
-    opts.providerMode ||
-    opts.providerTimeoutMs ||
-    opts.providerMaxBytes ||
-    opts.providerCommand ||
+    opts.providerPath !== undefined ||
+    opts.providerMode !== undefined ||
+    opts.providerTimeoutMs !== undefined ||
+    opts.providerMaxBytes !== undefined ||
+    opts.providerCommand !== undefined ||
     opts.providerArg?.length ||
-    opts.providerNoOutputTimeoutMs ||
-    opts.providerMaxOutputBytes ||
+    opts.providerNoOutputTimeoutMs !== undefined ||
+    opts.providerMaxOutputBytes !== undefined ||
     opts.providerJsonOnly ||
     opts.providerEnv?.length ||
     opts.providerPassEnv?.length ||

@@ -8,13 +8,14 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../model-setup/wizard-runner.ts";
-import { resolveCustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
+import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
 export type { SetupAutoCandidate, SetupAutoResult };
 
@@ -52,24 +53,50 @@ export class CustodianAutoSetup {
     },
     onBackgroundCompletion: (completion) => this.finishSignIn(completion),
     requestFailedMessage: () => t("custodian.autoSetup.failed"),
-    cancelledMessage: () => t("custodian.cancel"),
+    cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
 
   constructor(private readonly changed: () => void) {}
 
+  get operationEpoch(): number {
+    return this.epoch;
+  }
+
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";
   }
 
-  get configuredInferenceState() {
+  get configuredInferenceState(): CustodianConfiguredInferenceState {
     if (this.blocksGreeting) {
       return "unresolved";
     }
-    return this.supported && this.ready
+    if (this.supported && this.ready) {
+      return "ready";
+    }
+    const context = this.context;
+    if (!context || context.gateway.snapshot.phase !== "connected") {
+      return "unresolved";
+    }
+    const agentsList = context.agents.state.agentsList;
+    if (!agentsList) {
+      return "unresolved";
+    }
+    const selectedId = normalizeAgentId(
+      context.gateway.snapshot.assistantAgentId ?? agentsList.defaultId ?? "",
+    );
+    const selectedAgent = agentsList.agents.find(
+      (agent) => normalizeAgentId(agent.id) === selectedId,
+    );
+    if (!selectedAgent) {
+      return "unresolved";
+    }
+    return selectedAgent.model?.primary?.trim()
       ? "ready"
-      : resolveCustodianConfiguredInferenceState(this.context);
+      : selectedAgent.utilityModel?.trim()
+        ? "utility"
+        : "required";
   }
 
   get blocksGreeting(): boolean {
@@ -114,7 +141,9 @@ export class CustodianAutoSetup {
     }
   }
 
-  async retry(): Promise<void> {
+  private async run(
+    task: (client: GatewayBrowserClient) => Promise<SetupAutoResult>,
+  ): Promise<void> {
     const client = this.client;
     if (!client || this.pending) {
       return;
@@ -124,12 +153,7 @@ export class CustodianAutoSetup {
     this.error = null;
     this.changed();
     try {
-      // Verification and plugin preparation can exceed a minute. The Gateway owns the lifetime.
-      const result = await client.request<SetupAutoResult>(
-        "openclaw.setup.auto",
-        {},
-        { timeoutMs: null },
-      );
+      const result = await task(client);
       if (epoch !== this.epoch || client !== this.client) {
         return;
       }
@@ -149,29 +173,28 @@ export class CustodianAutoSetup {
     }
   }
 
+  retry(): Promise<void> {
+    // Verification and plugin preparation can exceed a minute. The Gateway owns the lifetime.
+    return this.run((client) =>
+      client.request<SetupAutoResult>("openclaw.setup.auto", {}, { timeoutMs: null }),
+    );
+  }
+
   async activate(candidate: SetupAutoCandidate): Promise<void> {
-    const client = this.client;
     const previous = this.result;
-    if (!client || !previous || this.pending) {
+    if (!previous) {
       return;
     }
-    const epoch = ++this.epoch;
-    this.pending = true;
-    this.error = null;
-    this.changed();
-    try {
+    await this.run(async (client) => {
       const result = await client.request<SystemAgentSetupActivateResult>(
         "openclaw.setup.activate",
         { kind: candidate.kind },
         { timeoutMs: null },
       );
-      if (epoch !== this.epoch || client !== this.client) {
-        return;
-      }
       if (!result.ok) {
         throw new Error(result.error || t("custodian.autoSetup.failed"));
       }
-      this.result = {
+      return {
         ...previous,
         status: "activated",
         selected: { ...candidate, modelRef: result.modelRef ?? candidate.modelRef },
@@ -180,17 +203,7 @@ export class CustodianAutoSetup {
           ...previous.alternatives.filter((entry) => entry !== candidate),
         ],
       };
-      void this.context?.agents.refreshList();
-    } catch (error) {
-      if (epoch === this.epoch && client === this.client) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-      }
-    } finally {
-      if (epoch === this.epoch && client === this.client) {
-        this.pending = false;
-        this.changed();
-      }
-    }
+    });
   }
 
   async signIn(): Promise<void> {
@@ -230,10 +243,14 @@ export class CustodianAutoSetup {
       await this.wizard.requestCancellation();
     } catch (error) {
       if (epoch === this.epoch) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-        this.changed();
+        this.reportError(error);
       }
     }
+  }
+
+  reportError(error: unknown): void {
+    this.error = formatUiError(error, t("custodian.autoSetup.failed"));
+    this.changed();
   }
 
   setWizardValue(value: unknown): void {

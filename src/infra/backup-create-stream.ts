@@ -1,36 +1,37 @@
 import fsSync, { createWriteStream, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
-import { compose, Transform } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
-import { createGzip } from "node:zlib";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
+import { createAbortError, isAbortError } from "./abort-signal.js";
+import { gzipInParallel } from "./backup-gzip.js";
+import type { ReportBackupProgress } from "./backup-progress.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 /** Seal the manifest from observed entries after the single payload traversal. */
 export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManifest: () => Buffer) {
-  return compose(
-    payload,
-    async function* (source: AsyncIterable<Buffer>) {
-      // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
-      // Replace only that terminator; the payload headers and bytes stay intact.
-      let tail: Buffer = Buffer.alloc(0);
-      for await (const chunk of source) {
-        const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
-        if (length) {
-          yield tail.subarray(0, length);
-        }
-        tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+  async function* sealed() {
+    // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
+    // Replace only that terminator; the payload headers and bytes stay intact.
+    let tail: Buffer = Buffer.alloc(0);
+    for await (const chunk of payload) {
+      const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
+      if (length) {
+        yield tail.subarray(0, length);
       }
-      if (tail.length > 1024) {
-        yield tail.subarray(0, -1024);
-      }
-      yield createManifest();
-    },
-    createGzip(),
-  );
+      tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+    }
+    if (tail.length > 1024) {
+      yield tail.subarray(0, -1024);
+    }
+    yield createManifest();
+  }
+  // Byte mode pulls the next member only after the archive file accepts the last,
+  // so a slow disk holds a few blocks rather than a queue of them.
+  return Readable.from(gzipInParallel(sealed()), { objectMode: false });
 }
 
 type BackupArchiveProgress = {
@@ -76,6 +77,7 @@ export async function writeArchiveStreamToFile(params: {
     signal: AbortSignal,
   ) => NodeJS.ReadableStream;
   onPartialArchive: (receipt: BackupArchiveCleanupReceipt) => void;
+  onProgress?: ReportBackupProgress;
 }): Promise<PreparedBackupArchive> {
   // Own both stream lifecycles so a tar read error closes the output handle
   // before retry cleanup touches the partial archive. Exclusive creation also
@@ -91,6 +93,12 @@ export async function writeArchiveStreamToFile(params: {
   let lastProgress: BackupArchiveProgress | undefined;
   const bytes = { output: 0, raw: 0 };
   let settled = false;
+  const describeProgress = () => {
+    const entrySuffix = lastEntryPath
+      ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
+      : "";
+    return `phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output}`;
+  };
   const reportProgress = (progress?: BackupArchiveProgress) => {
     // One archive owns this watchdog. Late producer callbacks must not refresh
     // its timer after cleanup has completed.
@@ -107,17 +115,20 @@ export async function writeArchiveStreamToFile(params: {
           progress.phase === "output" ? "output" : progress.phase === "raw" ? "raw" : undefined;
         if (phase) {
           bytes[phase] += progress.bytes;
+          params.onProgress?.({
+            stage: "archive-write",
+            phase: "progress",
+            bytes: bytes.raw,
+            outputBytes: bytes.output,
+          });
         }
       }
     }
     idleTimer =
       idleTimer?.refresh() ??
       setTimeout(() => {
-        const entrySuffix = lastEntryPath
-          ? `, entry=${JSON.stringify(sliceUtf16Safe(lastEntryPath, -512))}`
-          : "";
         idleTimeoutError = new Error(
-          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (phase=${lastProgress?.phase ?? "starting"}${entrySuffix}, rawBytes=${bytes.raw}, outputBytes=${bytes.output})`,
+          `Backup archive write stalled: no progress observed for ${BACKUP_ARCHIVE_IDLE_TIMEOUT_MS}ms (${describeProgress()})`,
         );
         controller.abort(idleTimeoutError);
       }, BACKUP_ARCHIVE_IDLE_TIMEOUT_MS);
@@ -143,6 +154,7 @@ export async function writeArchiveStreamToFile(params: {
     }
   });
   try {
+    params.onProgress?.({ stage: "archive-write", phase: "start" });
     const archiveStream = params.createArchiveStream(reportProgress, signal);
     const pipelinePromise = pipeline(archiveStream, progress, archiveWriteStream, {
       signal,
@@ -158,15 +170,31 @@ export async function writeArchiveStreamToFile(params: {
       throw new Error(`Backup archive path changed while writing: ${params.archivePath}`);
     }
     signal.throwIfAborted();
+    params.onProgress?.({
+      stage: "archive-write",
+      phase: "done",
+      bytes: bytes.raw,
+      outputBytes: bytes.output,
+    });
     return { archivePath: params.archivePath, identity: currentIdentity };
   } catch (err) {
+    let failure = idleTimeoutError ?? err;
+    if (!idleTimeoutError && signal.aborted && err instanceof Error && isAbortError(err)) {
+      // Capture the last observed activity before cleanup; never modify the
+      // shared abort reason or let late producer callbacks rewrite the failure.
+      const abortError = createAbortError(`${err.message} (${describeProgress()})`, { cause: err });
+      if ("code" in err && (typeof err.code === "string" || typeof err.code === "number")) {
+        Object.assign(abortError, { code: err.code });
+      }
+      failure = abortError;
+    }
     archiveWriteStream.destroy();
     // A synchronous producer failure can precede open. Join descriptor closure
     // before checked unlink so a late open cannot recreate the partial archive.
     await finished(archiveWriteStream, { cleanup: true }).catch(() => undefined);
     if (!opened) {
       // A refused exclusive open never owned the pre-existing pathname.
-      throw idleTimeoutError ?? err;
+      throw failure;
     }
     let cleanupReceipt: BackupArchiveCleanupReceipt | undefined = {
       archivePath: params.archivePath,
@@ -193,11 +221,9 @@ export async function writeArchiveStreamToFile(params: {
     ) {
       params.onPartialArchive(cleanupReceipt);
     }
-    throw idleTimeoutError ?? err;
+    throw failure;
   } finally {
     settled = true;
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-    }
+    clearTimeout(idleTimer);
   }
 }

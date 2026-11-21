@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { resolveGitReleaseEntrypointForLauncher } from "../infra/git-release-paths.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
+import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
@@ -47,6 +50,7 @@ export async function resolveGatewayServiceInstallationRefreshRoot(params: {
     !root ||
     !command ||
     isBunRuntime(command.programArguments[0] ?? "") ||
+    isStandaloneRuntimeExecutable(command.programArguments[0] ?? "") ||
     state.loadState.status === "unknown" ||
     (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
     (process.platform === "linux" && !isSystemdManagerUid(managerUid)) ||
@@ -116,11 +120,10 @@ function resolveSystemdScopeFromServicePath(
   return "user";
 }
 
-export function resolveServiceEntrypointIndex(
-  programArguments: readonly string[],
-): number | undefined {
-  const args = [...programArguments];
-  const { position: script } = resolveRuntimeScriptPosition(args);
+export function resolveServiceEntrypointIndex(args: readonly string[]): number | undefined {
+  const { position: script } = isStandaloneRuntimeExecutable(args[0] ?? "")
+    ? { position: { kind: "not-runtime" } }
+    : resolveRuntimeScriptPosition(args);
   if (typeof script !== "number" && script.kind === "other") {
     return undefined;
   }
@@ -164,7 +167,8 @@ export function resolveServiceEntrypoint(
     return undefined;
   }
   if (path.isAbsolute(entrypoint) || path.win32.isAbsolute(entrypoint)) {
-    return entrypoint;
+    // The release launcher starts the release its link selects.
+    return resolveGitReleaseEntrypointForLauncher(entrypoint) ?? entrypoint;
   }
   // Service managers resolve relative commands against their configured
   // working directory; without an absolute base, ownership is ambiguous.
@@ -184,15 +188,7 @@ export function resolveServiceEntrypoint(
 function tryRealpath(value: string): Promise<string>;
 function tryRealpath(value: string | undefined): Promise<string | undefined>;
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
-  if (!value) {
-    return undefined;
-  }
-  const resolved = path.resolve(value);
-  try {
-    return await fs.realpath(resolved);
-  } catch {
-    return resolved;
-  }
+  return value ? realpathOrResolve(path.resolve(value)) : undefined;
 }
 
 async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {

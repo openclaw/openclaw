@@ -1,8 +1,11 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
+import {
+  resolvePackageRuntimeProcessEntrypointUrl,
+  resolveRuntimeWorkerArgv,
+} from "openclaw/plugin-sdk/process-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
   isRecord,
@@ -19,10 +22,9 @@ import type {
 export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
 
 const MANAGED_MCP_BRIDGES = [
-  ["pluginToolsMcpBridge", "openclaw-plugin-tools", "plugin-tools-serve"],
-  ["openClawToolsMcpBridge", "openclaw-tools", "openclaw-tools-serve"],
+  ["pluginToolsMcpBridge", "openclaw-plugin-tools", "pluginToolsServe"],
+  ["openClawToolsMcpBridge", "openclaw-tools", "openclawToolsServe"],
 ] as const;
-const requireFromHere = createRequire(import.meta.url);
 
 function isAcpxPluginRoot(dir: string): boolean {
   return (
@@ -147,31 +149,16 @@ function resolveHostPackageRoot(argv1: string | undefined): string | null {
   }
 }
 
-function resolveTsxImportSpecifier(): string {
-  try {
-    return requireFromHere.resolve("tsx");
-  } catch {
-    return "tsx";
-  }
-}
-
 function resolveManagedToolsMcpServerConfig(
-  entryPoint: "plugin-tools-serve" | "openclaw-tools-serve",
+  entryPoint: "pluginToolsServe" | "openclawToolsServe",
   moduleUrl: string = import.meta.url,
 ): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
-  const distEntry = path.join(openClawRoot, "dist", "mcp", `${entryPoint}.js`);
-  if (fs.existsSync(distEntry)) {
-    return {
-      command: process.execPath,
-      args: [distEntry],
-    };
-  }
-  const sourceEntry = path.join(openClawRoot, "src", "mcp", `${entryPoint}.ts`);
+  const entry = resolvePackageRuntimeProcessEntrypointUrl(entryPoint, openClawRoot);
   return {
     command: process.execPath,
-    args: ["--import", resolveTsxImportSpecifier(), sourceEntry],
+    args: resolveRuntimeWorkerArgv(entry),
   };
 }
 
@@ -234,7 +221,7 @@ export function resolveAcpxPluginConfig(params: {
   });
   const agents = Object.fromEntries(
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
-      const cmd = entry.command.trim();
+      const cmd = entry.command;
       // Only explicit absolute paths bypass parsing; workspace files must not
       // reinterpret a configured command prefix as a different executable.
       const command = path.isAbsolute(cmd) && fs.existsSync(cmd) ? [cmd] : splitCommandParts(cmd);
@@ -252,6 +239,8 @@ export function resolveAcpxPluginConfig(params: {
     pluginToolsMcpBridge,
     openClawToolsMcpBridge,
     timeoutSeconds: normalized.timeoutSeconds,
+    agentProcessEnvAllow: normalized.agentProcessEnvAllow,
+    agentProcessEnvBlock: normalized.agentProcessEnvBlock,
     mcpServers,
     agents,
   };

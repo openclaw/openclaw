@@ -6,9 +6,15 @@ import {
   SQLITE_WORKER_TRANSFER_FRAME_BYTES,
   createSqliteWorkerTransferReceiver,
   type SqliteWorkerTransferFrame,
+  type SqliteWorkerTransferHandle,
 } from "./sqlite-worker-transfer.js";
 
 type SqliteAuthTransferRequest = { type: "next" | "end"; transferId: number };
+
+export type SqliteReadOnlyTransferReply =
+  | { type: "start"; handle: SqliteWorkerTransferHandle }
+  | { type: "frame"; frame: ReturnType<typeof encodeSqliteAuthTransferFrame> }
+  | { type: "complete" };
 
 /** JSON IPC carries only one bounded byte frame; aggregate records retain the transfer contract. */
 export function encodeSqliteAuthTransferFrame(frame: SqliteWorkerTransferFrame) {
@@ -25,59 +31,22 @@ export function encodeSqliteAuthTransferFrame(frame: SqliteWorkerTransferFrame) 
       };
 }
 
-function decodeFrame(value: unknown, label: string): SqliteWorkerTransferFrame {
-  if (
-    !isRecord(value) ||
-    typeof value.id !== "number" ||
-    !Number.isSafeInteger(value.id) ||
-    typeof value.sequence !== "number" ||
-    !Number.isSafeInteger(value.sequence)
-  ) {
-    throw new Error(`Invalid ${label} transfer frame`);
+function decodeFrame(
+  value: ReturnType<typeof encodeSqliteAuthTransferFrame>,
+  label: string,
+): SqliteWorkerTransferFrame {
+  // The same-build child owns envelope shape; the framing owner checks integrity.
+  if (value.done) {
+    return value;
   }
-  const { id, sequence } = value;
-  if (value.done === true && Array.isArray(value.counts)) {
-    const counts: Array<[string, number]> = [];
-    for (const entry of value.counts) {
-      if (
-        !Array.isArray(entry) ||
-        entry.length !== 2 ||
-        typeof entry[0] !== "string" ||
-        typeof entry[1] !== "number" ||
-        !Number.isSafeInteger(entry[1]) ||
-        entry[1] < 0
-      ) {
-        throw new Error(`Invalid ${label} transfer counts`);
-      }
-      counts.push([entry[0], entry[1]]);
-    }
-    return { id, sequence, done: true, counts };
-  }
-  if (
-    value.done !== false ||
-    typeof value.kind !== "string" ||
-    typeof value.recordBytes !== "number" ||
-    typeof value.offset !== "number" ||
-    typeof value.recordDone !== "boolean" ||
-    typeof value.bytes !== "string" ||
-    value.bytes.length > 4 * Math.ceil(SQLITE_WORKER_TRANSFER_FRAME_BYTES / 3)
-  ) {
+  if (value.bytes.length > 4 * Math.ceil(SQLITE_WORKER_TRANSFER_FRAME_BYTES / 3)) {
     throw new Error(`Invalid ${label} transfer bytes`);
   }
   const bytes = Buffer.from(value.bytes, "base64");
   if (bytes.toString("base64") !== value.bytes) {
     throw new Error(`Invalid ${label} transfer encoding`);
   }
-  return {
-    id,
-    sequence,
-    done: false,
-    kind: value.kind,
-    recordBytes: value.recordBytes,
-    offset: value.offset,
-    recordDone: value.recordDone,
-    bytes,
-  };
+  return { ...value, bytes };
 }
 
 function createSqliteReadOnlyTransferReceiver<T>(options: {
@@ -92,18 +61,17 @@ function createSqliteReadOnlyTransferReceiver<T>(options: {
   let ending = false;
   let completed = false;
   return {
-    accept(value: unknown): { request: SqliteAuthTransferRequest } | { value: T } {
-      if (!isRecord(value) || completed) {
+    accept(
+      value: SqliteReadOnlyTransferReply,
+    ): { request: SqliteAuthTransferRequest } | { value: T } {
+      if (completed) {
         throw new Error(`Invalid ${options.label} transfer response`);
       }
       if (value.type === "start" && !receiver) {
         const handle = value.handle;
         if (
-          !isRecord(handle) ||
-          typeof handle.id !== "number" ||
           !Number.isSafeInteger(handle.id) ||
           handle.id < 1 ||
-          !Array.isArray(handle.kinds) ||
           handle.kinds.length !== options.kinds.length ||
           handle.kinds.some((kind, index) => kind !== options.kinds[index])
         ) {

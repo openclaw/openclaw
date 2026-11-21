@@ -12,110 +12,76 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await state.cleanup();
 });
-const signal = () => new AbortController().signal;
-function policy(extras: string[] = []) {
-  return new MemoryWatchPolicy(state.workspaceDir, {
-    extraPaths: extras,
-    multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
+const p = (...parts: string[]) => state.path(...parts);
+const observe = (owner: MemoryWatchPolicy) => owner.observations(new AbortController().signal);
+type ExtraPaths = ConstructorParameters<typeof MemoryWatchPolicy>[1]["extraPaths"];
+function policy(extraPaths: ExtraPaths = [], media = false, workspace = state.workspaceDir) {
+  const modalities: ("image" | "audio")[] = media ? ["image", "audio"] : [];
+  return new MemoryWatchPolicy(workspace, {
+    extraPaths,
+    multimodal: { enabled: media, modalities, maxFileBytes: 10485760 },
     sync: { watchDebounceMs: 0 },
   });
 }
 
 it("observes root-entry links without following sources the indexer rejects", async () => {
-  await fs.mkdir(state.path("target"));
-  await fs.writeFile(state.path("target", "note.md"), "trusted");
-  await fs.symlink(state.path("target"), path.join(state.workspaceDir, "memory"), "junction");
-  await fs.symlink(state.path("target", "note.md"), path.join(state.workspaceDir, "MEMORY.md"));
-  await fs.symlink(state.path("target"), state.path("extra-link"), "junction");
-  const owner = policy([state.path("extra-link")]);
-  const groups = await owner.observations(signal());
-  const selected = groups.flatMap((group) =>
-    group.selections.map((selection) => ({
-      path: path.resolve(group.root.rootDir, selection.scope.path),
-      ...selection,
-    })),
+  await fs.mkdir(p("target"));
+  await fs.writeFile(p("target/note.md"), "trusted");
+  await fs.symlink(p("target"), path.join(state.workspaceDir, "memory"), "junction");
+  await fs.symlink(p("target/note.md"), path.join(state.workspaceDir, "MEMORY.md"));
+  await fs.symlink(p("target"), p("extra-link"), "junction");
+  const selected = (await observe(policy([p("extra-link")]))).flatMap(({ root, selections }) =>
+    selections.map(
+      (s) => [path.resolve(root.rootDir, s.scope.path), s.alias, s.scope.kind, s.core] as const,
+    ),
   );
-  expect(selected).toEqual(
-    expect.arrayContaining([
-      expect.objectContaining({
-        path: path.join(state.workspaceDir, "memory"),
-        alias: true,
-        scope: expect.objectContaining({ kind: "entry" }),
-      }),
-      expect.objectContaining({
-        path: path.join(state.workspaceDir, "MEMORY.md"),
-        alias: true,
-        scope: expect.objectContaining({ kind: "entry" }),
-      }),
-      expect.objectContaining({ path: state.path("extra-link"), alias: true, core: false }),
-    ]),
-  );
-  expect(selected.every((selection) => !selection.path.startsWith(state.path("target")))).toBe(
-    true,
-  );
+  for (const name of ["memory", "MEMORY.md"]) {
+    expect(selected).toContainEqual([path.join(state.workspaceDir, name), true, "entry", true]);
+  }
+  expect(selected).toContainEqual([p("extra-link"), true, "entry", false]);
+  expect(selected.some(([entry]) => entry.startsWith(p("target")))).toBe(false);
 });
 
 it("observes the first intermediate alias separately and retains configured parent-alias behavior", async () => {
-  await fs.mkdir(state.path("real", "workspace"), { recursive: true });
-  await fs.mkdir(state.path("real", "extra"));
-  await fs.symlink(state.path("real"), state.path("alias"), "junction");
-  const owner = new MemoryWatchPolicy(state.path("alias", "workspace"), {
-    extraPaths: [state.path("alias", "extra")],
-    multimodal: { enabled: false, modalities: [], maxFileBytes: 10485760 },
-    sync: { watchDebounceMs: 0 },
-  });
-  const groups = await owner.observations(signal());
-  const scopes = groups.flatMap((group) =>
+  await fs.mkdir(p("real/workspace"), { recursive: true });
+  await fs.mkdir(p("real/extra"));
+  await fs.symlink(p("real"), p("alias"), "junction");
+  const owner = policy([p("alias/extra")], false, p("alias/workspace"));
+  const scopes = (await observe(owner)).flatMap((group) =>
     owner.scopes(group).map((scope) => path.resolve(group.root.rootDir, scope.path)),
   );
-  expect(scopes).toContain(state.path("alias"));
-  expect(scopes).toContain(state.path("real", "extra"));
-  expect(scopes).not.toContain(state.path("alias", "extra"));
+  expect(scopes).toEqual(expect.arrayContaining([p("alias"), p("real/extra")]));
+  expect(scopes).not.toContain(p("alias/extra"));
 });
 
-it("retains successful Roots across missing-descendant creation and never repins a replaced authority", async () => {
-  await fs.mkdir(state.path("outer"));
-  const owner = policy([state.path("outer", "missing", "notes")]);
-  const first = await owner.observations(signal());
-  await fs.mkdir(state.path("outer", "missing", "notes"), { recursive: true });
-  const next = await owner.observations(signal());
-  expect(next.map((group) => group.root)).toEqual(first.map((group) => group.root));
-  // outer/missing was absent during first admission; authority remains outer.
-  await fs.rename(state.path("outer"), state.path("outer-old"));
-  await fs.mkdir(state.path("outer", "missing", "notes"), { recursive: true });
-  await expect(owner.observations(signal())).rejects.toBeDefined();
-});
-
-it("retains partial Root admission when a later configured boundary temporarily fails", async () => {
-  await fs.mkdir(state.path("first"));
-  await fs.mkdir(state.path("second"));
-  const owner = policy([state.path("first", "notes"), state.path("second", "notes")]);
-  const original = fs.lstat.bind(fs);
-  const failure = new Error("admission denied");
-  const stat = vi
-    .spyOn(fs, "lstat")
-    .mockImplementation(async (...args: Parameters<typeof fs.lstat>) => {
-      if (String(args[0]) === state.path("second")) {
-        throw failure;
-      }
-      return await original(...args);
-    });
-  await expect(owner.observations(signal())).rejects.toBe(failure);
-  stat.mockRestore();
-  await fs.rename(state.path("first"), state.path("first-old"));
-  await fs.mkdir(state.path("first"));
-  // If failure discarded successful admissions, this would silently repin first.
-  await expect(owner.observations(signal())).rejects.toBeDefined();
+it.each([false, true])("retains pinned roots when later admission fails: %s", async (failLater) => {
+  await Promise.all(["first", "second"].map((name) => fs.mkdir(p(name))));
+  const owner = policy([p("first/missing/notes"), p("second/notes")]);
+  if (failLater) {
+    const original = fs.lstat.bind(fs);
+    const failure = new Error("admission denied");
+    const stat = vi
+      .spyOn(fs, "lstat")
+      .mockImplementation((...args) =>
+        String(args[0]) === p("second") ? Promise.reject(failure) : original(...args),
+      );
+    await expect(observe(owner)).rejects.toBe(failure);
+    stat.mockRestore();
+  } else {
+    const first = await observe(owner);
+    await fs.mkdir(p("first/missing/notes"), { recursive: true });
+    const next = await observe(owner);
+    expect(next.map((group) => group.root)).toEqual(first.map((group) => group.root));
+  }
+  await fs.rename(p("first"), p("first-old"));
+  await fs.mkdir(p("first/missing/notes"), { recursive: true });
+  await expect(observe(owner)).rejects.toBeDefined();
 });
 
 it("selects configured patterns and multimodal files while pruning unrelated descendants", async () => {
-  const extra = state.path("extra");
-  const owner = new MemoryWatchPolicy(state.workspaceDir, {
-    extraPaths: [{ path: extra, pattern: "..notes/**/*" }, state.path("other")],
-    multimodal: { enabled: true, modalities: ["image", "audio"], maxFileBytes: 10485760 },
-    sync: { watchDebounceMs: 0 },
-  });
-  const group = (await owner.observations(signal())).find((entry) =>
+  const extra = p("extra");
+  const owner = policy([{ path: extra, pattern: "..notes/**/*" }, p("other")], true);
+  const group = (await observe(owner)).find((entry) =>
     entry.selections.some((selection) => selection.lexical === extra),
   )!;
   const relative = (name: string) => path.relative(group.root.rootDir, path.join(extra, name));

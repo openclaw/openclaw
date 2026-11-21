@@ -11,3 +11,10 @@ export function resolveAuthProfileDisplayLabel(params: {
   const label = displayName || email;
   return label ? `${params.profileId} (${label})` : params.profileId;
 }
+
+export function formatAuthProfileOAuthLabel(
+  params: Parameters<typeof resolveAuthProfileDisplayLabel>[0],
+): string {
+  const { profileId } = params;
+  return `${profileId}=OAuth${resolveAuthProfileDisplayLabel(params).slice(profileId.length)}`;
+}

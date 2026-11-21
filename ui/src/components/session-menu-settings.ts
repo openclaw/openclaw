@@ -1,12 +1,15 @@
+import { createEffect, createSignal } from "solid-js";
+import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { SESSION_COMMUNICATION_MODES } from "../../../packages/gateway-protocol/src/session-communication.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
-import {
-  selectSessionCommunication,
-  type SessionCommunicationMenuAction,
-} from "./session-communication-options.ts";
-import { SessionDetailsController } from "./session-details-controller.ts";
+import { createSessionDetails } from "./session-details.ts";
+
+export type SessionCommunicationMenuAction = {
+  kind: "set-communication";
+  communication: NonNullable<SessionsPatchMutation["communication"]> | null;
+};
 
 type SessionMenuSettingsOptions = {
   context: () => ApplicationContext | undefined;
@@ -20,80 +23,86 @@ type SessionMenuSettingsOptions = {
   runAction: (action: SessionCommunicationMenuAction) => void;
 };
 
-/** Composes session settings around capability-owned metadata and sparse communication edits. */
-export class SessionMenuSettings {
-  private settingsActive = false;
-  private readonly settingsDetails;
-  communicationState() {
-    const state = this.options.readState();
-    return { ...state, session: this.settingsDetails.row ?? state.session };
-  }
-
-  constructor(
-    host: SolidControllerHost,
-    private readonly options: SessionMenuSettingsOptions,
-  ) {
-    this.settingsDetails = new SessionDetailsController(() => host.requestUpdate(), {
-      captureScope: () => {
-        const context = this.options.context();
-        const connection = context?.sessions.captureConnectionScope();
-        return context && connection ? { context, sessions: context.sessions, connection } : null;
-      },
-      isCurrent: (scope) =>
-        this.options.context() === scope.context &&
-        this.options.context()?.sessions === scope.sessions &&
-        scope.sessions.isConnectionScopeCurrent(scope.connection),
-      row: () => {
-        const { session, selectionCount } = this.options.readState();
-        return this.settingsActive && selectionCount === 1 && session.target
-          ? {
-              key: session.target.key,
-              sessionId: session.sessionId ?? undefined,
-              rowMode: "compact" as const,
-            }
-          : undefined;
-      },
-      agentId: (row, scope) =>
-        this.options.readState().session.target?.agentId ??
-        parseAgentSessionKey(row.key)?.agentId ??
-        scope.context.agentSelection.state.selectedId ??
-        "main",
-    });
-
-    host.addController({
-      hostDisconnected: () => this.settingsDetails.reset(),
-      hostUpdate: () => {
-        if (this.settingsActive) {
-          this.settingsDetails.synchronize();
-        }
-      },
-    });
-  }
-
-  get error(): string | null {
-    return this.settingsDetails.error;
-  }
-
-  get communicationAvailable(): boolean {
-    return Boolean(this.communicationState().session.effectiveCommunication);
-  }
-
-  open(): void {
-    this.settingsActive = true;
-    this.settingsDetails.synchronize();
-  }
-
-  readonly close = () => {
-    this.settingsActive = false;
-    this.settingsDetails.reset();
+/** Owns the menu observation lifetime; the capability keeps synchronous row admission. */
+export function createSessionMenuSettings(options: SessionMenuSettingsOptions) {
+  const [active, setActive] = createSignal(false);
+  const details = createSessionDetails({
+    captureScope: () => {
+      const context = options.context();
+      const connection = context?.sessions.captureConnectionScope();
+      return context && connection ? { context, sessions: context.sessions, connection } : null;
+    },
+    isCurrent: (scope) =>
+      options.context() === scope.context &&
+      options.context()?.sessions === scope.sessions &&
+      scope.sessions.isConnectionScopeCurrent(scope.connection),
+    row: () => {
+      const { session, selectionCount } = options.readState();
+      return selectionCount === 1 && session.target
+        ? {
+            key: session.target.key,
+            sessionId: session.sessionId ?? undefined,
+            rowMode: "compact" as const,
+          }
+        : undefined;
+    },
+    agentId: (row, scope) =>
+      options.readState().session.target?.agentId ??
+      parseAgentSessionKey(row.key)?.agentId ??
+      scope.context.agentSelection.state.selectedId ??
+      "main",
+  });
+  createEffect(
+    () => {
+      options.context();
+      const { session, selectionCount } = options.readState();
+      return [active(), session.target, session.sessionId, selectionCount];
+    },
+    ([isActive]) => {
+      if (isActive) {
+        details.synchronize();
+      }
+    },
+  );
+  const communicationState = () => {
+    const state = options.readState();
+    return { ...state, session: details.row() ?? state.session };
   };
-
-  handleSelect(value: string): boolean {
-    if (value === "reload-settings") {
-      this.settingsDetails.reset();
-      this.settingsDetails.synchronize();
+  return {
+    communicationState,
+    row: details.row,
+    get communicationAvailable() {
+      return Boolean(communicationState().session.effectiveCommunication);
+    },
+    read: details.read,
+    readKey: details.readKey,
+    open() {
+      setActive(true);
+      details.synchronize();
+    },
+    close() {
+      setActive(false);
+      details.reset();
+    },
+    handleSelect(value: string) {
+      if (value === "reload-settings") {
+        details.retry();
+        return true;
+      }
+      const runAction = options.runAction;
+      if (value === "communication:reset") {
+        runAction({ kind: "set-communication", communication: null });
+        return true;
+      }
+      if (!value.startsWith("communication:")) {
+        return false;
+      }
+      const [, direction, selected] = value.split(":");
+      const mode = SESSION_COMMUNICATION_MODES.find((candidate) => candidate === selected);
+      if ((direction === "send" || direction === "receive") && mode) {
+        runAction({ kind: "set-communication", communication: { [direction]: mode } });
+      }
       return true;
-    }
-    return selectSessionCommunication(value, this.options.runAction);
-  }
+    },
+  };
 }

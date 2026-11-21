@@ -85,6 +85,10 @@ openclaw gateway
 Named accounts must use a configured token or token file; the shared env
 variable is intentionally limited to the default account.
 
+Ordinary channel status reads use configuration metadata and the running account's
+recorded health without reopening token files. Use `openclaw channels status --probe`
+for a live credential check.
+
 ## Configuration
 
 ### JSON5 reference
@@ -135,6 +139,11 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `requireMentionInBotThreads` | unset               | Override mention gating in threads started by this account's bot. See [Bot-created threads](#bot-created-threads).    |
 | `mentionPatterns`            | `[]`                | Mention patterns for this account in group channels. See [Group mention gating](#group-mention-gating).               |
 | `groups`                     | `{}`                | Per-channel group policy overrides keyed by ClickClack channel ID. See [Group mention gating](#group-mention-gating). |
+
+The realtime WebSocket sends standard ping frames. When the server stops
+answering them, OpenClaw drops the connection, reconnects after `reconnectMs`,
+and reads the events it missed from the server backlog. A quiet channel alone
+never triggers a reconnect.
 
 ### Keep an auth-gated public hostname
 

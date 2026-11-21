@@ -46,10 +46,6 @@ vi.mock("../../agents/exec-defaults.js", () => ({
     resolve: (file: ExecApprovalsFile) => ({ ...mocks.policy, ...file.defaults }),
   }),
 }));
-// mock-isolation: Prepared session classification is unrelated to this fixture's transport and effect checks.
-vi.mock("../../agents/sandbox/runtime-status.js", () => ({
-  resolveSandboxRuntimeStatus: () => ({}),
-}));
 // mock-isolation: The live reader is injected; worker publication and SQL-free reads have their owning store integration proof.
 vi.mock("../../infra/exec-approvals-store.js", () => ({
   prepareExecApprovalsCurrentRead: async () => () => ({
@@ -110,37 +106,31 @@ function fixture(denied: string[] = [], runtimeAllow?: string[]) {
     return result;
   });
   const respond = vi.fn();
-  const options = {
-    req: { type: "req", id: "exec-1", method: "environments.session.exec" },
-    params: {},
-    client:
-      runtimeAllow === undefined
-        ? null
-        : {
-            internal: {
-              agentRuntimeIdentity: {
-                sessionSpawnContext: {
-                  inheritedToolPolicy: { version: 1, allow: runtimeAllow, deny: [] },
-                },
-              },
-            },
-          },
-    respond,
-    isWebchatConnect: () => true,
-    context: bindSessionRowProjection(
-      {
-        getRuntimeConfig: () => config,
-        workerEnvironmentService: {
-          getSessionAttachment: () => binding,
-          assertSessionAttachment: vi.fn(),
-          execSessionAttachment: execute,
-        },
+  const sessionSpawnContext = {
+    inheritedToolPolicy: { version: 1, allow: runtimeAllow, deny: [] },
+  };
+  const client =
+    runtimeAllow === undefined
+      ? null
+      : { internal: { agentRuntimeIdentity: { sessionSpawnContext } } };
+  const context = bindSessionRowProjection(
+    {
+      getRuntimeConfig: () => config,
+      workerEnvironmentService: {
+        getSessionAttachment: () => binding,
+        assertSessionAttachment: vi.fn(),
+        execSessionAttachment: execute,
       },
-      () => projection,
-    ),
-  } as unknown as GatewayRequestHandlerOptions;
+    },
+    () => projection,
+  );
   const call = async (params: Record<string, unknown>) => {
-    await environmentsSessionExecHandlers["environments.session.exec"]!({ ...options, params });
+    await environmentsSessionExecHandlers["environments.session.exec"]!({
+      context,
+      client,
+      respond,
+      params,
+    } as unknown as GatewayRequestHandlerOptions);
     return respond.mock.calls.at(-1);
   };
   return { execute, call, respond, projection };

@@ -17,19 +17,18 @@ import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { closeProviderTransportDispatcherPool } from "./provider-transport-dispatcher-pool.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const model: Model<"openai-responses"> = {
+const model: Model<"openai-responses"> = makeProviderModelFixture({
   id: "gpt-5",
   name: "Loopback fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 1024,
-};
+});
 const usage = {
   input_tokens: 500,
   output_tokens: 9,
@@ -119,17 +118,19 @@ describe("managed provider response capture", () => {
               },
             );
             try {
+              const request = {
+                model: model.id,
+                stream: true,
+                input: [{ role: "user", content: "fixture" }],
+              } satisfies Parameters<typeof createResponsesStreamWithRecovery>[0]["request"];
               const { stream: sdk } = await createResponsesStreamWithRecovery({
                 client: new OpenAI({
                   apiKey: "fixture-key",
                   baseURL: localModel.baseUrl,
                   fetch: async () => response,
                 }),
-                request: {
-                  model: model.id,
-                  stream: true,
-                  input: [{ role: "user", content: "fixture" }],
-                },
+                request,
+                buildFullHistoryRequest: () => request,
                 requestOptions: { signal: controller.signal },
                 model: localModel,
               });

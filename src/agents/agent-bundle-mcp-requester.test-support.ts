@@ -1,16 +1,22 @@
 import { randomUUID } from "node:crypto";
 import http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { readMcpFixtureMessage } from "./agent-bundle-mcp-lifecycle.test-support.js";
 
 export async function startRequesterScopedMcpProofServer(): Promise<{
   url: string;
+  toolRequests: string[];
   session: { current?: string; closed?: string; calls: number };
   close: () => Promise<void>;
 }> {
   const server = new McpServer({ name: "openclaw-requester-proof", version: "1.0.0" });
   const session: { current?: string; closed?: string; calls: number } = { calls: 0 };
-  const transport = new StreamableHTTPServerTransport({
+  const transport = new NodeStreamableHTTPServerTransport({
     sessionIdGenerator: randomUUID,
     onsessioninitialized(nextSessionId) {
       session.current = nextSessionId;
@@ -28,34 +34,40 @@ export async function startRequesterScopedMcpProofServer(): Promise<{
     },
   );
   await server.connect(transport);
+  const toolRequests: string[] = [];
   const httpServer = http.createServer((request, response) => {
     if (request.url !== "/mcp" || request.headers.authorization !== "Bearer proof-token") {
       response.writeHead(404).end();
       return;
     }
-    void transport.handleRequest(request, response).catch(() => {
-      if (!response.headersSent) {
-        response.writeHead(500).end();
-      }
-    });
+    const body =
+      request.method === "POST"
+        ? readMcpFixtureMessage<{ name: string }>(request)
+        : Promise.resolve(undefined);
+    void body
+      .then((message) => {
+        const messages: (typeof message)[] = Array.isArray(message) ? message : [message];
+        for (const frame of messages) {
+          if (frame?.method === "tools/call") {
+            toolRequests.push(String(frame.params?.name));
+          }
+        }
+        return transport.handleRequest(request, response, message);
+      })
+      .catch((error: unknown) => {
+        if (!response.headersSent) {
+          response.writeHead(error instanceof SyntaxError ? 400 : 500).end();
+        }
+      });
   });
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
-  const address = httpServer.address();
-  if (!address || typeof address === "string") {
-    throw new Error("requester-scoped MCP proof server did not bind a loopback port");
-  }
+  const origin = await listenLoopback(httpServer);
   return {
-    url: `http://127.0.0.1:${address.port}/mcp`,
+    url: `${origin}/mcp`,
     session,
+    toolRequests,
     close: async () => {
       await server.close();
-      httpServer.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(httpServer);
     },
   };
 }

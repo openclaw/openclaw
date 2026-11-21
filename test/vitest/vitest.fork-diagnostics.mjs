@@ -1,7 +1,11 @@
-import { subscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+
+// Capture diagnostic I/O before tests install filesystem observers or mocks.
+const { writeFileSync, unlinkSync } = fs;
+const workerChannel = channel("worker_threads");
 
 // Loaded before the fork's tests so blocked teardown cannot hide its last synchronous wait.
 if (isMainThread && process.send && process.report.directory) {
@@ -9,7 +13,7 @@ if (isMainThread && process.send && process.report.directory) {
   const exit = process.exit;
   process.exit = function (...args) {
     try {
-      fs.writeFileSync(
+      writeFileSync(
         exitPath,
         JSON.stringify({ operation: "process.exit", pid: process.pid, enteredAt: Date.now() }),
         { mode: 0o600 },
@@ -20,7 +24,7 @@ if (isMainThread && process.send && process.report.directory) {
     return Reflect.apply(exit, this, args);
   };
   const workers = new Set();
-  subscribe("worker_threads", ({ worker }) => {
+  workerChannel.subscribe(({ worker }) => {
     workers.add(worker);
     worker.once("exit", () => workers.delete(worker));
   });
@@ -28,7 +32,7 @@ if (isMainThread && process.send && process.report.directory) {
   const wait = Atomics.wait;
   Atomics.wait = function (...args) {
     try {
-      fs.writeFileSync(
+      writeFileSync(
         waitPath,
         JSON.stringify({
           operation: "Atomics.wait",
@@ -44,7 +48,7 @@ if (isMainThread && process.send && process.report.directory) {
       return Reflect.apply(wait, this, args);
     } finally {
       try {
-        fs.rmSync(waitPath, { force: true });
+        unlinkSync(waitPath);
       } catch {
         // The pool may already have removed its diagnostic directory.
       }
@@ -53,7 +57,7 @@ if (isMainThread && process.send && process.report.directory) {
   process.prependListener("SIGQUIT", () => {
     try {
       const handles = process._getActiveHandles();
-      fs.writeFileSync(
+      writeFileSync(
         path.join(process.report.directory, "active-resources.json"),
         JSON.stringify({
           resources: process.getActiveResourcesInfo().slice(0, 64),

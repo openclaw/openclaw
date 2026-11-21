@@ -24,5 +24,3 @@ export type MonitorTelegramOpts = {
   botInfo?: TelegramBotInfo;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
 };
-
-export type TelegramMonitorFn = (opts?: MonitorTelegramOpts) => Promise<void>;

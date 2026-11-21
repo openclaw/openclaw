@@ -66,7 +66,10 @@ function retainWorkerAlias(
   }
 }
 
-function releaseWorkerAliases(worker: SqliteReclamationWorker): void {
+function retireRetainedWorker(key: string, worker: SqliteReclamationWorker): void {
+  if (retained.get(key) === worker) {
+    retained.delete(key);
+  }
   for (const unregister of retainedAliases.get(worker)?.values() ?? []) {
     unregister();
   }
@@ -113,12 +116,8 @@ export function withSqliteReclamationWorker<T>(
       {
         worker: retained.get(key),
         retain: (worker) => retained.set(key, worker),
-        retire: (worker) => {
-          if (retained.get(key) === worker) {
-            retained.delete(key);
-          }
-          releaseWorkerAliases(worker);
-        },
+        // The cached worker must not capture the requesting plan's closure scope.
+        retire: retireRetainedWorker.bind(undefined, key),
         alias: requestedPath,
       },
       options,
@@ -151,7 +150,7 @@ export async function withSqliteCanonicalValidationWorker<T>(
   } finally {
     closed = true;
     await queue.enqueue("canonical-validation", async () => {
-      await slot.worker?.close("exclusive-handoff");
+      await slot.worker?.close();
     });
   }
 }
@@ -167,7 +166,7 @@ async function useReclamationWorker<T>(
   assertRequestCurrent();
   assertSourceCurrent();
   if (slot.worker && !slot.worker.matches(options, expectedIdentity)) {
-    await slot.worker.close("matches-mismatch");
+    await slot.worker.close();
     slot.worker = undefined;
   }
   assertRequestCurrent();
@@ -197,7 +196,7 @@ async function useReclamationWorker<T>(
     }
     // An uncertain mutation is never replayed; a replacement serves only a later request.
     try {
-      await worker.close("failure");
+      await worker.close();
       if (slot.worker === worker) {
         slot.worker = undefined;
       }

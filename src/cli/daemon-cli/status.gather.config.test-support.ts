@@ -30,32 +30,38 @@ export function registerStatusConfigReadTests(params: {
     loadConfigCalls,
     probeInput,
   } = params;
-  it("uses the fast config path for plain same-file status reads", async () => {
-    await withStatusConfig(
-      JSON.stringify({
-        gateway: {
-          bind: "custom",
-          customBindHost: "10.0.0.5",
-          controlUi: { enabled: true },
-        },
-      }),
-      async (configPath) => {
-        const status = await gatherStatus({ probe: false });
+  it.each(["custom", "tailnet"])(
+    "checks %s status via loopback with fast config reads",
+    async (bind) => {
+      await withStatusConfig(
+        JSON.stringify({
+          gateway: {
+            bind,
+            customBindHost: "10.0.0.5",
+            controlUi: { enabled: true },
+          },
+        }),
+        async (configPath) => {
+          const status = await gatherStatus();
 
-        expect(createConfigIOCalls).not.toHaveBeenCalled();
-        expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
-        expect(loadConfigCalls).not.toHaveBeenCalled();
-        expect(status.config?.cli.path).toBe(configPath);
-        expect(status.config?.cli.exists).toBe(true);
-        expect(status.config?.cli.valid).toBe(true);
-        expect(status.config?.cli.controlUi).toEqual({ enabled: true });
-        expect(status.config?.daemon).toBe(status.config?.cli);
-        expect(status.gateway?.bindMode).toBe("custom");
-        expect(status.gateway?.customBindHost).toBe("10.0.0.5");
-      },
-      true,
-    );
-  });
+          expect(createConfigIOCalls).not.toHaveBeenCalled();
+          expect(readConfigFileSnapshotCalls).not.toHaveBeenCalled();
+          expect(loadConfigCalls).not.toHaveBeenCalled();
+          expect(status.config?.cli.path).toBe(configPath);
+          expect(status.config?.cli.exists).toBe(true);
+          expect(status.config?.cli.valid).toBe(true);
+          expect(status.config?.cli.controlUi).toEqual({ enabled: true });
+          expect(status.config?.daemon).toBe(status.config?.cli);
+          expect(status.gateway?.bindMode).toBe(bind);
+          expect(status.gateway?.customBindHost).toBe("10.0.0.5");
+          expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:19001");
+          expect(probeInput().url).toBe("ws://127.0.0.1:19001");
+          expect(probeInput().urlOverride).toBeUndefined();
+        },
+        true,
+      );
+    },
+  );
 
   it("uses the fast config path when the config file is missing", async () => {
     await withStatusConfig(

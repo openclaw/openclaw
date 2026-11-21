@@ -61,6 +61,7 @@ export function registerCurrentCoreServiceReceiptTests({
         vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
         vi.stubEnv("OPENCLAW_CONFIG_PATH", env.OPENCLAW_CONFIG_PATH);
         vi.stubEnv("OPENCLAW_UPDATE_RUN_HANDOFF", undefined);
+        const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
         mockProcessPlatform("darwin");
         vi.spyOn(temporaryState, "resolvePreferredOpenClawTmpDir").mockReturnValue(identity.home);
         vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
@@ -105,7 +106,7 @@ export function registerCurrentCoreServiceReceiptTests({
         });
         expect(before.serviceUpdateVerdict?.kind).toBe("owned");
         const run: NonNullable<FinishUpdateParams["opts"]["run"]> = {
-          runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+          runId,
           env,
           requesterAuthority: { requester: {}, isCurrent: () => currentRequester },
         };

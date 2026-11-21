@@ -1,26 +1,24 @@
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
-import {
-  withFreshOpenClawAgentDatabaseReadOnly,
-  type OpenClawAgentReadOnlyDatabase,
-} from "../../state/openclaw-agent-db-readonly-open.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
+import { withScopedOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import { readSessionEntryIdentity } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 
 export function readSessionBranchSnapshot(
   database: OpenClawAgentReadOnlyDatabase,
   request: Pick<SessionBranchSummaryReadRequest, "sessionKey" | "previous">,
 ): SessionBranchSummaryReadResult {
-  return runSqliteDeferredTransactionSync<SessionBranchSummaryReadResult>(
+  return runSqliteReadSnapshotSync<SessionBranchSummaryReadResult>(
     database.db,
     () => {
       const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
-      const entry = readSessionEntryRow(database, request.sessionKey, "list")?.entry;
+      const entry = readSessionEntryIdentity(database, request.sessionKey);
       if (!entry?.sessionId) {
         return { status: "missing-session" };
       }
@@ -44,10 +42,7 @@ export function readSessionBranchSnapshot(
           : readSessionBranchSummaries(database, entry.sessionId, cached);
       return {
         status: "ok",
-        source:
-          typeof databaseIdentity === "string"
-            ? { sessionId: entry.sessionId, databaseIdentity }
-            : undefined,
+        source: { sessionId: entry.sessionId, databaseIdentity },
         ...watermark,
         appendSafe: summaries.appendSafe,
         branches: summaries.branches,
@@ -57,11 +52,11 @@ export function readSessionBranchSnapshot(
   );
 }
 
-/** The transcript worker opens and closes its own read-only handle; only summaries leave it. */
+/** Reuse the worker's reader without retaining a read snapshot between requests. */
 export function readSessionBranchSummariesInWorker(
   request: SessionBranchSummaryReadRequest,
 ): SessionBranchSummaryReadResult {
-  const result = withFreshOpenClawAgentDatabaseReadOnly(
+  const result = withScopedOpenClawAgentDatabaseReadOnly(
     (database) => readSessionBranchSnapshot(database, request),
     request.database,
   );

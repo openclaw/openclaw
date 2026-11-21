@@ -3,10 +3,10 @@ import crypto from "node:crypto";
 import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathExists } from "@openclaw/fs-safe/advanced";
 import { isNotFoundPathError } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, withFileLock } from "../infra/file-lock.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { readJsonFile } from "../infra/json-files.js";
 import type { MigrationPlan } from "../plugins/types.js";
 import { resolveUserPath } from "../utils.js";
@@ -30,13 +30,7 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
 const IMPORT_BLOCKING_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
 
 export class SetupTargetLockedError extends Error {
-  readonly code = "setup_target_locked";
-
-  constructor(
-    public readonly holderPid: number | undefined,
-    profile: string | undefined,
-    cause: unknown,
-  ) {
+  constructor(holderPid: number | undefined, profile: string | undefined, cause: unknown) {
     const target = profile ? `profile ${profile}` : "the current profile";
     const owner = holderPid === undefined ? "" : ` (pid ${holderPid})`;
     super(

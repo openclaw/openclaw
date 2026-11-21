@@ -1,15 +1,11 @@
 // Shared filesystem helpers for plugin doctor legacy-state migrations.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { safeStat } from "../infra/path-existence.js";
 
 /** True when the legacy-state path exists and is a regular file. */
 export async function legacyStateFileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
+  return (await safeStat(filePath))?.isFile() ?? false;
 }
 
 /**

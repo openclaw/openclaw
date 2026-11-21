@@ -101,7 +101,6 @@ export type TeamReportsOperations = {
   };
   latestSourceWarnings: { input: undefined; output: string[] };
   latestPeople: { input: undefined; output: { key: string; members: ReportPerson[] } | undefined };
-  getDayReports: { input: { sinceMs: number; untilMs: number }; output: ReportDocument[] };
   listPersonDays: {
     input: { login: string; options: { since?: string; until?: string; limit?: number } };
     output: PersonDay[];
