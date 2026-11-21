@@ -111,11 +111,15 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
     };
     let stopState = subscribeWorkboard(current.owner, () => current.notify());
     let canWrite = host.connection.canWrite;
+    let agentDefaultId = host.agents.defaultId;
     const stopHost = host.subscribe(() => {
       const connection = host.connection;
       const connectedChanged = current.connected !== connection.connected;
       const writeChanged = canWrite !== connection.canWrite;
+      // A roster that arrives after the cards changes their agent labels.
+      const rosterLoaded = agentDefaultId !== host.agents.defaultId;
       canWrite = connection.canWrite;
+      agentDefaultId = host.agents.defaultId;
       if (connectedChanged) {
         current.connected = connection.connected;
         load = null;
@@ -128,9 +132,10 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
           void current.refresh();
         }
       }
-      // Roster, selection, and theme updates do not change Workboard data.
+      // Later roster edits, selection, and theme do not change Workboard data;
+      // renamed agents show on the next Workboard change.
       // Locale has its own reactive binding; mutation checks read live authority.
-      if (connectedChanged || writeChanged) {
+      if (connectedChanged || writeChanged || rosterLoaded) {
         current.notify();
       }
     });
@@ -181,6 +186,9 @@ export class WorkboardWidgetModel {
   }
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
+  }
+  get boards() {
+    return getWorkboardState(this.runtime.owner).boards;
   }
   get hasMore() {
     return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
