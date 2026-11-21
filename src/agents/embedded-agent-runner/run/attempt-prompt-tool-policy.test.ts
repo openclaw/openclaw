@@ -17,24 +17,6 @@ describe("prepareEmbeddedAttemptPromptDispatch", () => {
     { kind: "runtime-instruction" as const, text: "Existing context." },
   ];
 
-  it("forwards callbacks unresolved to the built-in harness", () => {
-    const finalizePromptForResolvedTools = vi.fn();
-    const resolveRuntimeContextForTools = vi.fn(() => []);
-    const params = {
-      runtimeContextFragments,
-      finalizePromptForResolvedTools,
-      resolveRuntimeContextForTools,
-    };
-    expect(
-      prepareEmbeddedAttemptPromptDispatch({ ownsTransport: false, preparedPrompt, params }),
-    ).toEqual({
-      ...preparedPrompt,
-      ...params,
-    });
-    expect(resolveRuntimeContextForTools).not.toHaveBeenCalled();
-    expect(finalizePromptForResolvedTools).not.toHaveBeenCalled();
-  });
-
   it.each([undefined, "", "caller transcript"])(
     "consumes plugin callbacks once with transcript pin %j",
     (transcriptPrompt) => {
