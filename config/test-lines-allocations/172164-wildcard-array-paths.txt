@@ -1,0 +1,3 @@
+67
+# Preserve wildcard-array CLI reuse and canonical path regressions for PR #172164.
+# Keep the CLI scenario in its own file to respect the existing CLI suite line cap.
