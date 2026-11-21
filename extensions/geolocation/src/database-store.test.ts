@@ -92,11 +92,13 @@ it("shares an oversized download and rejects callers only after cancellation set
 });
 
 it("refuses a gzip source that inflates past the on-disk ceiling", async () => {
-  const store = createStore(gzipSync(Buffer.alloc(700 * 1024 * 1024, 0)), {
+  const store = createStore(gzipSync(Buffer.alloc(512 * 1024 * 1024 + 1, 0)), {
     databaseUrl: "https://host.test/db.mmdb.gz",
   });
 
-  await expect(store.load()).rejects.toThrow(/db\.mmdb\.gz/);
+  await expect(store.load()).rejects.toThrow(
+    /db\.mmdb\.gz -> Cannot create a Buffer larger than 536870912 bytes/,
+  );
   await expect(fs.readdir(path.join(stateDir, "geolocation"))).rejects.toThrow();
 });
 function cityDatabase(city: string): Buffer {
