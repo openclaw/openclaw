@@ -53,7 +53,8 @@ vi.mock("../agent-bundle-mcp-tools.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agent-bundle-mcp-tools.js")>()),
   retireSessionMcpRuntime,
 }));
-vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/session-entry-read-runtime.js")>()),
   readSessionEntryReadOnlyInWorker,
 }));
 const transcriptRecorder = vi.hoisted(() => ({
