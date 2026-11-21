@@ -62,6 +62,7 @@
   "file-access-runtime",
   "file-lock",
   "gateway-config-runtime",
+  "gateway-http-testing",
   "global-singleton",
   "group-activation",
   "host-runtime",
