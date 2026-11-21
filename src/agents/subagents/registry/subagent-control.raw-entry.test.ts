@@ -377,10 +377,12 @@ it("numbers watched raw children independently and keeps their completion owner"
     spawnedBy: otherParentKey,
     parentSessionKey: otherParentKey,
     parentSessionId: "main-other-parent",
+    label: "Release notes draft",
   });
   expectAccepted(await send("main", "main-next-turn"));
   expect(getSubagentRunByRunId("main-3")).toMatchObject({
     childAgentId: "main",
+    label: "Release notes draft",
     generation: 2,
     requesterAgentId: "main",
     requesterSessionKey: parentKey,
