@@ -61,11 +61,12 @@ export function createLineBot(opts: LineBotOptions) {
   const spool = createLineWebhookSpool({
     accountId: account.accountId,
     runtime,
-    deliver: async (events, _destination, control) => {
+    deliver: async (events, destination, control) => {
       const cfg = resolveTurnConfig();
       await handleLineWebhookEvents(events, {
         cfg,
         account,
+        botUserId: destination,
         runtime,
         buildContext: opts.buildContext,
         mediaMaxBytes,
