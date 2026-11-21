@@ -840,16 +840,44 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
-`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
-imports into the server named by the DSN in that environment variable instead,
-for restore drills against a staging database; the restored configuration keeps
-the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
 plugin or additional-root identities. Use the identity recorded under `stores/`
 in the Git repository. Each restore creates a fresh namespace and publishes its
 matching local anchor after verification.
+
+#### Run an isolated restore drill
+
+To rehearse a full archive restore while the source Gateway runs, give the
+restore CLI its own state directory and config path. The CLI needs offline
+ownership of its selected state directory even when the import uses a separate
+PostgreSQL database.
+
+1. [Provision a dedicated staging database and role](#provision-a-database-and-runtime-role)
+   with the extensions required by the captured stores. Export its DSN as
+   `STAGING_PG_DSN` using your secret manager. If the archived config's default
+   environment secret provider has an allowlist, it must include that name.
+2. From a shell with that variable set, use a trusted backup archive. Use a
+   temporary directory outside the source installation's state, config, and
+   agent directories. The example creates a fresh CLI directory and a separate
+   restore target under that temporary directory.
+
+   ```bash
+   archive=/path/to/trusted-backup.tar.gz
+   drill_dir="$(mktemp -d)"
+   mkdir -m 700 "$drill_dir/cli"
+
+   OPENCLAW_STATE_DIR="$drill_dir/cli" \
+     OPENCLAW_CONFIG_PATH="$drill_dir/cli/openclaw.json" \
+     openclaw backup restore "$archive" --target "$drill_dir/restored" \
+       --postgres-connection-env STAGING_PG_DSN
+   ```
+
+3. Check that restore reports success and inspect the staged files and restored
+   stores in the staging database. Keep the restored installation offline during
+   the drill. The DSN override applies only to the import, and the restored
+   config still points to the archived connection.
 
 ### Recover a retained agent store
 
@@ -1070,7 +1098,15 @@ settings. The synchronous bridge has a 120-second deadline. If it expires, the
 process root terminates the whole I/O service, resetting every connection assigned
 to that service (roughly a quarter of the process's PostgreSQL connections) with
 an unknown outcome. Runtime statements time out after 90 seconds, so the bridge
-deadline covers a wedged service or a black-holed network. Offline port and restore
+deadline covers a wedged service or a black-holed network. Schema admission and
+migration transactions (including update generation fingerprints), first-use search
+extension builds, and explicit search rebuilds use a one-hour statement timeout and
+a bridge deadline of one hour plus 30 seconds. Lock waits still stop after 60 seconds.
+The maintenance statement limit is transaction-local; nested rebuilds restore the
+caller's limit on success or rollback, and ordinary requests keep their runtime limits.
+This lets large stores finish maintenance that would otherwise fail on every retry
+at the runtime deadline. Work exceeding the maintenance budget still fails.
+Offline port and restore
 materialization use a direct asynchronous client with a one-hour statement timeout;
 those statements do not pass through the synchronous bridge.
 These are not per-operation config options.
@@ -1317,7 +1353,8 @@ the heartbeat reports lease loss as before.
 
 If another store remains unavailable, restart the Gateway through its service owner.
 
-The 120-second bridge deadline also has an unknown outcome and resets the whole
+An expired bridge deadline (120 seconds for runtime requests, one hour plus
+30 seconds for maintenance) also has an unknown outcome and resets the whole
 I/O service, including its other assigned connections. Check the recorded result
 through the owning feature after connectivity recovers; a lost reply does not
 prove that the write rolled back. Do not blindly repeat an operation that could

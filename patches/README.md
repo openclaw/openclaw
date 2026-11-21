@@ -91,8 +91,8 @@ runner, and `@vitest/runner@5.0.0` is not published, so no standalone runner
 dependency or patch remains. The published package integrity is
 `sha512-cPODOMF8YnkiiYtDdHo6n4wWmBrOBBbOIYH2d33M4l3CdNn72h+qMmO6uXffUN6A5AZFXNND/d+krS9mgkXRfg==`.
 The patch SHA-256 is
-`a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6`
-and it changes exactly these nine published files:
+`af34f8b20f312ef2483070dc17cd9ca5127e14947d9a8a190682daca360c13fc`
+and it changes exactly these eleven published files:
 
 | Target | Published SHA-256 | Patched SHA-256 |
 | --- | --- | --- |
@@ -101,9 +101,11 @@ and it changes exactly these nine published files:
 | `dist/chunks/index.1TqnEahn.js` | `4e311af8b4db378a5c3d4e768b5210b0779d2ae0d0ec05f81a72378dbaf25412` | `5e145f05fb6a3626b30ecdb984b993380915b03c1ba580b60ee58d3603979d5b` |
 | `dist/chunks/index.CK-t0WMg.js` | `4712d1e9acaefca5d215c21f53007eeae30904768d45a10cd1fd09c01c6fd46e` | `605c675633a59166e5ca9b04108f4b34ca9f3cf2e3cc41a292f8277ec64aaa99` |
 | `dist/chunks/index.aTZaPVhf.js` | `381472b0170386acbc3f7d05b68ef05b3da53dcaa1058d2750d138648cd2933a` | `9fed49edda9cac115628ff4203ca307200ff721786925654044fbe4076be5ad9` |
+| `dist/chunks/init.PvxYpuCm.js` | `c0f37bd5e2230b47784675ecdb4d915a7df0a2100eadcc80fca99dab30013148` | `d844ad0dc35cc54bcad3041fa894fbc101de2c0d75193fb5dc4ce9842102c7f7` |
 | `dist/chunks/init-forks.CRxIPOJR.js` | `ef3f4026f3bc661f0542e379186637000cd2e6721e78733a4d5b5e9d3de46a64` | `03632dcb32e05236d984c58f2c8aed1a3eac7cb945594e9e0bd8bb32b2a18316` |
 | `dist/chunks/plugin.d.C8mmycim.d.ts` | `e1eae7448953ae3951958097b083af35b50f3adc39f0a922baa14de48324ac2f` | `59aed92bfefac4243398514cd6b274dab1ddc8841ed834d63eef6ff29d625bb7` |
 | `dist/chunks/run.BPv-BBRv.js` | `6353810fdd2b6370386dfb80ec4d1415b2a12d83e00f3ebee83cc0304d6e4c6b` | `0d1eb0c41c32a0e3040d108efc634fc405b1a2c437ca3414a284d84929c59199` |
+| `dist/module-evaluator.js` | `1390c7d62f1174924bdae333d59734acd065983b9f9580bdd24b07b52e430a50` | `dbb389c28c3595144ecf462a3b8e0b572780ed59caa5be3695e4d2e8c7c1ce47` |
 | `dist/node.d.ts` | `3cbd85d6dc3f7c97d2ced382172f12a115d46352af8d2a71fec05f9b185baf90` | `0b5cd4c6333b41b11f948f96c1b56809beb07d256ac1b24eab644a197dd033ec` |
 
 Vitest 5.0.5 writes replacement cache metadata upstream; the patch uses that
@@ -121,6 +123,18 @@ The patch owns these temporary invariants and removal gates:
   stock Vitest passes `test/scripts/vitest-mock-resolution.test.ts` and the
   original cold Gateway CI group containing
   `authenticated-request-dispatch.lifetime.test.ts`.
+- **Current environment deletion (`init.PvxYpuCm.js`, `dist/module-evaluator.js`):**
+  string-key deletion and membership resolve the current `process.env`, just as
+  existing reads and writes do. This includes `vi.stubEnv(key, undefined)` and
+  `vi.unstubAllEnvs()` restoring an originally absent key after an environment
+  replacement. Deleted `DEV`/`PROD`/`SSR` keys still read as `false`; non-string
+  keys retain the proxy's ignored-key policy. Keep enumeration and descriptors
+  target-owned: a stale non-extensible target cannot report replacement-only
+  keys, and a replacement's non-configurable descriptor may conflict with the
+  target. `Object.keys` and spread remain valid and read current values for
+  captured keys, but do not promise the replacement's key set. Remove these
+  hunks when a Vitest release forwards `deleteProperty` for this proxy and
+  `test/scripts/vitest-import-meta-env.test.ts` passes unpatched.
 - **CLI validation (`cac.CLrZKo1g.js`):** public `parseCLI` validates unknown
   options, required values, and required arguments without executing a command.
   Help/version and `allowUnknownOptions` retain native semantics. Remove this

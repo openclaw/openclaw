@@ -592,6 +592,8 @@ async function runSessionForkInner(params: SessionForkRunParams, abortSignal: Ab
       retryTransientErrors: false,
       allowAuthProfileFallback: false,
       authProfileFailurePolicy: "local_transient",
+      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      cliBackendDispatch: "subscription-auth",
       requestedRouteResolution: "resolved",
       sessionPersistence: "detached",
       // Every session tool stays listed for the provider's cached prefix; the run gates execution.

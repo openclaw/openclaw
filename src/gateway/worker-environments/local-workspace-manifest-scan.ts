@@ -56,6 +56,8 @@ import {
   isIgnoredWorkspaceBuildOutput,
 } from "./workspace-path-exclusions.js";
 
+const LEGACY_DERIVED_ELIGIBILITY_SUBSETS = [[], ["agp"], ["pnpm"], ["pnpm", "agp"]] as const;
+
 /** Capture owner rows synchronously; filesystem discovery runs after this read scope closes. */
 export function readLocalWorkspaceManifestRows(
   db: EngineConnection,
@@ -223,9 +225,9 @@ export async function executeLocalWorkspaceManifestRead(
     }
     let canonicalPaths: Set<string> | undefined;
     let scanFailure: unknown;
-    // Older accepted roots can contain the pnpm fallback store. Try current
-    // membership first, then restore only that historical eligibility for repair.
-    for (const includeLegacyPnpmStore of [false, true]) {
+    // Try legacy derived eligibility subsets independently, starting with current membership.
+    // Every candidate must reconstruct the exact saved root before replacement.
+    for (const legacyDerivedEligibilitySubset of LEGACY_DERIVED_ELIGIBILITY_SUBSETS) {
       let projectionPaths: Set<string> | undefined;
       let projectionDirectories: Set<string> | undefined;
       for (const candidate of [
@@ -272,7 +274,7 @@ export async function executeLocalWorkspaceManifestRead(
             includePaths,
             preserveDirectories,
             buildCacheInputs: retained,
-            includeLegacyPnpmStore,
+            legacyDerivedEligibilitySubset,
             onEntry: (node) => nodes.push(node),
           });
         } catch (error) {

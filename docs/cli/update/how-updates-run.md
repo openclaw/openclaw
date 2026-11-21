@@ -1607,6 +1607,20 @@ builds the target as a new release, switches the link, and arms a trial in
 which switches the link back to the trial's previous release after two failed starts.
 The trial ends once the Gateway on the new release is ready.
 
+If the old Gateway is still serving after its next maintenance check, the updater can
+request a cooperative restart. A busy Gateway can defer that request for five minutes.
+When the running Gateway records that it accepted a restart, the updater waits for
+that deferral and process replacement before verifying. A signal alone does not extend
+the wait. Older Gateways without this receipt keep the original bounded wait; an
+explicit overall update timeout still applies. Only serving-build and readiness checks
+confirm the update. This behavior requires the updated updater and, for the extended
+wait, a running Gateway that records acceptance. If restart signals are disabled, an updater in an
+independent terminal can still use the native restart of its verified, owned service.
+A managed handoff never selects that route to restart a running incumbent. On macOS,
+if a loaded KeepAlive job has no listener when verification times out, the updater
+leaves the trial unconfirmed rather than restarting the job a second time: launchd
+may still bring it up. Inspect `openclaw gateway status --deep` before taking action.
+
 The link alone does not show what serves. An update can fail after the link switched
 but before any Gateway started the new release. That leaves the link on a release that
 never started, with its trial still armed. When the trial's previous release is shown to
