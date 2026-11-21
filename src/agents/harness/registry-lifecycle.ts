@@ -1,3 +1,4 @@
+import { getPluginInstanceOwner } from "../../plugins/plugin-instance-scope.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -15,7 +16,7 @@ export function captureAgentHarnessLifecycleHooks<
     getPluginRuntimeGenerationRegistry() ?? getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
   const scoped = scopedRegistry();
   const registry = scoped ?? getPluginRegistryState()?.activeRegistry;
-  return (
+  const owners =
     registry?.agentHarnesses.flatMap((registration) => {
       const prepare = registration.harness[hook];
       if (!prepare) {
@@ -32,13 +33,29 @@ export function captureAgentHarnessLifecycleHooks<
         {
           registration,
           prepare,
+          record,
           isCurrent: () =>
             Boolean(current?.()) &&
-            (!scoped || scopedRegistry() === scoped) &&
+            (!scoped || isScopeCurrent()) &&
             registry.agentHarnesses.includes(registration) &&
             registration.harness[hook] === prepare,
         },
       ];
-    }) ?? []
-  );
+    }) ?? [];
+  const isScopeCurrent = () => {
+    const active = scopedRegistry();
+    if (active === scoped) {
+      return true;
+    }
+    // Wrapped hooks run in their owning instance's frame; nested hooks may
+    // continue in any captured owner's frame until the deletion settles.
+    return (
+      active !== undefined &&
+      owners.some(({ record }) => {
+        const owner = record && getPluginInstanceOwner(record);
+        return owner?.registry === active && owner.instance?.hasActiveCall === true;
+      })
+    );
+  };
+  return owners;
 }
