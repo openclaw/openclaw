@@ -538,6 +538,36 @@ describe("setup activation credentials and configuration", () => {
     expect(created.config.agents?.defaults?.model).toBe(`${modelRef}@${setup.readProfile()?.[0]}`);
   });
 
+  it.each([
+    { name: "first Gateway primary setup", surface: "gateway", provisions: true },
+    { name: "CLI activation", surface: "cli", provisions: false },
+    {
+      name: "an install whose primary model is already configured",
+      surface: "gateway",
+      primaryModel: "stable/configured",
+      provisions: false,
+    },
+  ] as const)("provisions implicit main only for $name", async (scenario) => {
+    const setup = await fixture({
+      fresh: true,
+      surface: scenario.surface,
+      ...("primaryModel" in scenario ? { primaryModel: scenario.primaryModel } : {}),
+    });
+    expect(await setup.activate("provider-auth")).toMatchObject({ ok: true });
+    const activated = await readSnapshot();
+    expect(hasResolvedRosterBeforeMigrations(activated)).toBe(scenario.provisions);
+    if (!scenario.provisions) {
+      return;
+    }
+    expect(activated.sourceConfig.agents?.entries?.main).toMatchObject({
+      name: "main",
+      workspace: setup.workspace,
+    });
+    expect(activated.sourceConfig.agents?.defaults?.models?.[modelRef]?.agentRuntime?.id).toBe(
+      "openclaw",
+    );
+  });
+
   it("saves credentials before the probe and commits after success", async () => {
     const setup = await fixture({ localService: true, addProviderDuringLogin: false });
     setup.run.mockImplementation(async (params) => {

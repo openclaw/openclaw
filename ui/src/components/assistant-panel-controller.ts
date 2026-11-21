@@ -51,7 +51,6 @@ export type AssistantPanelProps = {
   pageAgentId: string;
   pageRouteId: RouteId;
   pageRouteFailed: boolean;
-  minimizeRequestId: number;
   store?: CustodianSessionStore;
 };
 export function createAssistantPanel(
@@ -74,7 +73,6 @@ export function createAssistantPanel(
   let builtInDestination: "home" | "custodian" = "custodian";
   let pendingPrimaryPane: { pane: ChatPaneElement } | null = null;
   let publishedSessionKey: string | null = null;
-  let handledMinimizeRequestId = 0;
   let targetScope = "";
   let refreshing = false;
   let homeDefaults: {
@@ -126,17 +124,6 @@ export function createAssistantPanel(
         };
       }
       dockLayout.setSuppressed(restoreSuppressed());
-      if (
-        props.minimizeRequestId > 0 &&
-        props.minimizeRequestId !== handledMinimizeRequestId &&
-        props.custodianAvailable &&
-        props.store
-      ) {
-        handledMinimizeRequestId = props.minimizeRequestId;
-        if (typeof destination === "string" && props.store.hasRealUserTurn()) {
-          openDestination("custodian");
-        }
-      }
       if (!available()) {
         dockLayout.hideWithoutPersisting();
       } else {
@@ -514,9 +501,7 @@ export function createAssistantPanel(
     homeTarget,
     available,
     contentDefined: () => customElements.get("openclaw-assistant-panel-content") !== undefined,
-    shouldLoadContent: () =>
-      (dockLayout.open && (destination !== "home" || homeStarted)) ||
-      (props.custodianAvailable && props.minimizeRequestId > handledMinimizeRequestId),
+    shouldLoadContent: () => dockLayout.open && (destination !== "home" || homeStarted),
     get openSessionKey() {
       return openSessionKey();
     },

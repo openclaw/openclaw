@@ -58,6 +58,14 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
 vi.mock("../../system-agent/audit.js", () => ({ appendSystemAgentAuditEntry: fixture.audit }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// mock-isolation: The read-only handoff target is exercised by system-agent-first-agent.test.ts.
+vi.mock("../../system-agent/setup-first-agent.js", () => ({
+  describeSetupFirstAgent: async () => ({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    bootstrapPending: false,
+  }),
+}));
 const presentedCodex = {
   kind: "codex-cli" as const,
   modelRef: "openai/model",
@@ -238,6 +246,7 @@ describe("Gateway automatic inference setup", () => {
       const result = await runSetup();
       expect(result).toEqual({
         status: "configured",
+        firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: false },
         selected: {
           ...presentedCodex,
           kind: "existing-model",

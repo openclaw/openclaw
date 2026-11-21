@@ -107,6 +107,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
             authChoice: choice.choiceId,
             agentId: params.agentId,
             selectModel: params.selectModel === true,
+            nativeSessionCatalogsEnabled: params.nativeSessionCatalogsEnabled,
           },
           timeoutMs: 25 * 60_000,
         });

@@ -1,17 +1,30 @@
-import { createMemo, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { nativeSetupCapability } from "../../app/native-setup.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import type { CustodianSetupActions } from "./custodian-actions.ts";
-import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
-import type { CustodianSessionStore } from "./custodian-session-store.ts";
+import type { AutomaticModelSetup } from "./automatic-setup.ts";
+import { openFirstAgentConversation } from "./first-agent-handoff.ts";
 import "../../styles/custodian-setup-card.css";
 
-function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
+registerPluginManagementEnglish();
+
+type AutomaticSetupActions = {
+  readonly answering: boolean;
+  readonly cancelling: boolean;
+  readonly verifying: boolean;
+  signIn(): void;
+  retry(): void;
+  answer(value: unknown): void;
+  cancel(): void;
+  activate(candidate: NonNullable<AutomaticModelSetup["result"]>["alternatives"][number]): void;
+};
+
+function SignInWizard(props: { setup: () => AutomaticModelSetup; actions: AutomaticSetupActions }) {
   const state = () => props.setup().wizard.state;
   const step = () => {
     const current = state();
@@ -75,14 +88,33 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: Custodi
   );
 }
 
-export function CustodianSetupCard(props: {
-  store: CustodianSessionStore;
-  actions: CustodianSetupActions;
-}) {
+export function AutomaticSetupCard(props: { owner: AutomaticModelSetup; revision: () => number }) {
   const context = useApplication();
-  const source = createMemo(() => props.store);
-  const projection = createMemo(() => projectOwner(source(), (store) => store.autoSetup));
-  const setup = () => projection().read();
+  const setup = () => {
+    props.revision();
+    return props.owner;
+  };
+  const run = (command: (owner: AutomaticModelSetup) => Promise<void>) => {
+    const owner = props.owner;
+    void command(owner).catch((error: unknown) => owner.reportError(error));
+  };
+  const actions: AutomaticSetupActions = {
+    get verifying() {
+      return setup().pending;
+    },
+    get answering() {
+      const state = setup().wizard.state;
+      return state.phase === "starting" || (state.phase === "step" && state.busy);
+    },
+    get cancelling() {
+      return setup().cancelling;
+    },
+    retry: () => run((owner) => owner.retry()),
+    signIn: () => run((owner) => owner.signIn()),
+    answer: (value) => run((owner) => owner.answerWizard(value)),
+    cancel: () => run((owner) => owner.cancelWizard()),
+    activate: (candidate) => run((owner) => owner.activate(candidate)),
+  };
   const result = () => setup().result;
   const native = context.nativeDeviceSettings
     ? projectOwner(context.nativeDeviceSettings, () => nativeSetupCapability(context)).read
@@ -90,8 +122,8 @@ export function CustodianSetupCard(props: {
   const busy = () => {
     const current = setup();
     return (
-      props.actions.verifying ||
-      props.actions.answering ||
+      actions.verifying ||
+      actions.answering ||
       current.pending ||
       current.wizard.state.phase === "starting" ||
       current.wizard.state.phase === "step"
@@ -110,7 +142,7 @@ export function CustodianSetupCard(props: {
   };
   const title = () => {
     const current = setup();
-    if (props.actions.verifying || current.pending) {
+    if (actions.verifying || current.pending) {
       return t("custodian.autoSetup.connecting");
     }
     const selected = current.result?.selected;
@@ -133,16 +165,15 @@ export function CustodianSetupCard(props: {
         <section class="custodian-setup" aria-label={t("custodian.autoSetup.title")}>
           <div class="custodian-setup__heading">
             <h2>{title()}</h2>
-            <button
+            <IconButton
+              size={28}
+              icon="x"
               class="custodian__nudge-dismiss"
-              type="button"
-              aria-label={t("common.dismiss")}
+              label={t("common.dismiss")}
               onClick={() => setup().dismiss()}
-            >
-              <Icon name="x" />
-            </button>
+            />
           </div>
-          <Show when={props.actions.verifying || setup().pending}>
+          <Show when={actions.verifying || setup().pending}>
             <p class="custodian-setup__progress" role="status">
               <span class="btn__spinner" aria-hidden="true" />
               {t("custodian.autoSetup.verifying")}
@@ -151,19 +182,14 @@ export function CustodianSetupCard(props: {
           <Show when={!setup().pending && result()?.selected?.shared}>
             <p>{t("custodian.autoSetup.sharedCodexLogin")}</p>
             <Show when={result()?.separateSignIn}>
-              <button
-                class="btn"
-                type="button"
-                disabled={busy()}
-                onClick={() => props.actions.signIn()}
-              >
+              <button class="btn" type="button" disabled={busy()} onClick={() => actions.signIn()}>
                 {t("custodian.autoSetup.separateLogin")}
               </button>
             </Show>
           </Show>
           <Show when={!setup().pending && !setup().ready && result()?.signIn}>
             <Show when={!busy()}>
-              <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
+              <button class="btn primary" type="button" onClick={() => actions.signIn()}>
                 {t("custodian.autoSetup.signIn")}
               </button>
             </Show>
@@ -207,7 +233,7 @@ export function CustodianSetupCard(props: {
                       type="button"
                       title={candidate.detail}
                       disabled={busy()}
-                      onClick={() => props.actions.activate(candidate)}
+                      onClick={() => actions.activate(candidate)}
                     >
                       {candidate.label}
                     </button>
@@ -216,17 +242,30 @@ export function CustodianSetupCard(props: {
               </div>
             </div>
           </Show>
-          <SignInWizard setup={setup} actions={props.actions} />
+          <SignInWizard setup={setup} actions={actions} />
+          <Show when={setup().ready}>
+            <button
+              class="btn primary"
+              type="button"
+              disabled={busy()}
+              onClick={() => {
+                // The agent handoff is best effort; a ready connection always opens chat.
+                const agent = result()?.firstAgent;
+                if (agent) {
+                  openFirstAgentConversation(context, agent);
+                } else {
+                  context.navigate("chat");
+                }
+              }}
+            >
+              {t("modelSetup.startTalking")}
+            </button>
+          </Show>
           <Show when={setup().error}>
             {(error) => (
               <div class="custodian-setup__error" role="alert">
                 <p>{error()}</p>
-                <button
-                  class="btn"
-                  type="button"
-                  disabled={busy()}
-                  onClick={() => props.actions.retry()}
-                >
+                <button class="btn" type="button" disabled={busy()} onClick={() => actions.retry()}>
                   {t("common.retry")}
                 </button>
               </div>

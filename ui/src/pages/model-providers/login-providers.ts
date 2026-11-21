@@ -2,16 +2,46 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
+  ModelCatalogEntry,
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
+  WizardNextResult,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
+import type { ModelCatalogPresentation } from "../../lib/model-catalog-store.ts";
 
 registerModelSetupEnglish();
+
+/** A live recommendation wins; otherwise retain the exact verified model's display name. */
+export function resolveVerifiedLoginStarter(
+  catalog: ModelCatalogPresentation,
+  authProviderId: string | undefined,
+  activation: NonNullable<WizardNextResult["modelActivation"]>,
+): ModelCatalogEntry | undefined {
+  const slash = activation.modelRef.indexOf("/");
+  const provider = activation.modelRef.slice(0, slash);
+  const id = activation.modelRef.slice(slash + 1);
+  const known = catalog.models.find((model) => model.provider === provider && model.id === id);
+  const recommended =
+    !catalog.retired &&
+    catalog.models.find(
+      (model) =>
+        canonicalModelAuthProviderId(model.provider) === authProviderId &&
+        model.available === true &&
+        model.manualSelectionAllowed !== false &&
+        model.recommended === true,
+    );
+  const name = activation.modelName ?? known?.name;
+  return recommended
+    ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
+    : name
+      ? { provider, id, name }
+      : undefined;
+}
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";

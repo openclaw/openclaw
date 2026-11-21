@@ -4,21 +4,13 @@ import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
-import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
-import {
-  ANTHROPIC_API_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-  GEMINI_CLI_DEFAULT_MODEL_REF,
-  OPENAI_API_DEFAULT_MODEL_REF,
-} from "../commands/onboard-inference.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
@@ -33,19 +25,14 @@ import {
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
-import { stageCodexCandidate } from "./setup-inference-codex.js";
+import { stageSetupInferenceCandidate } from "./setup-inference-candidates.js";
 import {
   type ActivateSetupInferenceParams,
   type StagedCandidate,
   type StageContext,
-  type StageFailure,
   type ActivateSetupInferenceResult,
   describeSetupInferenceError,
   invalidSetupConfigError,
-  parseInferenceRef,
-  resolveSetupModel,
-  parseProviderAutoSetupChoiceId,
-  parseSavedAuthSetupProfileId,
   redactSetupInferenceError,
   resolveSetupInferenceWorkspace,
   SetupInferenceActivationIndeterminateError,
@@ -54,17 +41,11 @@ import {
   SetupInferenceOwnerDriftError,
   throwIfSetupInferenceCancelled,
   validateSetupInferenceEvidence,
-  validateSetupModelTarget,
 } from "./setup-inference-core.js";
 import {
   withPreparedSetupCredentialAccess,
   activatePreparedSetupCredential,
 } from "./setup-inference-credential-access.js";
-import {
-  stageProviderAuthCandidate,
-  stageProviderAutoCandidate,
-  stageSavedAuthCandidate,
-} from "./setup-inference-credentials.js";
 import {
   prepareSetupNativeRuntimeConsent,
   prepareSetupVerificationGeneration,
@@ -90,109 +71,6 @@ import {
   resolveSetupNativeSessionCatalogPreference,
 } from "./setup-native-session-catalogs.js";
 import { captureSystemAgentOwnerPluginArtifacts } from "./verified-inference.js";
-
-async function stageCandidate(ctx: StageContext): Promise<StagedCandidate | StageFailure> {
-  const { params, cfg } = ctx;
-  if (params.kind.startsWith("saved-auth:")) {
-    const profileId = parseSavedAuthSetupProfileId(params.kind);
-    if (!profileId) {
-      return { error: "Invalid saved sign-in choice. Open Model Setup and choose again." };
-    }
-    return await stageSavedAuthCandidate(ctx, profileId);
-  }
-  const choiceId = parseProviderAutoSetupChoiceId(params.kind);
-  const hasProviderTarget =
-    choiceId ||
-    params.kind === "existing-model" ||
-    params.kind === "provider-auth" ||
-    params.kind === "api-key";
-  const roleError = hasProviderTarget
-    ? undefined
-    : validateSetupModelTarget(undefined, params.modelTarget);
-  if (roleError) {
-    return roleError;
-  }
-  if (choiceId) {
-    return await stageProviderAutoCandidate(ctx, choiceId);
-  }
-  switch (params.kind) {
-    case "existing-model": {
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(
-        cfg,
-        params.agentId,
-        params.modelTarget ? { modelTarget: params.modelTarget } : {},
-        ctx.snapshot,
-      );
-      if (!route) {
-        return { error: "No configured default-agent inference route is available." };
-      }
-      const routeRoleError = validateSetupModelTarget(route.modelTarget, params.modelTarget);
-      if (routeRoleError) {
-        return routeRoleError;
-      }
-      const requested = params.modelRef?.trim();
-      if (requested && normalizeAgentModelRefForConfig(requested) !== route.modelLabel) {
-        return {
-          error: `The configured default model changed from ${requested} to ${route.modelLabel}. Try setup again.`,
-        };
-      }
-      return {
-        modelRef: route.modelLabel,
-        ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
-        config: cfg,
-        ...(route.authProfileId ? { authProfileId: route.authProfileId } : {}),
-      };
-    }
-    case "api-key":
-      return await stageProviderAuthCandidate(ctx, false);
-    case "provider-auth":
-      return await stageProviderAuthCandidate(ctx, true);
-    case "codex-cli":
-    case "claude-cli":
-    case "gemini-cli":
-    case "openai-api-key":
-    case "anthropic-api-key": {
-      const defaults = {
-        "codex-cli": CODEX_APP_SERVER_DEFAULT_MODEL_REF,
-        "claude-cli": CLAUDE_CLI_DEFAULT_MODEL_REF,
-        "gemini-cli": GEMINI_CLI_DEFAULT_MODEL_REF,
-        "openai-api-key": OPENAI_API_DEFAULT_MODEL_REF,
-        "anthropic-api-key": ANTHROPIC_API_DEFAULT_MODEL_REF,
-      };
-      const defaultModel = defaults[params.kind];
-      const modelRef = resolveSetupModel({
-        label: params.kind,
-        providerId: parseInferenceRef(defaultModel).provider,
-        defaultModel,
-        modelRef: params.modelRef,
-      });
-      if (typeof modelRef !== "string") {
-        return modelRef;
-      }
-      if (params.kind === "codex-cli") {
-        return await stageCodexCandidate(ctx, modelRef);
-      }
-      if (params.kind === "claude-cli") {
-        const ref = parseInferenceRef(modelRef);
-        const provider =
-          resolveCliRuntimeCanonicalProvider({
-            runtime: ref.provider,
-            config: cfg,
-            env: process.env,
-            includeSetupRegistry: true,
-          }) ?? ref.provider;
-        return { modelRef: `${provider}/${ref.model}`, agentRuntimeId: "claude-cli", config: cfg };
-      }
-      return {
-        modelRef,
-        ...(params.kind === "gemini-cli" ? {} : { agentRuntimeId: "openclaw" }),
-        config: cfg,
-      };
-    }
-    default:
-      return { error: `Unknown inference choice "${params.kind}".` };
-  }
-}
 
 async function withSetupInferenceErrorRedaction<T>(
   operation: () => Promise<T>,
@@ -300,7 +178,7 @@ async function activateCandidate(
       throwIfSetupInferenceCancelled(params);
     },
   };
-  const staged = await stageCandidate(ctx);
+  const staged = await stageSetupInferenceCandidate(ctx);
   const failure = (result: Extract<ActivateSetupInferenceResult, { ok: false }>) => ({
     ...result,
     ...(ctx.effects.credentialsSaved
@@ -365,15 +243,28 @@ async function verifyAndActivateCandidate(
           workspaceDir: ctx.workspace,
         });
   const providerPatch = createMergePatch(cfg, stripPendingPluginInstallRecords(prepared));
+  // Gateway setup that chooses the first primary model on an install without
+  // an authored roster also creates the canonical first agent. Existing
+  // installs, CLI activation and access-only sign-in keep their prior shape.
+  // The UI may select implicit main before it has an authored roster. Runtime
+  // metadata must remain in defaults until canonical first-agent provisioning.
+  const pendingFirstAgent =
+    params.surface === "gateway" &&
+    !hasResolvedRosterBeforeMigrations(snapshot) &&
+    !resolveAgentEffectiveModelPrimary(source, routeAgentId) &&
+    (!params.agentId || routeAgentId === resolveAmbientOwnerAgentId(cfg));
+  const createFirstAgent =
+    pendingFirstAgent && params.selectModel !== false && staged.modelTarget !== "utility";
   const selectModel: (config: OpenClawConfig, previousConfig: OpenClawConfig) => OpenClawConfig =
     params.kind === "existing-model"
       ? (config: OpenClawConfig) => config
       : await createSystemAgentModelSelectionUpdater({
           model: staged.modelRef,
           ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
-          ...(params.agentId ? { targetAgentId: routeAgentId } : {}),
+          ...(params.agentId && !pendingFirstAgent ? { targetAgentId: routeAgentId } : {}),
           ...(staged.agentRuntimeId ? { agentRuntimeId: staged.agentRuntimeId } : {}),
-          runtimeInDefaults: !params.agentId && !hasResolvedRosterBeforeMigrations(snapshot),
+          runtimeInDefaults:
+            (!params.agentId || pendingFirstAgent) && !hasResolvedRosterBeforeMigrations(snapshot),
           ...(staged.authProfileId ? { authProfileId: staged.authProfileId } : {}),
         });
   const buildCandidate = (base: OpenClawConfig) => {
@@ -433,7 +324,7 @@ async function verifyAndActivateCandidate(
     });
   }
   const baselineRoute = await project(cfg, source);
-  const verifiedRoute = await project(
+  let verifiedRoute = await project(
     candidateRouteConfig(candidate),
     candidateRouteConfig(sourceCandidate),
   );
@@ -612,7 +503,24 @@ async function verifyAndActivateCandidate(
       assertCurrent,
     );
   };
-  if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup) {
+  if (!isDeepStrictEqual(sourceCandidate, source) || savedCredential?.setup || createFirstAgent) {
+    let createdFirstAgent: OpenClawConfig | undefined;
+    const finishFirstAgent = async () => {
+      if (!createdFirstAgent) {
+        return;
+      }
+      try {
+        const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
+        await provisionDefaultProactiveJob(createdFirstAgent, routeAgentId, {
+          commitGuard: () => throwIfSetupInferenceCancelled(params),
+        });
+      } catch (error) {
+        // The model and agent are already applied; the default check-in job is optional.
+        params.runtime.error?.(
+          `Your agent is ready, but OpenClaw couldn't schedule its default check-in: ${formatErrorMessage(error)}`,
+        );
+      }
+    };
     const configTarget: SetupInferenceConfigTarget = {
       read: async () => ({
         config: (await readSnapshot()).sourceConfig,
@@ -621,16 +529,63 @@ async function verifyAndActivateCandidate(
       write: async (_candidate, { writeOptions, captureUndo }) => {
         const { transformConfigWithPendingPluginInstalls: transform } =
           await import("../plugins/install-record-commit.js");
-        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
-          captureUndo(
-            captureSetupInferenceFileUndo(
-              {
-                ...base,
-                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
-              },
-              stripPendingPluginInstallRecords(written),
-            ),
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) => {
+          let previous = stripPendingPluginInstallRecords(base.sourceConfig);
+          if (createFirstAgent && previous.agents) {
+            // A load-time implicit main is not an authored roster to retain on rollback.
+            const { entries: _implicit, ...agents } = previous.agents;
+            const entries = base.sourceConfigBeforeMigrations?.agents?.entries;
+            previous = { ...previous, agents: { ...agents, ...(entries ? { entries } : {}) } };
+          }
+          const undo = captureSetupInferenceFileUndo(
+            { ...base, sourceConfig: previous },
+            stripPendingPluginInstallRecords(written),
           );
+          captureUndo(
+            createFirstAgent
+              ? (options) =>
+                  undo(
+                    copyRuntimeConfigWriteApplication(options, {
+                      ...options,
+                      allowedAgentRosterRemovals: [routeAgentId],
+                      // The conditional inverse removes only this first-agent publication.
+                      allowConfigSizeDrop: true,
+                    }),
+                  )
+              : undo,
+          );
+        };
+        if (createFirstAgent) {
+          const { readConfigFileSnapshotForWrite } = await import("../config/config.js");
+          const { createSetupFirstAgent } = await import("./setup-first-agent.js");
+          const writeSnapshot = await readConfigFileSnapshotForWrite();
+          await ctx.beforePersistentEffect();
+          await revalidate(writeSnapshot.snapshot);
+          params.onCommitStarted?.(writeSnapshot.snapshot.sourceConfig);
+          const published = await createSetupFirstAgent({
+            agentId: routeAgentId,
+            config: buildCandidate(writeSnapshot.snapshot.sourceConfig),
+            writeSnapshot: {
+              ...writeSnapshot,
+              writeOptions: copyRuntimeConfigWriteApplication(writeOptions, {
+                ...writeSnapshot.writeOptions,
+                ...writeOptions,
+              }),
+            },
+            beforePersistentApply: () => throwIfSetupInferenceCancelled(params),
+            prepareConfigCommit: async (next) => {
+              // Canonical creation adds the real roster/workspace to the verified route.
+              verifiedRoute = await project(candidateRouteConfig(next), next);
+              captureFileUndo(writeSnapshot.snapshot, next);
+            },
+            onCommitted: (next) => {
+              captureFileUndo(writeSnapshot.snapshot, next);
+              ctx.effects.configPersisted = true;
+            },
+          });
+          createdFirstAgent = published;
+          return published;
+        }
         const committed = await transform({
           base: "source",
           writeOptions,
@@ -661,13 +616,25 @@ async function verifyAndActivateCandidate(
         (params.selectModel !== false &&
           (baselineRoute.route || resolveAgentEffectiveModelPrimary(cfg, routeAgentId))),
       ),
-      requireApplied: params.automaticSetup,
+      requireApplied: params.automaticSetup || createFirstAgent ? true : undefined,
       assertCurrent: () => throwIfSetupInferenceCancelled(params),
       activate: activateCredential,
-      deferCompletion: params.onActivationCompletion,
+      deferCompletion: params.onActivationCompletion
+        ? (complete) =>
+            params.onActivationCompletion?.(async () => {
+              const restart = await complete();
+              if (!restart) {
+                await finishFirstAgent();
+              }
+              return restart;
+            })
+        : undefined,
       configTarget,
       config: sourceCandidate,
     });
+    if (!params.onActivationCompletion) {
+      await finishFirstAgent();
+    }
   } else {
     await revalidate(await readSnapshot());
   }

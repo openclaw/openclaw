@@ -60,7 +60,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly navigationRevision: () => number;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
-  readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly nativeHistoryState: () => NativeHistoryState;
   readonly navDrawerOpen: boolean;

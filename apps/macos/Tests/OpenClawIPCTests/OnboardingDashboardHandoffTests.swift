@@ -191,9 +191,9 @@ struct OnboardingDashboardHandoffTests {
         #expect(view.finish())
         #expect(view.finishState.didFinish)
         // Fresh connections own the remaining first-run steps via the custodian.
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(handoffs == [.modelSetup])
         #expect(!view.finish())
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(handoffs == [.modelSetup])
     }
 
     @Test(arguments: [false, true], [false, true])
@@ -318,7 +318,7 @@ struct OnboardingDashboardHandoffTests {
             #expect(handoffs.isEmpty)
             #expect(view.finish())
             #expect(view.finishState.didFinish)
-            #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
+            #expect(handoffs == [utility ? .modelSetup : .dashboard])
             #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
         }
         #expect(await methods.snapshot().filter { $0 != "health" } == [
@@ -630,7 +630,7 @@ struct OnboardingDashboardHandoffTests {
             #expect(handoffs.isEmpty)
             #expect(view.finish())
             #expect(view.finishState.didFinish)
-            #expect(handoffs == [.custodianOnboarding])
+            #expect(handoffs == [.modelSetup])
             #expect(OnboardingSystemAgentResumeStore.pendingState(
                 for: routeIdentity,
                 defaults: defaults) == .none)

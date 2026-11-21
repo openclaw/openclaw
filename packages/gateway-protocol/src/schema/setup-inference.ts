@@ -1,6 +1,14 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { NonEmptyString } from "./primitives.js";
+
+export const SetupFirstAgentSchema = closedObject({
+  agentId: NonEmptyString,
+  sessionKey: NonEmptyString,
+  bootstrapPending: Type.Boolean(),
+});
+export type SetupFirstAgent = Static<typeof SetupFirstAgentSchema>;
 
 export const SystemAgentSetupAutoParamsSchema = closedObject({});
 
@@ -15,6 +23,7 @@ export const SystemAgentSetupAutoCandidateSchema = closedObject({
 });
 
 export const SystemAgentSetupAutoResultSchema = closedObject({
+  firstAgent: Type.Optional(SetupFirstAgentSchema),
   status: Type.Union([
     Type.Literal("configured"),
     Type.Literal("activated"),

@@ -633,7 +633,7 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
             print("PASS: automatic startup falls back with its error and manual installation remains retryable", flush=True)
             return
 
-        wait("Custodian chat", "heading")
+        wait("Local model setup", "heading")
         wait("Using Synthetic provider (fixture/model) on This computer", "heading")
         self.chrome.until(lambda: any(r.get("capabilityAtBoot") and r.get("currentGateway") == {
             "name": "This computer", "kind": "local",
@@ -642,12 +642,12 @@ class GatewayOnboardingFixture(GatewaySwitchFixture):
         if not installed["entry"].endswith("/package/node_modules/openclaw/openclaw.mjs"):
             raise RuntimeError("The native installer did not select the staged CLI")
         if not self.document_requests or self.document_requests[0] != {
-            "path": "/fixture/custodian", "query": {"onboarding": ["1"]},
+            "path": "/fixture/settings/model-setup", "query": {"firstRun": ["auto"]},
         }:
             raise RuntimeError(f"Native onboarding did not preserve the canonical base: {self.document_requests!r}")
         self.config_hash = self.primary_hash()
         main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "onboarding window")
-        self.chrome.record("fresh launch installs locally and opens custodian without setup input", True)
+        self.chrome.record("fresh launch installs locally and opens automatic Model Setup without setup input", True)
         self.capture("automatic-first-run")
         click("Review permissions")
         wait("Native permissions", "heading")

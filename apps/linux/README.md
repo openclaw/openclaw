@@ -361,7 +361,7 @@ against a synthetic CLI/service, including explicit runtime activation.
 On Linux and Windows, a fresh install with no saved OpenClaw configuration or
 Gateway profiles starts local setup automatically. It uses the same CLI installer,
 bundled runtime, and Gateway service owners as **On this computer**, then opens
-the Control UI's custodian onboarding. Release builds select their matching stable
+the Control UI's automatic Model Setup. Release builds select their matching stable
 version; development builds use their staged source package. Nearby Gateways are
 never joined automatically.
 
@@ -370,9 +370,9 @@ app version and runtime flavor instead of a release-channel picker, including
 development builds. Update the desktop app to change its bundled version. Builds
 without an embedded runtime retain the Stable, Beta, and Development choices.
 
-The custodian prepares available AI access and explains what was selected. Its
+Model Setup prepares available AI access and explains what was selected. Its
 **Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
-open Manage Gateways, this computer's permissions, and Model Setup respectively.
+open Manage Gateways, this computer's permissions, and manual AI setup respectively.
 Existing configurations and saved remote connections keep their current startup
 behavior. If automatic setup fails, the app shows the error alongside the existing
 local and remote choices so you can retry or connect elsewhere. Windows uses

@@ -153,7 +153,9 @@ describe("openclaw.setup", () => {
       await pending;
       admission.mockRestore();
     }
-    expect(calls).toEqual([{ ok: true, payload: result, error: undefined }]);
+    // Successful primary setup also reports its best-effort agent handoff target.
+    const firstAgent = expect.objectContaining({ agentId: "main" });
+    expect(calls).toEqual([{ ok: true, payload: { ...result, firstAgent }, error: undefined }]);
   });
 
   it("returns a retryable busy error while another activation is running", async () => {
@@ -575,7 +577,7 @@ describe("openclaw.chat", () => {
                 payload:
                   outcome === "restart-required"
                     ? { ...result, gatewayRestartRequired: true }
-                    : result,
+                    : { ...result, firstAgent: expect.objectContaining({ agentId: "main" }) },
                 error: undefined,
               },
             ],

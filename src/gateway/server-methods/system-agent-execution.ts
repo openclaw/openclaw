@@ -119,5 +119,18 @@ export async function activateGatewaySetupInference(
       activationProgress?.stop();
     }
   }
+  if (
+    result.ok &&
+    !restartRequired &&
+    result.modelTarget !== "utility" &&
+    params.selectModel !== false
+  ) {
+    // Best-effort handoff target only; setup has already succeeded.
+    const { describeSetupFirstAgent } = await import("../../system-agent/setup-first-agent.js");
+    const firstAgent = await describeSetupFirstAgent({ agentId: params.agentId });
+    if (firstAgent) {
+      result = { ...result, firstAgent };
+    }
+  }
   return result.ok && restartRequired ? { ...result, gatewayRestartRequired: true } : result;
 }

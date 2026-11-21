@@ -1,5 +1,6 @@
 import type {
   ProviderLoginOption,
+  SystemAgentSetupActivateParams,
   SystemAgentSetupActivateResult,
   SystemAgentSetupDetectResult,
   SystemAgentSetupVerifyResult,
@@ -14,6 +15,17 @@ export const MODEL_SETUP_VERIFY_TIMEOUT_MS = 150_000;
 const MODEL_SETUP_ACTIVATE_TIMEOUT_MS = 480_000;
 export const MODEL_SETUP_AUTH_START_TIMEOUT_MS = 30_000;
 export const MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS = null;
+
+export type ModelSetupActivationPreferences = Pick<
+  SystemAgentSetupActivateParams,
+  "nativeSessionCatalogsEnabled"
+> & { selectModel?: true };
+
+export type ModelSetupAuthOption = Pick<ProviderLoginOption, "id" | "label"> & {
+  brandId?: string;
+  kind: ProviderLoginOption["kind"] | "install" | "custom";
+  modelTarget?: "utility";
+};
 
 export type ModelSetupPageState =
   | { phase: "loading" }
@@ -108,6 +120,16 @@ export type ModelSetupState = {
   detectionRequest: object | null;
   cancellationNotice: string | null;
 };
+
+/** One request preference projection for every activation entrypoint. */
+export function modelSetupActivationPreferences(
+  state: ModelSetupState,
+): ModelSetupActivationPreferences {
+  return state.pageState.phase === "ready" &&
+    state.pageState.result.nativeSessionCatalogPreferenceRequired === true
+    ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
+    : {};
+}
 
 export function createModelSetupState(): ModelSetupState {
   return {

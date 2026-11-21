@@ -13,6 +13,7 @@ import { NonEmptyString } from "./primitives.js";
 import {
   SetupInferenceActivationRejectionSchema,
   SetupInferenceFailureStatusSchema,
+  SetupFirstAgentSchema,
 } from "./setup-inference.js";
 import { withSince } from "./since.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -423,6 +424,7 @@ export const SystemAgentSetupActivateStartParamsSchema = closedObject({
 export const SystemAgentSetupActivateStartResultSchema = WizardStartResultSchema;
 
 export const SystemAgentSetupActivateResultSchema = closedObject({
+  firstAgent: Type.Optional(SetupFirstAgentSchema),
   ok: Type.Boolean(),
   /** Present on success: the model ref that answered the live test. */
   modelRef: Type.Optional(Type.String()),

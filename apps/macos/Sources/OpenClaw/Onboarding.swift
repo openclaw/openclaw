@@ -38,8 +38,8 @@ final class OnboardingFinishState {
 
 /// Dashboard surface opened when onboarding finishes with working inference.
 enum OnboardingDashboardHandoff: Equatable {
-    /// Fresh activation: the custodian flow owns the remaining first-run steps.
-    case custodianOnboarding
+    /// Connect AI, then open the regular agent's persistent first conversation.
+    case modelSetup
     /// Live-verified pre-existing setup: reopen the normal dashboard.
     case dashboard
 }
@@ -927,7 +927,7 @@ struct OnboardingView: View {
         gatewaySelectionPersister: (@MainActor () -> Bool)? = nil,
         dashboardHandoffOpener: @escaping @MainActor (OnboardingDashboardHandoff) -> Void = {
             switch $0 {
-            case .custodianOnboarding: AppNavigationActions.openDashboardOnboarding()
+            case .modelSetup: AppNavigationActions.openDashboardOnboarding()
             case .dashboard: AppNavigationActions.openDashboard()
             }
         })

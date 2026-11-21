@@ -164,7 +164,7 @@ extension OnboardingAISetupModel {
         let modelTarget: ModelTarget?
 
         func handoff(for kind: String) -> OnboardingDashboardHandoff {
-            kind == "existing-model" && self.modelTarget != .utility ? .dashboard : .custodianOnboarding
+            kind == "existing-model" && self.modelTarget != .utility ? .dashboard : .modelSetup
         }
 
         func verifies(modelRef: String?, modelTarget: ModelTarget?) -> Bool {
@@ -458,7 +458,7 @@ extension OnboardingAISetupModel {
     }
 
     /// True when setup live-verified an already-configured route instead of
-    /// activating a new one. The custodian first-run handoff belongs only to
+    /// activating a new one. The Model Setup handoff belongs only to
     /// fresh activations; verified reopens land on the normal dashboard.
     var verifiedExistingInference: Bool {
         self.phase == .connected(.dashboard)

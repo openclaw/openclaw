@@ -42,7 +42,6 @@ export interface ShellNavigationHost {
   activeSessionKey: string;
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;
-  custodianMinimizeRequestId: number;
   lastConcreteRouteId: RouteId | undefined;
   didConsiderNativeRouteRestore: boolean;
   settingsSearchQuery: string;
@@ -257,9 +256,6 @@ export class ShellNavigationOwner {
   updateRouteState(routeState: ShellRouteState): void {
     this.host.routeState = routeState;
     if (routeState.routeId !== undefined) {
-      if (this.host.lastConcreteRouteId === "custodian" && routeState.routeId !== "custodian") {
-        this.host.custodianMinimizeRequestId += 1;
-      }
       this.host.lastConcreteRouteId = routeState.routeId;
     }
     const committedRouteId = routeState.committedRouteId;

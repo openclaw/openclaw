@@ -732,7 +732,7 @@ describe("renderModelSetup", () => {
         if (mode === "utility") {
           expect(text(success)).toContain("Setup & utility model ready");
           expect(text(success)).not.toContain("Active model");
-          expect(text(success)).not.toContain("Back to Models");
+          expect(text(success)).toContain("Back to Models");
           done.click();
           expect(onOpenSetupAssistant).toHaveBeenCalledOnce();
           expect(onOpenChat).not.toHaveBeenCalled();
@@ -784,7 +784,7 @@ describe("renderModelSetup", () => {
     const container = mount({ ...firstRunProps(), onOpenChat });
 
     const continueButton = [...container.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Continue setup",
+      (button) => button.textContent?.trim() === "Start talking to your agent",
     );
     expect(continueButton).toBeDefined();
     continueButton?.click();
@@ -796,7 +796,7 @@ describe("renderModelSetup", () => {
     });
     expect(
       [...freshSuccess.querySelectorAll("button")].filter(
-        (button) => button.textContent?.trim() === "Continue setup",
+        (button) => button.textContent?.trim() === "Start talking to your agent",
       ),
     ).toHaveLength(1);
     expect(freshSuccess.textContent).not.toContain("Open Chat");

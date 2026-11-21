@@ -33,6 +33,8 @@ export type ModelSetupViewProps = Omit<
   IconProps & {
     detectionIdentity: () => ModelSetupDetection | undefined;
     login?: JSX.Element;
+    automaticSetup?: JSX.Element;
+    automaticVisible?: boolean;
     wizardBusy?: boolean;
     revision?: () => unknown;
   };

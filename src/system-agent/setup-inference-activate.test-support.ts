@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
+import type { SystemAgentSetupAuthStartParams } from "../../packages/gateway-protocol/src/schema/openclaw.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
@@ -63,7 +64,7 @@ type RunParams = Parameters<typeof embeddedAgent.runEmbeddedAgent>[0];
 
 export function setupLoginSession(
   config: () => OpenClawConfig,
-  params: { sessionId: string; authChoice: string; agentId?: string },
+  params: SystemAgentSetupAuthStartParams,
   clientOptions: Pick<GatewayClient, "connId" | "connectionSignal"> = { connId: params.sessionId },
 ) {
   const tracker = createWizardSessionTracker();
@@ -158,6 +159,7 @@ export async function fixture(
     profiles?: ProviderAuthResult["profiles"];
     addProviderDuringLogin?: boolean;
     fresh?: boolean;
+    skipBootstrap?: boolean;
     surface?: "cli" | "gateway";
     secretRef?: boolean;
     signal?: AbortSignal;
@@ -208,7 +210,7 @@ export async function fixture(
         ...(options.primaryModel
           ? { model: { primary: options.primaryModel, fallbacks: ["stable/fallback"] } }
           : {}),
-        skipBootstrap: true,
+        skipBootstrap: options.skipBootstrap ?? true,
         models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
       },
     },

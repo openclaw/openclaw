@@ -2,6 +2,7 @@ import { createSignal, onSettled } from "solid-js";
 import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
+  ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -19,7 +20,11 @@ import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  resolveLoginSelection,
+  resolveVerifiedLoginStarter,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import { hasProviderAccounts } from "./profiles-view.tsx";
 import "../../styles/model-providers.css";
@@ -39,6 +44,8 @@ export function createModelProviderLogin(options: {
   onApiKey?: (provider: string) => void;
   getManualProviders?: () => SystemAgentSetupDetectResult["manualProviders"];
   onManualProvider?: (authChoice: string) => void;
+  /** A first-run caller can own model activation; account-only login stays here. */
+  getSetupAuthHandler?: () => ((choice: ProviderLoginOption) => void) | undefined;
 }) {
   let publish: (() => void) | undefined;
   const notify = () => publish?.();
@@ -438,9 +445,15 @@ export function createModelProviderLogin(options: {
           options.onManualProvider?.(selected.id);
           return;
         }
+        const selectingModel = picker.allowSetup && selected.requiresSetup;
+        const setupAuth = selectingModel ? options.getSetupAuthHandler?.() : undefined;
+        if (setupAuth) {
+          reset();
+          setupAuth({ ...selected, kind: selected.kind });
+          return;
+        }
         authProviderId = canonicalModelAuthProviderId(selected.authProvider);
         currentPicker = null;
-        const selectingModel = picker.allowSetup && selected.requiresSetup;
         loginMode = selectingModel ? "activate" : selected.requiresSetup ? "access" : "auth";
         refreshWarning = null;
         runner.prepareSignIn(selected.kind, selected.label, selected.brandId);
@@ -485,32 +498,17 @@ export function createModelProviderLogin(options: {
   }
 
   function showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
-    const modelRef = completion.modelActivation?.modelRef;
-    if (!modelRef) {
+    const activation = completion.modelActivation;
+    if (!activation?.modelRef) {
       return;
     }
     const { context, agentId } = options.getScope();
-    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
-    const slash = modelRef.indexOf("/");
-    const provider = modelRef.slice(0, slash);
-    const id = modelRef.slice(slash + 1);
-    const known = catalog.models.find((model) => model.provider === provider && model.id === id);
-    verifiedModelRef = modelRef;
-    const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
-    const name = completion.modelActivation?.modelName ?? known?.name;
-    completionModel = recommended
-      ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
-      : name
-        ? { provider, id, name }
-        : undefined;
+    verifiedModelRef = activation.modelRef;
+    completionModel = resolveVerifiedLoginStarter(
+      readAgentModelCatalog(context.gateway.snapshot.client, agentId),
+      authProviderId,
+      activation,
+    );
     notify();
   }
 

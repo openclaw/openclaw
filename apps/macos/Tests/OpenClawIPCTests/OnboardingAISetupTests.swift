@@ -2759,7 +2759,7 @@ struct OnboardingAISetupTests {
             #expect(!model.connected)
             #expect(model.phase == .ready)
         } else {
-            #expect(model.phase == .connected(.custodianOnboarding))
+            #expect(model.phase == .connected(.modelSetup))
             #expect(model.authError == nil)
         }
         let requests = await harness.recorder.snapshot().methods
@@ -2951,7 +2951,7 @@ struct OnboardingAISetupTests {
 
         #expect(model.connected)
         let expected: OnboardingDashboardHandoff = utility || kind != "existing-model"
-            ? .custodianOnboarding : .dashboard
+            ? .modelSetup : .dashboard
         #expect(model.phase == .connected(expected))
         #expect(model.verifiedExistingInference == (expected == .dashboard))
         #expect(handedOff)
@@ -3035,7 +3035,7 @@ struct OnboardingAISetupTests {
         #expect(storedActivationOwner(defaults) == activationOwner)
         #expect(pendingState(defaults) == .completed)
         #expect(view.finish())
-        #expect(handoffs == [.custodianOnboarding])
+        #expect(handoffs == [.modelSetup])
     }
 
     @Test func `managed Gateway restart rejects mismatched persisted transition`() async throws {
@@ -3647,7 +3647,7 @@ struct OnboardingAISetupTests {
         #expect(requests.methods == ["openclaw.setup.verify"])
         #expect(model.connected)
         #expect(model.selectedKind == "existing-model")
-        #expect(model.phase == .connected(utility ? .custodianOnboarding : .dashboard))
+        #expect(model.phase == .connected(utility ? .modelSetup : .dashboard))
         await harness.gateway.shutdown()
     }
 

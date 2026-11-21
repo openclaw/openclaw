@@ -3,6 +3,10 @@ import { en } from "./en.ts";
 
 const enModelSetup = {
   modelSetup: {
+    hatchDraft: "Wake up, my friend!",
+    startTalking: "Start talking to your agent",
+    automaticIntro:
+      "Connect your AI, then keep talking to your own agent. You can get to work right away.",
     discovery: {
       title: "Available models",
       description:
@@ -111,7 +115,7 @@ const enModelSetup = {
       activeModel: "Active model",
       latency: "Verified in {latencyMs} ms",
       openChat: "Start chatting",
-      continueSetup: "Continue setup",
+      continueSetup: "Start talking to your agent",
       stayHere: "Stay in settings",
       configuredModel: "Configured model",
     },
@@ -125,10 +129,10 @@ const enModelSetup = {
       verified: "{modelRef} replied. This model is ready for setup and lightweight tasks.",
       model: "Utility model",
       choosePrimary:
-        "Choose a primary model below for other sessions. Your setup agent stays available.",
+        "Choose a primary model below for other sessions and your agent's first conversation.",
       primaryReady:
         "This model handles setup and lightweight tasks. Other sessions use your primary model.",
-      openAssistant: "Open setup agent",
+      openAssistant: "Connect a primary model",
       repair: "Recheck & repair",
     },
     failure: {

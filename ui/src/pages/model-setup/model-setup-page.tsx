@@ -1,6 +1,7 @@
 import { createMemo } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { ModelProviderLoginView } from "../model-providers/login-view.tsx";
+import { AutomaticSetupCard } from "./automatic-setup-card.tsx";
 import { createModelSetup, type ModelSetupPageProps } from "./model-setup-owner.ts";
 import { ModelSetupView } from "./view.tsx";
 
@@ -13,6 +14,8 @@ export function ModelSetupPageBody(props: ModelSetupPageProps & { host: HTMLElem
       wizardBusy={setup.wizardSaving()}
       revision={setup.revision}
       login={<ModelProviderLoginView controller={setup.login} />}
+      automaticSetup={<AutomaticSetupCard owner={setup.autoSetup} revision={setup.revision} />}
+      automaticVisible={(setup.revision(), setup.autoSetup.supported && !setup.autoSetup.dismissed)}
     />
   );
 }

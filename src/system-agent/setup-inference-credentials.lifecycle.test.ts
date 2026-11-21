@@ -44,6 +44,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
+import { describeSetupFirstAgent } from "./setup-first-agent.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
 import {
   fixture,
@@ -329,6 +330,124 @@ it("activates and restores setup credentials off-thread while preserving later n
     expect(restored.usageStats?.neighbor?.lastUsed).toBe(42);
   });
 });
+
+it.each(["native", "header"])(
+  "provisions the first agent during %s provider sign-in before the UI handoff",
+  async (entrypoint) => {
+    const setup = await fixture({ codex: true, fresh: true, skipBootstrap: false });
+    const selectedModel = "meta/muse-spark-1.3";
+    const choice = setupMuseProvider(setup, selectedModel, {
+      executionEnvironment: "host-only",
+      verifySetup: async () => {},
+    });
+    installRuntime.mockImplementation(async ({ cfg, beforePersistentEffect }) => {
+      await beforePersistentEffect?.();
+      return {
+        installed: true,
+        status: "installed",
+        pluginId: "muse",
+        cfg: {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            entries: { ...cfg.plugins?.entries, muse: { enabled: true } },
+          },
+        },
+      };
+    });
+    vi.mocked(setup.prompter.select).mockResolvedValue("continue");
+    if (entrypoint === "header") {
+      vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
+        choice,
+      ]);
+      const activate = setupExecution.activateGatewaySetupInference;
+      vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
+        setup.runWithMetadata(() => activate(params)),
+      );
+      const login = setupLoginSession(() => setup.config, {
+        sessionId: "first-run-header",
+        authChoice: "meta/muse-code",
+        agentId: "main",
+        selectModel: true,
+        nativeSessionCatalogsEnabled: false,
+      });
+      const initial = await readConfigFileSnapshot();
+      setRuntimeConfigSnapshot(initial.config, initial.sourceConfig);
+      const unsubscribe = registerConfigWriteListener(
+        (event) => {
+          const claim = expectDefined(
+            getRuntimeConfigWriteApplication(event)?.claim(),
+            "application receipt",
+          );
+          void Promise.resolve(claim.prepare?.(() => {})).then(() => {
+            setRuntimeConfigSnapshot(event.runtimeConfig, event.sourceConfig);
+            claim.settle("applied");
+          });
+        },
+        {
+          ownsRuntimeActivationFor: setup.configPath,
+          preCommitRuntimePreflight: async (sourceConfig) => ({
+            runtimeConfig: sourceConfig,
+            compareConfig: sourceConfig,
+          }),
+        },
+      );
+      try {
+        const session = await login.start();
+        let consent = await session.next();
+        while (consent.step?.type === "progress") {
+          consent = await session.next();
+        }
+        expect(consent.step).toMatchObject({
+          type: "select",
+          message: expect.stringContaining("native permissions"),
+        });
+        await session.answer(expectDefined(consent.step, "consent step").id, "continue");
+        await whenAdmittedWizardSessionSettled(session);
+        expect(session.getStatus(), session.getError()).toBe("done");
+        await expect(session.next()).resolves.toMatchObject({
+          modelActivation: {
+            modelRef: selectedModel,
+            firstAgent: {
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              bootstrapPending: true,
+            },
+          },
+        });
+      } finally {
+        await login.cancel();
+        unsubscribe();
+        resetConfigRuntimeState();
+      }
+    } else {
+      const result = await setup.runWithMetadata(() =>
+        activateSetupInference({
+          kind: "provider-auth",
+          authChoice: "muse-code",
+          nativeSessionCatalogsEnabled: false,
+          surface: "gateway",
+          runtime: createNonExitingRuntime(),
+          prompter: setup.prompter,
+        }),
+      );
+      expect(result).toMatchObject({ ok: true, modelRef: selectedModel });
+    }
+    expect((await readConfigFileSnapshot()).sourceConfig.agents?.entries?.main).toMatchObject({
+      name: "main",
+      workspace: setup.workspace,
+      nativeRuntimeConsent: ["muse"],
+    });
+    expect(await fs.readFile(path.join(setup.workspace, "BOOTSTRAP.md"), "utf8")).toContain(
+      "The user's request always comes first.",
+    );
+    await expect(describeSetupFirstAgent({})).resolves.toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      bootstrapPending: true,
+    });
+  },
+);
 
 function museScenario(version = "1.3", selectModel?: boolean, outcome = "success") {
   return {

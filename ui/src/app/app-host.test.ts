@@ -500,17 +500,6 @@ describe("OpenClaw shell route session commits", () => {
     expect(setSessionKey).toHaveBeenCalledExactlyOnceWith("agent:main:session-b");
     expect(calls).toEqual(["agent:main", "session:agent:main:session-b"]);
   });
-
-  it("retains the custodian leave transition through an unresolved route state", () => {
-    const shell = testShell();
-
-    shell.shellNavigation.updateRouteState({ routeId: "custodian" });
-    shell.shellNavigation.updateRouteState({});
-    expect(shell.custodianMinimizeRequestId).toBe(0);
-
-    shell.shellNavigation.updateRouteState({ routeId: "appearance" });
-    expect(shell.custodianMinimizeRequestId).toBe(1);
-  });
 });
 
 describe("OpenClaw shell server preferences", () => {

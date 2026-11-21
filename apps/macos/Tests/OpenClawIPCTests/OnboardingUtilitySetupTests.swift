@@ -20,7 +20,7 @@ struct OnboardingUtilitySetupTests {
             modelActivation: payload.mapValues { AnyCodable($0) },
             activationRejection: nil).get()
         let expected: OnboardingDashboardHandoff = utility || kind != "existing-model"
-            ? .custodianOnboarding : .dashboard
+            ? .modelSetup : .dashboard
 
         #expect(direct.modelTarget == (utility ? .utility : nil))
         #expect(direct.handoff(for: kind) == expected)

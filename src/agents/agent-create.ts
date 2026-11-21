@@ -13,6 +13,7 @@ import {
   withConfigMutationExclusive,
 } from "../config/config.js";
 import type { ReadConfigFileSnapshotForWriteResult } from "../config/io.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { LegacyMainSessionMigrationOutcome } from "../config/sessions/legacy-main-session-migration.contract.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.js";
@@ -136,6 +137,8 @@ type CreateAgentParams = {
   onCommitted?: (result: CreateAgentSuccess & { config: OpenClawConfig }) => void;
   /** Provider cadence resolved from staged onboarding before config publication. */
   proactiveCadenceMs?: number;
+  /** Inference setup schedules the default job only after model application succeeds. */
+  deferProactiveJob?: true;
   provenance?: { createdVia: AgentCreatedVia; creatorAgentId?: string };
 };
 
@@ -384,20 +387,23 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       const committed = await transformConfig<CreateAgentSuccess>({
         afterWrite: { mode: "auto" },
         maxAttempts: 1,
-        writeOptions: {
-          ...params.stagedConfig?.writeSnapshot.writeOptions,
-          ...(params.bootstrapFirstAgent
-            ? { allowedAgentRosterRemovals: [BOOTSTRAP_AGENT_ID] }
-            : {}),
-          assertConfigPathForWrite: () => {
-            params.stagedConfig?.writeSnapshot.writeOptions.assertConfigPathForWrite?.();
-            beforePersistentApply();
+        writeOptions: copyRuntimeConfigWriteApplication(
+          params.stagedConfig?.writeSnapshot.writeOptions,
+          {
+            ...params.stagedConfig?.writeSnapshot.writeOptions,
+            ...(params.bootstrapFirstAgent
+              ? { allowedAgentRosterRemovals: [BOOTSTRAP_AGENT_ID] }
+              : {}),
+            assertConfigPathForWrite: () => {
+              params.stagedConfig?.writeSnapshot.writeOptions.assertConfigPathForWrite?.();
+              beforePersistentApply();
+            },
+            assertBeforePublish: () => {
+              params.stagedConfig?.writeSnapshot.writeOptions.assertBeforePublish?.();
+              params.assertBeforePublish?.();
+            },
           },
-          assertBeforePublish: () => {
-            params.stagedConfig?.writeSnapshot.writeOptions.assertBeforePublish?.();
-            params.assertBeforePublish?.();
-          },
-        },
+        ),
         transform: async (currentConfig, context) => {
           if (
             (params.stagedConfig || Object.hasOwn(params, "expectedConfigHash")) &&
@@ -477,15 +483,13 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           const workspaceDir =
             explicitWorkspace ?? resolveAgentWorkspaceDir(currentConfig, agentId);
           const agentDir = explicitAgentDir ?? resolveAgentDir(currentConfig, agentId);
+          const stagedBase = params.stagedConfig?.config ?? currentConfig;
           const creationBase = bootstrappingFirstAgent
             ? {
-                ...currentConfig,
-                agents: {
-                  ...currentConfig.agents,
-                  entries: {},
-                },
+                ...stagedBase,
+                agents: { ...stagedBase.agents, entries: {} },
               }
-            : (params.stagedConfig?.config ?? currentConfig);
+            : stagedBase;
           let nextConfig = applyAgentConfig(creationBase, {
             agentId,
             name: safeName,
@@ -679,7 +683,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       if (result.status === "created") {
         await recordAgentProvenance(agentId, params.provenance ?? { createdVia: "operator" });
-        if (!params.deferInitialization) {
+        if (!params.deferInitialization && !params.deferProactiveJob) {
           const { provisionDefaultProactiveJob } = await import("../cron/default-proactive-job.js");
           await provisionDefaultProactiveJob(result.config, agentId, {
             cadenceMs: params.proactiveCadenceMs,

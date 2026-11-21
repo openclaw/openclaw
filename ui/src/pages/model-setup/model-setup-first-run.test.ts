@@ -189,7 +189,10 @@ describe("ModelSetupPage first-run inference", () => {
           },
         ],
       ]);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
+      });
     });
   });
 
@@ -224,9 +227,10 @@ describe("ModelSetupPage first-run inference", () => {
       retry.click();
       await waitForElement(page, ".model-setup__verified");
       const continueSetup = [...page.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
-        button.textContent?.includes("Continue setup"),
+        button.textContent?.includes("Start talking to your agent"),
       )!;
       continueSetup.click();
+      // Verification alone never provisions; the handoff opens the ordinary chat.
       expect(context.navigate).toHaveBeenCalledWith("chat");
       expect(request.mock.calls.map(([method]) => method)).toEqual([
         "openclaw.setup.verify",
@@ -296,9 +300,9 @@ describe("ModelSetupPage first-run inference", () => {
             "openclaw.setup.detect",
             "openclaw.setup.verify",
           ]);
-          expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+          // Recovery without the activation reply has no handoff target: open chat.
+          expect(context.navigate).toHaveBeenCalledWith("chat");
         });
-        expect(context.navigate).not.toHaveBeenCalledWith("chat");
         activation.resolve(activated(expected, { gatewayRestartRequired: true }));
       } else {
         await waitForFast(() => {
@@ -356,10 +360,10 @@ describe("ModelSetupPage first-run inference", () => {
       }),
       "openclaw.setup.activate.start": (params) => {
         const parameters = requestParameters(params);
-        if (!("modelRef" in parameters)) {
+        if (!("modelRef" in parameters) || typeof parameters.modelRef !== "string") {
           throw new Error("Model activation is missing its model reference.");
         }
-        return { done: true, status: "done", modelActivation: { modelRef: parameters.modelRef } };
+        return activated(parameters.modelRef);
       },
     });
     const { page } = await mountDetection(
@@ -559,8 +563,9 @@ describe("ModelSetupPage first-run application recovery", () => {
         "openclaw.setup.detect",
         "openclaw.setup.activate.start",
       ]);
-      expect(relaunched.context.navigate).toHaveBeenCalledWith("custodian", {
-        search: "?onboarding=1",
+      expect(relaunched.context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
       });
     });
     expect(original.request).toHaveBeenCalledOnce();
@@ -620,7 +625,10 @@ describe("ModelSetupPage first-run application recovery", () => {
 
     await waitForFast(() => {
       expect(activationCount).toBe(2);
-      expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
+      expect(context.navigate).toHaveBeenCalledWith("chat", {
+        pathname: "/openclaw/chat/main",
+        search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
+      });
     });
     resolveFirstActivation?.(activated("openai/new", { gatewayRestartRequired: true }));
   });

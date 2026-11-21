@@ -19,9 +19,12 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { createContext, mountPage } from "./test-helpers/page.test-support.ts";
 import type { TestModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
-const onboarding = { search: "?onboarding=1" };
+const onboarding = {
+  pathname: "/openclaw/chat/main",
+  search: "?__openclawComposerFocus=1&draft=Wake+up%2C+my+friend%21",
+};
 export const waitForOnboarding = (context: Pick<ApplicationContext, "navigate">) =>
-  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("custodian", onboarding));
+  waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("chat", onboarding));
 
 export const missingWizardError = () =>
   new GatewayRequestError({
@@ -59,7 +62,15 @@ export function activated(
   modelRef: string,
   details: Partial<NonNullable<WizardNextResult["modelActivation"]>> = {},
 ) {
-  return { done: true, status: "done" as const, modelActivation: { modelRef, ...details } };
+  return {
+    done: true,
+    status: "done" as const,
+    modelActivation: {
+      modelRef,
+      firstAgent: { agentId: "main", sessionKey: "agent:main:main", bootstrapPending: true },
+      ...details,
+    },
+  };
 }
 
 export const runningStep = (step: NonNullable<WizardNextResult["step"]>) => ({

@@ -21,6 +21,7 @@ import type { FirstRunSetup } from "./first-run-setup.ts";
 import {
   MODEL_SETUP_AUTH_START_TIMEOUT_MS,
   MODEL_SETUP_WIZARD_NEXT_TIMEOUT_MS,
+  type ModelSetupActivationPreferences,
   type ModelSetupWizardResult,
   type ModelSetupWizardRecovery,
   type ModelSetupWizardState,
@@ -196,9 +197,7 @@ export class ModelSetupWizardRunner {
       ModelSetupWizardStartMethod,
       "openclaw.setup.activate.start" | "openclaw.setup.runtime.start" | "mcp.authLogin"
     > = "openclaw.setup.auth.start",
-    preferences: Pick<SystemAgentSetupActivateParams, "nativeSessionCatalogsEnabled"> & {
-      selectModel?: true;
-    } = {},
+    preferences: ModelSetupActivationPreferences = {},
     modelTarget?: "utility",
   ): Promise<ModelSetupWizardCompletion | null> {
     return this.startSession(authChoice, startMethod, {
@@ -263,7 +262,8 @@ export class ModelSetupWizardRunner {
         startMethod,
         "kind" in params
           ? params
-          : startMethod === "openclaw.setup.auth.start" && "authChoice" in params
+          : (startMethod === "openclaw.setup.auth.start" || startMethod === "models.authLogin") &&
+              "authChoice" in params
             ? {
                 ...params,
                 kind: "provider-auth",

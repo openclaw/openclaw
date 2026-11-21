@@ -8,23 +8,22 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { initialWizardValue } from "../model-setup/state.ts";
 import {
   ModelSetupWizardRunner,
   type ModelSetupWizardCompletion,
 } from "../model-setup/wizard-runner.ts";
-import type { CustodianConfiguredInferenceState } from "./custodian-session-variant.ts";
 
 export type { SetupAutoCandidate, SetupAutoResult };
 
 const DISMISSED_KEY = "openclaw.custodian.setup-dismissed.v1:";
 
 /** Connection-owned first-run setup. The Gateway owns selection and verification. */
-export class CustodianAutoSetup {
+export class AutomaticModelSetup {
   result: SetupAutoResult | null = null;
   pending = false;
+  cancelling = false;
   error: string | null = null;
   dismissed = false;
   supported = false;
@@ -66,41 +65,6 @@ export class CustodianAutoSetup {
 
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";
-  }
-
-  get configuredInferenceState(): CustodianConfiguredInferenceState {
-    if (this.blocksGreeting) {
-      return "unresolved";
-    }
-    if (this.supported && this.ready) {
-      return "ready";
-    }
-    const context = this.context;
-    if (!context || context.gateway.snapshot.phase !== "connected") {
-      return "unresolved";
-    }
-    const agentsList = context.agents.state.agentsList;
-    if (!agentsList) {
-      return "unresolved";
-    }
-    const selectedId = normalizeAgentId(
-      context.gateway.snapshot.assistantAgentId ?? agentsList.defaultId ?? "",
-    );
-    const selectedAgent = agentsList.agents.find(
-      (agent) => normalizeAgentId(agent.id) === selectedId,
-    );
-    if (!selectedAgent) {
-      return "unresolved";
-    }
-    return selectedAgent.model?.primary?.trim()
-      ? "ready"
-      : selectedAgent.utilityModel?.trim()
-        ? "utility"
-        : "required";
-  }
-
-  get blocksGreeting(): boolean {
-    return this.supported && (!this.ready || this.pending);
   }
 
   synchronize(context: ApplicationContext, onboarding: boolean, ownerKey: string): void {
@@ -188,7 +152,7 @@ export class CustodianAutoSetup {
     await this.run(async (client) => {
       const result = await client.request<SystemAgentSetupActivateResult>(
         "openclaw.setup.activate",
-        { kind: candidate.kind },
+        { kind: candidate.kind, modelRef: candidate.modelRef },
         { timeoutMs: null },
       );
       if (!result.ok) {
@@ -197,6 +161,7 @@ export class CustodianAutoSetup {
       return {
         ...previous,
         status: "activated",
+        firstAgent: result.firstAgent,
         selected: { ...candidate, modelRef: result.modelRef ?? candidate.modelRef },
         alternatives: [
           ...(previous.selected ? [previous.selected] : []),
@@ -215,7 +180,7 @@ export class CustodianAutoSetup {
     this.wizardStepId = null;
     this.wizard.prepareSignIn("oauth", signIn.label);
     const epoch = this.epoch;
-    const completion = await this.wizard.start(signIn.authOptionId);
+    const completion = await this.wizard.start(signIn.authOptionId, "openclaw.setup.auth.start");
     if (epoch === this.epoch && completion) {
       await this.finishSignIn(completion);
     }
@@ -238,6 +203,11 @@ export class CustodianAutoSetup {
   }
 
   async cancelWizard(): Promise<void> {
+    if (this.cancelling) {
+      return;
+    }
+    this.cancelling = true;
+    this.changed();
     const epoch = this.epoch;
     try {
       await this.wizard.requestCancellation();
@@ -245,7 +215,17 @@ export class CustodianAutoSetup {
       if (epoch === this.epoch) {
         this.reportError(error);
       }
+    } finally {
+      this.cancelling = false;
+      this.changed();
     }
+  }
+
+  dispose(): void {
+    this.epoch += 1;
+    this.client = null;
+    this.context = null;
+    this.wizard.close({ retireOwner: true });
   }
 
   reportError(error: unknown): void {

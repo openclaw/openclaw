@@ -1,0 +1,10 @@
+# Gateway-decided first-agent setup must prove consent rejection, verification/cancellation,
+# real config application/rollback, canonical workspace bootstrap and existing-agent
+# preservation for host-only Codex activation, plus the provider sign-in and header
+# models.authLogin entrypoints. Existing installs, CLI activation and configured primaries
+# must stay unprovisioned, and the read-only handoff target must fail open (unknown agent,
+# unreadable config, utility-only) at the real Gateway boundary. Browser coverage keeps the
+# unsent, focused starter handoff and the ordinary-chat fallback. Optional check-in and
+# post-publication bookkeeping failures must not fail an applied setup.
+# Measured net test growth over main: 478; allocation covers the 78-line excess.
+78

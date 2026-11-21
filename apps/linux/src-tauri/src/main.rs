@@ -161,7 +161,7 @@ fn is_active_onboarding_url(url: &Url) -> bool {
         .find(|(key, _)| key == query_key)
         .is_some_and(|(_, value)| {
             if query_key == "firstRun" {
-                return value == "1" || value == "explicit";
+                return value == "1" || value == "explicit" || value == "auto";
             }
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
@@ -632,21 +632,17 @@ impl NavigationState {
         let mut url =
             Url::parse(target).map_err(|_| "The Gateway returned an invalid URL.".to_string())?;
         if self.onboarding_pending {
-            // Setup owns inference before chat; preserve Gateway base paths and fragment auth.
-            // Saved first-run links may use either marker; new links use explicit.
-            let (path, key, value) = if self.automatic_setup {
-                (["custodian"].as_slice(), "onboarding", "1")
+            // Model Setup owns inference before chat; keep Gateway base paths and fragment auth.
+            // Automatic first run detects and verifies a connection; manual uses explicit.
+            let first_run = if self.automatic_setup {
+                "auto"
             } else {
-                (
-                    ["settings", "model-setup"].as_slice(),
-                    "firstRun",
-                    "explicit",
-                )
+                "explicit"
             };
             url.path_segments_mut()
                 .map_err(|_| "The Gateway returned an invalid URL.".to_string())?
                 .pop_if_empty()
-                .extend(path);
+                .extend(["settings", "model-setup"]);
             let existing_query = url
                 .query_pairs()
                 .filter(|(key, _)| key != "firstRun")
@@ -655,7 +651,7 @@ impl NavigationState {
             url.query_pairs_mut()
                 .clear()
                 .extend_pairs(existing_query)
-                .append_pair(key, value);
+                .append_pair("firstRun", first_run);
             self.onboarding_pending = false;
             self.automatic_setup = false;
         }
@@ -2293,6 +2289,7 @@ mod navigation_tests {
                 "http://127.0.0.1/openclaw/settings/model-setup/?tab=ai&firstRun=1#token=redacted",
                 true,
             ),
+            ("http://127.0.0.1/settings/model-setup?firstRun=auto", true),
             ("http://127.0.0.1/settings/model-setup", false),
             ("http://127.0.0.1/settings/model-setup?firstRun=0", false),
             (
@@ -2901,15 +2898,15 @@ mod navigation_tests {
     }
 
     #[test]
-    fn automatic_first_run_opens_custodian_once_preserving_dashboard_auth() {
+    fn automatic_first_run_opens_model_setup_once_preserving_dashboard_auth() {
         let mut navigation = NavigationState::default();
         navigation.mark_onboarding_pending();
         navigation.automatic_setup = true;
         let first = navigation
             .prepare_dashboard_url("http://127.0.0.1:18789/control/?foo=bar#token=fixture")
             .unwrap();
-        assert_eq!(first.path(), "/control/custodian");
-        assert_eq!(first.query(), Some("foo=bar&onboarding=1"));
+        assert_eq!(first.path(), "/control/settings/model-setup");
+        assert_eq!(first.query(), Some("foo=bar&firstRun=auto"));
         assert_eq!(first.fragment(), Some("token=fixture"));
         assert!(is_active_onboarding_url(&first));
         let next = navigation
@@ -2922,7 +2919,7 @@ mod navigation_tests {
     #[test]
     fn fresh_isolated_runtime_enters_shared_automatic_setup_on_first_navigation() {
         for (fresh, isolated_profile, expected_path) in [
-            (Ok(true), true, "/control/custodian"),
+            (Ok(true), true, "/control/settings/model-setup"),
             (Ok(false), true, "/control/"),
             (Err("Saved Gateways unavailable".into()), true, "/control/"),
             (Ok(true), false, "/control/"),
@@ -2936,7 +2933,7 @@ mod navigation_tests {
             assert_eq!(url.fragment(), Some("token=fixture"));
             assert_eq!(
                 url.query(),
-                (expected_path == "/control/custodian").then_some("onboarding=1")
+                (expected_path == "/control/settings/model-setup").then_some("firstRun=auto")
             );
             let next = navigation
                 .prepare_dashboard_url("http://127.0.0.1:19876/control/")

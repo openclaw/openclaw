@@ -1,3 +1,4 @@
+import type { SetupFirstAgent } from "../../../../packages/gateway-protocol/src/schema/setup-inference.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SystemAgentSetupActivateResult,
@@ -9,6 +10,7 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../../i18n/locales/en-update-actions.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
+import { openFirstAgentConversation } from "./first-agent-handoff.ts";
 import {
   clearFirstRunActivationReceipt,
   persistFirstRunActivationReceipt,
@@ -119,7 +121,7 @@ export function reconcileModelSetupConnection(
   return { kind: unchanged ? "unchanged" : "changed", connection };
 }
 
-export type ModelSetupRouteData = { firstRun: boolean };
+export type ModelSetupRouteData = { firstRun: boolean; automatic?: boolean };
 
 type SetupOutcome<T> = ModelSetupTaskResult<T> | undefined;
 
@@ -133,6 +135,7 @@ type FirstRunActivation = {
   deadlineMs: number;
   receipt: FirstRunActivationReceipt | null;
   outcome: "pending" | "verified" | "rejected" | "missing";
+  firstAgent?: SetupFirstAgent;
 };
 
 type FirstRunSetupHost = {
@@ -140,6 +143,7 @@ type FirstRunSetupHost = {
   routeData: () => ModelSetupRouteData | undefined;
   pageState: () => ModelSetupPageState;
   activationState: () => ModelSetupActivationState;
+  verifyState: () => ModelSetupVerifyState;
   actionsDisabled: () => boolean;
   canUseSetup: (client: GatewayBrowserClient | null) => boolean;
   canVerify: (client: GatewayBrowserClient | null) => boolean;
@@ -420,6 +424,7 @@ export class FirstRunSetup {
     activation.modelRef = modelActivation.modelRef;
     activation.modelTarget = modelActivation.modelTarget;
     activation.outcome = "verified";
+    activation.firstAgent = modelActivation.firstAgent;
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
   }
 
@@ -443,7 +448,7 @@ export class FirstRunSetup {
       this.host.setActivationState({ phase: "testing", targetId });
       this.host.setRefreshWarning(refreshError ?? t("updates.dialog.restarting"));
     } else if (!refreshError) {
-      this.completeNavigation();
+      this.completeNavigation(result.firstAgent, result.modelTarget);
     }
   }
 
@@ -480,7 +485,7 @@ export class FirstRunSetup {
       outcome.value.modelRef === modelRef &&
       outcome.value.modelTarget === pending.modelTarget
     ) {
-      this.completeNavigation();
+      this.completeNavigation(pending.firstAgent, outcome.value.modelTarget);
     } else if (outcome.value.ok) {
       this.showUnresolved();
     }
@@ -539,35 +544,36 @@ export class FirstRunSetup {
   }
 
   continueSetup(modelTarget?: "utility"): void {
-    if (!this.pending) {
-      const page = this.host.pageState();
-      const activation = this.host.activationState();
-      if (
-        modelTarget === "utility" ||
-        (activation.phase === "success" && activation.modelTarget === "utility") ||
-        (page.phase === "ready" && page.result.setupModel)
-      ) {
-        this.host
-          .context()
-          .navigate(
-            "custodian",
-            page.phase === "ready" && !page.result.configuredModel
-              ? { search: "?onboarding=1" }
-              : {},
-          );
-      } else {
+    if (modelTarget === "utility") {
+      this.host.setActivationState({ phase: "idle" });
+      this.host.notify();
+    } else if (this.pending?.outcome === "verified" && this.ownsActivation()) {
+      this.completeNavigation(this.pending.firstAgent, this.pending.modelTarget);
+    } else if (!this.pending) {
+      const verified = this.host.verifyState();
+      if (verified.phase === "ok") {
+        this.completeNavigation(undefined, verified.modelTarget);
+      } else if (!this.host.routeData()?.firstRun) {
         this.host.context().navigate("chat");
       }
-    } else if (this.pending.outcome === "verified" && this.ownsActivation()) {
-      this.completeNavigation();
     }
   }
 
-  private completeNavigation(): void {
+  private completeNavigation(firstAgent?: SetupFirstAgent, modelTarget?: "utility"): void {
     this.pending = null;
     clearFirstRunActivationReceipt();
     this.host.setRefreshWarning(null);
-    this.host.context().navigate("custodian", { search: "?onboarding=1" });
+    if (modelTarget === "utility") {
+      // Preserve the visible success receipt; its action returns to primary setup.
+      this.host.notify();
+      return;
+    }
+    if (firstAgent) {
+      openFirstAgentConversation(this.host.context(), firstAgent);
+    } else {
+      // Setup succeeded; the agent handoff is best effort, never a failure.
+      this.host.context().navigate("chat");
+    }
   }
 
   private showUnresolved(): void {
@@ -612,7 +618,7 @@ export class FirstRunSetup {
     if (!this.pending) {
       this.host.context().navigate("chat");
     } else if (this.pending.modelRef === modelRef && this.pending.modelTarget === modelTarget) {
-      this.completeNavigation();
+      this.completeNavigation(this.pending.firstAgent, modelTarget);
     } else {
       this.showUnresolved();
     }

@@ -86,6 +86,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
   let codexFailed = false;
   let shared = false;
   let authOptions = detection.authOptions;
+  let firstAgent: SystemAgentSetupAutoResult["firstAgent"];
   const result = (
     status: SystemAgentSetupAutoResult["status"],
     selected?: SetupInferenceCandidate,
@@ -100,6 +101,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       : undefined;
     return {
       status,
+      ...(firstAgent ? { firstAgent } : {}),
       ...(selected
         ? { selected: { ...present(selected), ...(shared ? { shared: true } : {}) } }
         : {}),
@@ -118,6 +120,9 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
     const config = initialSnapshot.runtimeConfig ?? initialSnapshot.config;
     const agentId = resolveAmbientOwnerAgentId(config);
     const modelRef = resolveConfiguredPrimaryModelForAgent({ cfg: config, agentId });
+    // Already configured stays read-only; the handoff target is best effort.
+    const { describeSetupFirstAgent } = await import("../../system-agent/setup-first-agent.js");
+    firstAgent = await describeSetupFirstAgent({ agentId });
     const ref = modelRef ? parseProviderModelRef(modelRef) : undefined;
     const appServer = config.plugins?.entries?.codex?.config?.appServer;
     shared = Boolean(
@@ -188,6 +193,7 @@ async function autoSetup(assertAuthority: () => void): Promise<SystemAgentSetupA
       };
     });
     if (activation.ok) {
+      firstAgent = activation.firstAgent;
       candidate.modelRef = activation.modelRef;
       if (candidate.kind === "codex-cli") {
         shared = true;

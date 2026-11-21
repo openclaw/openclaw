@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type {
+  SetupFirstAgent,
   SetupInferenceActivationRejection,
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
@@ -149,6 +150,8 @@ export type ActivateSetupInferenceResult =
       lines: string[];
       modelName?: string;
       gatewayRestartRequired?: true;
+      /** Gateway setup only: the regular agent whose Home continues setup. */
+      firstAgent?: SetupFirstAgent;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
       disposition?: SetupInferenceActivationRejection["disposition"];

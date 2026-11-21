@@ -47,7 +47,6 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       pageAgentId: { default: "" },
       pageRouteId: { default: "chat" },
       pageRouteFailed: { default: false, type: Boolean },
-      minimizeRequestId: { default: 0, type: Number },
       store: { default: undefined, attribute: false },
     },
     propertyChanged: (host) => controls.get(host)?.inputsChanged(),

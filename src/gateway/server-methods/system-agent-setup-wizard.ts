@@ -165,6 +165,7 @@ export async function startSetupActivationWizard(params: {
             throw new Error(result.error);
           }
           runnerSession.setModelActivation({
+            ...(result.firstAgent ? { firstAgent: result.firstAgent } : {}),
             modelRef: result.modelRef,
             ...(result.modelName ? { modelName: result.modelName } : {}),
             ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),

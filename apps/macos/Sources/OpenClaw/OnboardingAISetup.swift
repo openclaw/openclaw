@@ -492,7 +492,7 @@ final class OnboardingAISetupModel {
         guard self.pendingActivationOwner == nil else { return }
         finishConnected(
             kind: "existing-model",
-            handoff: modelTarget == .utility ? .custodianOnboarding : .dashboard)
+            handoff: modelTarget == .utility ? .modelSetup : .dashboard)
     }
 
     /// Clear only the completed receipt created by this setup attempt.
@@ -1633,7 +1633,7 @@ extension OnboardingAISetupModel {
     private func finishConnected(
         kind: String,
         activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner? = nil,
-        handoff: OnboardingDashboardHandoff = .custodianOnboarding)
+        handoff: OnboardingDashboardHandoff = .modelSetup)
     {
         let routeIdentity = self.routeIdentityProvider()?.trimmingCharacters(in: .whitespacesAndNewlines)
         let completedReceipt = OnboardingSystemAgentResumeStore.markCompleted(

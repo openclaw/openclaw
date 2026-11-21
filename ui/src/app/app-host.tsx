@@ -105,7 +105,6 @@ export class ShellOwner
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
-  custodianMinimizeRequestId = 0;
   lastConcreteRouteId: RouteId | undefined;
   lastLocalePrefSignature: string | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;

@@ -11,6 +11,7 @@ import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { createModelProviderLogin } from "../model-providers/login-controller.ts";
+import { AutomaticModelSetup } from "./automatic-setup.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -31,8 +32,10 @@ import { createModelSetupDetectRequest, createModelSetupVerifyRequest } from "./
 import {
   activationTargetId,
   createModelSetupState,
+  modelSetupActivationPreferences,
   updateModelSetupWizardDraft,
   type ModelSetupActivationState,
+  type ModelSetupAuthOption,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
@@ -59,7 +62,11 @@ export function createModelSetup(
       projection.invalidate();
     }
   };
+  const autoSetup = new AutomaticModelSetup(notify);
   const actionsDisabled = (): boolean =>
+    autoSetup.pending ||
+    autoSetup.wizard.state.phase === "starting" ||
+    autoSetup.wizard.state.phase === "step" ||
     login.busy ||
     nativeModels.active ||
     state.activationState.phase === "testing" ||
@@ -92,6 +99,7 @@ export function createModelSetup(
     routeData,
     pageState: () => state.pageState,
     activationState: () => state.activationState,
+    verifyState: () => state.verifyState,
     actionsDisabled: () => actionsDisabled() || state.detectionRequest !== null,
     canUseSetup,
     canVerify,
@@ -134,6 +142,8 @@ export function createModelSetup(
       manualProviderRevealPending = true;
       selectManualProvider(authChoice);
     },
+    getSetupAuthHandler: () =>
+      routeData()?.firstRun ? (option) => startAuth(option, "models.authLogin") : undefined,
     canStart: () =>
       canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
     canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
@@ -237,6 +247,11 @@ export function createModelSetup(
       return;
     }
     const snapshot = context.gateway.snapshot;
+    autoSetup.synchronize(
+      context,
+      currentRoute.automatic === true && hasOperatorAdminAccess(snapshot.hello?.auth ?? null),
+      `${context.gateway.connectionRevision}:${snapshot.hello?.auth?.recoveryScope ?? ""}`,
+    );
     const previous = observedConnection;
     const observation = reconcileModelSetupConnection(
       previous,
@@ -377,16 +392,29 @@ export function createModelSetup(
     state.activationState = { phase: "testing", targetId };
     pendingPrepareOption = null;
     state.wizardMode = "activate";
-    await runWizardMutation(() =>
-      wizard.activate({ ...params, ...nativeSessionCatalogPreference() }, targetId),
-    );
+    await runWizardMutation(() => wizard.activate({ ...params, ...preferences() }, targetId));
   }
 
-  function nativeSessionCatalogPreference(): { nativeSessionCatalogsEnabled?: boolean } {
-    return state.pageState.phase === "ready" &&
-      state.pageState.result.nativeSessionCatalogPreferenceRequired === true
-      ? { nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled }
-      : {};
+  const preferences = () => modelSetupActivationPreferences(state);
+
+  function startAuth(
+    option: ModelSetupAuthOption,
+    method: "models.authLogin" | "openclaw.setup.auth.start",
+  ): void {
+    wizard.prepareSignIn(option.kind, option.label, option.brandId);
+    pendingPrepareOption = null;
+    state.wizardMode = "auth";
+    void runWizardMutation(() =>
+      wizard.start(
+        option.id,
+        method,
+        {
+          ...preferences(),
+          ...(method === "models.authLogin" ? { selectModel: true } : {}),
+        },
+        option.modelTarget,
+      ),
+    );
   }
 
   function connectManual(): void {
@@ -482,7 +510,7 @@ export function createModelSetup(
         wizardMutationActive = false;
         wizardSaving.retire();
         const prepareOption = pendingPrepareOption;
-        const catalogPreference = nativeSessionCatalogPreference();
+        const catalogPreference = preferences();
         pendingPrepareOption = null;
         await completeModelSetupWizard(
           { state, firstRun, wizard, detect, activate },
@@ -615,19 +643,7 @@ export function createModelSetup(
           candidateActivation(candidate),
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
-      onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
-        wizard.prepareSignIn(option.kind, option.label, option.brandId);
-        pendingPrepareOption = null;
-        state.wizardMode = "auth";
-        void runWizardMutation(() =>
-          wizard.start(
-            option.id,
-            "openclaw.setup.auth.start",
-            nativeSessionCatalogPreference(),
-            option.modelTarget,
-          ),
-        );
-      },
+      onStartAuth: (option: ModelSetupAuthOption) => startAuth(option, "openclaw.setup.auth.start"),
       onStartPrepare: (option: ModelSetupPrepareOption) => {
         pendingPrepareOption = option;
         state.wizardMode = "prepare";
@@ -644,7 +660,8 @@ export function createModelSetup(
       },
       onIconError: iconLoader.invalidate,
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
-      onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
+      onOpenSetupAssistant: () =>
+        props.embedded ? props.onClose?.() : firstRun.continueSetup("utility"),
       onSuccessClose: () => {
         if (props.embedded) {
           props.onClose?.();
@@ -663,7 +680,8 @@ export function createModelSetup(
     };
   };
   const synchronizeCurrentGateway = () => {
-    synchronizeGateway(routeData());
+    const currentRoute = routeData();
+    synchronizeGateway(currentRoute);
     login.synchronizePresentation();
     notify();
   };
@@ -671,7 +689,9 @@ export function createModelSetup(
     () => {
       const currentRoute = routeData();
       return [
-        currentRoute ? { firstRun: currentRoute.firstRun } : undefined,
+        currentRoute
+          ? { firstRun: currentRoute.firstRun, automatic: currentRoute.automatic }
+          : undefined,
         agentSelection(currentRoute),
       ] as const;
     },
@@ -698,12 +718,14 @@ export function createModelSetup(
       stopGateway();
       stopFirstRun();
       firstRun.dispose();
+      autoSetup.dispose();
       retireWizardMutation();
       iconLoader.reset();
       void wizard.cancel();
     };
   });
   return {
+    autoSetup,
     view,
     login,
     wizardSaving: wizardSaving.saving,
