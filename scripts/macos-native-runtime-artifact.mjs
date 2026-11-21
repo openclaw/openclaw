@@ -11,7 +11,8 @@ function verifyRevision(root, revision) {
   assert.equal(info.commit, revision, "Native test runtime must match the selected checkout");
 }
 
-export function packNativeRuntime(root, directory, revision) {
+// native-runtime-bundled-recovery-v1: selected-source capability for complete build reuse.
+export function packNativeRuntime(root, directory, revision, { bundledRecovery = false } = {}) {
   verifyRevision(root, revision);
   const entries = ["dist"];
   if (fs.existsSync(path.join(root, "dist-runtime"))) {
@@ -24,17 +25,23 @@ export function packNativeRuntime(root, directory, revision) {
     }
   }
   fs.mkdirSync(directory, { recursive: true });
-  // The policy CLI uses core workers, not UI, plugins, or the sealed remote-worker deployment.
-  // tar preserves executable bits; native dependencies stay on their target platform.
+  // Policy-only jobs omit UI/plugins/deployment output. Recovery packaging needs all of them,
+  // including the sealed worker's lock-pinned cross-platform assets, never host node_modules.
+  // tar preserves executable bits and relative overlay links.
   execFileSync(
     "tar",
     [
       "-czf",
       path.join(directory, "runtime.tgz"),
-      "--exclude=dist/extensions",
-      "--exclude=dist/control-ui",
-      "--exclude=dist/worker",
-      "--exclude=dist-runtime/extensions",
+      "--exclude=node_modules",
+      ...(bundledRecovery
+        ? []
+        : [
+            "--exclude=dist/extensions",
+            "--exclude=dist/control-ui",
+            "--exclude=dist/worker",
+            "--exclude=dist-runtime/extensions",
+          ]),
       ...entries.toSorted(),
     ],
     { cwd: root, stdio: "inherit" },
@@ -60,13 +67,22 @@ export function restoreNativeRuntime(root, directory, revision) {
 
 if (import.meta.main) {
   const [operation, target, revision, ...extra] = process.argv.slice(2);
-  if (!target || !revision || extra.length || !["pack", "restore"].includes(operation)) {
-    throw new Error("Usage: macos-native-runtime-artifact.mjs <pack|restore> <directory> <SHA>");
+  if (
+    !target ||
+    !revision ||
+    extra.length ||
+    !["pack", "pack-recovery", "restore"].includes(operation)
+  ) {
+    throw new Error(
+      "Usage: macos-native-runtime-artifact.mjs <pack|pack-recovery|restore> <directory> <SHA>",
+    );
   }
   const root = process.cwd();
   const directory = path.resolve(target);
-  if (operation === "pack") {
-    packNativeRuntime(root, directory, revision);
+  if (operation !== "restore") {
+    packNativeRuntime(root, directory, revision, {
+      bundledRecovery: operation === "pack-recovery",
+    });
   } else {
     process.stdout.write(`${restoreNativeRuntime(root, directory, revision)}\n`);
   }

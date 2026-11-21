@@ -1,0 +1,2 @@
+# Shared Swift consumers reject producer-only needs references while retaining recovery job wiring.
+6
