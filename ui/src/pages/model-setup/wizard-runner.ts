@@ -556,9 +556,10 @@ export class ModelSetupWizardRunner {
         ? this.options.cancelledMessage()
         : this.options.requestFailedMessage(),
     );
+    // A device-code sign-in falls back to this browser step when its provider has no device code.
     if (
       next.phase === "step" &&
-      session.authKind === "oauth" &&
+      (session.authKind === "oauth" || session.authKind === "device-code") &&
       next.step.type === "text" &&
       next.step.externalUrl
     ) {

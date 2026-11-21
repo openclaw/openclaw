@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loginOption } from "../../test-helpers/model-providers.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { chooseLogin, loginHarness } from "./model-providers-page.login.test-support.ts";
 import { appendPage, unmountPage } from "./model-providers-page.test-support.tsx";
@@ -61,6 +62,107 @@ describe("Models provider login", () => {
       );
     } finally {
       answer.resolve({ done: true, status: "cancelled" });
+      cancel.resolve({ status: "cancelled" });
+      unmountPage(page);
+    }
+  });
+
+  it("reads the browser callback for a device-code sign-in that fell back to a pasted address", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, answer, cancel } = loginHarness({
+      capabilities: [
+        {
+          provider: "example",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            loginOption("example-code", "example", "Example code sign-in", "device-code", {
+              featured: true,
+            }),
+          ],
+        },
+      ],
+    });
+    const originalRequest = request.getMockImplementation()!;
+    let pasteShown = false;
+    request.mockImplementation(async (method) => {
+      if (method !== "wizard.next") {
+        return originalRequest(method);
+      }
+      if (pasteShown) {
+        return answer.promise;
+      }
+      pasteShown = true;
+      return {
+        done: false,
+        status: "running",
+        step: {
+          id: "paste",
+          type: "text",
+          message: "Paste the address your browser opens",
+          externalUrl: "https://provider.example/sign-in",
+        },
+      };
+    });
+    const page = appendPage(context);
+    try {
+      await chooseLogin(page, "Example code sign-in");
+      await waitForSolid(
+        () => {
+          expect(page.querySelector(".wizard-sign-in--paste")).not.toBeNull();
+          // Nothing was pasted, so the second read is the automatic one that sees a callback.
+          expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(2);
+          // The runner reads once a second.
+        },
+        { timeout: 3000 },
+      );
+    } finally {
+      answer.resolve({ done: true, status: "cancelled" });
+      cancel.resolve({ status: "cancelled" });
+      unmountPage(page);
+    }
+  });
+
+  it("starts a fresh sign-in from a typed failure's Start sign-in again action", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { context, request, cancel } = loginHarness({
+      capabilities: [
+        {
+          provider: "example",
+          apiKeySupported: true,
+          quickApiKeySetup: true,
+          loginOptions: [
+            loginOption("example-code", "example", "Example code sign-in", "device-code", {
+              featured: true,
+            }),
+          ],
+        },
+      ],
+    });
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) =>
+      method === "wizard.next"
+        ? {
+            done: true,
+            status: "error",
+            error: "The sign-in code expired before it was approved.",
+            reason: "device_code_expired",
+          }
+        : originalRequest(method),
+    );
+    const starts = () => request.mock.calls.filter(([method]) => method === "models.authLogin");
+    const page = appendPage(context);
+    try {
+      await chooseLogin(page, "Example code sign-in");
+      const startAgain = () =>
+        [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+          (button) => button.textContent?.trim() === "Start sign-in again",
+        );
+      await waitForSolid(() => expect(startAgain()).toBeDefined());
+      expect(starts()).toHaveLength(1);
+      startAgain()!.click();
+      await waitForSolid(() => expect(starts()).toHaveLength(2));
+    } finally {
       cancel.resolve({ status: "cancelled" });
       unmountPage(page);
     }
