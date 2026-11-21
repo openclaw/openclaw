@@ -35,6 +35,8 @@ WebSocket 34 suites / `c4c10bae3232`: 198 declarations / 353 expanded cases, all
 
 Fixture reference survey / `c4c10bae3232`: 58 top-level files checked for references. All four exact-name misses have live consumers through a worker descriptor, a `.js` import, or release-based filenames. Retain them; the survey is not a completed value audit of all 58 fixtures.
 
+OpenClaw ID token startup / `6978b40e9d38`: D1 duplicate startup-wait case, −13 test lines / one case. The retained service case exercises the real saved-binding publisher; exact mismatch/report checks and current-owner lookup preparation remain. The token-startup candidate in the frozen review below is qualified. Boat baseline 16/16 and candidate 15/15; removing only the token check's startup wait makes both original and keeper fail with early acceptance. Production bytes restored before the candidate run. Format, lint, types and independent preservation review passed. Broad scan results are recorded with the PR. No production change or runtime savings claimed.
+
 ## Frozen source census
 
 Census 7c99ae1dd417: owner / support / caller / history / static routing; bounded transitive dependencies. Closed = source-only.
