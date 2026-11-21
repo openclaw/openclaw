@@ -1,5 +1,5 @@
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
-import { isAlias, isNode, parseDocument } from "yaml";
+import { isAlias, isMap, isNode, isScalar, parseDocument } from "yaml";
 import type { MdAst } from "./ast.js";
 import { OcPathEditError } from "./edit-error.js";
 import { replaceMdSource } from "./emit.js";
@@ -22,10 +22,13 @@ export function setMdOcPath(ast: MdAst, path: OcPath, newValue: string): MdAst {
     const prefix = /^[^:\r\n]*:[ \t]*/.exec(source)?.[0];
     // YAML owns the selected value's extent, including block scalars and maps.
     // Normalize lone CR without changing offsets into the original source.
-    const value = parseDocument(source.replace(/\r(?!\n)/g, "\n"), {
+    const { contents } = parseDocument(source.replace(/\r(?!\n)/g, "\n"), {
       prettyErrors: false,
       logLevel: "silent",
-    }).get(existing.key, true);
+    });
+    // The slice starts at the addressed key. YAML can decode its spelling as a boolean or null.
+    const pair = isMap(contents) ? contents.items[0] : undefined;
+    const value = isScalar(pair?.key) && pair.key.source === existing.key ? pair.value : undefined;
     if (prefix === undefined || !isNode(value) || !value.range) {
       throw new OcPathEditError("unresolved");
     }
