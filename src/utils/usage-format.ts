@@ -444,12 +444,19 @@ function resolveAggregateUsageCost<T>(
   return estimate(usage);
 }
 
+/**
+ * An all-zero transport cost is a placeholder; the resolved price owns it, authored zero included.
+ * A sum below the second tier keeps every call in the first tier, so only that sum is exact.
+ */
 function estimateUnpricedAggregateUsageCost(
   usage: NormalizedUsage,
   cost: ModelCostConfig | undefined,
 ): number | undefined {
-  if (usage.cost && cost) {
-    return usage.cost.total;
-  }
-  return cost?.tieredPricing?.length ? undefined : estimateUsageCost({ usage, cost });
+  const secondTierStart = cost?.tieredPricing
+    ?.map((tier) => tier.range[0])
+    .toSorted((a, b) => a - b)[1];
+  const promptTokens = (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
+  return secondTierStart !== undefined && promptTokens >= secondTierStart
+    ? undefined
+    : estimateUsageCost({ usage, cost });
 }

@@ -47,7 +47,9 @@ import {
 import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37-resource-receipts.js";
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
+import { withLegacyWorkspaceBootstrapDeferred } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
 import {
   admitStateSchemaFacts,
   parseStateSchemaContentVersion,
@@ -173,13 +175,25 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     postgres: stateEngineSchema.postgres,
     postgresFragments: stateEngineSchema.postgresFragments,
   };
+  const statePostgresSchemaV40 = {
+    ...statePostgresSchema,
+    postgres: withLegacyApprovalProfile(statePostgresSchema.postgres),
+  };
+  const v39Postgres = withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres);
+  const v39WithoutBootstrapDeferred = withLegacyWorkspaceBootstrapDeferred(v39Postgres);
   const statePostgresSchemaV39 = {
     ...statePostgresSchema,
-    postgres: withLegacyWorkerProvisionSource(statePostgresSchema.postgres),
+    postgres: v39Postgres,
+    // Main builds used both shapes while the numeric state version was 39.
+    postgresWithoutOptionalColumn: {
+      table: "workspace_setup_state",
+      column: "bootstrap_deferred",
+      sql: v39WithoutBootstrapDeferred,
+    },
   };
   const statePostgresSchemaV38 = {
-    ...statePostgresSchemaV39,
-    postgres: withLegacyWorkerRetention(statePostgresSchemaV39.postgres),
+    ...statePostgresSchema,
+    postgres: withLegacyWorkerRetention(v39WithoutBootstrapDeferred),
   };
   const statePostgresSchemaV37 = {
     postgres: withLegacyRepositoryDiskAuthority(statePostgresSchemaV38.postgres),
@@ -397,14 +411,22 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
-      schema: statePostgresSchema,
-      sql: `ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
+      schema: statePostgresSchemaV40,
+      sql: `ALTER TABLE workspace_setup_state ADD COLUMN IF NOT EXISTS bootstrap_deferred bigint;
+        ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
         UPDATE worker_environments
         SET provision_source_json = '{"kind":"unavailable"}'
         WHERE (state IN ('requested', 'provisioning') AND lease_id IS NULL
           OR state = 'bootstrapping' AND owner_epoch = 0)
           AND provision_source_json IS NULL;
         ${statePostgresVersionSql(40)}`,
+    },
+    {
+      version: 41,
+      fromSchema: statePostgresSchemaV40,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE operator_approvals ADD COLUMN requested_by_profile_id text COLLATE "C";
+        ${statePostgresVersionSql(41)}`,
     },
   ];
 }

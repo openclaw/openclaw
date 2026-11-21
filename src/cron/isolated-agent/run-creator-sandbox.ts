@@ -1,14 +1,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareOpenClawIdTunnelPrincipal } from "../../gateway/openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../../gateway/operator-role-enforcement.js";
 import {
-  openclawIdTunnelRolePolicy,
-  prepareOpenClawIdTunnelPrincipal,
-} from "../../gateway/openclaw-id/tunnel-principal.js";
-import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
+  resolveCreatorSandbox,
+  resolveOperatorRolePolicyForAssignment,
+} from "../../gateway/operator-role-policy.js";
 import {
   isOperatorRoleSourcePolicyCurrent,
   sourceRolePolicy,
 } from "../../gateway/operator-role-source-policy.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import { cronExecutionActor } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { readCronOperatorSnapshotForRun } from "../operator-source-snapshot.js";
@@ -27,10 +29,20 @@ export async function prepareCronCreatorSandbox(
     if (snapshot && principal?.kind === "member") {
       await prepareOpenClawIdTunnelPrincipal(principal);
       signal?.throwIfAborted();
+      const profile = await prepareUserProfileRoleAuthority(snapshot.profileId);
+      signal?.throwIfAborted();
       if (
         !isOperatorRoleSourcePolicyCurrent(
           snapshot.rolePolicy,
-          sourceRolePolicy(openclawIdTunnelRolePolicy(principal)),
+          sourceRolePolicy(
+            resolveOperatorRolePolicyForAssignment(
+              profile?.profileId,
+              profile?.role ?? null,
+              cfg,
+              profile?.githubLogin ?? null,
+              operatorRoleSubject(profile),
+            ),
+          ),
           snapshot.scopes,
         )
       ) {

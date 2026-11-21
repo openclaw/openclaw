@@ -190,6 +190,43 @@ it("keeps a disabled heartbeat in included config and asks to consolidate instea
   expect(f.snapshot()).toEqual(before);
 });
 
+it("admits a disabled heartbeat beside catalog compat values kept for review", async () => {
+  const f = fixture({ scratch: source });
+  const workspace = path.join(path.dirname(path.dirname(f.configPath)), "workspace");
+  writeFixtureJsonSync(f.configPath, {
+    agents: {
+      defaults: { heartbeat: { agentId: "main", every: "" } },
+      entries: { main: { workspace } },
+    },
+    models: {
+      providers: {
+        "ollama-cloud": {
+          api: "ollama",
+          baseUrl: "https://ollama.com",
+          models: [
+            {
+              id: "gpt-oss:20b",
+              name: "gpt-oss:20b",
+              compat: { supportsJsonSchemaResponseFormat: true },
+            },
+          ],
+        },
+      },
+    },
+  });
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
+  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  const before = f.snapshot();
+
+  await updateAdmitCommand(f.contextPath);
+
+  expect(parseUpdateAdmissionVerdict(output.mock.calls[0]?.[0])).toMatchObject({
+    verdict: "admit",
+    reasons: [],
+  });
+  expect(f.snapshot()).toEqual(before);
+});
+
 it.each(["absent", "file", "unreadable"] as const)(
   "checks unresolved cron update admission (heartbeat source: %s)",
   async (sourceKind) => {

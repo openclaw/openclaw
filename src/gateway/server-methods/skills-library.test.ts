@@ -451,7 +451,15 @@ describe("session skill library projection and activation", () => {
         expect(respond).toHaveBeenCalledWith(
           outcome === "success",
           outcome === "success" ? expect.objectContaining({ selections: [] }) : undefined,
-          outcome === "success" ? undefined : expect.any(Object),
+          outcome === "success"
+            ? undefined
+            : outcome === "missing session"
+              ? expect.objectContaining({
+                  code: "INVALID_REQUEST",
+                  message: expect.stringContaining("starts with its first message"),
+                  details: { code: "SKILL_LIBRARY_NOT_FOUND" },
+                })
+              : expect.any(Object),
         );
         expect(resolved).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();

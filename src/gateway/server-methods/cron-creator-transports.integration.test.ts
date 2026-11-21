@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,6 +21,8 @@ import {
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { linkOpenClawIdUserProfile } from "../../state/user-profile-openclaw-id.worker.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   mintAgentRuntimeIdentityToken,
@@ -38,6 +40,7 @@ import {
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../mcp-http.js";
 import { MEMBER_ROLE_PRESETS } from "../openclaw-id/member-role-presets.test-support.js";
 import {
+  setOpenClawIdMemberAccountLookup,
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "../openclaw-id/tunnel-principal.js";
@@ -143,6 +146,10 @@ function heldCron(testConfig: OpenClawConfig) {
 }
 
 installRequesterCronAuthorityTestHooks();
+afterEach(() => {
+  setOpenClawIdTunnelPrincipalLookup(undefined);
+  setOpenClawIdMemberAccountLookup(undefined);
+});
 beforeEach(async () => {
   config = {
     ...baseCfg,
@@ -199,12 +206,19 @@ it.each([
       kind: "member",
       peerKey: `iroh:${"ec".repeat(32)}`,
       accountId: "script-creator",
-      role: "operator",
+      role: "display-only",
       authority: { clawId: "creator-claw", rootPub: "creator-root", listedSeq: 1 },
     };
     if (ocid) {
+      setUserProfileRole(profile.id, "operator");
+      linkOpenClawIdUserProfile(
+        { profileId: profile.id, accountId: principal.accountId, email: null },
+        {},
+      );
+      setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
       config.gateway = {
         ...config.gateway,
+        openclawId: { enabled: true },
         roles: {
           ...config.gateway?.roles,
           definitions: {

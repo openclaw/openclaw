@@ -128,8 +128,11 @@ inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
 order of floating-point cost additions. SQLite summary and detail reads use recorded quarter aggregates, checkpoints,
 and transcript mutation facts instead of recounting transcript payloads. Complete
-cost summaries remain reusable until the owning usage, transcript, session, or
-pricing facts change. Cold SQLite statistics are read in cancellable pages;
+cost summaries and session reports remain reusable until the owning usage, transcript,
+session, pricing, profile, or visibility facts change. Unchanged detail polls do not
+reread stored rollups just because 30 seconds have passed. Detailed month reads use indexed
+session ranges even when SQLite statistics describe an older, smaller cache.
+Cold SQLite statistics are read in cancellable pages;
 refresh discovery applies its batch limit before collecting those statistics.
 Hot payload reads yield between pages, with physical reads paced to 16 MiB/s where
 kernel accounting is available. A single oversized row can exceed a page budget.
@@ -138,9 +141,9 @@ After an append, background refresh also reuses the checkpoint's size and event
 count and reads only the appended rows. A transcript rewrite or missing checkpoint
 still requires a full recount before the new totals are published.
 
-Background refresh budgets, detailed-result cache freshness, and the Control UI's
+Background refresh budgets, result-cache eviction, and the Control UI's
 context-breakdown retry backoff use elapsed time, so wall-clock corrections do not
-extend the quiet period, keep expired results fresh, or shorten retry delays.
+extend the quiet period, retain idle cache entries longer, or shorten retry delays.
 Report dates and recorded timestamps still follow the wall clock.
 
 ## Usage date ranges
