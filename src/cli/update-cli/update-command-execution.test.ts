@@ -241,13 +241,14 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { migrating: true, owner: true, retained: false },
-    { migrating: true, owner: false, retained: false },
-    { migrating: false, owner: true, retained: false },
-    { migrating: true, owner: true, retained: true },
+    { migrating: true, owner: true, retained: false, owned: false },
+    { migrating: true, owner: false, retained: false, owned: false },
+    { migrating: false, owner: true, retained: false, owned: false },
+    { migrating: true, owner: true, retained: true, owned: false },
+    { migrating: true, owner: true, retained: false, owned: true },
   ])(
-    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained)",
-    async ({ migrating, owner, retained }) => {
+    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained, owned service=$owned)",
+    async ({ migrating, owner, retained, owned }) => {
       await withTestDir({ prefix: "migration-owner-" }, async (state) => {
         // #202700: a Gateway this update does not stop keeps Doctor out of maintenance.
         vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -274,19 +275,23 @@ describe("mutable update execution", () => {
           ...readyCandidate([]),
           candidateSchemaVersions: { state: 15, agent: 19 },
         });
-        mocks.maybeStopService.mockResolvedValue({
-          stopped: false,
-          inspected: false,
-          serviceMutationAllowed: false,
-          serviceMutationSkipMessage: "service management skipped: non-default install",
-        });
+        mocks.maybeStopService.mockResolvedValue(
+          owned
+            ? { ...inspectOrStopService("inspect"), stopped: false }
+            : {
+                stopped: false,
+                inspected: false,
+                serviceMutationAllowed: false,
+                serviceMutationSkipMessage: "service management skipped: non-default install",
+              },
+        );
         mocks.runPackageUpdate.mockImplementation(packageCandidate(state));
         const params = executionParams("package");
         params.opts.restart = params.shouldRestart = false;
 
         const execution = await execute(params);
 
-        if (migrating && owner && !retained) {
+        if (migrating && owner && !retained && !owned) {
           expect(execution).toMatchObject({
             mutationStarted: false,
             result: { status: "error", reason: "database-migration-owner-live" },

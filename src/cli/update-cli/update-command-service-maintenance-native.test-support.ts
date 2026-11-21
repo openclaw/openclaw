@@ -47,7 +47,8 @@ vi.mock("./update-command-terminal.js", async (original) => ({
 }));
 vi.mock("./update-command-schema.js", () => ({
   preflightUpdateCommandSchemas: async () => ({ preflightNotes: [], preflightFailures: [] }),
-  captureUpdateActivationSchemas: async () => ({}),
+  captureUpdateActivationSchemas: async () => ({ pendingMigrations: [] }),
+  assertPendingMigrationsAdmitted: async () => {},
 }));
 vi.mock("./update-command-database-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-database-context.js")>()),

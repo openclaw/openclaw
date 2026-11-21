@@ -491,7 +491,11 @@ export async function executeMutableUpdate(
       // Preparation can hold Windows recovery custody without stopping a process.
       servicePrepared = true;
     }
-    if (params.updateInstallKind === "package") {
+    // An owned service was stopped above, or its supervisor restarts it on the new package.
+    if (
+      params.updateInstallKind === "package" &&
+      preManagedServiceStop?.serviceUpdateVerdict?.kind !== "owned"
+    ) {
       await assertPendingMigrationsAdmitted({
         pendingMigrations: activationSchemas.pendingMigrations,
         env,

@@ -1256,13 +1256,14 @@ changes nothing. The saved report keeps the details.
 
 A package update that must migrate a shared or agent database runs that
 migration in the candidate Doctor, which needs exclusive access to the state.
-Some Gateways stay running through the update: with `--no-restart`, under a
-non-default `OPENCLAW_HOME` or `OPENCLAW_STATE_DIR` profile, or under an
-external supervisor. If such a Gateway still owns the state after the updater's
-own service stop, the update refuses before replacing the package. The refusal
-names each database with its schema hop and the Gateway PID. Stop that Gateway
-through its owner, or press Ctrl+C in its terminal, then rerun
-`openclaw update`. Updates that need no migration still run while it serves.
+A Gateway that the updater does not manage as a service keeps running through
+the update, for example a foreground `openclaw gateway run` under a non-default
+`OPENCLAW_HOME` or `OPENCLAW_STATE_DIR` profile, or one under an external
+supervisor. If such a Gateway owns the state, the update refuses before
+replacing the package. The refusal names each database with its schema hop and
+the Gateway PID. Stop that Gateway through its owner, or press Ctrl+C in its
+terminal, then rerun `openclaw update`. Updates that need no migration still
+run while it serves.
 
 Every attempt ends with one update run record. Its `cause` is one of `none`,
 `node-unsupported`, `git-unsupported`, `disk-full`, `permission-denied`,
