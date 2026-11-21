@@ -643,7 +643,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before Side chat could answer.",
         );
       }
-      const answer = sanitizeAnswer(rawAnswer);
+      const answer = sanitizeAnswer(rawAnswer, question);
       if (!answer) {
         throw new Error("session companion returned an empty answer");
       }
