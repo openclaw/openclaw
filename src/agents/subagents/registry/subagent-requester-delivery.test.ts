@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
 import { mutateSubagentCompletionInDatabase } from "../completion/subagent-completion-mutation.kernel.js";
+import { resolveSubagentDeliveryStatus } from "./subagent-list.js";
 import {
   createSubagentStoreRunFixture,
   saveSubagentRegistryToSqlite,
@@ -112,6 +113,9 @@ it.for([
         status: visibleFinal ? "failed" : "delivered",
         requesterDelivery: { state: "consumed", runId },
       });
+      expect(resolveSubagentDeliveryStatus(subagent)).toBe(
+        visibleFinal ? "failed" : "consumed_privately",
+      );
       if (kind === "requesterBatch") {
         expect(subagent.requesterSettleWake).toBeUndefined();
       }

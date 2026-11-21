@@ -21,6 +21,7 @@ import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner
 import {
   ensureCompletionState,
   ensureDeliveryState,
+  recordPrivateConsumption,
   recordRequesterHandoff,
 } from "./subagent-delivery-state.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
@@ -78,6 +79,7 @@ export const recordAnnounceDeliveryResult = (
     deliveryState.deliveredAt =
       typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
     deliveryState.lastDropReason = undefined;
+    recordPrivateConsumption(entry, delivery.requesterVisibleFinalDelivered);
     const requesterTurnRunId = entry.requesterTurnRunId?.trim();
     if (
       delivery.path === "direct" &&

@@ -22,6 +22,7 @@ import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
+  recordPrivateConsumption,
   recordRequesterDelivery,
   hasConsumedPrivateRequesterInput,
   resolveRequesterDeliveryOutcome,
@@ -166,6 +167,7 @@ function prepareBlockedSubagentCompletion(
   }
   if (consumed) {
     markDelivered(subagent, now);
+    recordPrivateConsumption(subagent, false);
     return { subagent };
   }
   const successful = subagent.execution.outcome?.status === "ok";
@@ -363,6 +365,7 @@ function mutateRequesterBatch(
     ) {
       if (params.outcome.delivered) {
         markDelivered(subagent, params.outcome.deliveredAt ?? now);
+        recordPrivateConsumption(subagent, params.outcome.requesterVisibleFinalDelivered);
       } else {
         const blocked = prepareBlockedSubagentCompletion(
           database,

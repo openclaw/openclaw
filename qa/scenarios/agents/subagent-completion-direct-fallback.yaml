@@ -26,6 +26,7 @@ scenario:
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
     - A visible but unsent parent completion triggers direct fallback, which strips protected internal metadata before one channel delivery.
     - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, records its reviewed outcome internally, and does not send or replay either result on the channel.
+    - A later turn of that private parent sees both privately consumed children as `delivery=consumed_privately`, while an announced child stays `delivery=delivered`.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
@@ -35,6 +36,7 @@ scenario:
     - src/agents/agent-run-terminal-reply.ts
     - src/agents/subagents/announce/subagent-announce-delivery.ts
     - src/agents/subagents/registry/subagent-registry-lifecycle.ts
+    - src/agents/subagents/registry/subagent-list.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
@@ -56,6 +58,7 @@ scenario:
       restartMarker: QA-SUBAGENT-TERMINAL-RESTART-OK
       metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
       parentAcknowledgment: Worker started.
+      privateFollowUpReply: QA-PRIVATE-FOLLOW-UP-OK
 
 flow:
   steps:
@@ -448,9 +451,55 @@ flow:
                     - assert:
                         expr: "privateFallbackReceipts.length === 0"
                         message: Private result reached the direct channel fallback.
+              # A later parent turn must not read private consumption as user delivery.
+              - set: activePhase
+                value: private-follow-up
+              - set: privateFollowUpRequestCursor
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - set: activeRequestCursor
+                value:
+                  ref: privateFollowUpRequestCursor
+              - set: privateFollowUpStartIndex
+                value:
+                  expr: state.getSnapshot().messages.length
+              - sendInbound:
+                  accountId: default
+                  conversation:
+                    id:
+                      ref: privateConversationId
+                    kind: direct
+                  senderId:
+                    ref: privateConversationId
+                  senderName: QA Private Completion Operator
+                  text:
+                    expr: "`Private follow-up check. Reply exactly: ${config.privateFollowUpReply}`"
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      expr: "state.getSnapshot().messages.slice(privateFollowUpStartIndex).find((message) => message.direction === 'outbound' && message.conversation.id === privateConversationId && String(message.text ?? '').trim() === config.privateFollowUpReply)"
+                  - 60000
+                  - 250
+              - set: privateFollowUpContext
+                value:
+                  expr: |-
+                    (async () => {
+                      const { normalizeResponsesInput, extractLastUserText, extractCurrentRuntimeContextTexts } = await qaImport('./providers/mock-openai/mock-openai-input.js');
+                      const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${privateFollowUpRequestCursor}`);
+                      const inputs = requests.map((request) => normalizeResponsesInput(request.body?.input));
+                      const input = inputs.find((candidate) => extractLastUserText(candidate).includes('Private follow-up check.')) ?? [];
+                      return extractCurrentRuntimeContextTexts(input.filter((item) => item.role === 'user')).join('\n');
+                    })()
+              - set: privateFollowUpDeliveryLabels
+                value:
+                  expr: "[...privateRuns.map((run) => run.runId), verdicts.find((verdict) => verdict.case === 'visible').runId].map((runId) => /delivery=([a-z_]+);/.exec(privateFollowUpContext.split('\\n').find((line) => line.includes(`run=${runId};`)) ?? '')?.[1])"
+              - assert:
+                  expr: "JSON.stringify(privateFollowUpDeliveryLabels) === JSON.stringify(['consumed_privately', 'consumed_privately', 'delivered'])"
+                  message:
+                    expr: "`later parent turn mislabeled private or announced child delivery: ${JSON.stringify({ labels: privateFollowUpDeliveryLabels, runtimeContext: privateFollowUpContext })}`"
               - set: appendPrivateVerdict
                 value:
-                  expr: "verdicts.push({ case: 'private', conversationId: privateConversationId, runIds: privateRuns.map((run) => run.runId), deliveryStatus: 'delivered', privateSpawnReceiptCount: privateSpawnReceipts.length, messageToolDenied: !privateTools.has('message'), mediaReferenceConsumed: true, outboundAttachmentCount: privateOutboundEvents.reduce((count, event) => count + (event.message.attachments?.length ?? 0), 0), expectedTerminalSendCount: 0, actualTerminalSendCount: privateAcknowledgments.length - 1, kickoffTransportSendCount: privateOutbound.length, previewRetirementVerified: !privateTelegramWire, capturedTerminalPayloads: [], pass: true })"
+                  expr: "verdicts.push({ case: 'private', conversationId: privateConversationId, runIds: privateRuns.map((run) => run.runId), deliveryStatus: 'delivered', privateSpawnReceiptCount: privateSpawnReceipts.length, messageToolDenied: !privateTools.has('message'), mediaReferenceConsumed: true, outboundAttachmentCount: privateOutboundEvents.reduce((count, event) => count + (event.message.attachments?.length ?? 0), 0), expectedTerminalSendCount: 0, actualTerminalSendCount: privateAcknowledgments.length - 1, kickoffTransportSendCount: privateOutbound.length, previewRetirementVerified: !privateTelegramWire, followUpDeliveryLabels: privateFollowUpDeliveryLabels, capturedTerminalPayloads: [], pass: true })"
               # Every prior run is now terminal and delivery-settled, so restart from
               # the lifecycle boundary rather than waiting an arbitrary grace period.
               - set: preRestartOutbound
