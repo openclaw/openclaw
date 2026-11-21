@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { emitAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { projectNormalizedToolItem } from "./event-projector-events.js";
+import { projectCodexHookEventData, projectNormalizedToolItem } from "./event-projector-events.js";
 import { readItem } from "./event-projector-values.js";
 import {
   codexNativeSubagentRunId,
@@ -27,6 +27,10 @@ type NativeSubagentTurnObservationCallbacks = {
 export class CodexNativeSubagentTurnObservation {
   private readonly observationSourceId = randomUUID();
   private readonly projectedActivityWaits = new WeakSet<ChildState>();
+
+  static pending(method: CodexServerNotification["method"]): boolean {
+    return method === "turn/completed" || method === "hook/started" || method === "hook/completed";
+  }
 
   constructor(private readonly callbacks: NativeSubagentTurnObservationCallbacks) {}
 
@@ -118,6 +122,13 @@ export class CodexNativeSubagentTurnObservation {
   emitChildTaskActivity(notification: CodexServerNotification, childState: ChildState): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
+      return;
+    }
+    if (notification.method === "hook/started" || notification.method === "hook/completed") {
+      const data = projectCodexHookEventData(notification.method, params, childState.childThreadId);
+      if (data) {
+        this.callbacks.emitTaskEvent(childState, { stream: "codex_app_server.hook", data });
+      }
       return;
     }
     const turn = isJsonObject(params.turn) ? params.turn : undefined;

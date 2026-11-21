@@ -81,7 +81,9 @@ export function createCodexNativeSubagentNotificationRouter(
       notification.method === "thread/status/changed" ||
       notification.method === "turn/started" ||
       notification.method === "turn/completed" ||
-      notification.method === "item/agentMessage/delta"
+      notification.method === "item/agentMessage/delta" ||
+      notification.method === "hook/started" ||
+      notification.method === "hook/completed"
     ) {
       const childThreadId = readString(params, "threadId")?.trim();
       const parentThreadId = childThreadId

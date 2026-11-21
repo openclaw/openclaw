@@ -12,6 +12,8 @@ export const NATIVE_SUBAGENT_NOTIFICATION_METHODS = new Set([
   "item/reasoning/summaryTextDelta",
   "item/started",
   "item/completed",
+  "hook/started",
+  "hook/completed",
   // App-server exposes no typed terminal subagent result. Keep this one raw
   // boundary until its protocol provides the child's terminal status and text.
   "rawResponseItem/completed",
