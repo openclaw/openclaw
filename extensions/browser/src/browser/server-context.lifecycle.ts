@@ -18,6 +18,7 @@ import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { getLoadedPwAiModule } from "./pw-ai-module.js";
 import type { PlaywrightConnectionRetirement } from "./pw-session.js";
+import { EXTENSION_IDLE_RELEASE_MS } from "./server-context.constants.js";
 import type { BrowserServerState, ProfileRuntimeState } from "./server-context.types.js";
 
 type ProfileLifecycleTerminal = "deleted" | "config-removed";
@@ -35,6 +36,8 @@ type ProfileLifecycleActor = {
   terminal: ProfileLifecycleTerminal | null;
   transitionReason: string | null;
   blockedReason: string | null;
+  /** Pending release of an extension profile's Playwright adapter after its last lease. */
+  idleRelease: ReturnType<typeof setTimeout> | undefined;
 };
 
 type ProfileTransitionOptions = {
@@ -79,6 +82,7 @@ function createProfileLifecycleActor(): ProfileLifecycleActor {
     terminal: null,
     transitionReason: null,
     blockedReason: null,
+    idleRelease: undefined,
   };
 }
 
@@ -170,13 +174,44 @@ export function waitForProfileOperation<T>(promise: Promise<T>, signal?: AbortSi
   );
 }
 
-function createLease(actor: ProfileLifecycleActor): () => void {
+function createLease(actor: ProfileLifecycleActor, runtime: ProfileRuntimeState): () => void {
   const { promise: settled, resolve: release } = createDeferred<void>();
+  clearTimeout(actor.idleRelease);
+  actor.idleRelease = undefined;
   actor.leases.add(settled);
   return () => {
     actor.leases.delete(settled);
     release();
+    scheduleIdleExtensionRelease(actor, runtime);
   };
+}
+
+/**
+ * The extension keeps chrome.debugger attached (and the browser shows its
+ * "started debugging this browser" bar) for as long as a CDP client holds the
+ * tab. Release the cached Playwright adapter once an extension profile has had
+ * no operation for a while; the next operation reconnects. Element refs from
+ * an earlier snapshot survive through the target-keyed ref cache.
+ */
+function scheduleIdleExtensionRelease(
+  actor: ProfileLifecycleActor,
+  runtime: ProfileRuntimeState,
+): void {
+  if (runtime.profile.driver !== "extension" || actor.leases.size > 0) {
+    return;
+  }
+  clearTimeout(actor.idleRelease);
+  actor.idleRelease = setTimeout(() => {
+    actor.idleRelease = undefined;
+    if (actor.leases.size > 0 || actor.starts.size > 0 || actor.terminal) {
+      return;
+    }
+    const retirement = getLoadedPwAiModule()?.retirePlaywrightBrowserConnectionExact({
+      cdpUrl: runtime.profile.cdpUrl,
+    });
+    void retirement?.close().catch(() => {});
+  }, EXTENSION_IDLE_RELEASE_MS);
+  actor.idleRelease.unref?.();
 }
 
 /** Return the current runtime object; terminal tombstones stay until exact cleanup removes them. */
@@ -274,7 +309,7 @@ export async function withProfileOperationLease<T>(params: {
       ? lifecycleSignal
       : combineSignals(lifecycleSignal, params.signal);
   signal.throwIfAborted();
-  const release = createLease(actor);
+  const release = createLease(actor, params.runtime);
   try {
     const leases = new Map(inherited);
     leases.set(params.runtime, { signal });
