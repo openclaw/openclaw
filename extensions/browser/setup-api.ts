@@ -44,7 +44,13 @@ export default definePluginEntry({
       ) {
         return null;
       }
-      if (Object.hasOwn(config, "browser")) {
+      const browser = config.browser;
+      // Disabling legacy relay auth alone is hardening, not a request to activate browser.
+      const hardeningOnly =
+        browser?.extensionRelay?.allowLegacyAuth === false &&
+        Object.keys(browser).length === 1 &&
+        Object.keys(browser.extensionRelay).length === 1;
+      if (Object.hasOwn(config, "browser") && !hardeningOnly) {
         return "browser configured";
       }
       if (config.plugins?.entries && Object.hasOwn(config.plugins.entries, "browser")) {
