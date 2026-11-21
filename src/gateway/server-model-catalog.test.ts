@@ -349,6 +349,57 @@ describe("gateway prepared model catalog", () => {
     ).rejects.toBe(error);
   });
 
+  it("retries provider-scoped discovery when its published owner is replaced", async () => {
+    const staleConfig = ownerConfig("main", { logging: { level: "info" } });
+    const currentConfig = ownerConfig("main", { logging: { level: "debug" } });
+    const staleCatalog = {
+      entries: [{ provider: "openai", id: "stale", name: "Stale" }],
+      routeVariants: [],
+    } satisfies ModelCatalogSnapshot;
+    const currentCatalog = {
+      entries: [{ provider: "openai", id: "current", name: "Current" }],
+      routeVariants: [],
+    } satisfies ModelCatalogSnapshot;
+    let replaced = false;
+    const staleOwner = { ...ownerSnapshot(staleConfig), isCurrent: () => !replaced };
+    const currentOwner = ownerSnapshot(currentConfig);
+    const loadPublishedPreparedModelCatalogOwnerSnapshot = vi.fn(async () =>
+      replaced ? currentOwner : staleOwner,
+    );
+    const loadPreparedModelCatalogSnapshot = vi
+      .spyOn(
+        await import("../agents/prepared-model-catalog.js"),
+        "loadPreparedModelCatalogSnapshot",
+      )
+      .mockImplementation(async (params) => {
+        if (params?.config === staleConfig) {
+          replaced = true;
+          return staleCatalog;
+        }
+        return currentCatalog;
+      });
+
+    await expect(
+      loadGatewayModelCatalogSnapshot({
+        getConfig: () => staleConfig,
+        loadPublishedPreparedModelCatalogOwnerSnapshot,
+        providerDiscoveryProviderIds: ["openai"],
+        readOnly: true,
+        scopedLiveProviderDiscovery: true,
+      }),
+    ).resolves.toMatchObject({ config: currentConfig, entries: currentCatalog.entries });
+    expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledTimes(2);
+    expect(loadPreparedModelCatalogSnapshot).toHaveBeenLastCalledWith({
+      agentId: "main",
+      agentDir: "/tmp/gateway-agent",
+      config: currentConfig,
+      providerDiscoveryProviderIds: ["openai"],
+      readOnly: true,
+      scopedLiveProviderDiscovery: true,
+      workspaceDir: "/tmp/gateway-workspace",
+    });
+  });
+
   it("does not hide lifecycle publication failures behind stale data", async () => {
     setRuntimeConfigSnapshot({});
     onTestFinished(clearRuntimeConfigSnapshot);
