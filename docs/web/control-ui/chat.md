@@ -456,7 +456,7 @@ Confirming text with an input method does not send the Side chat question. Finis
 
 Editing a Side chat draft does not interrupt loading its earlier answers. On desktop, closing the Side chat tab waits for the Gateway to confirm the reset; a failed reset leaves the tab and its content open. Hiding the panel or switching tabs preserves the thread and draft. When Side chat occupies the main panel, or on mobile, **Clear side chat** remains available. It removes the earlier content after the Gateway confirms it; drafts, images, and questions added after the click remain.
 
-Side chat cancels a question after 60 seconds. Once the canceled model run has finished cleanup, the failed question offers **Retry**. Earlier answers stay intact, and a late answer from the canceled run is not added to the thread.
+After a minute, Side chat shows **Still waiting for an answer** instead of cutting off a running answer. The runner detects stalled model requests, and each question has a five-minute upper limit. **Stop side chat answer** stops just that question, without clearing earlier answers, your next draft, or the main session. A stopped or timed-out question offers **Retry** after cleanup; a late answer is not added to the thread.
 
 Side chat returns complete answers, including lists of links, within the thread’s 48 KiB text budget. If a single exchange exceeds that budget, the answer ends at a word boundary with an explicit notice instead of a broken link.
 
