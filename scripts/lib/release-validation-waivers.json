@@ -392,6 +392,31 @@
           ]
         }
       ]
+    },
+    {
+      "targetVersion": "2026.11.10-beta.2",
+      "childRole": "normalCi",
+      "jobName": "checks-node-compact-large-38 (node)",
+      "reason": "Accepted exact successor-chat timeout after both same local private child-completion tests passed unchanged. Raw failure retained; requires trusted evaluator support for the native two-part project label.",
+      "aggregates": [
+        {
+          "jobName": "openclaw/ci-gate",
+          "stepName": "Verify selected CI lanes",
+          "causes": [
+            "checks-node-core-test-nondist-shard finished with failure (selected=true)"
+          ]
+        }
+      ],
+      "testFailures": {
+        "stepName": "Run Node test shard",
+        "signatures": [
+          {
+            "kind": "vitest",
+            "file": "src/gateway/server.private-completion.test.ts",
+            "test": "private subagent completion processing receipts > settles a sessions_send child reply through real private admission (processed) :: Error: timeout\n❯ onceMessage test/helpers/gateway-websocket.ts:114:24\n112| ): Promise<T> {\n113|   // Keep the wait's caller in the stack when a timer eventually rejec…\n114|   const timeoutError = new Error(\"timeout\");\n|                        ^\n115|   return new Promise<T>((resolve, reject) => {\n116|     function cleanup() {\n❯ Object.verifyChatSuccessor src/gateway/server.private-completion.test.ts:252:24\n❯ src/gateway/server.private-completion.sessions-send.test-support.ts:<redacted len=6>"
+          }
+        ]
+      }
     }
   ]
 }
