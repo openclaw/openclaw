@@ -3,8 +3,10 @@ import { createMemo, createSignal } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import {
+  isInstalledSkillsPath,
   pathForClawHubSkill,
   pathForInstalledSkill,
+  pathForInstalledSkills,
   pathForRoute,
   type SkillPageRef,
 } from "../../app-route-paths.ts";
@@ -30,6 +32,15 @@ function createSkillPageRoute(options: {
         left.skillKey === right.skillKey) ||
       (left?.kind === "clawhub" && right?.kind === "clawhub" && left.ref === right.ref),
   });
+  const installed = createMemo(() => {
+    const current = skillsRouteLocation(location());
+    return (
+      options.surface() === "discovery" &&
+      (isInstalledSkillsPath(current.pathname, context.basePath) ||
+        (page()?.kind === "installed" &&
+          new URLSearchParams(current.search).get("from") === "installed"))
+    );
+  });
   const listRoute = (): "skills" | "skill-settings" =>
     options.surface() === "discovery" ? "skills" : "skill-settings";
   const agentSearch = (route: ReturnType<typeof listRoute>) => {
@@ -43,12 +54,25 @@ function createSkillPageRoute(options: {
   };
   return {
     page,
+    installed,
     setLocation,
-    listHref: () => `${pathForRoute(listRoute(), context.basePath)}${agentSearch(listRoute())}`,
+    browseHref: () => `${pathForRoute("skills", context.basePath)}${agentSearch("skills")}`,
+    listHref: () =>
+      `${installed() ? pathForInstalledSkills(context.basePath) : pathForRoute(listRoute(), context.basePath)}${agentSearch(listRoute())}`,
+    openInventory(this: void) {
+      context.navigate("skills", {
+        pathname: pathForInstalledSkills(context.basePath),
+        search: agentSearch("skills"),
+      });
+    },
     openInstalled(this: void, skillKey: string) {
+      const search = new URLSearchParams(agentSearch(listRoute()));
+      if (installed()) {
+        search.set("from", "installed");
+      }
       context.navigate(listRoute(), {
         pathname: pathForInstalledSkill(skillKey, options.surface(), context.basePath),
-        search: agentSearch(listRoute()),
+        search: search.size ? `?${search}` : "",
       });
     },
     openClawHub(this: void, ref: string) {
@@ -58,7 +82,10 @@ function createSkillPageRoute(options: {
       });
     },
     close(this: void) {
-      context.navigate(listRoute(), { search: agentSearch(listRoute()) });
+      context.navigate(listRoute(), {
+        ...(installed() ? { pathname: pathForInstalledSkills(context.basePath) } : {}),
+        search: agentSearch(listRoute()),
+      });
     },
     /** Either Skills list, for the same agent. */
     navigateList(route: "skills" | "skill-settings") {

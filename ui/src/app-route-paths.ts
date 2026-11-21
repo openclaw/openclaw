@@ -449,6 +449,14 @@ function decodeSkillSegment(encoded: string | undefined): string | null {
   return value?.trim() && value !== "." && value !== ".." ? value : null;
 }
 
+export function pathForInstalledSkills(basePath = ""): string {
+  return `${pathForRoute("skills", basePath)}/installed`;
+}
+
+export function isInstalledSkillsPath(pathname: string, basePath = ""): boolean {
+  return routePathSuffix(pathname, "skills", basePath) === "installed";
+}
+
 /** An installed skill opens under the list it was opened from: Skills or Settings › Skills. */
 export function pathForInstalledSkill(
   skillKey: string,
@@ -460,7 +468,7 @@ export function pathForInstalledSkill(
   }
   return surface === "settings"
     ? `${pathForRoute("skill-settings", basePath)}/${encodeSkillSegment(skillKey)}`
-    : `${pathForRoute("skills", basePath)}/installed/${encodeSkillSegment(skillKey)}`;
+    : `${pathForInstalledSkills(basePath)}/${encodeSkillSegment(skillKey)}`;
 }
 
 /** A ClawHub reference keeps its own segments, so `@owner/slug` reads as it is written. */
@@ -501,8 +509,9 @@ export function skillPageFromPath(pathname: string, basePath = ""): SkillPageRef
 
 function isSkillsPagePath(pathname: string, basePath = ""): boolean {
   return (
-    routePathSuffix(pathname, "skill-settings", basePath) === null &&
-    skillPageFromPath(pathname, basePath) !== null
+    isInstalledSkillsPath(pathname, basePath) ||
+    (routePathSuffix(pathname, "skill-settings", basePath) === null &&
+      skillPageFromPath(pathname, basePath) !== null)
   );
 }
 

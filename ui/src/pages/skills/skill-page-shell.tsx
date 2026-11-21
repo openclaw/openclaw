@@ -31,7 +31,7 @@ export function SkillPageShell(props: {
         name={props.name}
         summary={props.summary}
         backHref={props.view.listHref}
-        backLabel={t("tabs.skills")}
+        backLabel={t(props.view.installed ? "skillGroups.installed" : "tabs.skills")}
         onBack={() => props.view.onDetailClose()}
         icon={props.icon}
         identity={
@@ -60,7 +60,7 @@ export function SkillPageAbsent(props: {
     renderPluginDetailBreadcrumb({
       name: props.name,
       backHref: props.view.listHref,
-      backLabel: t("tabs.skills"),
+      backLabel: t(props.view.installed ? "skillGroups.installed" : "tabs.skills"),
       onBack: () => props.view.onDetailClose(),
     });
   return (

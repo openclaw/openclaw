@@ -354,6 +354,10 @@ See [Skill Workshop](/tools/skill-workshop) for how agents learn skills and
 
 ## Installing from ClawHub
 
+In the Control UI, open **Customize → Skills → Installed skills** to search
+the skills you already have. Select **Skills** to return to where you left off
+in discovery.
+
 [ClawHub](https://clawhub.ai) is the public skills registry. Use
 `openclaw skills` commands for install and update, or the `clawhub` CLI for
 publish and sync.

@@ -26,11 +26,8 @@ function renderDiscovery(
   return container;
 }
 
-/** Installed skills sit in one summary line until the Installed chip lists them. */
-function showInstalled(container: HTMLElement) {
-  [...container.querySelectorAll<HTMLButtonElement>(".plugin-catalog-chip")]
-    .find((chip) => chip.textContent === "Installed")!
-    .click();
+function openInstalled(container: HTMLElement) {
+  container.querySelector<HTMLButtonElement>(".skill-installed-shelf")!.click();
   flush();
 }
 
@@ -139,7 +136,10 @@ describe("unified skill discovery", () => {
       await route;
     }
     await waitForFast(() => expect(shelfText(mounted.container)).toContain("Prefetched status"));
-    showInstalled(mounted.container);
+    openInstalled(mounted.container);
+    await waitForFast(() =>
+      expect(mounted.container.querySelector(".skill-installed-heading")).not.toBeNull(),
+    );
     expect(
       mounted.container.querySelector('[data-skill-id="library:' + entry.skillId + '"]'),
     ).not.toBeNull();
@@ -148,6 +148,53 @@ describe("unified skill discovery", () => {
     ).not.toBeNull();
     expect(request.mock.calls.filter(([method]) => method === "skills.status")).toHaveLength(1);
   });
+
+  it.each(["workspace", "library"] as const)(
+    "holds the first installed grid until both reads settle when %s arrives first",
+    async (first) => {
+      const entry = libraryEntry();
+      const report = createReport([createSkill({ name: "Workspace marker" })]);
+      const library = { ...personalLibrary, entries: [entry] };
+      const statusRead = Promise.withResolvers<typeof report>();
+      const libraryRead = Promise.withResolvers<typeof library>();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.status") return statusRead.promise;
+        if (method === "skills.library.list") return libraryRead.promise;
+        if (method === "skills.search") return { results: [] };
+        throw new Error("Unexpected method: " + method);
+      });
+      const { container, publishRouteData } = mountSkills(request, "discovery");
+      publishRouteData({ reportRead: statusRead.promise });
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("skills.library.list", { scope: "all" }),
+      );
+      openInstalled(container);
+      const gridCards = () => [...container.querySelectorAll(".skill-discovery [data-skill-id]")];
+      const skeleton = () => container.querySelector(".plugin-catalog-grid--skeleton");
+      await waitForFast(() => expect(skeleton()).not.toBeNull());
+      try {
+        if (first === "workspace") statusRead.resolve(report);
+        else libraryRead.resolve(library);
+        await waitForFast(() =>
+          expect(shelfText(container)).toContain(
+            first === "workspace" ? "Workspace marker" : entry.slug,
+          ),
+        );
+        expect(gridCards()).toHaveLength(0);
+        expect(skeleton()).not.toBeNull();
+      } finally {
+        statusRead.resolve(report);
+        libraryRead.resolve(library);
+      }
+      await waitForFast(() => {
+        expect(skeleton()).toBeNull();
+        expect(gridCards().map((card) => card.querySelector("h3")?.textContent)).toEqual([
+          entry.slug,
+          "Workspace marker",
+        ]);
+      });
+    },
+  );
 
   it("keeps cards visible without a loading label while loading", () => {
     const container = document.createElement("div");
@@ -164,11 +211,11 @@ describe("unified skill discovery", () => {
     const libraries = buildSkillLibraryMock().map((item) => item.entry);
     const onLibraryOpen = vi.fn();
     const container = renderDiscovery({
+      installed: true,
       libraryEntries: libraries,
       onLibraryOpen,
       skill: { name: libraries[0]!.name, source: "openclaw-library" },
     });
-    showInstalled(container);
     expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(3);
     const cards = [...container.querySelectorAll(".plugin-catalog-card")];
     expect(cards[0]?.textContent).toContain("Alice");
