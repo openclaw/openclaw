@@ -472,3 +472,13 @@ For full diagnosis ladders, use [Gateway Troubleshooting](/gateway/troubleshooti
 - [Remote access](/gateway/remote)
 - [Secrets management](/gateway/secrets)
 - [CLI backends](/gateway/cli-backends) — running an external CLI agent as a Gateway backend
+
+## Resource profile and worker diagnostics
+
+Use `gateway.resources.profile` to select `auto` (default), `standard`, or `lean`.
+Auto selects lean below 8 GiB effective memory; exactly 8 GiB or more selects
+standard, regardless of CPU count. **Both profiles currently retain the same worker behavior.**
+`openclaw status` reports the running Gateway's decision and live direct-worker
+census; `--json` exposes the same facts under `resources`. See
+[resource profile configuration](/gateway/config-gateway#gateway.resources.profile)
+for limit detection, overrides and diagnostic coverage.

@@ -35,6 +35,7 @@ import {
 } from "../../src/plugins/candidate-install-owner.js";
 import { PluginDashboardDeclarationError } from "../../src/plugins/dashboard-capabilities.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../src/plugins/hardlink-policy.js";
+import { isMemoryBackendRequested } from "../../src/plugins/memory-backend.js";
 import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "../../src/plugins/package-entrypoints.js";
 import {
   isPathInside,
@@ -981,6 +982,7 @@ describe("standalone image metadata", () => {
     Object.assign(context, {
       performance,
       PluginDashboardDeclarationError,
+      isMemoryBackendRequested,
       resolveImmutableInstallIdentity,
       resolvePluginCandidateInstallOwner,
       openRootFileSync: open,

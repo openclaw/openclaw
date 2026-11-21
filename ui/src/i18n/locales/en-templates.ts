@@ -60,6 +60,7 @@ const enTemplates = {
     noneIncluded: "None included",
     publisher: "@openclaw",
     workspaceFiles: "Workspace files",
+    personality: "Personality",
     aboutFile: "About {name}",
     filePurpose: {
       agents: "Operating instructions, priorities, and workspace conventions for the agent.",

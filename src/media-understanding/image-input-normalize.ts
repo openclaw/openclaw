@@ -1,10 +1,10 @@
 // Image input normalization converts HEIC/HEIF payloads through the shared
 // input-file media path before provider execution.
 import { mimeTypeFromFilePath, normalizeMimeType } from "@openclaw/media-core/mime";
+import { readImageMetadataFromHeader } from "../media/image-header-metadata.js";
 import { ImageOptimizationLimitError } from "../media/image-optimization-error.js";
 import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
 import { normalizeInputImageBuffer } from "../media/input-files.js";
-import { readImageMetadataFromHeader } from "../media/media-services.js";
 import {
   effectiveImageBytesCap,
   optimizeImageBufferForWebMedia,

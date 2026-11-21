@@ -4,7 +4,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AssistantMessage } from "../../llm/types.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -185,7 +184,6 @@ export function appendFreshLinearTranscriptMessagesInTransaction(
   if (
     messages.length < 2 ||
     readSessionActorTransactionState(database, resolved) ||
-    getCliHistoryWriter({ ...resolved, storePath: database.path }) ||
     messages.some(
       (append) =>
         !isRecord(append.message) ||

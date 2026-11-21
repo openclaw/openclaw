@@ -1,6 +1,6 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
-import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-input.types.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";

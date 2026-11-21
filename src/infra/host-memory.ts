@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
+import path from "node:path";
 
 // <mach/host_info.h>: HOST_VM_INFO returns vm_statistics_data_t, 14 natural_t counters.
 const HOST_VM_INFO = 2;
@@ -78,4 +80,53 @@ export function isConstrainedProcessLowOnMemory(): boolean {
   return (
     Number.isSafeInteger(limit) && limit > 0 && readProcessAvailableMemoryBytes() <= limit * 0.2
   );
+}
+
+/** Read cgroup-v2 limits through visible ancestors, including a namespaced mount root. */
+export function readCgroupV2MemoryLimits(files: readonly string[]): Record<string, number> {
+  const limits: Record<string, number> = {};
+  if (process.platform !== "linux") {
+    return limits;
+  }
+  let relative: string | undefined;
+  try {
+    relative = /^0::(\/.*)$/mu.exec(readFileSync("/proc/self/cgroup", "utf8"))?.[1];
+  } catch {
+    return limits;
+  }
+  if (!relative) {
+    return limits;
+  }
+  const mount = "/sys/fs/cgroup";
+  let directory = path.resolve(mount, `.${relative}`);
+  if (directory !== mount && !directory.startsWith(`${mount}/`)) {
+    return limits;
+  }
+  for (;;) {
+    for (const file of files) {
+      try {
+        const value = readFileSync(path.join(directory, file), "utf8").trim();
+        if (/^\d+$/u.test(value)) {
+          limits[file] = Math.min(limits[file] ?? Infinity, Number(value));
+        }
+      } catch {
+        // Missing controllers and inaccessible ancestors retain known limits.
+      }
+    }
+    if (directory === mount) {
+      return limits;
+    }
+    directory = path.dirname(directory);
+  }
+}
+
+/** Hard memory allowance, not free memory or the cgroup's reclaim threshold. */
+export function readEffectiveMemoryLimit() {
+  const total = os.totalmem();
+  const cgroup = readCgroupV2MemoryLimits(["memory.max"])["memory.max"];
+  return {
+    memoryLimitBytes: cgroup === undefined ? total : Math.min(total, cgroup),
+    memoryLimitSource:
+      cgroup !== undefined && cgroup <= total ? ("cgroup-v2" as const) : ("host" as const),
+  };
 }

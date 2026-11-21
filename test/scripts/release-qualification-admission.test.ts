@@ -16,6 +16,10 @@ import {
   fixture,
 } from "./release-qualification-admission.test-support.js";
 
+it("rejects a Q revision without its ledger", () => {
+  expect(() => fixture(false, { missingLedger: true })).toThrow("HTTP 404");
+});
+
 const envelope = (inputs = request().inputs) =>
   JSON.parse(expectDefined(inputs.trusted_workflow_json, "trusted workflow envelope"));
 const withEnvelope = (trusted: Record<string, unknown>, inputs = request().inputs) => ({
@@ -106,15 +110,16 @@ it.each([false, true])("authenticates P without Q main ancestry (protected=%s)",
   ).toEqual(f.descriptor);
 });
 
-it("admits independently selected Q while retaining C package and baseline identity", () => {
+it("admits off-main Q while retaining P authority and C package and baseline identity", () => {
   const q = "c".repeat(40);
   const f = fixture(true, { qualificationSha: q, transportRef: "release-ci/cccccccccccc-123" });
   expect(f.verify()).toEqual(f.receipt);
   expect(f.receipt.request).toMatchObject({ candidateSha, qualificationSha: q });
   expect(f.calls).toContain("repos/openclaw/openclaw/contents/package.json?ref=" + candidateSha);
   expect(f.calls).not.toContain("repos/openclaw/openclaw/contents/package.json?ref=" + q);
-  f.authority.qualificationAncestry = "behind";
-  expect(() => f.verify()).toThrow(/main/);
+  expect(f.calls.some((call) => call.includes("compare/" + q))).toBe(false);
+  f.authority.tagSha = q;
+  expect(() => f.verify()).toThrow(/protected release tooling tag/);
 });
 
 it("rejects mismatched Q in the reviewed workflow envelope", () => {

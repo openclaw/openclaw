@@ -55,7 +55,6 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
-  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord, UpdateRunStep } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -344,11 +343,6 @@ export function createUpdateRunProgress(
   };
   return {
     pendingSteps,
-    onRollbackOutcome: (rollbackOutcome) => {
-      if (!deferred) {
-        recordUpdateRunVerification(run.runId, { rollbackOutcome }, run);
-      }
-    },
     onHeartbeat() {
       if (!deferred) {
         heartbeatUpdateRun(run.runId, driver, run);

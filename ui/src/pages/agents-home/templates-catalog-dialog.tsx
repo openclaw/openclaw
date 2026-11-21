@@ -350,6 +350,21 @@ class TemplatesCatalogModel {
     }
   }
 
+  /** Reads one workspace file of the shown release for the page; a newer selection wins. */
+  async readInstruction(name: string): Promise<string> {
+    const source = this.source();
+    const scope = this.gateway.capture();
+    const revision = this.detailRevision;
+    if (!source || !scope) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    const result = await readTemplatePreview(scope.client, source, { kind: "instruction", name });
+    if (!this.gateway.isCurrent(scope) || revision !== this.detailRevision) {
+      throw new UserFacingError(t("templatesCatalog.unavailable"));
+    }
+    return result.content ?? "";
+  }
+
   view(): Omit<TemplatesCatalogViewProps, "readDetail" | "detailRequest"> {
     return {
       basePath: this.context.basePath,
@@ -364,6 +379,7 @@ class TemplatesCatalogModel {
       canAdd: this.canAdd(),
       consentWarning: this.consentWarning,
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
+      readInstruction: (name) => this.readInstruction(name),
       onBack: () => this.back(),
       onRetryDetail: () => this.loadDetail(),
       onConfirm: () => {

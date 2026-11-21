@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -39,36 +40,53 @@ export function isRetiredCheckoutDeletionPending(directory: string): boolean {
 }
 
 /** One serialized deletion owner for retired checkouts and orphan recovery. */
-export function deleteRetiredCheckout(directory: string): Promise<void> {
+export async function deleteRetiredCheckout(directory: string): Promise<void> {
   const retired = path.resolve(directory);
   deletingCheckouts.add(retired);
-  const deletion = checkoutDeletion
-    .then(async () => {
-      await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
-      const argv = [
-        process.execPath,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
-        ),
-        retired,
-      ];
-      const deleted = await runOutsideCommandProcessScope(() =>
-        withChildProcessOperation("worktree.cleanup", () =>
-          runCommandWithTimeout(
-            process.platform === "win32" ? argv : ["nice", "-n", "10", ...argv],
-            // Pacing and pressure waits need a separate background budget;
-            // this retired tree owns no live checkout or removal lease.
-            { timeoutMs: 30 * 60_000, killProcessTree: true },
+  try {
+    const argv = [
+      process.execPath,
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.retiredWorktreeCleanup),
+      ),
+      retired,
+    ];
+    let complete = false;
+    let firstPass = true;
+    while (!complete) {
+      const pass = checkoutDeletion.then(async () => {
+        const args = firstPass ? argv : [...argv, "resume"];
+        if (firstPass) {
+          await fs.unlink(path.join(retired, ".git")).catch(missingPathOrThrow);
+          firstPass = false;
+        }
+        const deleted = await runOutsideCommandProcessScope(() =>
+          withChildProcessOperation("worktree.cleanup", () =>
+            runCommandWithTimeout(
+              process.platform === "win32" ? args : ["nice", "-n", "10", ...args],
+              { timeoutMs: 30 * 60_000, killProcessTree: true },
+            ),
           ),
-        ),
+        );
+        if (deleted.termination !== "exit" || (deleted.code !== 0 && deleted.code !== 75)) {
+          throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
+        }
+        if (deleted.code === 75) {
+          // Keep the whole deletion queue quiet for a commit interval, then let
+          // queued siblings run before continuing this tree's remaining files.
+          await pause(30_000);
+        }
+        return deleted.code === 0;
+      });
+      checkoutDeletion = pass.then(
+        () => {},
+        () => {},
       );
-      if (deleted.termination !== "exit" || deleted.code !== 0) {
-        throw new Error(deleted.stderr || "Retired checkout deletion did not complete");
-      }
-    })
-    .finally(() => deletingCheckouts.delete(retired));
-  checkoutDeletion = deletion.catch(() => {});
-  return deletion;
+      complete = await pass;
+    }
+  } finally {
+    deletingCheckouts.delete(retired);
+  }
 }
 
 function missingPathOrThrow(error: unknown): undefined {

@@ -59,6 +59,24 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
+  it("recovers raw failed child receipts using the original admitted Q grant", async () => {
+    const test = recoveryConsumptionFixture(true, { waivedFailure: true });
+    const original = await verifyOriginalReceiptQualification(test.recovery, {
+      client: test.client,
+    });
+    expect(original).toBeDefined();
+    expect(test.runs.get("910")!.conclusion).toBe("failure");
+    const source = test.client.getWorkflowSource;
+    vi.spyOn(test.client, "getWorkflowSource").mockImplementation((sha, path) =>
+      path === "scripts/lib/release-validation-waivers.json"
+        ? JSON.stringify({ schema: "openclaw.release-validation-waivers/v1", waivers: [] })
+        : source(sha, path),
+    );
+    await expect(
+      verifyOriginalReceiptQualification(test.recovery, { client: test.client }),
+    ).rejects.toThrow("original child failed release policy");
+  });
+
   it("rejects a recovery title for a different request", async () => {
     const test = aggregateFixture();
     test.run.name = "Receipt Recovery 87654321-1234-4123-8123-123456789abc";

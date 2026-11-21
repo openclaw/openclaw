@@ -13,7 +13,7 @@ import { prepareSkillResourceDelivery } from "../../src/skills/runtime/resources
 import type { SkillSnapshot } from "../../src/skills/types.js";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import { writeGatewayGcTraceMarker, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 // Metadata-shaped synthetic trees, never copies of operator instructions or scripts.
 const supportSizes = [
@@ -296,12 +296,7 @@ if (values["start-file"]) {
 }
 const inspector = new Session();
 if (values.allocations) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
 }
 const stopDiagnostics = startGatewayBenchDiagnostics();
 if (values["gc-log"]) {
