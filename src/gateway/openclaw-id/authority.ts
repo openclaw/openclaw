@@ -39,6 +39,7 @@ import {
   assertSameClawIdentity,
   assertStoredClawText,
   clawStoreRows,
+  emptyRecord,
   readStoredClaw,
   writeStoredClaw,
   storedOwnerProfile,
@@ -97,22 +98,6 @@ export type RedemptionSender = {
   display_name?: string | null;
   location_hint?: string | null;
 };
-
-function emptyRecord(clawId: string): StoredClaw {
-  return {
-    v: 1,
-    claw_id: clawId,
-    hostname: null,
-    authority: null,
-    binding: null,
-    discovery: {
-      owner_account_id: null,
-      published_binding_seq: 0,
-      published_snapshot_seq: 0,
-      mailbox_cursor: null,
-    },
-  };
-}
 
 /** A tunnel-issued device token and the device key it is bound to. */
 export type DeviceTokenRef = { deviceId: string; role: string; peerKey: string };

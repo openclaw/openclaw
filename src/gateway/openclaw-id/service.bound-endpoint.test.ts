@@ -60,6 +60,27 @@ describe("tunnel child restarts for a linked claw", () => {
     }
   });
 
+  it("start unlinked after a confirmed unlink, not pinned to the old K_srv", async () => {
+    const claw = await linkedClaw();
+    const { service } = serviceFor(
+      claw.authority,
+      { enabled: true, relayUrl: "https://relay.test/" },
+      claw.stateDir,
+    );
+    try {
+      await service.reconcileRuntimePolicy();
+      expect(runtime.boundEndpointKey?.()).toBe(TEST_K_SRV);
+      expect(await service.unlink.run("local_operator", claw.clawId)).toMatchObject({
+        ok: true,
+        unlinked: true,
+      });
+      expect(claw.authority.current()?.binding).toBeNull();
+      expect(runtime.boundEndpointKey?.()).toBeUndefined();
+    } finally {
+      await service.stop();
+    }
+  });
+
   it.each(["initial link", "later write"])(
     "stay on K_srv when %s persistence is uncertain",
     async (phase) => {

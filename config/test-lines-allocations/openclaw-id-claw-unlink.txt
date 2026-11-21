@@ -6,4 +6,6 @@
 # signed-out local Unlink entry, a claw that never sent its registration versus one that did
 # (service, CLI exit code and status lines, dialog), an unlink racing a registration in flight or
 # its lookup, a publication without a link code, and the pre-unlink stored-claw upgrade proof.
-474
+# Final review repairs add Unlink staying in the menu when only the endpoint key is refused, and
+# the tunnel child starting unlinked (not pinned to the old K_srv) after a confirmed unlink.
+504

@@ -25,6 +25,7 @@ import type { OpenClawIdAccount, StoredClaw } from "./claw-store.js";
 import { createOpenClawIdConnectionAccess } from "./connection-identity.js";
 import { setDeviceTokenBindingOwner } from "./device-token-binding.js";
 import type { TunnelApiHandler } from "./ingress-listener.js";
+import { linkSummaryOf } from "./link-summary.js";
 import type { OpenClawIdPeerActivity } from "./member-activity.js";
 import { publishMemberProfileRoleChanges } from "./member-role-change.js";
 import { createMemberRolePresetActivation } from "./member-role-presets.js";
@@ -307,9 +308,11 @@ export function createOpenClawIdService(params: {
         settings,
         gatewayServer: params.getGatewayServer,
         membership: await (await getAuthority()).admittedPeerKeys(),
+        // Unavailable record (uncertain write): keep the last K_srv. Loaded unlinked: none.
         boundEndpointKey: () =>
-          (lastBoundEndpointKey =
-            authority?.current()?.binding?.body.k_srv ?? lastBoundEndpointKey),
+          (lastBoundEndpointKey = authority?.current()
+            ? authority.current()?.binding?.body.k_srv
+            : lastBoundEndpointKey),
         log: params.log,
         onStatus: (tunnel) => {
           status = openClawIdTunnelStatus(tunnel);
@@ -715,18 +718,7 @@ export function createOpenClawIdService(params: {
       if (!isOpenClawIdEnabled(params.getConfig())) {
         return { linked: false as const };
       }
-      const record = await (await getAuthority()).load();
-      const state = record?.authority;
-      if (!record || !state) {
-        return { linked: false as const, ...unlinkSteps.pendingHosts(record) };
-      }
-      return {
-        linked: true as const,
-        ...unlinkSteps.pendingHosts(record),
-        clawId: record.claw_id,
-        hostname: record.hostname ?? undefined,
-        rootPub: state.anchor.root_pub,
-      };
+      return linkSummaryOf(await (await getAuthority()).load());
     },
 
     /**
