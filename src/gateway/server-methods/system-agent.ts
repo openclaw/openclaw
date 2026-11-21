@@ -374,7 +374,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     // Accepted logbook work belongs to the serialized task, not socket cancellation.
     const assertSessionCurrent = () => {
       if (context.systemAgentSessions.get(params.sessionId) !== ownedSession) {
-        throw new Error("OpenClaw session changed during audit persistence");
+        throw new Error(
+          "This OpenClaw chat changed while the change was being saved. Check the current settings before making a new request.",
+        );
       }
     };
     const transcript = createSystemAgentTranscriptStore({

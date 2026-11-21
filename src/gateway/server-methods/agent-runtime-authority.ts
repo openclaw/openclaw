@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export function hasActiveAgentRuntimeAuthority(
@@ -9,7 +10,10 @@ export function hasActiveAgentRuntimeAuthority(
 ): boolean {
   try {
     assertCallerCurrent?.();
-  } catch {
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
+    }
     return false;
   }
   const identity = client?.internal?.agentRuntimeIdentity;
@@ -25,7 +29,7 @@ export function assertActiveAgentRuntimeAuthority(
   assertCallerCurrent?: () => void,
 ): void {
   if (!hasActiveAgentRuntimeAuthority(client, context, assertCallerCurrent)) {
-    throw new TypeError("agent runtime authority is no longer active");
+    throw new TypeError("The message turn has ended. Start a new turn to retry.");
   }
 }
 
@@ -51,7 +55,10 @@ export function createAgentRuntimeAuthorityGuard(
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "agent runtime authority is no longer active"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "The message turn has ended. Start a new turn to retry.",
+        ),
       );
       return false;
     },
