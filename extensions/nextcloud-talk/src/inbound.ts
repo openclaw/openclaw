@@ -143,11 +143,38 @@ export async function handleNextcloudTalkInbound(params: {
     ? normalizeStringEntries(account.config.groupAllowFrom)
     : allowFrom;
   const roomAllowFrom = normalizeStringEntries(roomConfig?.allowFrom);
+  const isNextcloudTalkSenderAllowed = (id: string, allow: string[]) =>
+    resolveNextcloudTalkAllowlistMatch({ senderId: id, allowFrom: allow }).allowed;
+
+  /** Room allowFrom must expand accessGroup: entries the same way quote checks do. */
+  const resolveRoomSenderAllowed = async (): Promise<boolean> => {
+    if (isNextcloudTalkSenderAllowed(senderId, roomAllowFrom)) {
+      return true;
+    }
+    const expanded = await expandAllowFromWithAccessGroups({
+      cfg: config,
+      allowFrom: roomAllowFrom,
+      channel: CHANNEL_ID,
+      accountId: account.accountId,
+      senderId,
+      isSenderAllowed: isNextcloudTalkSenderAllowed,
+    });
+    return isNextcloudTalkSenderAllowed(senderId, expanded);
+  };
+
   const resolveAccess = async (
     wasMentioned?: boolean,
     contextBinding?: ChannelIngressContextBinding,
-  ) =>
-    await core.channel.inbound.ingress.resolveStable({
+  ) => {
+    const roomSenderNeedsLocalMatch =
+      groupPolicy === "allowlist" &&
+      hasAllowEntries(roomAllowFrom) &&
+      hasAllowEntries(outerGroupAllowFrom);
+    const roomSenderAllowed = roomSenderNeedsLocalMatch
+      ? await resolveRoomSenderAllowed()
+      : undefined;
+
+    return await core.channel.inbound.ingress.resolveStable({
       channelId: CHANNEL_ID,
       accountId: account.accountId,
       identity: {
@@ -192,10 +219,7 @@ export async function handleNextcloudTalkInbound(params: {
                       senderAllowFrom: roomAllowFrom,
                     }
                   : {
-                      allowed: resolveNextcloudTalkAllowlistMatch({
-                        allowFrom: roomAllowFrom,
-                        senderId,
-                      }).allowed,
+                      allowed: roomSenderAllowed === true,
                       matchId: "nextcloud-talk-room-sender",
                     }),
               },
@@ -225,6 +249,8 @@ export async function handleNextcloudTalkInbound(params: {
         hasControlCommand,
       },
     });
+  };
+
   let access = await resolveAccess();
   const logAuthorizationChanged = () => {
     runtime.log?.(
