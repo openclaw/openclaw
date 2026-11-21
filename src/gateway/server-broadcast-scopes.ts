@@ -13,11 +13,11 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
-  PUBLICATION_READ_SCOPE,
   SESSION_READ_SCOPE,
   TALK_SCOPE,
   WRITE_SCOPE,
 } from "./operator-scopes.js";
+import { isPublicationTransportScope } from "./publication-reader.js";
 import type { GatewayPluginEventScope } from "./server-broadcast-types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -246,8 +246,8 @@ export function hasEventScope(
   hasSessionReadContext?: () => boolean,
 ): boolean {
   if (
-    client.internal?.publicationReader ||
-    client.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+    client.internal?.publicationTransport ||
+    client.connect.scopes?.some(isPublicationTransportScope)
   ) {
     return event === "tick";
   }
@@ -282,15 +282,15 @@ export function hasEventScope(
 }
 
 /** Preserve transport liveness without exposing arbitrary tick payloads or state versions. */
-export function isPublicationReaderEventAllowed(
+export function isPublicationTransportEventAllowed(
   client: GatewayWsClient,
   event: string,
   payload: unknown,
   stateVersion: unknown,
 ): boolean {
   if (
-    !client.internal?.publicationReader &&
-    !client.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+    !client.internal?.publicationTransport &&
+    !client.connect.scopes?.some(isPublicationTransportScope)
   ) {
     return true;
   }

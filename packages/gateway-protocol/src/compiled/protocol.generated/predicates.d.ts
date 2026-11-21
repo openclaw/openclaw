@@ -2003,6 +2003,11 @@ export function isSessionsTitlePrepareParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SessionsTitlePrepareParamsSchema
 >;
+export function isSessionsSteerTargetParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").SessionsSteerTargetParamsSchema
+>;
 export function isSessionsSteerActiveParams(
   value: unknown,
 ): value is import("typebox").Static<
