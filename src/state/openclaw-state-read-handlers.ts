@@ -1,4 +1,5 @@
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
+import { isContinuationMaintenanceStateReadCommand } from "../auto-reply/continuation/custody/custody-store.worker-contract.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -553,6 +554,14 @@ export async function prepareOpenClawStateRead(
   if (isTuiLastSessionReadCommand(command)) {
     const { readTuiLastSessionCommand } = await import("../tui/tui-last-session.kernel.js");
     return (db: EngineConnection) => readTuiLastSessionCommand(db, command);
+  }
+  if (isContinuationMaintenanceStateReadCommand(command)) {
+    const { readContinuationMaintenanceStateInDatabase } =
+      await import("../auto-reply/continuation/custody/custody-store.worker.js");
+    return (db: EngineConnection) => ({
+      type: command.type,
+      ...readContinuationMaintenanceStateInDatabase(db),
+    });
   }
   if (command.type === "agentDeletionJournal.status") {
     const { readAgentDeletionJournalStatusInDatabase } =

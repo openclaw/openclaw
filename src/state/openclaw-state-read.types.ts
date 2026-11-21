@@ -6,6 +6,7 @@ import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kerne
 import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { ExecutionIdentityInspectionQuery } from "../audit/execution-identity-inspection.types.js";
+import type { ContinuationMaintenanceStateReadCommand } from "../auto-reply/continuation/custody/custody-store.worker-contract.js";
 import type { ChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScratchReadCommand } from "../cron/scratch-contract.js";
@@ -77,6 +78,7 @@ export type OpenClawStateReadCommand =
   | { type: "admit" }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
+  | ContinuationMaintenanceStateReadCommand
   | ChannelIngressReadCommand
   | { type: "capture.readOnlyEvents"; sessionId: string; limit?: number }
   | { type: "capture.readOnlyBlob"; blobId: string }

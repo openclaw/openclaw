@@ -4,7 +4,9 @@
 // state worker. Each operation validates every precondition before its first
 // write, so a refusal commits nothing and a thrown write rolls the whole
 // transaction back.
+import { deliveryQueueEntriesQuery } from "../../../infra/delivery-queue-sqlite-bound.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { SESSION_DELIVERY_QUEUE_NAME } from "../../../infra/session-delivery-queue.records.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../../infra/sqlite-schema-ensure.js";
 import { requestSqliteWorkerOperationAdmission } from "../../../infra/sqlite-worker-operation-admission.js";
@@ -75,6 +77,19 @@ export function listContinuationRecordsInDatabase(
   query: ContinuationRecordQuery,
 ): ContinuationRecord[] {
   return tableExists(db, CONTINUATION_RECORDS_TABLE) ? selectRecords(db, query) : [];
+}
+
+/**
+ * Whether session maintenance must read continuation rows or custody through the state worker.
+ * Any pending session delivery qualifies; only the worker's decoder tells which rows are
+ * continuation-owned, and the custody projection names live owners.
+ */
+export function readContinuationMaintenanceStateInDatabase(db: EngineConnection) {
+  const pending = deliveryQueueEntriesQuery({ db }, [SESSION_DELIVERY_QUEUE_NAME], "pending");
+  return {
+    pendingSessionDeliveries: executeSqliteQuerySync(db, pending.limit(1)).rows.length > 0,
+    liveCustody: listContinuationRecordsInDatabase(db, { statuses: LIVE_STATUSES }).length > 0,
+  };
 }
 
 /** Durable create keyed by owner and kind; an existing record ID is never overwritten. */

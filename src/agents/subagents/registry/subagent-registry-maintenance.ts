@@ -18,13 +18,21 @@
  * Custody is read from the maintained store's own state root, never the process's ambient one. An
  * incognito memory store owns no durable state and no row is addressed to its sessions (their
  * elections are refused at the binding), so its pass keeps the live owners alone: it never opens
- * the state database or waits for custody readiness.
+ * the state database or waits for custody readiness. A durable store first asks the shared-state
+ * reader whether its state holds a pending session delivery or a live custody record, and reads
+ * rows or awaits readiness through the state worker only for what it holds. A store holding
+ * neither never starts that worker, whose first start would otherwise stall the pass while writers
+ * move the protection inputs it captures.
  */
 import { whenContinuationCustodyReady } from "../../../auto-reply/continuation/custody/custody-store.js";
 import { listLiveContinuationCustodyOwners } from "../../../auto-reply/continuation/work-store.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../../../config/sessions/store-maintenance-preserve.js";
 import { listPendingContinuationSessionDeliveryKeys } from "../../../infra/session-delivery-queue-storage.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../../../state/openclaw-state-worker-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { prepareSubagentMaintenanceRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunMaintenanceRecord } from "./subagent-registry.types.js";
@@ -49,21 +57,31 @@ function* protectedSubagentSessionKeys(
   yield* custodyHolders;
 }
 
+function readContinuationMaintenanceState(env: NodeJS.ProcessEnv | undefined) {
+  const context = captureOpenClawStateReadWorkerContext({ env });
+  return executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "continuationCustody.maintenanceState" },
+    { context, current: true },
+  );
+}
+
 registerSessionMaintenancePreserveKeysProvider(async ({ native, env, memory }) => {
-  const [prepared, pendingRowSessionKeys] = await Promise.all([
+  const [prepared, durable] = await Promise.all([
     prepareSubagentMaintenanceRunsSnapshotForRead(
       subagentRuns,
       native ? { live: true } : undefined,
     ),
-    memory
-      ? undefined
-      : listPendingContinuationSessionDeliveryKeys(captureOpenClawStateWorkerContext({ env })),
+    memory ? undefined : readContinuationMaintenanceState(env),
   ]);
-  // No state database holds no custody; one that exists has its projection hydrated (phase A,
-  // already done after the Gateway's custody boot) before it is read.
-  if (pendingRowSessionKeys) {
-    await whenContinuationCustodyReady({ env });
-  }
+  // Live custody has its projection hydrated (phase A, already done after the Gateway's custody
+  // boot) before it is read. A missing state database holds neither rows nor custody.
+  const [pendingRowSessionKeys] = await Promise.all([
+    durable?.pendingSessionDeliveries
+      ? listPendingContinuationSessionDeliveryKeys(captureOpenClawStateWorkerContext({ env }))
+      : undefined,
+    durable?.liveCustody ? whenContinuationCustodyReady({ env }) : undefined,
+  ]);
   const custodyHolders = [
     ...listLiveContinuationCustodyOwners(env),
     ...(pendingRowSessionKeys ?? []),

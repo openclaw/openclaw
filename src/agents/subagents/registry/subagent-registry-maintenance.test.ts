@@ -19,6 +19,7 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -223,6 +224,34 @@ describe("subagent maintenance protection", () => {
     expect([rows.mock.calls.length, readiness.mock.calls.length]).toEqual([0, 0]);
     expect(await protectedKeys()).toEqual(["agent:main:row", elector]);
     expect([rows.mock.calls.length, readiness.mock.calls.length]).toEqual([1, 1]);
+  });
+
+  it("prepares a durable store holding no rows or custody without the state worker", async () => {
+    openOpenClawStateDatabase();
+    const run = createRun();
+    subagentRuns.set(run.runId, run);
+    const worker = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+    const readiness = vi.spyOn(custodyStore, "whenContinuationCustodyReady");
+    expect(await protectedKeys()).toEqual([run.childSessionKey]);
+    expect([worker.mock.calls.length, readiness.mock.calls.length]).toEqual([0, 0]);
+  });
+
+  it("waits for custody readiness when this process has not hydrated live custody", async () => {
+    openOpenClawStateDatabase();
+    const elector = "agent:main:subagent:elector";
+    await createContinuationRecord({
+      recordId: newContinuationRecordId(),
+      kind: "delegate",
+      ownerSessionKey: elector,
+      status: "queued",
+      createdAt: Date.now(),
+      stateJson: "{}",
+    });
+    // Closing the state database retires this process's custody projection.
+    await closeOpenClawStateDatabaseAsync();
+    const readiness = vi.spyOn(custodyStore, "whenContinuationCustodyReady");
+    expect(await protectedKeys()).toEqual([elector]);
+    expect(readiness).toHaveBeenCalledOnce();
   });
 
   it("loads protection once without decoding retained task and reply text", async () => {

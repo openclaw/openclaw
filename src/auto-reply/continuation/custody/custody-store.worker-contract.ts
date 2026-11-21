@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ContinuationAttemptFailureInput,
   ContinuationClaimResult,
@@ -65,3 +66,17 @@ export type ContinuationCustodyWorkerOperations = {
     output: { live: ContinuationRecord[] };
   };
 };
+
+/**
+ * A shared-state read, not a worker command: maintenance asks it before reading custody or rows
+ * through the state worker, so a store with neither never starts that worker.
+ */
+export type ContinuationMaintenanceStateReadCommand = {
+  type: "continuationCustody.maintenanceState";
+};
+
+export function isContinuationMaintenanceStateReadCommand(
+  value: unknown,
+): value is ContinuationMaintenanceStateReadCommand {
+  return isRecord(value) && value.type === "continuationCustody.maintenanceState";
+}
