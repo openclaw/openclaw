@@ -42,6 +42,7 @@ export function buildChannelUserTurnSender(ctx: MsgContext): UserTurnInput["send
           },
         }
       : {}),
+    ...(normalizeOptionalString(ctx.ForwardedFrom) ? { forwarded: true } : {}),
   };
 }
 
@@ -52,10 +53,11 @@ export function buildPersistedUserTurnMetadata(
   const senderId = normalizeOptionalString(input.sender?.id);
   const senderName = normalizeOptionalString(input.sender?.name);
   const senderUsername = normalizeOptionalString(input.sender?.username);
-  const senderIdentity =
-    input.display !== false && (!input.provenance || input.provenance.kind === "external_user")
-      ? readTranscriptSenderIdentity(input.sender?.identity)
-      : undefined;
+  const externalChannelTurn =
+    input.display !== false && (!input.provenance || input.provenance.kind === "external_user");
+  const senderIdentity = externalChannelTurn
+    ? readTranscriptSenderIdentity(input.sender?.identity)
+    : undefined;
   const replyToId = normalizeOptionalString(input.replyToId);
   const replyPreviewText = normalizeOptionalString(input.replyToPreview?.text);
   const replyPreviewSender = normalizeOptionalString(input.replyToPreview?.senderLabel);
@@ -78,6 +80,7 @@ export function buildPersistedUserTurnMetadata(
     ...(senderName ? { senderName } : {}),
     ...(senderUsername ? { senderUsername } : {}),
     ...(senderIdentity && senderIdentity.id === senderId ? { senderIdentity } : {}),
+    ...(externalChannelTurn && input.sender?.forwarded === true ? { forwarded: true } : {}),
     ...(input.workContext ? { workContext: structuredClone(input.workContext) } : {}),
     ...(input.appContext ? { appContext: structuredClone(input.appContext) } : {}),
     ...(input.mentions?.length

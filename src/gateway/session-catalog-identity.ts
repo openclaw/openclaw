@@ -248,7 +248,7 @@ export async function prepareSessionCatalogGitHubLinker(params: {
   const prepared = await prepareIdentityFacts({
     kind: "link",
     accountIds,
-    owners: params.owners ?? [],
+    owners: [...(params.owners ?? [])],
   });
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();
   const prepareDisplay = (id: string) => {

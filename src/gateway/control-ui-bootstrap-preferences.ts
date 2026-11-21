@@ -3,6 +3,7 @@ import { redactConfigObject } from "../config/redact-snapshot.js";
 import { computeBaseConfigUiHints } from "../config/schema-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCanonicalUserPreferences } from "../state/user-preferences.js";
+import { isTemplatesEnabled } from "../templates/availability.js";
 import type { ControlUiBootstrapConfig } from "./control-ui-bootstrap-contract.js";
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
@@ -32,7 +33,7 @@ export async function prepareControlUiBootstrapPreferences(
               publicOrigin: config.gateway?.publicOrigin,
               controlUi: {
                 experimental: {
-                  templates: config.gateway?.controlUi?.experimental?.templates === true,
+                  templates: isTemplatesEnabled(config),
                 },
               },
             },

@@ -56,7 +56,7 @@ export async function getCanonicalUserPreferences(
   const context = captureOpenClawStateReadWorkerContext(options);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
-    { type: "userPreferences.read", profileId, keys },
+    { type: "userPreferences.read", profileId, keys: keys?.slice() },
     { context, current: true },
   );
   return reply?.preferences;

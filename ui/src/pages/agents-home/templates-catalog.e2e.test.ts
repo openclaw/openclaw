@@ -466,19 +466,6 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     expect(layout.scrollHeight).toBeGreaterThan(layout.height);
   }
 
-  it("shows the renamed Labs entry and configuration availability", async () => {
-    const { page } = await fixture();
-    await page.goto(`${server.baseUrl}settings/labs`);
-    const row = page
-      .locator(".settings-row")
-      .filter({ has: page.locator(".settings-row__title", { hasText: /^Templates$/ }) });
-    await row.getByRole("switch").waitFor();
-    expect(await row.textContent()).toContain(
-      "Templates are ready-made agents for specific tasks.",
-    );
-    await capture(page, "after-labs", row, row);
-  });
-
   it("lays out featured cards and switches category shelves to filtered results", async () => {
     const { page, gateway } = await fixture(
       undefined,

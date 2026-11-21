@@ -39,8 +39,9 @@ import type {
   Tool,
   Usage,
 } from "../../llm/types.js";
+import { resolveModelCostConfig } from "../../model-catalog/usage-pricing.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
+import { estimateUsageCost } from "../../utils/usage-format.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import type { WorkerInferenceExecutor } from "./connection-identity.js";
 import type { PreparedWorkerInference } from "./inference-model.js";
