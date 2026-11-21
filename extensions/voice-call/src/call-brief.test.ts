@@ -98,6 +98,17 @@ it("preserves a near-limit callback brief when supplying the receptionist task",
   );
 });
 
+it("keeps an emoji whole when an owner instruction hits the brief cap", () => {
+  const instruction = `${"o".repeat(499)}😀ZZEND`;
+  const instructions = buildCallBriefInstructions(
+    call({ task: "Confirm the visit" }, { ownerInstructions: [instruction] }),
+  );
+  expect(instructions).toContain("o".repeat(499));
+  expect(instructions).not.toContain("😀");
+  expect(instructions).not.toContain("ZZEND");
+  expect(instructions).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+});
+
 it("carries task, approvals and owner steering without changing the opening message", () => {
   const instructions = buildCallBriefInstructions(
     call(
