@@ -13,7 +13,7 @@ import {
   readPluginCacheDirectory,
 } from "../../plugins/plugin-cache-files.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../../plugins/plugin-cache.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-memo-lifecycle.js";
 import { resolvePluginMetadataSnapshotRequiredRuntime } from "../../plugins/plugin-metadata-snapshot-required.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { iteratePluginRootContributions } from "../../plugins/plugin-root-contributions.js";
