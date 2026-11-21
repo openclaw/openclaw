@@ -126,6 +126,7 @@ function completeInvocations(rows) {
       current &&
       (current.files !== undefined || current.tests !== undefined) &&
       text !== "" &&
+      !(current.empty && /^(?:include|exclude):(?: |$)/u.test(text)) &&
       !/^(?:Test Files|Tests)\s/u.test(text) &&
       !/^Start at\s+\d{2}:\d{2}:\d{2}$/u.test(text) &&
       !/^Duration\s+\d+(?:\.\d+)?(?:ms|s)\b/u.test(text) &&
@@ -138,10 +139,19 @@ function completeInvocations(rows) {
     if (text.startsWith("[test] starting ")) {
       state.invocations.push({ files: undefined, tests: undefined });
     }
+    if (text === "No test files found, exiting with code 0") {
+      if (!current || current.files !== undefined || current.tests !== undefined) {
+        return false;
+      }
+      // Vitest emits no summary for a successfully completed empty selection.
+      current.empty = true;
+      current.files = false;
+      current.tests = false;
+    }
     const summary = /^(Test Files|Tests)\s+.+\(\d+\)$/u.exec(text);
     if (summary) {
       const active = state.invocations.at(-1);
-      if (!active) {
+      if (!active || active.empty) {
         return false;
       }
       const key = summary[1] === "Test Files" ? "files" : "tests";
@@ -234,7 +244,7 @@ export function parseNodeFailureReport(log, requireComplete) {
       if (
         !failure ||
         !isNodeTestEvidencePath(failure[1]) ||
-        !/^(?:AssertionError|Error|TypeError|RangeError): .+/u.test(message ?? "")
+        !/^\w*Error: .+/u.test(message ?? "")
       ) {
         return [];
       }
