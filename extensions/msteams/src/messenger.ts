@@ -238,7 +238,7 @@ export async function sendMSTeamsMessages(
             if (!tokenProvider) {
               throw new Error("MS Teams Graph token provider unavailable for SharePoint file send");
             }
-            const siteId = await resolveMSTeamsSharePointSiteId({
+            const uploadSite = await resolveMSTeamsSharePointSiteId({
               ...options,
               siteId: sharePointSiteId,
               accountId: params.accountId,
@@ -255,14 +255,15 @@ export async function sendMSTeamsMessages(
               filename: fileName,
               contentType,
               tokenProvider,
-              siteId,
+              siteId: uploadSite.siteId,
+              memberScoped: uploadSite.memberScoped,
               chatId,
               usePerUserSharing: conversationType === "groupchat",
             });
 
             const driveItem = await getDriveItemProperties({
               assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
-              siteId,
+              siteId: uploadSite.siteId,
               itemId: uploaded.itemId,
               tokenProvider,
             });
