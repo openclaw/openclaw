@@ -991,8 +991,17 @@ describe("CI changed Node test plan", () => {
       ];
       const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       let full: CompactNodeTestShard[];
+      let changedFull: CompactNodeTestShard[];
       try {
         full = fullOwnerPlan(runnerBackend);
+        // Changed selection explicitly opts in runtime owners; direct selections below do not.
+        changedFull = createNodeTestShardBundles({
+          compactMode: "pull-request",
+          runnerBackend,
+          includeReleaseOnlyPluginShards: false,
+          includeReleaseOnlyRuntimeTests: true,
+          includePrExemptRuntimeTests: true,
+        });
       } finally {
         placement.mockRestore();
       }
@@ -1009,7 +1018,7 @@ describe("CI changed Node test plan", () => {
             (group) => !group.includePatterns?.includes(lintSuppressionInventoryTest),
           ) ?? [];
         for (const group of embeddedGroups) {
-          const { job: ownerJob, group: owner } = canonicalOwner(full, group.shard_name);
+          const { job: ownerJob, group: owner } = canonicalOwner(changedFull, group.shard_name);
           expect(group.env).toEqual(owner.env);
           expect(group.env?.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("660000");
           for (const target of group.includePatterns ?? []) {
