@@ -85,6 +85,11 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
     let prepared = raw ?? "";
     if (!protocolResolved) {
       pendingProtocol += prepared;
+      // A trailing CR may be the first half of a CRLF split across chunks. Wait for
+      // the next chunk so the delimiter is stripped as one unit instead of leaving LF.
+      if (!options?.final && pendingProtocol.toUpperCase() === `${SILENT_REPLY_TOKEN}\r`) {
+        return null;
+      }
       const stripped = stripMixedSilentReplyTokens(pendingProtocol);
       if (stripped !== null) {
         prepared = stripped;
