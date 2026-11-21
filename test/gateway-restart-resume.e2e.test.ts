@@ -587,6 +587,92 @@ it.skipIf(process.platform === "win32")(
 );
 
 it.skipIf(process.platform === "win32")(
+  "leaves interrupted dashboard automation with cron while resuming operator work",
+  { timeout: 180_000 },
+  async ({ signal, onTestFailed }) => {
+    const provider = await providerFixture(signal);
+    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const instance = await createOpenClawTestInstance({
+      name: "restart-automation-owner",
+      signal,
+      config: { ...restartResumeConfig(model), cron: { enabled: true } },
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1", OPENCLAW_SKIP_CRON: "0" },
+    });
+    let client: Awaited<ReturnType<typeof connectRestartClient>> | undefined;
+    onTestFailed(() => {
+      process.stderr.write(`${instance.logs()}\n`);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", { key: key(0, "stream"), agentId: "other" });
+        await client.request("cron.add", {
+          agentId: "other",
+          name: "Restart automation owner",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 2_000 },
+          sessionTarget: `session:${key(0, "stream")}`,
+          wakeMode: "now",
+          idleOnly: false,
+          payload: { kind: "agentTurn", message: marker(0, "stream") },
+          delivery: { mode: "none" },
+        });
+        await provider.wait("ready:0:stream");
+        await client.request("chat.send", {
+          sessionKey: key(1, "stream"),
+          message: marker(1, "stream"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("ready:1:stream");
+        const beforeRestart = provider.calls.at(-1)!.ordinal;
+        provider.restart();
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        const scope = {
+          agentId: "other",
+          env: instance.env,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
+        };
+        const rows = await readSessionEntrySummariesInWorker(scope);
+        expect(
+          rows.find((row) => row.sessionKey === key(0, "stream"))?.entry.resumeAfterRestart,
+        ).toBeUndefined();
+        expect(
+          rows.find((row) => row.sessionKey === key(1, "stream"))?.entry.resumeAfterRestart,
+        ).toBeDefined();
+        await closeOpenClawAgentDatabasesAsync();
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await provider.wait("resume:1:stream");
+        provider.release(1);
+        await vi.waitFor(
+          async () => {
+            expect(
+              provider.calls.some((call) => call.cycle === 0 && call.ordinal > beforeRestart),
+            ).toBe(true);
+            const history = await client!.request<{ messages: unknown[] }>("chat.history", {
+              sessionKey: key(0, "stream"),
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(JSON.stringify(history.messages)).not.toContain("this run could not resume");
+          },
+          { timeout: 30_000 },
+        );
+        expect(provider.calls.filter((call) => call.resumeInput).map((call) => call.cycle)).toEqual(
+          [1],
+        );
+        expect(instance.logs()).not.toContain("Queued operator authority cannot be recovered");
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
+
+it.skipIf(process.platform === "win32")(
   "records a visible outcome when a marked run loses requester authority before restart",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
@@ -1281,11 +1367,21 @@ it.skipIf(process.platform === "win32").for([true, false])(
           provider.release(cycle);
           const expectedReplies: Array<{ name: Case; text: string }> = [
             ...cases
-              .filter((name) => name !== "stream" && name !== "idle" && name !== "background")
+              .filter(
+                (name) =>
+                  name !== "stream" &&
+                  name !== "idle" &&
+                  name !== "background" &&
+                  name !== "parent",
+              )
               .map((name) => ({ name, text: `RESUMED_${cycle}_${name}` })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
               ? [{ name: "background" as const, text: "HANDLED_NEW_INPUT" }]
+              : []),
+            // A yielded parent receives its interrupted child's restored completion.
+            ...(cases.includes("parent")
+              ? [{ name: "parent" as const, text: "HANDLED_NEW_INPUT" }]
               : []),
             { name: "stream", text: "HANDLED_LITERAL_STOP" },
             { name: "stream", text: `HANDLED_${queued(cycle, 2)}` },
@@ -1330,10 +1426,17 @@ it.skipIf(process.platform === "win32").for([true, false])(
                 ),
               ).toBe(true);
             }
+            if (name === "parent") {
+              const completions = calls.filter((call) =>
+                call.current.includes("status: error: Gateway stopped"),
+              );
+              expect(completions).toHaveLength(1);
+              expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
+            }
             expect(
               resumes,
               `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(name === "idle" || name === "background" ? 0 : 1);
+            ).toHaveLength(name === "idle" || name === "background" || name === "parent" ? 0 : 1);
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             expect(

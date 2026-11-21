@@ -575,6 +575,12 @@ Escape stay with composition. Finish composing before saving or canceling.
 Once the Gateway confirms a rename, the saved name stays visible while the session
 list refreshes, even if an older snapshot arrives late.
 
+Choose **Archive all** from a shared sidebar group’s options to archive its
+unarchived sessions, including nested sessions that still belong to the group.
+The confirmation shows how many sessions will be archived, even when the
+sidebar hasn’t loaded them all. The group stays in place, and **Undo** cancels
+the archive before it is saved.
+
 Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
@@ -802,10 +808,11 @@ read succeeds. Failed summary reads show **Failed** instead of an unexplained
 with **Refresh** available; previously loaded jobs remain visible while a
 refresh is pending or fails.
 
-Open **Templates** in **Pages**, or visit `/templates`, to discover official Templates.
-This page contains Templates discovery only. Enable **Templates** in **Settings → Labs**
-to make it available; when disabled, both the Pages entry and direct visits to
-Templates discovery or details are unavailable. The former `/agents` overview is removed.
+Open **Customize → Templates** (find **Customize** in **Pages** if it is not pinned),
+or visit `/templates`, to discover official Templates.
+Templates are available by default, without a Labs switch. An explicit
+`gateway.controlUi.experimental.templates: false` hides the Templates entry and
+direct visits to discovery or details. The former `/agents` overview is removed.
 
 To browse sessions across agents, choose the **Show all** tile in the agent
 switcher. It appears with two or more agents and groups their own avatars: two

@@ -389,6 +389,19 @@ export function getAdmittedRunSource(
     : undefined;
 }
 
+/** Reads the initiating profile only from the host's exact active admission lease. */
+export function getAdmittedRunOperatorProfileId(
+  authority: AgentRunDelegatedAuthority,
+): string | undefined {
+  const context = admittedContextsByAuthority.get(authority);
+  if (!context || getAdmittedRunDelegatedAuthority(context) !== authority) {
+    return undefined;
+  }
+  const operator = readAdmittedRunOperatorAuthority(context);
+  operator?.assertCurrent();
+  return operator?.profileId;
+}
+
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,

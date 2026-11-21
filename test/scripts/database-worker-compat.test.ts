@@ -1,6 +1,6 @@
 import * as ts from "typescript/ast";
-import { Checker } from "typescript/sync";
-import { expect, it } from "vitest";
+import { API, Checker } from "typescript/sync";
+import { expect, it, vi } from "vitest";
 import { inspectDatabaseWorkerBoundaries } from "../../scripts/lib/database-worker-compat.mts";
 
 const legacyFile = "src/plugin-sdk/sqlite-runtime-legacy.ts";
@@ -335,7 +335,9 @@ it.each([
 });
 
 it("batches shorthand receiver types while rejecting typed receiver and parameter escapes", () => {
-  const queries: (ts.Node | readonly ts.Node[])[] = [];
+  const batches = vi.spyOn(API.prototype, "batch");
+  const queries: ts.Node[] = [];
+  const facts = new Map<string, Readonly<Record<string, string | number>>>();
   const symbolNodes: ts.Node[] = [];
   const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getTypeAtLocation")!;
   const symbolDescriptor = Object.getOwnPropertyDescriptor(
@@ -362,47 +364,112 @@ it("batches shorthand receiver types while rejecting typed receiver and paramete
       ...descriptor,
       get(this: Checker) {
         const query: Checker["getTypeAtLocation"] = descriptor.get!.call(this);
+        const record = (input: ts.Node | readonly ts.Node[]) => {
+          const nodes = Array.isArray(input) ? input : [input as ts.Node];
+          queries.push(...nodes.filter(ts.isObjectBindingPattern));
+        };
         const observed = Object.assign(
           ((input: ts.Node | readonly ts.Node[]) => {
-            const nodes = Array.isArray(input) ? input : [input as ts.Node];
-            if (nodes.some(ts.isObjectBindingPattern)) {
-              queries.push(input);
-            }
+            record(input);
             return Array.isArray(input) ? query(input) : query(input as ts.Node);
           }) as Checker["getTypeAtLocation"],
-          { gen: query.gen.bind(query) },
+          {
+            *gen(input: ts.Node | readonly ts.Node[]) {
+              record(input);
+              return yield* Array.isArray(input) ? query.gen(input) : query.gen(input as ts.Node);
+            },
+          },
         );
         // The compiler getter installs a callable on the instance; observe that path too.
         Object.defineProperty(this, "getTypeAtLocation", { configurable: true, value: observed });
         return observed;
       },
     });
-    const result = inspectStore(`
-      import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
-      const { lookupMany, consume, clear } = createSyncKeyedStore<number>();
-      consume(1);
-      export function receive({ lookupMany, consume, clear }: Store<number>) {
-        retain(lookupMany, consume, clear);
-      }
-    `);
+    const consumers = Array.from({ length: 337 }, (_, index) => `src/consumer-${index}.ts`);
+    const result = inspectDatabaseWorkerBoundaries(
+      process.cwd(),
+      new Map([
+        [kernelFile, kernel],
+        [pluginStateLegacyFile, legacyStore],
+        [
+          "src/consumer.ts",
+          `import { createSyncKeyedStore, type Store } from './plugin-state/plugin-state-store.legacy.js';
+          const { lookupMany, consume, clear } = createSyncKeyedStore<number>();
+          consume(1);
+          export function receive({ lookupMany, consume, clear }: Store<number>) {
+            retain(lookupMany, consume, clear);
+          }`,
+        ],
+        ...consumers.map((file): [string, string] => [
+          file,
+          `import type { Store } from './plugin-state/plugin-state-store.legacy.js';
+          export function receive({ lookupMany, consume, clear }: Store<number>) {
+            retain(lookupMany, consume, clear);
+          }`,
+        ]),
+        [
+          "src/unrelated.ts",
+          `export function unrelated({ consume, clear }: { consume: () => void; clear: () => void }) {
+            consume(); clear();
+          }
+          export function missing({ lookupMany }: {}) { lookupMany(); }`,
+        ],
+      ]),
+      undefined,
+      undefined,
+      false,
+      (phase, observed) => {
+        if (observed) {
+          facts.set(phase, observed);
+        }
+      },
+    );
     const methods = legacyStoreMethods.map((name) => `createSyncKeyedStore.${name}`);
-    expectViolations(result, ...methods, ...methods);
+    expect(result.violations).toHaveLength((consumers.length + 2) * methods.length);
+    for (const file of ["src/consumer.ts", ...consumers]) {
+      for (const method of methods) {
+        expect(result.violations).toContainEqual(
+          expect.stringMatching(new RegExp(`^${file.replaceAll(".", "\\.")}:.*${method}$`)),
+        );
+      }
+    }
     expect(result.operations.has(kernelFile)).toBe(false);
-    expect(queries).toHaveLength(1);
-    expect(Array.isArray(queries[0])).toBe(true);
-    const patterns = queries[0] as readonly ts.Node[];
-    expect(patterns).toHaveLength(2);
-    expect(new Set(patterns).size).toBe(2);
-    expect(patterns.every(ts.isObjectBindingPattern)).toBe(true);
-    const members = patterns
+    expect(queries).toHaveLength(consumers.length + 4);
+    expect(new Set(queries).size).toBe(queries.length);
+    const members = queries
       .filter(ts.isObjectBindingPattern)
       .flatMap((pattern) =>
         pattern.elements.flatMap((element) => (element.name ? [element.name] : [])),
       );
-    expect(members).toHaveLength(6);
+    expect(members).toHaveLength((consumers.length + 2) * methods.length + 3);
     const memberNodes = new Set<ts.Node>(members);
-    expect(symbolNodes.filter((node) => memberNodes.has(node))).toEqual([]);
+    const unresolved = symbolNodes.filter((node) => memberNodes.has(node));
+    expect(unresolved).toHaveLength(1);
+    expect(unresolved[0]?.getText()).toBe("lookupMany");
+    expect(unresolved[0]?.getSourceFile().fileName).toMatch(/unrelated\.ts$/);
+    const before = facts.get("binding-forwarding")!;
+    const after = facts.get("reference-prefetch")!;
+    const complete = facts.get("graph-classification")!;
+    expect(before.timingSample).toBe("current");
+    expect(after.timingSample).toBe("current");
+    expect(complete.timingSample).toBe("current");
+    const referenceRequests = Number(after.requestCount) - Number(before.requestCount);
+    console.info(
+      "database member query work",
+      JSON.stringify({
+        patterns: queries.length,
+        members: members.length,
+        referenceRequests,
+        complete,
+      }),
+    );
+    // A growing multi-file inventory must not require a round trip per receiver/member.
+    expect(referenceRequests).toBeLessThan(consumers.length);
+    expect(
+      batches.mock.calls.every((generators: readonly unknown[]) => generators.length <= 256),
+    ).toBe(true);
   } finally {
+    batches.mockRestore();
     Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
     Object.defineProperty(Checker.prototype, "getSymbolAtLocation", symbolDescriptor);
   }

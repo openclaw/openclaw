@@ -46,6 +46,34 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Resource profile
+
+`openclaw/plugin-sdk/resource-profile` exposes the host's read-only resource
+policy as `ResourceProfile` (`"standard" | "lean"`):
+
+```typescript
+import { getResourceProfile, onResourceProfileChange } from "openclaw/plugin-sdk/resource-profile";
+
+const profile = getResourceProfile();
+const unsubscribe = onResourceProfileChange((nextProfile) => {
+  // Update plugin-owned resource policy; let admitted work settle first.
+  applyResourcePolicy(nextProfile);
+});
+api.lifecycle.onDispose(unsubscribe);
+```
+
+Reads return the Gateway owner's resolved decision, without inspecting config,
+memory or CPUs again. Before Gateway initialization and in standalone commands,
+the default is `standard`. The subscription observes future changes only; it
+does not immediately call the listener. Listeners run synchronously after the
+new value is visible, and one listener throwing does not stop the others.
+Unsubscribe on plugin disposal; Gateway shutdown also clears subscriptions.
+
+`gateway.resources.profile` still requires a Gateway restart. This signal does
+not enable hot configuration changes or grant execution authority. Plugins own
+their policy: lean can defer optional startup and retire idle resources, but
+must preserve watches, accepted operations and durable maintenance obligations.
+
 ## Settled agent lifecycle events
 
 Use `api.agent.events.registerAgentEventSubscription` with `streams: ["lifecycle"]`
@@ -188,8 +216,15 @@ bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
 turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts. CLI
-runtimes are not supported.
+stored user message recorded. Plugins cannot supply requester facts.
+
+A session whose model runs on a subscription login that a CLI backend owns (for
+example `claude-cli` with a Claude login or Claude subscription token) forks
+through that CLI, so the fork stays within the plan. The CLI starts a fresh
+session with the conversation as context, so the session's prompt cache is not
+reused, and only the fork's own tools are available to it. A fork that grants
+the plugin's own tools or sets `maxTokens` cannot run on the CLI and uses the
+direct provider route instead. API-key sessions keep the request replay above.
 
 Sandboxed managed-worktree forks prepare the same private workspace and selected
 working directory as an ordinary turn of the source session. The durable project
@@ -762,6 +797,10 @@ The experimental mixed-mode configuration is described in
 
 External stores continue using `resolveDatabaseEngineInput(config)`, which follows
 `database.engine` independently of the built-in family overrides.
+For PostgreSQL stores, `openclaw database port` and the built-in backup and restore
+commands cover only the registered database families listed in the
+[PostgreSQL operator guide](/gateway/postgresql#support-matrix). Plugins using
+private PostgreSQL stores need their own migration, backup, and restore procedures.
 
 Engine-aware stores keep host secret resolution and operation settlement in
 `openclaw/plugin-sdk/database-engine-runtime`, and physical opens and transaction
@@ -1100,7 +1139,7 @@ Beyond `api.runtime`, the API object also provides:
   Scoped logger (`debug`, `info`, `warn`, `error`).
 </ParamField>
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
-  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), or `"cli-metadata"` (CLI command metadata collection).
+  Current load mode: `"full"` (live activation), `"discovery"` / `"tool-discovery"` (read-only capability discovery), `"setup-only"` (lightweight setup entry), `"setup-runtime"` (setup flow that also needs the runtime channel entry), `"cli-metadata"` (CLI command metadata collection), or `"memory-backend"` (passive memory backend for the slot owner).
 </ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.

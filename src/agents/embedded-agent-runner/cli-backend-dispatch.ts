@@ -1,6 +1,7 @@
 // Subscription-auth callers opt into CLI latency to avoid metered direct-API passthrough.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolvePreparedRunAdmission } from "../admitted-run-context.js";
@@ -29,21 +30,35 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   if (params.sourceReplyDeliveryMode === "message_tool_only") {
     return undefined;
   }
-  // The CLI runner needs the caller-owned transcript path; runs without one
-  // stay on the passthrough where session targets are resolved internally.
-  const sessionFile = params.sessionFile?.trim();
+  // The CLI runner needs the caller-owned transcript path or the caller's in-memory session;
+  // runs without either stay on the passthrough where session targets are resolved internally.
+  const sessionFile =
+    params.sessionFile?.trim() ||
+    (params.sessionManager ? `in-memory:${params.sessionManager.getSessionId()}` : undefined);
   if (!sessionFile) {
     return undefined;
   }
-  // The CLI bridge supports only a non-empty named allowlist bounded by its loopback grant.
+  // The CLI bridge supports only a named allowlist bounded by its loopback grant.
   // Other policies stay on the embedded path so dispatch cannot widen tool access (#57326).
-  if (params.disableTools || params.modelRun) {
+  // A plugin's own tools and a caller output cap do not reach a CLI process either.
+  if (
+    params.disableTools ||
+    params.modelRun ||
+    params.runtimePluginToolGrant?.toolNames.length ||
+    params.streamParams?.maxTokens !== undefined
+  ) {
     return undefined;
   }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
+  // Only tools that may execute reach the CLI: a session fork lists every session tool but runs
+  // only its own. An empty list is a tool-free run.
+  const allowed =
+    params.toolExecutionAllow?.filter(
+      (tool) => !params.toolsAllow || params.toolsAllow.includes(tool),
+    ) ?? params.toolsAllow;
+  if (!allowed) {
     return undefined;
   }
-  const names = params.toolsAllow.map(normalizeToolPolicyName);
+  const names = allowed.map(normalizeToolPolicyName);
   if (names.some((name) => !name || name.includes("*"))) {
     return undefined;
   }
@@ -53,6 +68,27 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
     return undefined;
   }
   const { runCliAgent } = await import("../cli-runner.runtime.js");
+  const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+    await import("../cli-execution-auth.js");
+  // A fresh CLI session uses the account order new CLI sessions use, so an OpenClaw-held
+  // subscription login reaches the CLI as it does for the session's own turns.
+  const { config, agentDir } = params;
+  const authProfileId =
+    config &&
+    agentDir &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: eligibility.provider,
+      config,
+      agentId: params.agentId,
+    })
+      ? await resolveCliExecutionAuthProfileId({
+          cliExecutionProvider: eligibility.provider,
+          authProfileProvider: params.provider ?? eligibility.provider,
+          config,
+          agentDir,
+          selected: { authProfileId: params.authProfileId },
+        })
+      : params.authProfileId;
   const admittedRunContext = await resolvePreparedRunAdmission({
     runId: params.runId,
     runtimeKind: "embedded",
@@ -67,6 +103,19 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
   };
   const onAgentToolResult = params.onAgentToolResult;
   const { storePath, expectedLifecycleRevision, expectedWriterRunId } = params.sessionTarget;
+  // A run under another session's policy (a session fork) reads that session's permission
+  // ceiling, sandbox and exec placement, as the CLI's grant takes them from the session entry.
+  const policySessionKey =
+    params.sandboxSessionKey && params.sandboxSessionKey !== params.sessionKey
+      ? params.sandboxSessionKey
+      : undefined;
+  const policySessionEntry = policySessionKey
+    ? await readSessionEntryReadOnlyInWorker({
+        agentId: params.agentId,
+        sessionKey: policySessionKey,
+        storePath,
+      })
+    : undefined;
   // Durable turns mirror CLI output for transcript readers and timeout salvage.
   // Detached runs may borrow the identity without owning its transcript.
   const transcript =
@@ -166,7 +215,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       ...(params.requestedRouteResolution === "resolved" && params.provider && params.model
         ? { requesterModel: { provider: params.provider, model: params.model } }
         : {}),
-      authProfileId: params.authProfileId,
+      authProfileId,
       modelHasVision: params.modelHasVision,
       contextWindow: params.contextWindow,
       thinkLevel: params.thinkLevel,
@@ -181,6 +230,20 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      // The requester and policy the embedded run would check its tools against.
+      ...(policySessionKey ? { runtimePolicySessionKey: policySessionKey } : {}),
+      ...(policySessionEntry ? { sessionEntry: policySessionEntry } : {}),
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      inputProvenance: params.inputProvenance,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,

@@ -1,4 +1,3 @@
-import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronListParams } from "../../../../packages/gateway-protocol/src/schema/cron.types.ts";
 import { sortCronJobs } from "../../../../src/cron/service/list-page-sort.ts";
@@ -16,6 +15,7 @@ import {
   type Inventory,
   type Runtime,
 } from "./inventory-connection.ts";
+import { applyFullCronRuntime, applyCompactCronRuntime } from "./runtime-projection.ts";
 
 function updateFull(page: CronJobsListResult, event: Runtime, params: CronListParams) {
   const index = page.jobs.findIndex((job) => job.id === event.jobId);
@@ -23,26 +23,7 @@ function updateFull(page: CronJobsListResult, event: Runtime, params: CronListPa
   if (!previous || previous.updatedAtMs > event.job.updatedAtMs) {
     return page;
   }
-  const jobs = page.jobs.with(index, {
-    ...previous,
-    updatedAtMs: event.job.updatedAtMs,
-    state: {
-      ...previous.state,
-      nextRunAtMs: event.job.state.nextRunAtMs,
-      lastRunAtMs: event.job.state.lastRunAtMs,
-      lastRunStatus: event.job.state.lastRunStatus,
-      lastStatus: event.job.state.lastStatus,
-      runningAtMs: event.job.state.runningAtMs,
-      autoDisabled: event.job.state.autoDisabled,
-      admissionDeferred: event.job.state.admissionDeferred,
-      lastDurationMs: event.job.state.lastDurationMs,
-      lastMeaningfulResult: event.job.state.lastMeaningfulResult,
-      lastTriggerEvalAtMs: event.job.state.lastTriggerEvalAtMs,
-      ...(event.action === "finished"
-        ? { lastError: event.error, lastDurationMs: event.durationMs }
-        : {}),
-    },
-  });
+  const jobs = page.jobs.with(index, applyFullCronRuntime(previous, event));
   return {
     ...page,
     snapshotRevision: `runtime:${event.revision}`,
@@ -59,28 +40,10 @@ function updateCompact(page: CronJobsListResult<CronCompactJob>, event: Runtime)
   if (!previous || previous.updatedAtMs > event.job.updatedAtMs) {
     return page;
   }
-  const runtime = event.job.state;
   return {
     ...page,
     snapshotRevision: `runtime:${event.revision}`,
-    jobs: page.jobs.with(index, {
-      ...previous,
-      updatedAtMs: event.job.updatedAtMs,
-      nextRunAt: timestampMsToIsoString(runtime.nextRunAtMs) ?? null,
-      nextRunAtMs: runtime.nextRunAtMs ?? null,
-      lastRunAt: timestampMsToIsoString(runtime.lastRunAtMs) ?? null,
-      lastRunAtMs: runtime.lastRunAtMs ?? null,
-      lastRunStatus: runtime.lastRunStatus ?? runtime.lastStatus ?? null,
-      runningAtMs: runtime.runningAtMs,
-      autoDisabled: runtime.autoDisabled,
-      admissionDeferred: runtime.admissionDeferred,
-      lastDurationMs: runtime.lastDurationMs,
-      lastMeaningfulResult: runtime.lastMeaningfulResult,
-      lastTriggerEvalAtMs: runtime.lastTriggerEvalAtMs,
-      ...(event.action === "finished"
-        ? { lastRunError: event.error ?? null, lastDurationMs: event.durationMs }
-        : {}),
-    }),
+    jobs: page.jobs.with(index, applyCompactCronRuntime(previous, event)),
   };
 }
 

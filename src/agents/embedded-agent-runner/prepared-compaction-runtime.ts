@@ -28,11 +28,7 @@ import {
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
-import {
-  applyAuthHeaderOverride,
-  applyLocalNoAuthHeaderOverride,
-  resolveModelAuthModeAsync,
-} from "../model-auth.js";
+import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
 import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
@@ -318,14 +314,6 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: await resolveModelAuthModeAsync(
-              effectiveModel.provider,
-              params.config,
-              authProfileStore,
-              {
-                workspaceDir: effectiveWorkspace,
-              },
-            ),
           },
           skillReadResources,
         )

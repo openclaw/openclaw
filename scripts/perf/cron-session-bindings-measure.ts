@@ -20,7 +20,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
-import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
+import { startCollectedHeapSampling, sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -78,12 +78,7 @@ for (let i = 0; i < 20; i++) {
 }
 const inspector = new Session();
 if (values.mode === "allocation") {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 let gcMs = 0;
 let gcCount = 0;

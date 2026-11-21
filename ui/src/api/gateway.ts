@@ -15,6 +15,7 @@ import type {
 } from "@openclaw/gateway-client/scope-upgrade";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { CONTROL_UI_OPERATOR_SCOPES } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { reportBrowserAccessDenied } from "../app/browser-http.ts";
 import { trackForegroundActivity } from "../app/foreground-activity.ts";
 import { NativeGatewayAuthUnavailableError } from "../app/native-gateway-auth.ts";
 import { isRemoteControlUiIngress } from "../app/remote-ingress.ts";
@@ -193,15 +194,16 @@ export class GatewayBrowserClient {
             this.reachabilityProbe = probe;
             const timeout = setTimeout(() => probe.abort(), 1_000);
             void probeGatewayReachability(this.opts.url, probe.signal)
-              .then((reachable) => {
+              .then((reachability) => {
                 clearTimeout(timeout);
                 // A new socket or explicit stop retires this failed upgrade's evidence.
                 if (this.reachabilityProbe === probe) {
                   this.reachabilityProbe = null;
-                  this.opts.onClose?.({
-                    ...info,
-                    ...(reachable && !probe.signal.aborted ? { busy: true } : {}),
-                  });
+                  const result = probe.signal.aborted ? "unavailable" : reachability;
+                  if (result === "access-denied") {
+                    reportBrowserAccessDenied();
+                  }
+                  this.opts.onClose?.({ ...info, ...(result === "live" ? { busy: true } : {}) });
                 }
               })
               .catch((callbackError: unknown) =>

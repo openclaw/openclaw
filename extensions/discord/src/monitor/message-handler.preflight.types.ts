@@ -12,6 +12,7 @@ import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordIngressLifecycle } from "./ingress.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 import type { DiscordAvatarResolver } from "./message-avatar.js";
 import type { DiscordChannelInfo } from "./message-channel-info.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
@@ -118,5 +119,6 @@ export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields 
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   avatarResolver?: DiscordAvatarResolver;
+  readPolicy?: DiscordLivePolicyReader;
   precedingMessages?: readonly DiscordMessageEvent["message"][];
 };

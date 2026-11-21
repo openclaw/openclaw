@@ -44,6 +44,7 @@ const enChatToolLabels = {
       changedFiles: "Changed files",
       viewingImage: "Viewing image",
       viewedImage: "Viewed image",
+      viewedImages: "Viewed {count} images",
       viewImage: "View image",
       askingQuestion: "Asking you a question",
       askedQuestion: "Asked you a question",

@@ -12,7 +12,12 @@ import {
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
 import { captureWorkerTaskContext } from "./worker-task-context.js";
-import { WorkerTaskError, workerTaskTimeoutError } from "./worker-task-error.js";
+import {
+  WorkerTaskError,
+  workerTaskRetirementError,
+  workerTaskTimeoutError,
+  workerTaskUnavailableError,
+} from "./worker-task-error.js";
 import {
   serviceNativeWorkerPass,
   type WorkerTaskHost,
@@ -419,7 +424,11 @@ export class WorkerTaskPoolCore<Input, Output> {
               bootstrapError: this.bootstrap.error,
               createWorker: () => this.createWorker(slot),
               fail: (error, nativeFailure) =>
-                this.fail(slot, this.unavailableError(slot, String(error), error), nativeFailure),
+                this.fail(
+                  slot,
+                  workerTaskUnavailableError(slot, String(error), error),
+                  nativeFailure,
+                ),
               refuse: (error) => this.finish(task, error, undefined, true),
             });
           },
@@ -430,16 +439,6 @@ export class WorkerTaskPoolCore<Input, Output> {
         );
       });
     }
-  }
-
-  private unavailableError(slot: Slot<Input, Output>, message: string, cause?: unknown): Error {
-    const task = slot.task;
-    const stage = slot.ready === false ? "startup" : task?.exchange ? "exchange" : "running";
-    // Reuse owned estimates/progress without sizing or retaining input.
-    const detail = task?.diagnosticLabel
-      ? ` [task=${task.diagnosticLabel} admittedInputBytes=${task.inputBytes} exchanges=${task.exchangeSequence} stage=${stage}]`
-      : "";
-    return new WorkerTaskError(message + detail, "unavailable", { cause });
   }
 
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
@@ -453,11 +452,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       options: this.options,
       host: this.host,
       runInContext: runInWorkerPoolContext,
-      unavailableError: (message, cause) => this.unavailableError(slot, message, cause),
+      unavailableError: (message, cause) => workerTaskUnavailableError(slot, message, cause),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;
-        this.host.workerStarted(worker, this);
+        this.host.workerStarted(worker, this, this.maxWorkers, this.options, this.ownerOptions);
       },
       onMessage: (message) => this.receive(slot, message),
       onFailure: (error, nativeFailure) => this.fail(slot, error, nativeFailure),
@@ -465,7 +464,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         if (counted) {
           this.workers--;
         }
-        const error = this.unavailableError(slot, `worker exited with code ${code}`);
+        const error = workerTaskUnavailableError(slot, `worker exited with code ${code}`);
         this.fail(slot, error, true);
       },
     });
@@ -689,15 +688,22 @@ export class WorkerTaskPoolCore<Input, Output> {
     clearTimeout(task.timer);
     task.deadline = undefined;
     task.options.signal?.removeEventListener("abort", task.abort);
-    const complete = createWorkerTaskCompletion(task, this.completion, error, value);
+    const slot = task.slot;
+    const { complete, resolveFailure } = createWorkerTaskCompletion(
+      task,
+      this.completion,
+      error,
+      value,
+    );
     if (task.owner) {
       task.owner.complete = complete;
       task.owner.retire ||= retire || Boolean(error && task.slot && task.preparedAt !== undefined);
-      if (error) {
-        task.reject(error);
-      } else {
+      if (!error) {
         // SAFETY: A validated successful reply supplies Output; custody remains held separately.
         task.resolve(value as Output);
+      } else if (!resolveFailure || task.preparation) {
+        // Owned cleanup must join preparation before retirement, but the caller need not wait.
+        task.reject(resolveFailure?.() ?? error);
       }
       if (error || retire) {
         // Keep the first failed stop until an explicit close observes it and permits retry.
@@ -705,24 +711,17 @@ export class WorkerTaskPoolCore<Input, Output> {
       }
       return;
     }
-    const slot = task.slot;
     if (slot) {
       slot.task = undefined;
       this.activeTasks--;
       if (retire) {
         // Keep input and capacity custody until execution stops, even if rejection is early.
         (slot.completions ??= []).push(complete);
-        void this.retirement.retire(slot, "failure").catch((failure: unknown) => {
-          task.reject(
-            error
-              ? new AggregateError(
-                  [error, failure],
-                  `Worker retirement failed: ${toErrorObject(failure, "worker retirement failed").message}; task failed: ${error.message}`,
-                  { cause: failure },
-                )
-              : failure,
+        void this.retirement
+          .retire(slot, "failure")
+          .catch((failure: unknown) =>
+            task.reject(workerTaskRetirementError(resolveFailure?.() ?? error, failure)),
           );
-        });
         return;
       }
     }

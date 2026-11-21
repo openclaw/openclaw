@@ -10,6 +10,7 @@ import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { isBrowserOperatorUiClient } from "../utils/message-channel.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { sourceRolePolicy } from "./operator-role-source-policy.js";
 import {
@@ -106,6 +107,7 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
             profile.assignedRole,
             params.config,
             profile.githubLogin ?? null,
+            operatorRoleSubject(profile),
           ),
         ),
       ),
@@ -163,6 +165,7 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
           profile.assignedRole,
           params.config,
           profile.githubLogin ?? null,
+          operatorRoleSubject(profile),
         ),
       ),
     ),

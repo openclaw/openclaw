@@ -69,7 +69,7 @@ private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
 }
 
 private actor CancellingCameraService: CameraServicing {
-    func listDevices() async -> [CameraController.CameraDeviceInfo] {
+    func listDevices() async -> [OpenClawCameraDeviceInfo] {
         []
     }
 
@@ -91,8 +91,12 @@ private actor CancellingCameraService: CameraServicing {
 private actor RecordingCameraService: CameraServicing {
     private var clipCalls = 0
 
-    func listDevices() async -> [CameraController.CameraDeviceInfo] {
-        []
+    func listDevices() async -> [OpenClawCameraDeviceInfo] {
+        [OpenClawCameraDeviceInfo(
+            id: "front-camera",
+            name: "Front Camera",
+            position: "front",
+            deviceType: "builtInWideAngleCamera")]
     }
 
     func snap(
@@ -164,7 +168,7 @@ private actor BlockingAudioCameraService: CameraServicing {
         self.barrier = barrier
     }
 
-    func listDevices() async -> [CameraController.CameraDeviceInfo] {
+    func listDevices() async -> [OpenClawCameraDeviceInfo] {
         []
     }
 
@@ -251,7 +255,7 @@ private actor OverlappingCameraService: CameraServicing {
         self.secondStarted = secondStarted
     }
 
-    func listDevices() async -> [CameraController.CameraDeviceInfo] {
+    func listDevices() async -> [OpenClawCameraDeviceInfo] {
         []
     }
 
@@ -8696,6 +8700,34 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         let talk = await appModel.handleInvoke(talkRequest(id: "bg-talk", command: .pttStart))
         #expect(talk.ok == false)
         #expect(talk.error?.message.contains("/talk") == true)
+    }
+
+    @Test @MainActor func `camera list preserves device wire fields`() async throws {
+        let defaults = UserDefaults.standard
+        let key = "camera.enabled"
+        let previous = defaults.object(forKey: key)
+        defaults.set(true, forKey: key)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: key)
+            } else {
+                defaults.removeObject(forKey: key)
+            }
+        }
+        let appModel = NodeAppModel(camera: RecordingCameraService())
+        let request = BridgeInvokeRequest(id: "camera-list", command: OpenClawCameraCommand.list.rawValue)
+
+        let response = await appModel.handleInvoke(request)
+
+        #expect(response.ok)
+        let data = try #require(response.payloadJSON?.data(using: .utf8))
+        let payload = try JSONSerialization.jsonObject(with: data) as? [String: [[String: String]]]
+        #expect(payload == ["devices": [[
+            "id": "front-camera",
+            "name": "Front Camera",
+            "position": "front",
+            "deviceType": "builtInWideAngleCamera",
+        ]]])
     }
 
     @Test @MainActor func `handle invoke rejects camera when disabled`() async {

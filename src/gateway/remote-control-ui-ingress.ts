@@ -24,8 +24,9 @@ import { ensureCanonicalGatewayOwnerProfile } from "../state/user-profile-writes
 import { gatewayIngressPrincipalAuthError, gatewayPersonPrincipalAuthError } from "./auth.js";
 import { validateRemoteControlUiFrameAncestors } from "./control-ui-csp.js";
 import { filterRemoteControlUiPluginReadCookies } from "./control-ui-plugin-auth-cookie.js";
-import { openclawIdTunnelRolePolicy } from "./openclaw-id/tunnel-principal.js";
+import { openclawIdSubjectRolePolicy } from "./openclaw-id/tunnel-principal.js";
 import { resolveGatewayOperatorAccessAuthority } from "./operator-access-policy.js";
+import { operatorRoleSubject } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { isOperatorScope } from "./operator-scopes.js";
@@ -271,14 +272,15 @@ export function createGatewayControlUiIngressFactory(params: {
         const initial = initialIdentity.profile;
         const emailBindingIds = prepared.emailBindingIds;
         const readRole = (current: typeof initial) =>
-          admission
-            ? openclawIdTunnelRolePolicy(admission.principal)
-            : resolveOperatorRolePolicyForAssignment(
-                profileId,
-                current.assignedRole,
-                host.getRuntimeConfig(),
-                current.githubLogin ?? null,
-              );
+          openclawIdSubjectRolePolicy(admission?.principal, () =>
+            resolveOperatorRolePolicyForAssignment(
+              profileId,
+              current.assignedRole,
+              host.getRuntimeConfig(),
+              current.githubLogin ?? null,
+              operatorRoleSubject(current),
+            ),
+          );
         const role = principal.kind !== "owner" ? structuredClone(readRole(initial)) : undefined;
         const access =
           principal.kind !== "owner"
@@ -308,6 +310,7 @@ export function createGatewayControlUiIngressFactory(params: {
                   host.getResolvedAuth(),
                   host.getRuntimeConfig(),
                   current.emails,
+                  operatorRoleSubject(current),
                 ) !== undefined) ||
               !isDeepStrictEqual(role, principal.kind !== "owner" ? readRole(current) : undefined)
             ) {
@@ -344,6 +347,7 @@ export function createGatewayControlUiIngressFactory(params: {
               },
               preparedSessionProfile: {
                 profileId,
+                openclawIdAccountIds: profile.openclawIdAccountIds,
                 role: profile.assignedRole,
                 githubLogin: profile.githubLogin ?? null,
                 aliases,

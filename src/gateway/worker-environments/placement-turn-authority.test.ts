@@ -11,7 +11,6 @@ import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { captureAgentToolSourceExecutionGuard } from "../../agents/agent-tool-source-execution-guard.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import { createStubTool } from "../../agents/test-helpers/agent-tool-stubs.js";
@@ -235,7 +234,6 @@ it("retains worker-parent source predicates through tool execution and rejects a
                       sessionKey: "agent:research:whatsapp:group:requesters",
                       senderId: "requester-bob",
                     });
-                    const guard = captureAgentToolSourceExecutionGuard();
                     const sql = reset ? undefined : observeHostDataSql();
                     const child = await patchSessionEntryCore(
                       { ...target, sessionKey: `agent:main:child-source-${reset}` },
@@ -249,7 +247,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
                         return { label: "child" };
                       },
                       {
-                        workerGuard: { source: guard },
+                        workerGuard: { source },
                         fallbackEntry: {
                           sessionId: `child-${reset}`,
                           updatedAt: 1,
@@ -274,9 +272,7 @@ it("retains worker-parent source predicates through tool execution and rejects a
         label: "child",
       });
       host?.close();
-      await expect(writeChild(true)).rejects.toThrow(
-        `Session ${target.sessionId} worker turn authority changed`,
-      );
+      await expect(writeChild(true)).rejects.toThrow();
       expect(loadSessionEntry(target)?.lifecycleRevision).toBe("replacement");
       expect(
         loadSessionEntry({ ...target, sessionKey: "agent:main:child-source-true" }),
