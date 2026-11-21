@@ -183,7 +183,7 @@ function fixture(
       return options.resident ?? { pid: 42, shutdownBudget: { timeoutMs: 25_000 } };
     }
     if (request.method === "system.info") {
-      return { pid: 42, processInstanceId: "resident-instance" };
+      return { pid: options.resident?.pid ?? 42, processInstanceId: "resident-instance" };
     }
     if (request.method === "gateway.suspend.prepare") {
       const observed = expectDefined(
@@ -631,6 +631,33 @@ it.each(["authority", "boot"] as const)(
       change === "authority" ? "service operation authority lost" : "Gateway process changed",
     );
     expect(f.events).toEqual(change === "authority" ? ["status", "observe:ready"] : ["status"]);
+    expect(f.stop).not.toHaveBeenCalled();
+  },
+);
+
+// Runtime recovery reruns a Gateway whose Node fails admission under another
+// Node: systemd's main process is the launcher and its child serves (#202954).
+it.each([
+  { listener: { pid: 43, ppid: 42 }, explicit: false, stops: true },
+  { listener: { pid: 43, ppid: 42 }, explicit: true, stops: true },
+  { listener: { pid: 43, ppid: 7 }, explicit: false, stops: false },
+  { listener: { pid: 44, ppid: 42 }, explicit: false, stops: false },
+])(
+  "drains a resident $listener.pid served under launcher $listener.ppid (explicit=$explicit, stops=$stops)",
+  async ({ listener, explicit, stops }) => {
+    const f = fixture({ resident: { pid: 43 } });
+    mocks.portUsage.mockResolvedValue(portUsage("busy", [listener]));
+    const running = explicit ? f.interrupt() : f.run();
+    if (stops) {
+      await expect(running).resolves.toBe("stopped");
+      expect(f.events).toEqual(
+        explicit
+          ? ["status", "observe:ready", "handoff", "stop"]
+          : ["status", "observe:ready", "stop"],
+      );
+      return;
+    }
+    await expect(running).rejects.toThrow("Gateway process changed");
     expect(f.stop).not.toHaveBeenCalled();
   },
 );
