@@ -551,6 +551,8 @@ export async function captureUpdateActivationSchemas(params: {
           config: params.config,
           env: params.env,
           timeoutMs: params.timeoutMs,
+          // Doctor leaves retained agent stores unmigrated; the final check excludes them too.
+          includeRetainedAgentPaths: true,
           onInventory: (files) => addAgentInventoryPaths(agentPaths, files),
         })
       : undefined;

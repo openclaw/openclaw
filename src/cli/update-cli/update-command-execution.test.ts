@@ -241,27 +241,32 @@ describe("mutable update execution", () => {
   });
 
   it.each([
-    { migrating: true, owner: true },
-    { migrating: true, owner: false },
-    { migrating: false, owner: true },
+    { migrating: true, owner: true, retained: false },
+    { migrating: true, owner: false, retained: false },
+    { migrating: false, owner: true, retained: false },
+    { migrating: true, owner: true, retained: true },
   ])(
-    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner)",
-    async ({ migrating, owner }) => {
+    "admits activation only when Doctor can migrate (migrating=$migrating, live owner=$owner, retained=$retained)",
+    async ({ migrating, owner, retained }) => {
       await withTestDir({ prefix: "migration-owner-" }, async (state) => {
         // #202700: a Gateway this update does not stop keeps Doctor out of maintenance.
         vi.stubEnv("OPENCLAW_STATE_DIR", state);
         const external = path.join(state, "..", "archive-data", "openclaw-agent.sqlite");
-        vi.spyOn(candidateState, "readUpdateStateSchemaVersions").mockImplementation(
-          async ({ onInventory }) => {
+        const read = vi
+          .spyOn(candidateState, "readUpdateStateSchemaVersions")
+          .mockImplementation(async ({ onInventory }) => {
             onInventory?.(
               new Map([[external, { spellings: [external], registeredPaths: [external] }]]),
             );
             return [
-              { path: path.join(state, "state", "openclaw.sqlite"), userVersion: 15 },
+              {
+                path: path.join(state, "state", "openclaw.sqlite"),
+                userVersion: 15,
+                ...(retained ? { retainedAgentPaths: [external] } : {}),
+              },
               { path: external, userVersion: migrating ? 18 : 19 },
             ];
-          },
-        );
+          });
         vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue(
           owner ? { pid: 4242, createdAt: "2026-11-21T00:00:00.000Z", port: 18789 } : undefined,
         );
@@ -281,7 +286,7 @@ describe("mutable update execution", () => {
 
         const execution = await execute(params);
 
-        if (migrating && owner) {
+        if (migrating && owner && !retained) {
           expect(execution).toMatchObject({
             mutationStarted: false,
             result: { status: "error", reason: "database-migration-owner-live" },
@@ -292,6 +297,9 @@ describe("mutable update execution", () => {
         } else {
           expect(execution).toMatchObject({ mutationStarted: true, result: { status: "ok" } });
         }
+        expect(read).toHaveBeenCalledWith(
+          expect.objectContaining({ includeRetainedAgentPaths: true }),
+        );
       });
     },
   );
