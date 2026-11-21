@@ -4,7 +4,9 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 export {
   chunkMarkdown,
   createMarkdownChunker,
+  estimateMarkdownChunkChars,
   remapChunkLines,
+  resolveMarkdownChunkMaxChars,
   type MemoryChunk,
 } from "../../packages/memory-host-sdk/src/host/markdown-chunks.js";
 export const hashText: (value: string) => string = sha256Hex;
