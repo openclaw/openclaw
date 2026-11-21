@@ -83,6 +83,22 @@ describe("settings save indicator", () => {
     expect(button("Apply changes")).toBeUndefined();
   });
 
+  it("reports a write that needs a restart as saved and offers Restart now", async () => {
+    const { onRestart, onApply } = await update({ status: "restart-required", needsApply: true });
+    expect(indicator.textContent).toContain(
+      "Saved. Restart OpenClaw to finish applying this change.",
+    );
+    expect(part("title")).toBeNull();
+    expect(button("Retry")).toBeUndefined();
+    expect(button("Discard changes")).toBeUndefined();
+    expect(button("Restart now")).toBeDefined();
+    button("Restart now")?.click();
+    await waitForSolid(() => expect(onRestart).toHaveBeenCalledOnce());
+    expect(onApply).not.toHaveBeenCalled();
+    await update({ status: "restart-required", needsApply: true, onRestart: null });
+    expect(button("Restart now")).toBeUndefined();
+  });
+
   it.each([true, false])("discards a failure only when confirmed: %s", async (confirmed) => {
     vi.mocked(showConfirmDialog).mockResolvedValueOnce(confirmed);
     const { onRetry, onReload } = await update({

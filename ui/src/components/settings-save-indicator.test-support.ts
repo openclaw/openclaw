@@ -18,6 +18,7 @@ export function saveIndicatorProps(overrides: Partial<Props> = {}): Props {
     onSave: vi.fn(async () => false),
     onReload: vi.fn(async () => undefined),
     onApply: vi.fn(async () => false),
+    onRestart: vi.fn(async () => undefined),
     ...overrides,
   };
 }
