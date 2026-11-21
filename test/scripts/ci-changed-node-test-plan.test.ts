@@ -29,6 +29,7 @@ import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import { listExtensionTestFilesForRoots } from "../../scripts/lib/extension-test-plan.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
+import * as shardMetadata from "../../scripts/lib/vitest-shard-metadata.mts";
 import * as testProjects from "../../scripts/test-projects.test-support.mts";
 import {
   buildVitestRunPlans,
@@ -190,6 +191,9 @@ describe("selected boundary setup sharing", () => {
         ),
       );
       const readTimings = vi.spyOn(testTimings, "readToolingFileTimings").mockReturnValue(timings);
+      const estimateTimings = vi
+        .spyOn(shardMetadata, "estimateVitestToolingFileSeconds")
+        .mockReturnValue(75);
       try {
         const selected = expectDefined(
           createSelectedNodeTestShardBundles(files, {
@@ -223,6 +227,7 @@ describe("selected boundary setup sharing", () => {
           true,
         );
       } finally {
+        estimateTimings.mockRestore();
         readTimings.mockRestore();
       }
     },
